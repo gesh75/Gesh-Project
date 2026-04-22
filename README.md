@@ -7,7 +7,7 @@
 [![Claude](https://img.shields.io/badge/Anthropic_Claude-Sonnet_4.6-000?style=flat&logo=anthropic&logoColor=white)](https://anthropic.com)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-GESH combines live Robinhood portfolio data with multiple AI analysis engines — Claude, Gemini, and local LLMs — to produce deep trading insights, position sizing, risk management, and a full signal → gate → execution pipeline.
+GESH combines live Robinhood portfolio data with Claude AI analysis engines to produce deep trading insights, position sizing, risk management, and a full signal → gate → execution pipeline.
 
 ---
 
