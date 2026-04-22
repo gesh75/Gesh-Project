@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="accent">#00D4FF</color>
+    <color name="adim">#1E00D4FF</color>
+    <color name="bg">#07070F</color>
+    <color name="black">#000000</color>
+    <color name="border">#1C1C35</color>
+    <color name="card">#0D0D1A</color>
+    <color name="card_hover">#13132A</color>
+    <color name="colorBackground">#07070F</color>
+    <color name="colorOnBackground">#E2E8F0</color>
+    <color name="colorOnPrimary">#000000</color>
+    <color name="colorOnSecondary">#000000</color>
+    <color name="colorOnSurface">#E2E8F0</color>
+    <color name="colorOutline">#1C1C35</color>
+    <color name="colorPrimary">#00D4FF</color>
+    <color name="colorSecondary">#A78BFA</color>
+    <color name="colorSurface">#0D0D1A</color>
+    <color name="green">#00E676</color>
+    <color name="muted">#64748B</color>
+    <color name="orange">#FF8C42</color>
+    <color name="purple">#A78BFA</color>
+    <color name="red">#FF4444</color>
+    <color name="text">#E2E8F0</color>
+    <color name="white">#FFFFFF</color>
+    <color name="yellow">#FFD700</color>
+    <string name="app_name">Gesh Financial</string>
+    <string name="nav_analysis">Analysis</string>
+    <string name="nav_portfolio">Portfolio</string>
+    <string name="nav_settings">Settings</string>
+    <style name="Theme.GeshFinancial" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">@color/black</item>
+        <item name="colorPrimaryVariant">@color/accent</item>
+        <item name="colorSecondary">@color/purple</item>
+        <item name="colorOnSecondary">@color/black</item>
+        <item name="colorSurface">@color/card</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="android:colorBackground">@color/bg</item>
+        <item name="colorOnBackground">@color/text</item>
+        <item name="android:statusBarColor">@color/card</item>
+        <item name="android:navigationBarColor">@color/card</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
+    </style>
+</resources>

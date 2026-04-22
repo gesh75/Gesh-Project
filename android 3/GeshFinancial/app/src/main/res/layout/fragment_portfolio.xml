@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg">
+
+    <!-- Header bar -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp"
+        android:background="@color/card" android:gravity="center_vertical"
+        android:paddingStart="16dp" android:paddingEnd="16dp" android:orientation="horizontal">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:text="GESH FINANCIAL OBSERVABILITY"
+            android:textColor="@color/accent" android:textSize="12sp" android:textStyle="bold"
+            android:letterSpacing="0.08"/>
+        <TextView android:id="@+id/tvConnectionStatus" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:text="Connecting..."
+            android:textColor="@color/muted" android:textSize="11sp"/>
+    </LinearLayout>
+
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+        android:id="@+id/swipeRefresh"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+        <androidx.core.widget.NestedScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="12dp">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:gap="12dp">
+
+                <!-- KPI Grid -->
+                <GridLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:columnCount="2" android:rowCount="2" android:useDefaultMargins="false">
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="0dp" android:layout_height="wrap_content"
+                        app:cardBackgroundColor="@color/card" app:strokeColor="@color/border"
+                        app:strokeWidth="1dp" app:cardCornerRadius="8dp" app:cardElevation="0dp"
+                        android:layout_columnWeight="1" android:layout_margin="3dp">
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:padding="14dp">
+                            <TextView android:text="PORTFOLIO VALUE" android:textColor="@color/muted"
+                                android:textSize="9sp" android:letterSpacing="0.1" android:layout_marginBottom="5dp"/>
+                            <TextView android:id="@+id/tvEquity" android:text="—"
+                                android:textColor="@color/text" android:textSize="18sp" android:textStyle="bold"/>
+                            <TextView android:id="@+id/tvEquitySub" android:text="—"
+                                android:textColor="@color/muted" android:textSize="10sp" android:layout_marginTop="3dp"/>
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="0dp" android:layout_height="wrap_content"
+                        app:cardBackgroundColor="@color/card" app:strokeColor="@color/border"
+                        app:strokeWidth="1dp" app:cardCornerRadius="8dp" app:cardElevation="0dp"
+                        android:layout_columnWeight="1" android:layout_margin="3dp">
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:padding="14dp">
+                            <TextView android:text="DAY CHANGE" android:textColor="@color/muted"
+                                android:textSize="9sp" android:letterSpacing="0.1" android:layout_marginBottom="5dp"/>
+                            <TextView android:id="@+id/tvDayChange" android:text="—"
+                                android:textColor="@color/green" android:textSize="18sp" android:textStyle="bold"/>
+                            <TextView android:textColor="@color/muted" android:textSize="10sp"
+                                android:text="vs. previous close" android:layout_marginTop="3dp"/>
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="0dp" android:layout_height="wrap_content"
+                        app:cardBackgroundColor="@color/card" app:strokeColor="@color/border"
+                        app:strokeWidth="1dp" app:cardCornerRadius="8dp" app:cardElevation="0dp"
+                        android:layout_columnWeight="1" android:layout_margin="3dp">
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:padding="14dp">
+                            <TextView android:text="CASH" android:textColor="@color/muted"
+                                android:textSize="9sp" android:letterSpacing="0.1" android:layout_marginBottom="5dp"/>
+                            <TextView android:id="@+id/tvCash" android:text="—"
+                                android:textColor="@color/text" android:textSize="18sp" android:textStyle="bold"/>
+                            <TextView android:textColor="@color/muted" android:textSize="10sp"
+                                android:text="available balance" android:layout_marginTop="3dp"/>
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.card.MaterialCardView
+                        android:layout_width="0dp" android:layout_height="wrap_content"
+                        app:cardBackgroundColor="@color/card" app:strokeColor="@color/border"
+                        app:strokeWidth="1dp" app:cardCornerRadius="8dp" app:cardElevation="0dp"
+                        android:layout_columnWeight="1" android:layout_margin="3dp">
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:orientation="vertical" android:padding="14dp">
+                            <TextView android:text="BUYING POWER" android:textColor="@color/muted"
+                                android:textSize="9sp" android:letterSpacing="0.1" android:layout_marginBottom="5dp"/>
+                            <TextView android:id="@+id/tvBuyingPower" android:text="—"
+                                android:textColor="@color/text" android:textSize="18sp" android:textStyle="bold"/>
+                            <TextView android:textColor="@color/muted" android:textSize="10sp"
+                                android:text="available to trade" android:layout_marginTop="3dp"/>
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+                </GridLayout>
+
+                <!-- Positions Card -->
+                <com.google.android.material.card.MaterialCardView android:layout_width="match_parent"
+                    android:layout_height="wrap_content" app:cardBackgroundColor="@color/card"
+                    app:strokeColor="@color/border" app:strokeWidth="1dp" app:cardCornerRadius="8dp"
+                    app:cardElevation="0dp" android:layout_marginTop="6dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="vertical">
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="48dp"
+                            android:paddingStart="14dp" android:paddingEnd="14dp"
+                            android:gravity="center_vertical" android:orientation="horizontal"
+                            android:background="@color/card">
+                            <TextView android:text="OPEN POSITIONS" android:textColor="@color/accent"
+                                android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.1"
+                                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"/>
+                            <TextView android:id="@+id/tvPositionCount" android:textColor="@color/muted"
+                                android:textSize="10sp" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                        </LinearLayout>
+                        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border"/>
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/rvHoldings" android:layout_width="match_parent"
+                            android:layout_height="wrap_content" android:nestedScrollingEnabled="false"/>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Allocation Chart -->
+                <com.google.android.material.card.MaterialCardView android:layout_width="match_parent"
+                    android:layout_height="wrap_content" app:cardBackgroundColor="@color/card"
+                    app:strokeColor="@color/border" app:strokeWidth="1dp" app:cardCornerRadius="8dp"
+                    app:cardElevation="0dp" android:layout_marginTop="6dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="vertical">
+                        <TextView android:text="ALLOCATION" android:textColor="@color/accent"
+                            android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.1"
+                            android:padding="14dp"/>
+                        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border"/>
+                        <com.github.mikephil.charting.charts.PieChart
+                            android:id="@+id/pieChart" android:layout_width="match_parent"
+                            android:layout_height="220dp" android:padding="10dp"/>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Watchlist Card -->
+                <com.google.android.material.card.MaterialCardView android:layout_width="match_parent"
+                    android:layout_height="wrap_content" app:cardBackgroundColor="@color/card"
+                    app:strokeColor="@color/border" app:strokeWidth="1dp" app:cardCornerRadius="8dp"
+                    app:cardElevation="0dp" android:layout_marginTop="6dp" android:layout_marginBottom="8dp">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:orientation="vertical">
+                        <TextView android:text="WATCHLIST" android:textColor="@color/accent"
+                            android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.1"
+                            android:padding="14dp"/>
+                        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/border"/>
+                        <androidx.recyclerview.widget.RecyclerView
+                            android:id="@+id/rvWatchlist" android:layout_width="match_parent"
+                            android:layout_height="wrap_content" android:nestedScrollingEnabled="false"/>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+            </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+</LinearLayout>

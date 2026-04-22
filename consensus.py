@@ -1,0 +1,458 @@
+"""
+Multi-Node Consensus Engine
+10 independent signal nodes, each using a DIFFERENT data source.
+A stock only gets a strong signal when 5+ nodes agree.
+
+Nodes (intentionally uncorrelated):
+  1.  MOMENTUM      — RSI + MA crossover (price action)
+  2.  TREND         — ADX + Bollinger regime
+  3.  RELATIVE_STR  — Performance vs SPY (relative strength)
+  4.  FUNDAMENTALS  — Revenue growth + margins + PE (quality)
+  5.  ANALYST       — Wall St consensus + price target upside
+  6.  NEWS          — Cached sentiment score from news_agent DB
+  7.  KELLY         — Position sizing signal (ADD/HOLD/TRIM)
+  8.  ECG           — Equity Curve Gate health (HEALTHY/SUSPENDED)
+  9.  VOLUME        — Volume trend + liquidity (not wash-trade noise)
+  10. FFT_CYCLE     — Dominant price cycle phase (trough vs peak)
+
+Voting: BULLISH=+1, NEUTRAL=0, BEARISH=-1, ABSTAIN=None
+Final: score = sum(votes) / len(voting nodes)
+"""
+
+from __future__ import annotations
+import sqlite3, json, numpy as np
+from datetime import datetime, timedelta
+from pathlib import Path
+import yfinance as yf
+
+DB_PATH = Path(__file__).parent / "gesh.db"
+VOTE_BULLISH  =  1
+VOTE_NEUTRAL  =  0
+VOTE_BEARISH  = -1
+ABSTAIN       = None
+
+# ─── yfinance .info cache (15-minute TTL) ─────────────────────────────────────
+# yf.Ticker.info makes a slow HTTP call. Caching for 15 min cuts redundant
+# calls when Fundamentals + Analyst nodes both need the same symbol's info.
+import time as _time
+_INFO_CACHE: dict[str, tuple[dict, float]] = {}   # symbol → (info_dict, timestamp)
+_INFO_TTL = 900  # 15 minutes
+
+def _get_ticker_info(symbol: str) -> dict:
+    """Return yfinance .info for symbol, cached for 15 minutes."""
+    now = _time.monotonic()
+    cached = _INFO_CACHE.get(symbol)
+    if cached and (now - cached[1]) < _INFO_TTL:
+        return cached[0]
+    try:
+        info = yf.Ticker(symbol).info or {}
+    except Exception:
+        info = {}
+    _INFO_CACHE[symbol] = (info, now)
+    return info
+
+
+# ─── Node implementations ─────────────────────────────────────────────────────
+
+def node_momentum(symbol: str, close: np.ndarray | None = None) -> tuple[int | None, str]:
+    """RSI + 20/50 MA crossover on 90d daily data."""
+    try:
+        if close is None:
+            raw = yf.download(symbol, period="90d", auto_adjust=True, progress=False)
+            if raw is None or len(raw) < 20:
+                return ABSTAIN, "Insufficient data"
+            c = raw["Close"].squeeze().dropna().values.astype(float)
+        else:
+            c = close
+            if len(c) < 20:
+                return ABSTAIN, "Insufficient data"
+        # RSI-14
+        d = np.diff(c); gains = np.where(d>0,d,0); losses = np.where(d<0,-d,0)
+        ag = np.convolve(gains,  np.ones(14)/14, 'valid')[-1]
+        al = np.convolve(losses, np.ones(14)/14, 'valid')[-1]
+        rsi = 100 - (100/(1+ag/al)) if al > 0 else 50
+        # MA crossover
+        ma20 = np.mean(c[-20:]); ma50 = np.mean(c[-50:]) if len(c)>=50 else ma20
+        # Price vs 52w high
+        pct_from_high = (c[-1] - max(c)) / max(c) * 100
+        signals = []
+        if rsi > 55: signals.append(1)
+        elif rsi < 45: signals.append(-1)
+        else: signals.append(0)
+        if ma20 > ma50 * 1.005: signals.append(1)
+        elif ma20 < ma50 * 0.995: signals.append(-1)
+        else: signals.append(0)
+        score = sum(signals) / len(signals)
+        detail = f"RSI={rsi:.0f} MA20={'>' if ma20>ma50 else '<'}MA50 HighGap={pct_from_high:.1f}%"
+        if score >= 0.5: return VOTE_BULLISH, detail
+        if score <= -0.5: return VOTE_BEARISH, detail
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_trend(symbol: str, close: np.ndarray | None = None, high: np.ndarray | None = None, low: np.ndarray | None = None) -> tuple[int | None, str]:
+    """ADX + Bollinger regime from existing regime module."""
+    try:
+        from regime import _rsi, _adx, _bollinger_width as _bollinger
+        if close is None or high is None or low is None:
+            raw = yf.download(symbol, period="60d", auto_adjust=True, progress=False)
+            if raw is None or len(raw) < 20:
+                return ABSTAIN, "Insufficient data"
+            c = raw["Close"].squeeze().dropna().values.astype(float)
+            h = raw["High"].squeeze().dropna().values.astype(float)
+            l = raw["Low"].squeeze().dropna().values.astype(float)
+        else:
+            c, h, l = close, high, low
+            if len(c) < 20:
+                return ABSTAIN, "Insufficient data"
+        adx = _adx(h, l, c)
+        _, pct_b = _bollinger(c)
+        rsi = _rsi(c)
+        detail = f"ADX={adx:.0f} %B={pct_b:.0f} RSI={rsi:.0f}"
+        # Strong trend + price above midline = bullish
+        if adx > 25 and pct_b > 55 and rsi > 50: return VOTE_BULLISH, detail
+        if adx > 25 and pct_b < 45 and rsi < 50: return VOTE_BEARISH, detail
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_relative_strength(symbol: str, benchmark: str = "SPY") -> tuple[int | None, str]:
+    """1-month performance vs SPY."""
+    try:
+        raw = yf.download([symbol, benchmark], period="35d", auto_adjust=True, progress=False)
+        if raw is None or raw.empty:
+            return ABSTAIN, "No data"
+        closes = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
+        if hasattr(closes.columns, "__iter__") and symbol in closes.columns and benchmark in closes.columns:
+            s = closes[symbol].dropna()
+            b = closes[benchmark].dropna()
+        else:
+            return ABSTAIN, "Column mismatch"
+        if len(s) < 5 or len(b) < 5:
+            return ABSTAIN, "Too few rows"
+        s_ret = (s.iloc[-1] / s.iloc[0] - 1) * 100
+        b_ret = (b.iloc[-1] / b.iloc[0] - 1) * 100
+        rs = float(s_ret) - float(b_ret)
+        detail = f"1M: {float(s_ret):.1f}% vs SPY {float(b_ret):.1f}% → RS={rs:+.1f}%"
+        if rs > 3: return VOTE_BULLISH, detail
+        if rs < -3: return VOTE_BEARISH, detail
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_fundamentals(symbol: str) -> tuple[int | None, str]:
+    """Revenue growth + profit margins + PE ratio."""
+    try:
+        info = _get_ticker_info(symbol)
+        pe   = info.get("forwardPE") or info.get("trailingPE")
+        rev_growth = info.get("revenueGrowth")   # e.g. 0.12 = 12%
+        profit_m   = info.get("profitMargins")    # e.g. 0.15 = 15%
+        eps_growth = info.get("earningsGrowth")
+        if rev_growth is None and pe is None:
+            return ABSTAIN, "No fundamental data"
+        score = 0; count = 0
+        reasons = []
+        if rev_growth is not None:
+            count += 1
+            if rev_growth > 0.10: score += 1; reasons.append(f"RevGrowth={rev_growth*100:.0f}%↑")
+            elif rev_growth < 0: score -= 1;  reasons.append(f"RevGrowth={rev_growth*100:.0f}%↓")
+            else: reasons.append(f"RevGrowth={rev_growth*100:.0f}%")
+        if pe is not None:
+            count += 1
+            if 0 < pe < 20: score += 1;  reasons.append(f"PE={pe:.0f}✓")
+            elif pe > 50:   score -= 1;  reasons.append(f"PE={pe:.0f}↑")
+            elif pe < 0:    score -= 1;  reasons.append("PE<0")
+            else: reasons.append(f"PE={pe:.0f}")
+        if profit_m is not None:
+            count += 1
+            if profit_m > 0.15: score += 1; reasons.append(f"Margin={profit_m*100:.0f}%✓")
+            elif profit_m < 0:  score -= 1; reasons.append(f"Margin={profit_m*100:.0f}%✗")
+        if eps_growth is not None:
+            count += 1
+            if eps_growth > 0.10: score += 1; reasons.append(f"EPS↑{eps_growth*100:.0f}%")
+            elif eps_growth < 0:  score -= 1; reasons.append(f"EPS↓{eps_growth*100:.0f}%")
+        if count == 0: return ABSTAIN, "No usable data"
+        norm = score / count
+        detail = " · ".join(reasons)
+        if norm >= 0.4: return VOTE_BULLISH, detail
+        if norm <= -0.4: return VOTE_BEARISH, detail
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_analyst(symbol: str) -> tuple[int | None, str]:
+    """Analyst recommendation + price target upside."""
+    try:
+        info = _get_ticker_info(symbol)
+        rec  = (info.get("recommendationKey") or "").lower()
+        mean_target = info.get("targetMeanPrice")
+        current     = info.get("currentPrice") or info.get("regularMarketPrice")
+        upside = ((mean_target - current) / current * 100) if mean_target and current else None
+        detail = f"Rec={rec} Target={mean_target} Upside={upside:.1f}%" if upside else f"Rec={rec}"
+        if rec in ("strong_buy", "buy") and (upside is None or upside > 5):
+            return VOTE_BULLISH, detail
+        if rec in ("sell", "strong_sell") or (upside is not None and upside < -5):
+            return VOTE_BEARISH, detail
+        if rec == "hold" or (upside is not None and -5 <= upside <= 5):
+            return VOTE_NEUTRAL, detail
+        return ABSTAIN, "No analyst data"
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_news(symbol: str) -> tuple[int | None, str]:
+    """Cached news sentiment from DB (populated by news_agent)."""
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT sentiment_score, overall_sentiment FROM news_sentiment "
+                "WHERE symbol=? AND created_at>=? ORDER BY created_at DESC LIMIT 1",
+                (symbol, cutoff)
+            ).fetchone()
+        if not row:
+            return ABSTAIN, "No cached news (run News agent first)"
+        score, sentiment = row
+        detail = f"Sentiment={sentiment} Score={score}"
+        if score >= 30:  return VOTE_BULLISH, detail
+        if score <= -30: return VOTE_BEARISH, detail
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_kelly(symbol: str, equity: float, total_portfolio: float,
+               avg_cost: float, current_price: float, returns: np.ndarray | None = None) -> tuple[int | None, str]:
+    """Kelly position sizing signal."""
+    try:
+        from kelly import kelly_size_holding
+        k = kelly_size_holding(symbol, equity, total_portfolio, avg_cost, current_price, returns=returns)
+        if k.get("error"):
+            return ABSTAIN, k["error"]
+        action = k.get("action", "HOLD")
+        detail = f"Action={action} Optimal={k.get('optimal_pct',0)}% Current={k.get('current_pct',0)}% Sharpe={k.get('sharpe',0)}"
+        if action == "ADD":   return VOTE_BULLISH, detail
+        if action == "TRIM":  return VOTE_BEARISH, detail
+        if action == "AVOID": return VOTE_BEARISH, detail
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_ecg(symbol: str) -> tuple[int | None, str]:
+    """Equity Curve Gate health for this holding."""
+    try:
+        from db import get_equity_history
+        from ecg import _drawdown, _streak, _gate_status
+        history = get_equity_history(symbol, days=30)
+        if not history or len(history) < 3:
+            return ABSTAIN, "Insufficient ECG history"
+        prices = [h["equity"] for h in history]
+        dd = _drawdown(prices)
+        streak = _streak(prices)
+        status = _gate_status(dd, streak)
+        detail = f"ECG={status} DD={dd:.1f}% Streak={streak}"
+        if status == "HEALTHY":   return VOTE_BULLISH, detail
+        if status == "SUSPENDED": return VOTE_BEARISH, detail
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+def node_volume(symbol: str, close: np.ndarray | None = None, volume: np.ndarray | None = None) -> tuple[int | None, str]:
+    """Volume trend: 10d avg vs 30d avg. Rising volume = conviction."""
+    try:
+        if close is None or volume is None:
+            raw = yf.download(symbol, period="45d", auto_adjust=True, progress=False)
+            if raw is None or len(raw) < 15:
+                return ABSTAIN, "Insufficient data"
+            vol = raw["Volume"].squeeze().dropna().values.astype(float)
+            prices = raw["Close"].squeeze().dropna().values.astype(float)
+        else:
+            vol = volume
+            prices = close
+            
+        if len(vol) < 15 or len(prices) < 15:
+            return ABSTAIN, "Too few rows"
+        avg10 = np.mean(vol[-10:])
+        avg30 = np.mean(vol[-30:]) if len(vol) >= 30 else np.mean(vol)
+        ratio = avg10 / avg30 if avg30 > 0 else 1.0
+        # Also check: volume increasing while price increasing = bullish
+        price_up = prices[-1] > prices[-10]
+        detail = f"Vol10/30={ratio:.2f}x PriceDir={'↑' if price_up else '↓'}"
+        if ratio > 1.2 and price_up:  return VOTE_BULLISH, detail
+        if ratio > 1.3 and not price_up: return VOTE_BEARISH, detail  # high vol, falling = distribution
+        if ratio < 0.7:               return VOTE_NEUTRAL, detail    # drying up volume = wait
+        return VOTE_NEUTRAL, detail
+    except Exception as e:
+        return ABSTAIN, str(e)
+
+
+# ─── Main consensus runner ────────────────────────────────────────────────────
+
+def run_consensus_holding(
+    symbol: str,
+    equity: float = 0,
+    total_portfolio: float = 1,
+    avg_cost: float = 0,
+    current_price: float = 0,
+) -> dict:
+    """Run all 9 nodes for one holding, return consensus verdict."""
+    nodes = {}
+
+    try:
+        raw_252 = yf.download(symbol, period="252d", auto_adjust=True, progress=False)
+        cache = {
+            "close": raw_252["Close"].squeeze().dropna().values.astype(float) if "Close" in raw_252 else np.array([]),
+            "high":  raw_252["High"].squeeze().dropna().values.astype(float) if "High" in raw_252 else np.array([]),
+            "low":   raw_252["Low"].squeeze().dropna().values.astype(float) if "Low" in raw_252 else np.array([]),
+            "volume":raw_252["Volume"].squeeze().dropna().values.astype(float) if "Volume" in raw_252 else np.array([]),
+        }
+        if len(cache["close"]) > 0:
+            returns = np.diff(np.log(cache["close"][-91:]))
+        else:
+            returns = None
+    except Exception:
+        cache = {"close": None, "high": None, "low": None, "volume": None}
+        returns = None
+
+    c, h, l, v = cache["close"], cache["high"], cache["low"], cache["volume"]
+
+    nodes["Momentum"]       = node_momentum(symbol, close=c[-90:] if c is not None and len(c) > 0 else None)
+    nodes["Trend"]          = node_trend(symbol, close=c[-60:] if c is not None and len(c) > 0 else None, high=h[-60:] if h is not None and len(h) > 0 else None, low=l[-60:] if l is not None and len(l) > 0 else None)
+    nodes["Rel.Strength"]   = node_relative_strength(symbol)
+    nodes["Fundamentals"]   = node_fundamentals(symbol)
+    nodes["Analyst"]        = node_analyst(symbol)
+    nodes["News"]           = node_news(symbol)
+    nodes["Kelly"]          = node_kelly(symbol, equity, total_portfolio, avg_cost, current_price, returns=returns)
+    nodes["ECG"]            = node_ecg(symbol)
+    nodes["Volume"]         = node_volume(symbol, close=c[-45:] if c is not None and len(c) > 0 else None, volume=v[-45:] if v is not None and len(v) > 0 else None)
+    # Node 10: FFT Cycle phase (spectral analysis)
+    try:
+        from fft_cycles import node_fft_cycle
+        nodes["FFT_Cycle"] = node_fft_cycle(symbol, prices=c if c is not None and len(c) > 0 else None)
+    except Exception as _fft_err:
+        nodes["FFT_Cycle"] = (None, f"FFT unavailable: {_fft_err}")
+
+    votes   = {k: v[0] for k, v in nodes.items()}
+    details = {k: v[1] for k, v in nodes.items()}
+
+    # Weighted tally — same weights as trading engine for consistency
+    NODE_WEIGHTS = {
+        "Rel.Strength":  2.0,
+        "Trend":         2.0,
+        "Volume":        1.5,
+        "Momentum":      1.5,
+        "Fundamentals":  0.75,
+        "ECG":           0.5,
+        "Analyst":       0.5,
+        "News":          0.25,
+        # Kelly: sizing output, not in directional vote
+        # FFT_Cycle: removed from vote — spurious in non-stationary series
+    }
+
+    # Extract Kelly separately for sizing display
+    kelly_vote   = votes.get("Kelly")
+    kelly_detail = details.get("Kelly", "")
+
+    weighted_sum = 0.0
+    weight_total = 0.0
+    bullish = bearish = neutral = 0
+    active_count = 0
+    abstains = 0
+
+    for node, vote in votes.items():
+        if node in ("Kelly", "FFT_Cycle"):
+            continue
+        w = NODE_WEIGHTS.get(node, 1.0)
+        if vote is None:
+            abstains += 1
+            continue
+        active_count += 1
+        weight_total += w
+        weighted_sum += vote * w
+        if vote == VOTE_BULLISH:   bullish += 1
+        elif vote == VOTE_BEARISH: bearish += 1
+        else:                      neutral += 1
+
+    n         = active_count
+    raw_score = weighted_sum / weight_total if weight_total > 0 else 0
+    confidence = n / max(len(NODE_WEIGHTS), 1)
+
+    if n < 4:
+        verdict = "INSUFFICIENT DATA"
+        verdict_color = "muted"
+    elif raw_score >= 0.55:
+        verdict = "STRONG BUY"
+        verdict_color = "green"
+    elif raw_score >= 0.25:
+        verdict = "BUY"
+        verdict_color = "green"
+    elif raw_score <= -0.55:
+        verdict = "STRONG SELL"
+        verdict_color = "red"
+    elif raw_score <= -0.25:
+        verdict = "SELL"
+        verdict_color = "red"
+    else:
+        verdict = "HOLD"
+        verdict_color = "cyan"
+
+    return {
+        "symbol":        symbol,
+        "verdict":       verdict,
+        "verdict_color": verdict_color,
+        "raw_score":     round(raw_score, 3),
+        "confidence":    round(confidence * 100, 0),
+        "bullish":       bullish,
+        "bearish":       bearish,
+        "neutral":       neutral,
+        "abstains":      abstains,
+        "total_nodes":   len(nodes),
+        "active_nodes":  n,
+        "votes":         votes,    # {node: +1/0/-1/None}
+        "details":       details,  # {node: reasoning string}
+        "kelly_vote":    kelly_vote,
+        "kelly_detail":  kelly_detail,
+        "as_of":         datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def run_consensus_portfolio(holdings: list[dict], total_portfolio: float) -> dict:
+    """Run consensus on all holdings, return ranked results."""
+    import concurrent.futures
+
+    def process_holding(h):
+        sym   = h.get("symbol", "")
+        eq    = float(h.get("equity", 0))
+        cost  = float(h.get("average_buy_price", 0))
+        price = float(h.get("current_price", 0))
+        print(f"  CONSENSUS: {sym}...")
+        return run_consensus_holding(sym, eq, total_portfolio, cost, price)
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(holdings) or 1, 8)) as executor:
+        results = list(executor.map(process_holding, holdings))
+
+    # Sort: strong buy first, strong sell last
+    order = {"STRONG BUY": 0, "BUY": 1, "HOLD": 2, "SELL": 3, "STRONG SELL": 4, "INSUFFICIENT DATA": 5}
+    results.sort(key=lambda x: (order.get(x["verdict"], 5), -x["raw_score"]))
+
+    strong_buys  = [r["symbol"] for r in results if r["verdict"] == "STRONG BUY"]
+    buys         = [r["symbol"] for r in results if r["verdict"] == "BUY"]
+    sells        = [r["symbol"] for r in results if r["verdict"] in ("SELL", "STRONG SELL")]
+    avg_conf     = round(sum(r["confidence"] for r in results) / len(results), 1) if results else 0
+
+    return {
+        "holdings":      results,
+        "strong_buys":   strong_buys,
+        "buys":          buys,
+        "sells":         sells,
+        "avg_confidence": avg_conf,
+        "total_analyzed": len(results),
+        "as_of":         datetime.utcnow().isoformat() + "Z",
+    }

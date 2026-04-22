@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:padding="16dp">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="SETTINGS" android:textColor="@color/accent"
+            android:textSize="14sp" android:textStyle="bold" android:letterSpacing="0.1"
+            android:layout_marginBottom="20dp" android:layout_marginTop="8dp"/>
+
+        <com.google.android.material.card.MaterialCardView android:layout_width="match_parent"
+            android:layout_height="wrap_content" app:cardBackgroundColor="@color/card"
+            app:strokeColor="@color/border" app:strokeWidth="1dp" app:cardCornerRadius="8dp"
+            app:cardElevation="0dp" android:layout_marginBottom="12dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="SERVER CONNECTION" android:textColor="@color/accent"
+                    android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.1"
+                    android:layout_marginBottom="12dp"/>
+
+                <TextView
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="Server URL" android:textColor="@color/muted"
+                    android:textSize="11sp" android:layout_marginBottom="6dp"/>
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    app:boxBackgroundColor="@color/card_hover" app:boxBackgroundMode="outline"
+                    app:boxStrokeColor="@color/border" app:hintTextColor="@color/muted"
+                    android:layout_marginBottom="8dp">
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etServerUrl"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:hint="http://10.0.0.113:9000"
+                        android:textColor="@color/text" android:textSize="13sp"
+                        android:inputType="textUri"/>
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <TextView android:id="@+id/tvCurrentUrl" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:textColor="@color/muted"
+                    android:textSize="11sp" android:layout_marginBottom="14dp"/>
+
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" >
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnSave" android:layout_width="0dp"
+                        android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="Save &amp; Reconnect" app:backgroundTint="@color/accent"
+                        android:textColor="@color/black" android:textSize="11sp"/>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnTestConnection" android:layout_width="0dp"
+                        android:layout_height="wrap_content" android:layout_weight="1"
+                        android:text="Test Connection" app:backgroundTint="@color/card_hover"
+                        android:textColor="@color/accent" android:textSize="11sp"
+                        app:strokeColor="@color/accent" app:strokeWidth="1dp"/>
+                </LinearLayout>
+
+                <TextView android:id="@+id/tvTestResult" android:layout_width="match_parent"
+                    android:layout_height="wrap_content" android:text=""
+                    android:textColor="@color/green" android:textSize="12sp"
+                    android:layout_marginTop="10dp" android:gravity="center"/>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView android:layout_width="match_parent"
+            android:layout_height="wrap_content" app:cardBackgroundColor="@color/card"
+            app:strokeColor="@color/border" app:strokeWidth="1dp" app:cardCornerRadius="8dp"
+            app:cardElevation="0dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical" android:padding="16dp">
+                <TextView
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="HOW TO CONNECT" android:textColor="@color/accent"
+                    android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.1"
+                    android:layout_marginBottom="10dp"/>
+                <TextView
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:text="1. Make sure your Python server is running on your PC\n   cd gesh-project &amp;&amp; python server.py\n\n2. Find your PC's local IP address\n   Windows: ipconfig | Mac: ifconfig\n   Look for 10.0.0.x\n\n3. Enter http://10.0.0.113:9000 above\n\n4. Both devices must be on the same WiFi network"
+                    android:textColor="@color/muted" android:textSize="12sp"
+                    android:lineSpacingMultiplier="1.5" android:fontFamily="monospace"/>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

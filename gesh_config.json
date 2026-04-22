@@ -1,0 +1,20 @@
+{
+  "total_buying_power": null,
+  "stock_allocation_pct": 70.0,
+  "options_allocation_pct": 30.0,
+  "max_stock_per_trade": 5000.0,
+  "max_options_per_trade": 2000.0,
+  "max_open_positions": 5,
+  "max_open_contracts": 3,
+  "min_cash_buffer": 500.0,
+  "scanner_price_min": 0.1,
+  "scanner_price_max": 10.0,
+  "scanner_volume_min": 200000,
+  "scanner_timeframe": "daily",
+  "auto_trade": false,
+  "extended_hours": true,
+  "paper_mode": false,
+  "screener_universe": "default",
+  "last_updated": "2026-04-18T14:03:50.091872+00:00",
+  "version": "1.1"
+}

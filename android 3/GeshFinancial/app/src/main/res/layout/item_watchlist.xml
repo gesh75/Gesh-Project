@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:orientation="horizontal" android:paddingStart="14dp" android:paddingEnd="14dp"
+    android:paddingTop="10dp" android:paddingBottom="10dp" android:gravity="center_vertical"
+    android:background="@color/card">
+    <TextView android:id="@+id/tvSymbol" android:layout_width="70dp" android:layout_height="wrap_content"
+        android:textColor="@color/accent" android:textSize="13sp" android:textStyle="bold"/>
+    <TextView android:id="@+id/tvLast" android:layout_width="0dp" android:layout_height="wrap_content"
+        android:layout_weight="1" android:textColor="@color/text" android:textSize="12sp"
+        android:gravity="end" android:textStyle="bold"/>
+    <TextView android:id="@+id/tvBid" android:layout_width="0dp" android:layout_height="wrap_content"
+        android:layout_weight="1" android:textColor="@color/muted" android:textSize="11sp"
+        android:gravity="end"/>
+    <TextView android:id="@+id/tvAsk" android:layout_width="0dp" android:layout_height="wrap_content"
+        android:layout_weight="1" android:textColor="@color/muted" android:textSize="11sp"
+        android:gravity="end"/>
+    <TextView android:id="@+id/tvChange" android:layout_width="0dp" android:layout_height="wrap_content"
+        android:layout_weight="1" android:textColor="@color/green" android:textSize="11sp"
+        android:gravity="end" android:textStyle="bold"/>
+</LinearLayout>
