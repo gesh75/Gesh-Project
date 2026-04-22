@@ -155,11 +155,8 @@ Open **http://localhost:9000** for the dashboard.
 |---|---|---|
 | `claude-sonnet-4-6` | Anthropic | Deep portfolio analysis, screener, SEC, fundamentals |
 | `claude-haiku-4-5-20251001` | Anthropic | Batch news sentiment (fast + cheap) |
-| `gemini-2.5-flash` | Google | High-volume batch tasks, market commentary, second opinion |
-| `gemini-2.5-pro` | Google | Contrarian second opinion on STRONG BUY signals |
-| `llama3.2:3b` (Ollama) | Local | Portfolio commentary, offline fallback, zero API cost |
 
-**Routing rule:** Cheap/high-volume tasks → Haiku or Gemini Flash. Complex reasoning → Sonnet. Independent second opinion → Gemini Pro.
+**Routing rule:** High-volume/batch tasks → Haiku. Complex reasoning and deep analysis → Sonnet.
 
 ---
 
@@ -282,10 +279,6 @@ zone_symbols = [r["symbol"] for r in cz_report["found"]]
 | `/api/agents/sec` | POST | Watch SEC EDGAR filings |
 | `/api/agents/news` | POST | Scan news sentiment |
 | `/api/agents/fundamentals` | POST | Run full fundamental scan |
-| `/api/ollama/analyze` | POST | Ollama portfolio commentary |
-| `/api/gemini/analyze` | POST | Gemini Flash portfolio commentary |
-| `/api/gemini/second-opinion/{symbol}` | POST | Gemini Pro contrarian review |
-| `/api/gemini/market-commentary` | POST | Macro market narrative |
 
 ### Trading Pipeline
 

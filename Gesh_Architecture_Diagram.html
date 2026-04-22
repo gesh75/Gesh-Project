@@ -254,11 +254,6 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
         <div class="box-body">FFT spectral cycle detection · Log-detrend + Hanning window · Top 3 dominant cycles · Primary cycle phase · Trough/Peak position · BULLISH/BEARISH signal · Consensus node #10</div>
         <div style="margin-top:6px"><span class="tag t-green">NumPy FFT</span><span class="tag t-green">252d lookback</span></div>
       </div>
-      <div class="box c-orange w2">
-        <div class="box-title">🦙 ollama_agent.py</div>
-        <div class="box-body">Local LLM via Ollama · llama3.2:3b (2GB) · Zero API cost · Portfolio commentary · News sentiment scoring · Contrarian second opinion · Auto-fallback if offline</div>
-        <div style="margin-top:6px"><span class="tag t-orange">Ollama</span><span class="tag t-orange">llama3.2:3b</span><span class="tag t-orange">FREE · LOCAL</span></div>
-      </div>
       <div class="box c-red w2">
         <div class="box-title">⚠️ ecg.py</div>
         <div class="box-body">Equity Curve Gate · Drawdown from peak · Losing streak count · HEALTHY / COOLING / SUSPENDED · VRE26-style monitor · unblock.py reset utility</div>
@@ -403,24 +398,6 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
           </div>
         </div>
       </div>
-    </div>
-    <div class="box c-orange full" style="margin-top:12px">
-      <div class="box-title">🦙 Ollama Local LLM · ollama_agent.py</div>
-      <div class="box-body" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:4px">
-        <div style="padding:6px;border:1px solid rgba(255,140,66,.18);border-radius:5px">
-          <div style="font-size:11px;font-weight:700;color:var(--orange);margin-bottom:3px">📊 Portfolio Summary</div>
-          <div style="font-size:10px;color:var(--muted2)">3-point analysis · Positioning · Biggest risk · Best action today · Zero API cost</div>
-        </div>
-        <div style="padding:6px;border:1px solid rgba(255,140,66,.18);border-radius:5px">
-          <div style="font-size:11px;font-weight:700;color:var(--orange);margin-bottom:3px">📰 News Sentiment</div>
-          <div style="font-size:10px;color:var(--muted2)">Batch headline scoring · −100→+100 · BULLISH/NEUTRAL/BEARISH · Backup to Claude Haiku</div>
-        </div>
-        <div style="padding:6px;border:1px solid rgba(255,140,66,.18);border-radius:5px">
-          <div style="font-size:11px;font-weight:700;color:var(--orange);margin-bottom:3px">🔍 Second Opinion</div>
-          <div style="font-size:10px;color:var(--muted2)">Contrarian risk review · Stress-test Claude's thesis · 2 missed risks surfaced per call</div>
-        </div>
-      </div>
-      <div style="margin-top:6px;font-size:10px;color:var(--muted)">Model: <strong style="color:var(--orange)">llama3.2:3b</strong> (2GB) locally · urllib only · no extra deps · graceful offline fallback · <span style="color:var(--orange)">FREE · NO API COST</span></div>
     </div>
   </div>
 
@@ -634,23 +611,6 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
           <span>Market Bias + Hot sectors</span>
         </div>
       </div>
-      <div class="tab-box" style="border-color:rgba(255,140,66,.3);background:rgba(255,140,66,.04)">
-        <div class="tab-name" style="color:var(--orange)"><span class="tab-icon">🦙</span>Local AI</div>
-        <div class="tab-feat">
-          <span>🦙 Ollama Status card</span>
-          <span>Model · Size · Running?</span>
-          <span>Setup guide if offline</span>
-          <span>📊 Portfolio Commentary</span>
-          <span>llama3.2:3b · FREE</span>
-          <span>Positioning · Risk · Action</span>
-          <span>🔍 Second Opinion</span>
-          <span>Contrarian risk view</span>
-          <span>Any ticker · Any context</span>
-          <span>〰️ FFT Cycle Detector</span>
-          <span>Phase · Direction · Signal</span>
-          <span>Primary + secondary cycles</span>
-        </div>
-      </div>
       <div class="tab-box" style="border-color:rgba(0,229,204,.3);background:rgba(0,229,204,.04)">
         <div class="tab-name" style="color:var(--teal)"><span class="tab-icon">🔍</span>Scanner <span class="new-badge">v4</span></div>
         <div class="tab-feat">
@@ -686,7 +646,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
           </div>
           <div style="padding:8px;border:1px solid rgba(0,212,255,.2);border-radius:6px">
             <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:4px">📁 gesh/portfolio-manager/ → :9000</div>
-            <div style="font-size:10px;color:var(--muted2)">Branch: <span style="color:var(--accent)">main</span><br>Unique: gemini_agent.py (backend only)<br>Regime: Full 413-line version<br>Consensus: 11-node<br>Dashboard: 8 tabs (Overview · AI · Signals · Risk · Intelligence · Radar · Local AI · Scanner · Paper Trades)</div>
+            <div style="font-size:10px;color:var(--muted2)">Branch: <span style="color:var(--accent)">main</span><br>Regime: Full version<br>Consensus: 11-node<br>Dashboard: 7 tabs (Overview · AI · Signals · Risk · Intelligence · Radar · Scanner)</div>
           </div>
           <div style="padding:8px;border:1px solid rgba(0,229,204,.2);border-radius:6px">
             <div style="font-size:11px;font-weight:700;color:var(--teal);margin-bottom:4px">📁 gesh/trading-engine/ → :9001</div>
@@ -715,7 +675,6 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
           <span style="color:var(--red)">ANTHROPIC_API_KEY</span>=sk-ant-...<br>
           <span style="color:var(--green)">ROBINHOOD_USER</span>=your@email.com<br>
           <span style="color:var(--green)">ROBINHOOD_PASS</span>=yourpassword<br>
-          <span style="color:#4ade80">GEMINI_API_KEY</span>=AIzaSy... <span style="color:var(--muted);font-size:10px">(backend only — tab removed)</span><br>
           <span style="color:var(--muted2)">CLAUDE_MODEL</span>=sonnet <span style="color:var(--muted);font-size:10px">(optional)</span><br>
           <span style="color:var(--muted2)">FINNHUB_API_KEY</span>=... <span style="color:var(--muted);font-size:10px">(optional)</span><br>
           <span style="color:var(--teal)">FRED_API_KEY</span>=... <span class="new-badge">v3</span> <span style="color:var(--muted);font-size:10px">Node 11 accuracy</span><br>
@@ -750,25 +709,22 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
         </div>
         <div style="margin-top:6px"><span class="tag t-yellow">One-time</span><span class="tag t-yellow">Python 3.9+</span></div>
       </div>
-      <div class="box c-orange w2">
-        <div class="box-title">🦙 Optional: Ollama Local LLM</div>
+      <div class="box c-red w2">
+        <div class="box-title">🔴 Kill Switch</div>
         <div class="box-body" style="font-family:var(--font);line-height:2;font-size:11px">
-          <span style="color:var(--muted2)">Install Ollama (ollama.ai):</span><br>
-          <span style="color:var(--orange)">ollama pull llama3.2:3b</span><br>
-          <span style="color:var(--muted2)">Ollama auto-starts on boot</span><br>
-          <span style="color:var(--muted2)">Kill switch (block all orders):</span><br>
+          <span style="color:var(--muted2)">Block all orders immediately:</span><br>
           <span style="color:var(--red)">touch ~/.gesh/KILL</span><br>
           <span style="color:var(--muted2)">Remove kill switch:</span><br>
-          <span style="color:var(--green)">rm ~/.gesh/KILL</span>
+          <span style="color:var(--green)">rm ~/.gesh/KILL</span><br>
+          <span style="color:var(--muted2)">Honored mid-loop by risk gate</span>
         </div>
-        <div style="margin-top:6px"><span class="tag t-orange">Optional</span><span class="tag t-orange">Free / Local</span></div>
+        <div style="margin-top:6px"><span class="tag t-red">Gate 1</span><span class="tag t-red">Instant</span></div>
       </div>
     </div>
     <div style="margin-top:10px;padding:10px 14px;border:1px solid rgba(0,212,255,.2);border-radius:8px;background:rgba(0,212,255,.04);font-size:11px;color:var(--muted2)">
       <span style="color:var(--accent);font-weight:700">localhost:9000 (Portfolio Manager):</span>
       /api/portfolio · /api/analyze · /api/deep-analysis · /api/screener · /api/regime · /api/kelly · /api/monte-carlo · /api/consensus · /api/ecg · /api/fft-cycles
       · /api/agents/sec · /api/agents/news · /api/agents/fundamentals
-      · <span style="color:var(--orange)">/api/ollama/status · /api/ollama/analyze · /api/ollama/second-opinion/{symbol}</span>
       · /api/config · /api/trades · /api/paper/run · /api/trading/consensus-order
       &nbsp;·&nbsp; <span style="color:var(--green)">Total: 40+ endpoints</span>
     </div>
@@ -842,14 +798,13 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
   <div class="leg-item"><div class="leg-dot" style="background:rgba(167,139,250,.4)"></div> AI / Claude powered</div>
   <div class="leg-item"><div class="leg-dot" style="background:rgba(255,215,0,.4)"></div> External public data</div>
   <div class="leg-item"><div class="leg-dot" style="background:rgba(255,68,68,.4)"></div> Risk monitoring</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,140,66,.4)"></div> News / filings / Ollama local LLM</div>
+  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,140,66,.4)"></div> News / filings agents</div>
   <div class="leg-item"><div class="leg-dot" style="background:rgba(0,229,204,.4)"></div> v2 — FRED macro · Polymarket · Trading layer</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(74,222,128,.4)"></div> v2 — Gemini AI backend (google-genai SDK) · v5: dashboard tab removed (quota limits)</div>
   <div class="leg-item"><div class="leg-dot" style="background:rgba(255,68,68,.4)"></div> v3 — Live Reddit sentiment · macro_connector · sentiment_connector</div>
   <div class="leg-item"><div class="leg-dot" style="background:rgba(255,110,180,.4)"></div> Execution tier · paper mode · 8-gate risk gate · LIVE</div>
   <div class="leg-item"><div class="leg-dot" style="background:rgba(255,255,255,.15)"></div> Storage / cache</div>
   <div class="leg-item"><div class="leg-dot" style="background:rgba(0,229,204,.4)"></div> v4 — Monorepo consolidation · Dual-app architecture · :9000 Portfolio · :9001 Trading</div>
-  <div class="leg-item" style="margin-left:12px;color:var(--muted)">Built by Georgi Gaydarov · Claude Sonnet 4.6 · April 2026 · v5: 3 Critical Bugs Fixed · Weighted Consensus · 4 New Risk Gates · Slippage Model · Ollama Removed · Polymarket Removed · Gemini Tab Removed (quota limits) · 15-min yfinance Cache · :9000 Portfolio · :9001 Trading · PAPER MODE</div>
+  <div class="leg-item" style="margin-left:12px;color:var(--muted)">Built by Georgi Gaydarov · Claude Sonnet 4.6 · April 2026 · v5: Weighted Consensus · 4 New Risk Gates · Reddit Sentiment · FRED Macro · 7-tab Dashboard · :9000 Portfolio · :9001 Trading · PAPER MODE</div>
 </div>
 
 <script>
