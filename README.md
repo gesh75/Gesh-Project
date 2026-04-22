@@ -11,6 +11,14 @@ GESH combines live Robinhood portfolio data with multiple AI analysis engines â€
 
 ---
 
+## Architecture Diagram
+
+[![GESH Architecture](docs/architecture_diagram.png)](https://htmlpreview.github.io/?https://github.com/gesh75/Gesh-Project/blob/main/Gesh_Architecture_Diagram.html)
+
+> Click the diagram to open the **live interactive version** with animations.
+
+---
+
 ## Features
 
 | Category | Capability |
