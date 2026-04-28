@@ -1,0 +1,34 @@
+# Core web server
+fastapi==0.135.3
+uvicorn==0.44.0
+python-dotenv==1.2.2
+
+# Robinhood
+robin-stocks==3.4.0
+pyotp==2.9.0
+
+# Market data
+yfinance==1.2.1
+pandas==3.0.2
+numpy==2.4.4
+
+# AI / LLM
+anthropic==0.93.0
+google-genai==1.73.1
+
+# News & sentiment
+requests==2.33.1
+beautifulsoup4==4.14.3
+praw==7.8.1
+vaderSentiment==3.3.2
+nltk==3.9.4
+
+# Macro data
+fredapi==0.5.2
+
+# Scheduler (autopilot)
+APScheduler==3.11.2
+
+# Utilities
+httpx==0.28.1
+tenacity==9.1.4
