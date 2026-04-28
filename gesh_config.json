@@ -10,11 +10,11 @@
   "scanner_price_min": 0.1,
   "scanner_price_max": 10.0,
   "scanner_volume_min": 200000,
-  "scanner_timeframe": "daily",
+  "scanner_timeframe": "1HR",
   "auto_trade": false,
   "extended_hours": true,
   "paper_mode": false,
   "screener_universe": "default",
-  "last_updated": "2026-04-18T14:03:50.091872+00:00",
+  "last_updated": "2026-04-28T15:09:58.174286+00:00",
   "version": "1.1"
 }

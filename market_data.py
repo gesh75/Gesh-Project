@@ -316,18 +316,17 @@ def screen_market(top_n: int = 40) -> list[dict]:
     import datetime as _dt
 
     universe = list(dict.fromkeys(SCREENER_UNIVERSE))
-    end   = _dt.date.today()
-    start = end - _dt.timedelta(days=35)
 
     # ── 1. Batch price + volume download ────────────────────────────────────
+    # Use period= (relative) instead of start/end= (absolute) — more resilient
+    # to yfinance crumb expiry and always includes today's partial-day bar.
     try:
         raw = yf.download(
             universe,
-            start=start.isoformat(),
-            end=end.isoformat(),
+            period="40d",
             progress=False,
             auto_adjust=True,
-            threads=True,
+            threads=False,  # avoid crumb collisions under parallel load
         )
     except Exception as e:
         print(f"⚠  Screener batch download failed: {e}")

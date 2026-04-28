@@ -103,7 +103,7 @@ def _adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = ADX
         return 15.0
     # ADX = smoothed average of DX
     adx = sum(dx_vals[-period:]) / min(period, len(dx_vals[-period:]))
-    return round(adx, 1)
+    return round(float(adx), 1)
 
 
 def _bollinger_width(close: np.ndarray, period: int = BB_PERIOD) -> tuple[float, float]:

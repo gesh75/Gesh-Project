@@ -5,4 +5,10 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
 .DS_Store
+gesh_report.html
+.playwright-mcp/
+test.txt
+analysis_*.json
+trade_*_exit_*.json

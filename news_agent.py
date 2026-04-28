@@ -40,22 +40,69 @@ HEADERS = {"User-Agent": "GeshFinancial/2.0 georgy75@gmail.com"}
 
 def _fetch_yahoo_news(symbol: str, max_items: int = 8) -> list[dict]:
     """Yahoo Finance RSS feed — no key needed."""
+    items = []
     try:
         url = f"https://finance.yahoo.com/rss/headline?s={symbol}"
         r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code != 200:
-            return []
-        root = ET.fromstring(r.text)
-        items = []
-        for item in root.findall(".//item")[:max_items]:
-            title = item.findtext("title", "")
-            desc  = item.findtext("description", "")
-            pub   = item.findtext("pubDate", "")
-            link  = item.findtext("link", "")
-            items.append({"title": title, "description": desc[:500], "published": pub, "url": link, "source": "Yahoo Finance"})
-        return items
+        if r.status_code == 200 and "<item>" in r.text:
+            root = ET.fromstring(r.text)
+            for item in root.findall(".//item")[:max_items]:
+                title = item.findtext("title", "")
+                desc  = item.findtext("description", "")
+                pub   = item.findtext("pubDate", "")
+                link  = item.findtext("link", "")
+                if title:
+                    items.append({"title": title, "description": desc[:500], "published": pub, "url": link, "source": "Yahoo Finance"})
     except Exception:
-        return []
+        pass
+    return items
+
+
+def _fetch_seeking_alpha_rss(symbol: str, max_items: int = 5) -> list[dict]:
+    """Seeking Alpha RSS — no key needed."""
+    items = []
+    try:
+        url = f"https://seekingalpha.com/api/sa/combined/{symbol.upper()}.xml"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        if r.status_code == 200 and "<item>" in r.text:
+            root = ET.fromstring(r.text)
+            for item in root.findall(".//item")[:max_items]:
+                title = item.findtext("title", "")
+                desc  = item.findtext("description", "") or item.findtext("{http://purl.org/rss/1.0/modules/content/}encoded", "")
+                pub   = item.findtext("pubDate", "")
+                link  = item.findtext("link", "")
+                # Strip HTML tags from description
+                desc  = re.sub(r"<[^>]+>", " ", desc)[:500]
+                if title:
+                    items.append({"title": title, "description": desc.strip(), "published": pub, "url": link, "source": "Seeking Alpha"})
+    except Exception:
+        pass
+    return items
+
+
+def _fetch_marketwatch_rss(symbol: str, max_items: int = 5) -> list[dict]:
+    """MarketWatch RSS feed — no key needed."""
+    items = []
+    try:
+        url = f"https://feeds.marketwatch.com/marketwatch/realtimeheadlines/"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        if r.status_code == 200 and "<item>" in r.text:
+            root = ET.fromstring(r.text)
+            sym_upper = symbol.upper()
+            for item in root.findall(".//item")[:50]:
+                title = item.findtext("title", "")
+                # Filter for symbol-relevant headlines
+                if sym_upper in title.upper() or sym_upper in item.findtext("description", "").upper():
+                    desc = item.findtext("description", "")[:500]
+                    pub  = item.findtext("pubDate", "")
+                    link = item.findtext("link", "")
+                    if title:
+                        items.append({"title": title, "description": desc, "published": pub, "url": link, "source": "MarketWatch"})
+                        if len(items) >= max_items:
+                            break
+    except Exception:
+        pass
+    return items
 
 
 def _fetch_finnhub_news(symbol: str, days_back: int = 7) -> list[dict]:
@@ -90,12 +137,17 @@ def _fetch_finnhub_news(symbol: str, days_back: int = 7) -> list[dict]:
 
 
 def _fetch_all_news(symbol: str, days_back: int = 7) -> list[dict]:
-    """Combine news from all available sources, deduplicated by title."""
-    yahoo   = _fetch_yahoo_news(symbol)
-    finnhub = _fetch_finnhub_news(symbol, days_back=days_back)
+    """Combine news from all available sources, deduplicated by title.
+    Source priority: Yahoo RSS → Finnhub → Seeking Alpha RSS → MarketWatch RSS.
+    """
+    yahoo         = _fetch_yahoo_news(symbol)
+    finnhub       = _fetch_finnhub_news(symbol, days_back=days_back)
+    seeking_alpha = _fetch_seeking_alpha_rss(symbol) if len(yahoo) + len(finnhub) < 3 else []
+    marketwatch   = _fetch_marketwatch_rss(symbol)   if len(yahoo) + len(finnhub) < 3 else []
+
     seen_titles: set[str] = set()
     combined = []
-    for item in yahoo + finnhub:
+    for item in yahoo + finnhub + seeking_alpha + marketwatch:
         title_key = item["title"][:60].lower()
         if title_key not in seen_titles and item["title"]:
             seen_titles.add(title_key)

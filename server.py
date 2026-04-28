@@ -1,9 +1,24 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
-import math, uvicorn
+import math, time, threading, uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
+
+# ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
+# Long-running uvicorn + yfinance + sqlite + robin_stocks tends to leak FDs
+# (HTTP keep-alive sockets, yfinance crumb/tz cache opens, sqlite handles).
+# macOS default soft limit is 256/1024 — bump to 10240 so a slow leak takes
+# days, not hours, to bite. Also enforced via launchd plist as defense-in-depth.
+try:
+    import resource
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    _target = 10240
+    resource.setrlimit(resource.RLIMIT_NOFILE,
+                       (max(_soft, _target), max(_hard, _target)))
+    print(f"✓ RLIMIT_NOFILE raised: soft={_soft}→{max(_soft, _target)}")
+except Exception as _rl_err:
+    print(f"⚠  Could not raise RLIMIT_NOFILE: {_rl_err}")
 
 
 def _sanitize(obj):
@@ -71,6 +86,34 @@ async def lifespan(app):
 app = FastAPI(title="Gesh Financial Observability", lifespan=lifespan)
 HTML = Path(__file__).parent / "templates" / "dashboard.html"
 
+# ─── In-process throttles / caches (FD-leak mitigation) ──────────────────────
+# Dashboard polls /api/portfolio every few seconds. Logging an equity snapshot
+# on *every* poll is pointless for ECG (which only needs minute-level cadence)
+# and was the source of "Snapshot log failed: unable to open database file"
+# spam once FDs got tight. Throttle to one write per SNAPSHOT_INTERVAL_SEC.
+SNAPSHOT_INTERVAL_SEC = 300  # 5 minutes — plenty for ECG
+_last_snapshot_at: float = 0.0
+_snapshot_lock = threading.Lock()
+
+def _maybe_log_snapshot(holdings: list[dict]) -> None:
+    """Rate-limited equity snapshot. Silently skips if last write < interval ago."""
+    global _last_snapshot_at
+    now = time.monotonic()
+    with _snapshot_lock:
+        if now - _last_snapshot_at < SNAPSHOT_INTERVAL_SEC:
+            return
+        _last_snapshot_at = now
+    try:
+        log_equity_snapshot(holdings)
+    except Exception as snap_err:
+        print(f"⚠  Snapshot log failed: {snap_err}")
+
+# /api/chart/{symbol}?period=… cache. yfinance opens its tz cache + a fresh
+# session every call; back-to-back polls were a major FD churn source.
+_chart_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+_chart_cache_lock = threading.Lock()
+CHART_TTL_SEC = 30
+
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
@@ -91,11 +134,8 @@ def get_portfolio():
         eq["day_change"]     = round(curr - prev, 2)
         eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0, 2)
 
-        # Log equity snapshot for ECG
-        try:
-            log_equity_snapshot(payload["holdings"])
-        except Exception as snap_err:
-            print(f"⚠  Snapshot log failed: {snap_err}")
+        # Log equity snapshot for ECG (rate-limited — see _maybe_log_snapshot)
+        _maybe_log_snapshot(payload["holdings"])
 
         return _sanitize({"status": "ok", "data": payload})
     except Exception as e:
@@ -137,7 +177,8 @@ def run_deep_analysis():
 
         analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
 
-        # Log to SQLite
+        # Log to SQLite. Deep analysis is user-triggered (not a poll), so we
+        # always write the snapshot here regardless of the throttle.
         try:
             run_id = log_analysis(MODEL, payload, analysis)
             log_equity_snapshot(payload["holdings"])
@@ -365,12 +406,23 @@ def kelly_endpoint():
 
 @app.get("/api/chart/{symbol}")
 def price_chart(symbol: str, period: str = "1mo"):
+    # 30s TTL cache — dashboard polls this per holding; without the cache
+    # every refresh would spawn a fresh yfinance session + crumb fetch +
+    # tz-cache file open, which is the dominant FD-leak path.
+    sym = symbol.upper()
+    key = (sym, period)
+    now = time.monotonic()
+    with _chart_cache_lock:
+        hit = _chart_cache.get(key)
+        if hit and (now - hit[0]) < CHART_TTL_SEC:
+            return hit[1]
+
     try:
         import yfinance as yf
         period_map = {"1d":"1d","5d":"5d","1w":"5d","1mo":"1mo","3mo":"3mo","6mo":"6mo","1y":"1y"}
         yf_period = period_map.get(period, "1mo")
         interval  = "5m" if period in ("1d","5d") else "1d"
-        raw = yf.download(symbol, period=yf_period, interval=interval, auto_adjust=True, progress=False)
+        raw = yf.download(sym, period=yf_period, interval=interval, auto_adjust=True, progress=False)
         if raw is None or raw.empty:
             raise HTTPException(status_code=404, detail="No data")
         closes = raw["Close"].squeeze().dropna()
@@ -380,8 +432,11 @@ def price_chart(symbol: str, period: str = "1mo"):
         import numpy as np
         prices = [round(float(v), 2) for v in np.array(closes).flatten()]
         pct_chg = round((prices[-1]/prices[0]-1)*100, 2) if len(prices)>1 else 0
-        return {"symbol":symbol,"period":period,"dates":dates,"prices":prices,
-                "pct_change":pct_chg,"current":prices[-1],"start":prices[0]}
+        result = {"symbol":sym,"period":period,"dates":dates,"prices":prices,
+                  "pct_change":pct_chg,"current":prices[-1],"start":prices[0]}
+        with _chart_cache_lock:
+            _chart_cache[key] = (now, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:

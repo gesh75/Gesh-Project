@@ -82,10 +82,17 @@ def get_portfolio_holdings() -> pd.DataFrame:
 def get_total_equity() -> dict[str, float]:
     profile = rh.load_portfolio_profile()
     account = rh.load_account_profile()
-    # account["portfolio_cash"] represents the absolute uninvested cash in the account.
-    # withdrawable_amount often includes margin or unsettled funds.
-    cash = float(account.get("portfolio_cash", 0) or account.get("cash", 0) or 0)
-    return {"portfolio_equity": float(profile.get("equity", 0) or 0), "extended_hours_equity": float(profile.get("extended_hours_equity", 0) or 0), "adjusted_equity_previous_close": float(profile.get("adjusted_equity_previous_close", 0) or 0), "cash": cash, "buying_power": float(account.get("buying_power", 0) or 0)}
+    # GOLD ACCOUNT WARNING: account["buying_power"] includes margin credit — always wrong.
+    # account["cash"] is a negative margin-accounting figure on Gold accounts — always wrong.
+    # Use profile["withdrawable_amount"] for both cash and buying power display.
+    withdrawable = float(profile.get("withdrawable_amount", 0) or 0)
+    return {
+        "portfolio_equity":               float(profile.get("equity", 0) or 0),
+        "extended_hours_equity":          float(profile.get("extended_hours_equity", 0) or 0),
+        "adjusted_equity_previous_close": float(profile.get("adjusted_equity_previous_close", 0) or 0),
+        "cash":                           withdrawable,   # withdrawable_amount = real spendable cash
+        "buying_power":                   withdrawable,   # same source — avoids Gold margin inflation
+    }
 
 def get_watchlist_quotes(symbols: list[str] | None = None) -> pd.DataFrame:
     if symbols is None:

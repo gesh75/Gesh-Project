@@ -152,9 +152,10 @@ def _get_volume_ratio(etf: str) -> tuple[float, float, float]:
         return 0.0, 0.0, 0.0
 
     today_vol = float(vol[-1])
+
     # Average over up to AVG_PERIOD prior sessions (exclude today)
-    prior     = vol[-(AVG_PERIOD + 1):-1]
-    avg_vol   = float(prior.mean()) if len(prior) > 0 else float(vol[:-1].mean())
+    prior   = vol[-(AVG_PERIOD + 1):-1]
+    avg_vol = float(prior.mean()) if len(prior) > 0 else float(vol[:-1].mean())
 
     if avg_vol == 0:
         return today_vol, avg_vol, 0.0
