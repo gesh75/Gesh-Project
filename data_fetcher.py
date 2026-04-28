@@ -82,16 +82,17 @@ def get_portfolio_holdings() -> pd.DataFrame:
 def get_total_equity() -> dict[str, float]:
     profile = rh.load_portfolio_profile()
     account = rh.load_account_profile()
-    # GOLD ACCOUNT WARNING: account["buying_power"] includes margin credit — always wrong.
-    # account["cash"] is a negative margin-accounting figure on Gold accounts — always wrong.
-    # Use profile["withdrawable_amount"] for both cash and buying power display.
+    # GOLD ACCOUNT WARNING: account["cash"] is a negative margin-accounting figure — always wrong.
+    # cash display uses withdrawable_amount (real spendable, ~$39).
+    # buying_power uses account["buying_power"] (includes Gold margin, ~$1,378) — correct for risk gate.
     withdrawable = float(profile.get("withdrawable_amount", 0) or 0)
+    buying_power = float(account.get("buying_power", 0) or 0)
     return {
         "portfolio_equity":               float(profile.get("equity", 0) or 0),
         "extended_hours_equity":          float(profile.get("extended_hours_equity", 0) or 0),
         "adjusted_equity_previous_close": float(profile.get("adjusted_equity_previous_close", 0) or 0),
-        "cash":                           withdrawable,   # withdrawable_amount = real spendable cash
-        "buying_power":                   withdrawable,   # same source — avoids Gold margin inflation
+        "cash":                           withdrawable,   # real withdrawable (display only)
+        "buying_power":                   buying_power,   # tradeable buying power (risk gate)
     }
 
 def get_watchlist_quotes(symbols: list[str] | None = None) -> pd.DataFrame:
