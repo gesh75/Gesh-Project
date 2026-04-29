@@ -11,6 +11,8 @@ pyotp==2.9.0
 yfinance==1.2.1
 pandas==3.0.2
 numpy==2.4.4
+openbb>=4.3.0
+openbb-yfinance>=1.6.0
 
 # AI / LLM
 anthropic==0.93.0

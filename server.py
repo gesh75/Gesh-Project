@@ -909,6 +909,45 @@ async def trading_consensus_order(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/trading/deep-debate/{symbol}")
+async def trading_deep_debate(symbol: str):
+    """
+    Bull / Bear debate engine: haiku x2 (bull + bear) → sonnet x1 (PM synthesis).
+    Returns structured decision with price target, conviction, and catalysts.
+    """
+    try:
+        symbol = symbol.upper()
+        payload = build_data_payload(DEFAULT_WATCHLIST)
+
+        eq = cost = price = 0.0
+        total_eq = float((payload.get("equity_summary") or {}).get("portfolio_equity") or 1.0)
+        for h in payload.get("holdings", []):
+            if h.get("symbol") == symbol:
+                eq    = float(h.get("equity", 0) or 0)
+                cost  = float(h.get("average_buy_price", 0) or 0)
+                price = float(h.get("current_price", 0) or 0)
+                break
+
+        from consensus import run_consensus_holding
+        consensus = run_consensus_holding(symbol, eq, total_eq, cost, price)
+
+        from fundamentals_openbb import get_fundamentals_openbb
+        fundamentals = get_fundamentals_openbb(symbol) or {}
+
+        from bull_bear_debate import run_debate
+        result = run_debate(symbol, consensus, fundamentals)
+
+        return _sanitize({
+            "status":            "ok",
+            "symbol":            symbol,
+            "debate":            result,
+            "consensus_verdict": consensus.get("verdict"),
+            "consensus_score":   consensus.get("raw_score"),
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

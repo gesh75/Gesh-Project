@@ -144,13 +144,23 @@ def node_relative_strength(symbol: str, benchmark: str = "SPY") -> tuple[int | N
 
 
 def node_fundamentals(symbol: str) -> tuple[int | None, str]:
-    """Revenue growth + profit margins + PE ratio."""
+    """Revenue growth + profit margins + PE ratio. OpenBB primary, yfinance fallback."""
     try:
-        info = _get_ticker_info(symbol)
-        pe   = info.get("forwardPE") or info.get("trailingPE")
-        rev_growth = info.get("revenueGrowth")   # e.g. 0.12 = 12%
-        profit_m   = info.get("profitMargins")    # e.g. 0.15 = 15%
-        eps_growth = info.get("earningsGrowth")
+        from fundamentals_openbb import get_fundamentals_openbb
+        obb_data = get_fundamentals_openbb(symbol)
+        if obb_data is not None:
+            rev_growth = obb_data.get("rev_growth")
+            pe         = obb_data.get("pe")
+            profit_m   = obb_data.get("profit_margin")
+            eps_growth = obb_data.get("eps_growth")
+            src        = "[OpenBB]"
+        else:
+            info       = _get_ticker_info(symbol)
+            pe         = info.get("forwardPE") or info.get("trailingPE")
+            rev_growth = info.get("revenueGrowth")
+            profit_m   = info.get("profitMargins")
+            eps_growth = info.get("earningsGrowth")
+            src        = "[yf]"
         if rev_growth is None and pe is None:
             return ABSTAIN, "No fundamental data"
         score = 0; count = 0
@@ -176,7 +186,7 @@ def node_fundamentals(symbol: str) -> tuple[int | None, str]:
             elif eps_growth < 0:  score -= 1; reasons.append(f"EPS↓{eps_growth*100:.0f}%")
         if count == 0: return ABSTAIN, "No usable data"
         norm = score / count
-        detail = " · ".join(reasons)
+        detail = f"{src} " + " · ".join(reasons)
         if norm >= 0.4: return VOTE_BULLISH, detail
         if norm <= -0.4: return VOTE_BEARISH, detail
         return VOTE_NEUTRAL, detail
@@ -185,14 +195,23 @@ def node_fundamentals(symbol: str) -> tuple[int | None, str]:
 
 
 def node_analyst(symbol: str) -> tuple[int | None, str]:
-    """Analyst recommendation + price target upside."""
+    """Analyst recommendation + price target upside. OpenBB primary, yfinance fallback."""
     try:
-        info = _get_ticker_info(symbol)
-        rec  = (info.get("recommendationKey") or "").lower()
-        mean_target = info.get("targetMeanPrice")
-        current     = info.get("currentPrice") or info.get("regularMarketPrice")
+        from fundamentals_openbb import get_fundamentals_openbb
+        obb_data = get_fundamentals_openbb(symbol)
+        if obb_data is not None and obb_data.get("rec_key") is not None:
+            rec         = (obb_data.get("rec_key") or "").lower()
+            mean_target = obb_data.get("target_mean_price")
+            current     = obb_data.get("current_price")
+            src         = "[OpenBB]"
+        else:
+            info        = _get_ticker_info(symbol)
+            rec         = (info.get("recommendationKey") or "").lower()
+            mean_target = info.get("targetMeanPrice")
+            current     = info.get("currentPrice") or info.get("regularMarketPrice")
+            src         = "[yf]"
         upside = ((mean_target - current) / current * 100) if mean_target and current else None
-        detail = f"Rec={rec} Target={mean_target} Upside={upside:.1f}%" if upside else f"Rec={rec}"
+        detail = f"{src} Rec={rec} Target={mean_target} Upside={upside:.1f}%" if upside else f"{src} Rec={rec}"
         if rec in ("strong_buy", "buy") and (upside is None or upside > 5):
             return VOTE_BULLISH, detail
         if rec in ("sell", "strong_sell") or (upside is not None and upside < -5):

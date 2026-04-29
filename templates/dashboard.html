@@ -745,6 +745,36 @@ tr:hover td{background:var(--hover)}
       <div id="gate-container" style="display:none;padding-bottom:14px"></div>
     </div>
 
+    <!-- Bull / Bear Debate Engine -->
+    <div class="card" style="margin-bottom:18px" id="mainDebateCard">
+      <div class="ch">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="ct">🧠 Bull / Bear Debate</span>
+          <span class="badge b-purple" style="font-size:10px">haiku x2 · sonnet x1 · ~15s</span>
+        </div>
+        <span id="main-debate-meta" class="ts">enter ticker → run debate</span>
+      </div>
+      <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 0 14px">
+        <div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">SYMBOL</div>
+          <input id="main-debate-sym" type="text" value="NVDA" maxlength="8"
+            style="width:110px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
+        </div>
+        <button class="btn-analyze" id="btn-main-debate" onclick="runMainDebate()">▶ Run Debate</button>
+      </div>
+      <div id="main-debate-loading" style="display:none;padding:16px;text-align:center;color:var(--muted)">
+        Calling Claude (bull → bear → portfolio manager)…
+      </div>
+      <div id="main-debate-result" style="display:none;padding:0 0 16px">
+        <div id="main-debate-decision" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px;background:var(--hover)"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div id="main-debate-bull" style="border:1px solid #00e87a33;border-radius:8px;padding:12px;background:#00e87a08"></div>
+          <div id="main-debate-bear" style="border:1px solid #ff3c5a33;border-radius:8px;padding:12px;background:#ff3c5a08"></div>
+        </div>
+        <div id="main-debate-catalysts" style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--hover)"></div>
+      </div>
+    </div>
+
     <!-- Trade History Table -->
     <div class="card" style="margin-bottom:18px">
       <div class="ch">
@@ -2205,6 +2235,59 @@ function renderGateVerdict(d, sym, action){
   });
   html+=`</div>`;
   $('gate-container').innerHTML=html;
+}
+
+// ── Bull/Bear debate panel (Trading tab) ─────────────────────────────────
+// All API data is escaped via _esc() before innerHTML injection
+const _esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const _fmt = (n,d=2) => (n===null||n===undefined)?'—':Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const _debArgs = args => (!args||!args.length) ? '' :
+  args.map(a=>`<li><b>${_esc(a.point)}</b> — <span style="opacity:.75">${_esc(a.evidence)}</span></li>`).join('');
+
+async function runMainDebate(){
+  const sym = _esc((document.getElementById('main-debate-sym').value||'SPY').trim().toUpperCase());
+  if(!sym) return;
+  const btn = document.getElementById('btn-main-debate');
+  const aColors = {'STRONG BUY':'#00e87a','BUY':'#4caf87','HOLD':'#f0b429','SELL':'#ff6b35','STRONG SELL':'#ff3c5a'};
+  btn.disabled=true; btn.textContent='⏳ Debating…';
+  document.getElementById('main-debate-loading').style.display='block';
+  document.getElementById('main-debate-result').style.display='none';
+  document.getElementById('main-debate-meta').textContent='calling Claude — ~15s…';
+  try {
+    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{method:'POST'});
+    const r=await resp.json();
+    if(!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
+    const dec=r.debate.decision, bull=r.debate.bull, bear=r.debate.bear;
+    const aCol=aColors[dec.action]||'#e8eaf0';
+    document.getElementById('main-debate-decision').innerHTML=
+      `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">` +
+      `<div style="font-size:22px;font-weight:700;color:${aCol}">${_esc(dec.action)}</div>` +
+      `<div style="flex:1"><div style="font-size:12px;opacity:.6;margin-bottom:4px">${sym} · Conv ${_esc(dec.conviction)}% · Bull ${_esc(dec.bull_weight)}%</div>` +
+      `<div style="font-size:13px">${_esc(dec.rationale)}</div></div>` +
+      `<div style="text-align:right;min-width:120px">` +
+      `<div style="font-size:18px;font-weight:600;color:${aCol}">$${_fmt(dec.price_target,2)}</div>` +
+      `<div style="font-size:11px;opacity:.6">${dec.upside_pct>=0?'+':''}${_fmt(dec.upside_pct,1)}% target</div>` +
+      `<div style="font-size:11px;opacity:.5">Stop −${_fmt(dec.stop_loss_pct,1)}%</div></div></div>`;
+    document.getElementById('main-debate-bull').innerHTML=
+      `<div style="color:#00e87a;font-weight:700;margin-bottom:6px">🐂 BULL — ${_esc(bull.confidence)}%</div>` +
+      `<div style="font-size:12px;margin-bottom:8px;font-style:italic">${_esc(bull.thesis)}</div>` +
+      `<ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.7">${_debArgs(bull.arguments)}</ul>` +
+      `<div style="font-size:11px;opacity:.5;margin-top:8px">Target $${_fmt(bull.price_target,2)} · Risk: ${_esc(bull.key_risk)}</div>`;
+    document.getElementById('main-debate-bear').innerHTML=
+      `<div style="color:#ff3c5a;font-weight:700;margin-bottom:6px">🐻 BEAR — ${_esc(bear.confidence)}%</div>` +
+      `<div style="font-size:12px;margin-bottom:8px;font-style:italic">${_esc(bear.thesis)}</div>` +
+      `<ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.7">${_debArgs(bear.arguments)}</ul>` +
+      `<div style="font-size:11px;opacity:.5;margin-top:8px">Target $${_fmt(bear.price_target,2)} · Risk: ${_esc(bear.key_risk)}</div>`;
+    const cats=(dec.catalysts||[]).map(c=>`<span style="display:inline-block;background:var(--hover);border-radius:4px;padding:3px 8px;margin:3px;font-size:12px">${_esc(c)}</span>`).join('');
+    document.getElementById('main-debate-catalysts').innerHTML=`<div style="font-size:12px;opacity:.6;margin-bottom:6px">CATALYSTS TO WATCH</div>${cats||'—'}`;
+    document.getElementById('main-debate-meta').textContent=`${sym} · ${new Date().toLocaleTimeString()}`;
+    document.getElementById('main-debate-loading').style.display='none';
+    document.getElementById('main-debate-result').style.display='block';
+  } catch(e){
+    document.getElementById('main-debate-loading').style.display='none';
+    document.getElementById('main-debate-meta').textContent='Error: '+(e.message||e);
+  }
+  btn.disabled=false; btn.textContent='▶ Run Debate';
 }
 
 </script>
