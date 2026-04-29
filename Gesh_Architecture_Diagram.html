@@ -398,6 +398,24 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
           </div>
         </div>
       </div>
+      <div class="box c-green" style="grid-column:1/-1;border-color:rgba(0,232,122,.35);background:rgba(0,232,122,.06)">
+        <div class="box-title" style="color:#00e87a">🧠 Bull / Bear Debate Engine · bull_bear_debate.py <span class="new-badge" style="background:rgba(0,232,122,.2);color:#00e87a;border-color:rgba(0,232,122,.4)">Sprint 3</span></div>
+        <div class="box-body" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:4px">
+          <div style="padding:6px;border:1px solid rgba(0,232,122,.2);border-radius:5px">
+            <div style="font-size:11px;font-weight:700;color:#00e87a;margin-bottom:3px">🐂 Bull Analyst (haiku)</div>
+            <div style="font-size:10px;color:var(--muted2)">Thesis · Arguments · Price target · Conviction % · Key risk</div>
+          </div>
+          <div style="padding:6px;border:1px solid rgba(0,232,122,.2);border-radius:5px">
+            <div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:3px">🐻 Bear Analyst (haiku)</div>
+            <div style="font-size:10px;color:var(--muted2)">Counter-thesis · Arguments · Price target · Conviction % · Key risk</div>
+          </div>
+          <div style="padding:6px;border:1px solid rgba(0,232,122,.2);border-radius:5px">
+            <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:3px">📋 Portfolio Manager (sonnet)</div>
+            <div style="font-size:10px;color:var(--muted2)">Action · Conviction % · Price target · Upside % · Bull weight · Stop-loss % · Catalysts</div>
+          </div>
+        </div>
+        <div style="margin-top:6px;font-size:10px;color:var(--muted)">Endpoint: POST /api/trading/deep-debate/{symbol} · Cost: ~$0.01–0.03/debate · UI: Deep Debate Engine panel in trading + crypto dashboards · 🧠 button in scanner table</div>
+      </div>
     </div>
   </div>
 
@@ -422,15 +440,15 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
         <div class="node-name">Rel. Strength</div>
         <div class="node-src">vs SPY 1-month<br>±3% threshold · 35d</div>
       </div>
-      <div class="node-box">
+      <div class="node-box" style="border-color:rgba(0,232,122,.35);background:rgba(0,232,122,.05)">
         <div class="node-icon">📊</div>
         <div class="node-name">Fundamentals</div>
-        <div class="node-src">Rev growth · PE<br>Margins · EPS · live</div>
+        <div class="node-src">Rev growth · PE<br>Margins · EPS<br><span style="color:#00e87a;font-size:9px">OpenBB★</span></div>
       </div>
-      <div class="node-box">
+      <div class="node-box" style="border-color:rgba(0,232,122,.35);background:rgba(0,232,122,.05)">
         <div class="node-icon">🏦</div>
         <div class="node-name">Analyst</div>
-        <div class="node-src">Wall St rec key<br>Target upside · live</div>
+        <div class="node-src">Wall St rec key<br>Target upside<br><span style="color:#00e87a;font-size:9px">OpenBB★</span></div>
       </div>
       <div class="node-box" style="border-color:rgba(255,68,68,.35);background:rgba(255,68,68,.07)">
         <div class="node-icon">🗣️</div>
@@ -729,11 +747,12 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
       &nbsp;·&nbsp; <span style="color:var(--green)">Total: 40+ endpoints</span>
     </div>
     <div style="margin-top:8px;padding:10px 14px;border:1px solid rgba(0,229,204,.2);border-radius:8px;background:rgba(0,229,204,.04);font-size:11px;color:var(--muted2)">
-      <span style="color:var(--teal);font-weight:700">localhost:9001/trading (Trading Engine):</span>
+      <span style="color:var(--teal);font-weight:700">localhost:9003/trading (Trading Engine):</span>
       /trading · /api/trading/dry-run · /api/trading/paper-order · /api/trading/consensus-order
       · /api/consensus (11-node) · /api/regime · /api/kelly · /api/ecg
       · /api/scanner/consolidation · /api/scanner/sector
       · /api/trades · /api/paper/run · /api/paper/summary
+      · <span style="color:#00e87a;font-weight:700">POST /api/trading/deep-debate/{symbol}</span> <span style="font-size:10px;color:#00e87a">(Sprint 3)</span>
       &nbsp;·&nbsp; <span style="color:var(--teal)">Auto-redirects / → /trading</span>
     </div>
   </div>
