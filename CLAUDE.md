@@ -82,7 +82,7 @@ server.py (FastAPI · Port 9000)
 │   ├── trading/alerts.py     — Telegram alerts (@gesh755bot) for fills, rejections, EOD P&L
 │   └── trading/autopilot.py  — APScheduler: 08:30 scan / 09:35 execute / 12:30 rebalance / 15:55 EOD
 │
-└── templates/dashboard.html  — Web UI (Chart.js, 7 tabs)
+└── templates/dashboard.html  — Web UI (Chart.js, 8 tabs: Overview, Analysis, Screener, Kelly, Monte Carlo, Regime, SEC/News, 🔬 Daily Analysis)
 ```
 
 ---
@@ -513,6 +513,28 @@ DEFAULT_WATCHLIST = ["MSTR", "SPY", "QQQ"]
 `gesh_financial.db` may live on a macOS-shared FUSE mount. `trade_log.py` auto-detects
 this at import and falls back to `/tmp/gesh_trades.db` for trade_log / paper_trades tables
 if DDL fails. Analysis data always writes to the primary DB via db.py.
+
+---
+
+## UI Changes — 2026-05-02
+
+### 🔬 Daily Analysis Tab (8th tab in dashboard.html)
+
+Added on-demand daily portfolio analysis to the main dashboard. Button: **▶ Run Daily Analysis**.
+
+**What it does:**
+- Calls `/api/deep-analysis` + `/api/kelly` + `/api/portfolio` in parallel (`Promise.all`)
+- Renders 5 stat cards: Portfolio Score, Portfolio Type, Risk Score, Diversification, AI Verdict
+- Market context block (Claude narrative)
+- **Kelly trade plan table** with exact share counts: Δ SHARES, $ IMPACT, NOW % vs KELLY % columns
+  - TRIM rows: `ceil(abs(delta_usd)/price)` shares, red tint, P1
+  - ADD rows: `floor(abs(delta_usd)/price)` shares, green tint, P2
+- Holdings cards: snowflake score bars (VAL/GRO/HLT/MOM/DIV), fair value pill, risks/rewards, 3M/12M predictions
+- Portfolio risks list with severity coloring
+- Sector breakdown bars
+- History dropdown — replays any past run from `/api/history` without re-running Claude
+
+**JS functions:** `daRunAnalysis()`, `daRender(data, meta, kellyData, portData)`, `daLoadHistory()`, `daLoadRun()`
 
 ---
 

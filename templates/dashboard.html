@@ -163,6 +163,44 @@ tr:hover td{background:var(--hover)}
 
 ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:var(--bg)}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ── GESH Daily Analysis tab ──────────────────────────────────────── */
+.da-stats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
+.da-stat{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
+.da-stat .lbl{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+.da-stat .val{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.da-stat .sub{font-size:13px;color:var(--muted);margin-top:3px}
+.da-holding{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;transition:border-color .2s}
+.da-holding:hover{border-color:rgba(0,212,255,.3)}
+.da-holding .hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:6px}
+.da-holding .sym{font-size:18px;font-weight:700;color:var(--accent)}
+.da-holding .vrd{font-size:12px;font-weight:700;padding:3px 9px;border-radius:4px;letter-spacing:.05em;white-space:nowrap}
+.da-sbars{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px}
+.da-sbar{display:flex;flex-direction:column;align-items:center;gap:3px}
+.da-sbar .nm{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.da-sbar .nv{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.da-sbar .tr{width:100%;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.da-sbar .fl{height:100%;border-radius:2px;transition:width .6s}
+.da-fv{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:13px;font-weight:700;border:1px solid;white-space:nowrap}
+.da-rec{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px dashed var(--border);font-size:14px;line-height:1.5}
+.da-rec:last-child{border-bottom:none}
+.da-pri{min-width:28px;font-size:11px;font-weight:700;padding:2px 6px;border-radius:3px;text-align:center;flex-shrink:0;margin-top:2px}
+.da-risk{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--border);font-size:14px;line-height:1.5}
+.da-risk:last-child{border-bottom:none}
+.da-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:6px}
+.da-hist-sel{background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:9px 12px;font-family:var(--font);font-size:14px;outline:none;min-width:240px;cursor:pointer}
+.da-hist-sel:focus{border-color:var(--accent)}
+.da-ctx{padding:12px 16px;background:var(--card2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;font-size:14px;line-height:1.7;color:var(--muted2)}
+.da-load-bar{height:3px;width:100%;background:var(--border);border-radius:2px;overflow:hidden;margin-top:10px}
+.da-load-fill{height:100%;width:0%;background:var(--accent);border-radius:2px;animation:da-grow 28s linear forwards}
+@keyframes da-grow{0%{width:0%}75%{width:80%}100%{width:88%}}
+.da-holdings-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.da-sec-lbl{font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);padding-left:8px;border-left:2px solid var(--accent);margin-bottom:8px}
+.da-btn-load{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:8px 16px;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.05em;text-transform:uppercase;transition:all .2s}
+.da-btn-load:hover{color:var(--accent);border-color:var(--accent)}
+.da-btn-load:disabled{opacity:.35;cursor:not-allowed}
+@media(max-width:1100px){.da-stats{grid-template-columns:repeat(2,1fr)}.da-sbars{grid-template-columns:repeat(3,1fr)}.da-holdings-grid{grid-template-columns:1fr}}
+
 @media(max-width:1300px){.stock-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:1100px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.pi-body{grid-template-columns:1fr}.pi-left{border-right:none;border-bottom:1px solid var(--border)}.pi-right{grid-template-columns:1fr}}
 @media(max-width:800px){.stock-grid{grid-template-columns:1fr}.sc-body{grid-template-columns:1fr}.sc-radar{border-right:none;border-bottom:1px solid var(--border)}}
@@ -376,6 +414,7 @@ tr:hover td{background:var(--hover)}
   <button class="tab-btn" onclick="switchTab('radar',this)"><span class="tab-icon">📡</span> Radar</button>
   <button class="tab-btn" onclick="switchTab('scanner',this);loadScannerConfig()"><span class="tab-icon">🔍</span> Scanner</button>
   <button class="tab-btn" onclick="switchTab('trading',this);loadTradeStats()"><span class="tab-icon">📄</span> Paper Trades</button>
+  <button class="tab-btn" onclick="switchTab('daily',this);daLoadHistory()" style="border-bottom-color:transparent" id="tab-btn-daily"><span class="tab-icon">🔬</span> Daily Analysis</button>
 </div>
 
 <div class="main">
@@ -813,6 +852,93 @@ tr:hover td{background:var(--hover)}
       </div>
     </div>
   </div>
+
+  <!-- ═══ TAB: DAILY ANALYSIS ═══ -->
+  <div class="tab-pane" id="tab-daily">
+    <div class="card" style="margin-bottom:18px">
+
+      <!-- Header -->
+      <div class="ch" style="flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="ct" style="display:flex;align-items:center;gap:8px"><span style="font-size:20px">🔬</span> GESH Daily Portfolio Analysis</span>
+          <span class="badge b-purple" style="font-size:11px">All 6 Engines · Regime-Aware · AI Deep-Dive</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn-analyze" id="da-btn-run" onclick="daRunAnalysis()">▶ Run Daily Analysis</button>
+          <select class="da-hist-sel" id="da-hist-sel"><option value="">— Load past run —</option></select>
+          <button class="da-btn-load" id="da-btn-load" onclick="daLoadRun()">Load</button>
+          <span class="ts" id="da-ts"></span>
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div id="da-loading" style="display:none;padding:32px 20px;text-align:center">
+        <div style="font-size:16px;font-weight:600;color:var(--accent);margin-bottom:8px">
+          <span class="spin" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></span>
+          Running all engines — ~20–40 seconds…
+        </div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px" id="da-loading-msg">Fetching portfolio · building payload…</div>
+        <div class="da-load-bar"><div class="da-load-fill" id="da-load-fill"></div></div>
+      </div>
+
+      <!-- Placeholder (before first run) -->
+      <div id="da-placeholder" class="deep-placeholder">
+        <div class="deep-ph-icon">🔬</div>
+        <div class="deep-ph-text">
+          <strong style="color:var(--text)">Full Daily Portfolio Deep-Dive</strong><br>
+          Snowflake scores · Fair value · Regime overlay · Kelly sizing · Monte Carlo risk · 12M predictions<br>
+          <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run Daily Analysis</strong> or load a past run from the dropdown.</span>
+        </div>
+      </div>
+
+      <!-- Results -->
+      <div id="da-results" style="display:none;padding:18px">
+
+        <!-- 5 stat cards -->
+        <div class="da-stats">
+          <div class="da-stat"><div class="lbl">Portfolio Score</div><div class="val" id="da-port-score">—</div><div class="sub" id="da-port-type">—</div></div>
+          <div class="da-stat"><div class="lbl">Risk Score</div><div class="val" id="da-risk-score">—</div><div class="sub">0 safe · 100 extreme</div></div>
+          <div class="da-stat"><div class="lbl">Diversification</div><div class="val" id="da-div-score">—</div><div class="sub">0 concentrated · 100 spread</div></div>
+          <div class="da-stat" style="grid-column:span 2">
+            <div class="lbl">AI Verdict</div>
+            <div class="val" id="da-verdict" style="font-size:16px;line-height:1.4;margin-top:4px;font-weight:600">—</div>
+          </div>
+        </div>
+
+        <!-- Market context -->
+        <div class="da-ctx" id="da-context">—</div>
+
+        <!-- Prioritised action plan -->
+        <div style="margin-bottom:18px">
+          <div class="da-sec-lbl" style="margin-bottom:10px">Prioritised Action Plan</div>
+          <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:4px 16px 0" id="da-recs"></div>
+        </div>
+
+        <!-- Holdings analysis -->
+        <div style="margin-bottom:18px">
+          <div class="da-sec-lbl" style="margin-bottom:10px">Holdings Analysis</div>
+          <div class="da-holdings-grid" id="da-holdings"></div>
+        </div>
+
+        <!-- Risks + Sectors side by side -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
+          <div>
+            <div class="da-sec-lbl" style="margin-bottom:10px">Portfolio Risks</div>
+            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:4px 16px 0" id="da-risks"></div>
+          </div>
+          <div>
+            <div class="da-sec-lbl" style="margin-bottom:10px">Sector Breakdown</div>
+            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;overflow:hidden" id="da-sectors"></div>
+          </div>
+        </div>
+
+        <div style="font-size:12px;color:var(--muted);padding-top:8px;border-top:1px solid var(--border)">
+          <span id="da-run-meta">—</span> &nbsp;·&nbsp; NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY
+        </div>
+
+      </div><!-- /da-results -->
+    </div>
+  </div><!-- /tab-daily -->
 
 </div>
 
@@ -1888,6 +2014,313 @@ setInterval(loadPortfolioWithECG,REFRESH);
 // Load ECG + regime on init so alert bar and macro bar populate immediately
 loadECG();
 loadRegime();
+
+// ══════════════════════════════════════════════════════════════════════
+// GESH DAILY PORTFOLIO ANALYSIS TAB
+// ══════════════════════════════════════════════════════════════════════
+const daEsc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const daFmt=(n,d=2)=>(n==null)?'—':Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+
+function daScoreColor(n){
+  return n>=70?'var(--green)':n>=45?'var(--yellow)':'var(--red)';
+}
+function daVerdictStyle(v=''){
+  const u=(v||'').toUpperCase();
+  if(u.includes('STRONG BUY')||u.includes('OVERWEIGHT')) return 'background:rgba(0,230,118,.15);color:#00e676;border:1px solid #00e676';
+  if(u.includes('BUY'))  return 'background:rgba(0,212,255,.12);color:#00d4ff;border:1px solid #00d4ff';
+  if(u.includes('SELL')) return 'background:rgba(255,68,68,.15);color:#ff4444;border:1px solid #ff4444';
+  if(u.includes('AVOID'))return 'background:rgba(255,140,66,.12);color:#ff8c42;border:1px solid #ff8c42';
+  return 'background:rgba(255,215,0,.1);color:#ffd700;border:1px solid #ffd700';
+}
+function daPriStyle(p=''){
+  if(p==='P1') return 'background:rgba(255,68,68,.2);color:#ff4444';
+  if(p==='P2') return 'background:rgba(255,215,0,.15);color:#ffd700';
+  return 'background:rgba(0,212,255,.1);color:#00d4ff';
+}
+const DA_SCORE_COLORS={valuation:'#a78bfa',growth:'#00e676',health:'#00d4ff',momentum:'#ffd700',dividend:'#ff8c42'};
+
+function daRender(data, meta, kellyData, portData){
+  const a=data.analysis;
+  if(!a){$('da-placeholder').style.display='flex';$('da-results').style.display='none';return;}
+
+  // ── Stat cards ──────────────────────────────────────────────────────
+  const ps=a.portfolio_score||0, rs=a.risk_score||0, ds=a.diversification_score||0;
+  $('da-port-score').textContent=ps; $('da-port-score').style.color=daScoreColor(ps);
+  $('da-port-type').textContent=a.portfolio_type||'';
+  $('da-risk-score').textContent=rs;
+  $('da-risk-score').style.color=rs>=65?'var(--red)':rs>=40?'var(--yellow)':'var(--green)';
+  $('da-div-score').textContent=ds; $('da-div-score').style.color=daScoreColor(ds);
+  $('da-verdict').textContent=a.portfolio_verdict||'—';
+
+  // ── Market context ───────────────────────────────────────────────────
+  $('da-context').textContent=a.market_context||'—';
+
+  // ── Trade Plan (Kelly-powered) ───────────────────────────────────────
+  // Build price map from portfolio data
+  const priceMap={}, qtyMap={};
+  const portHoldings=(portData&&portData.data&&portData.data.holdings)||[];
+  portHoldings.forEach(h=>{
+    priceMap[h.symbol]=parseFloat(h.current_price||0);
+    qtyMap[h.symbol]=parseFloat(h.quantity||0);
+  });
+
+  const kellyHoldings=(kellyData&&kellyData.data&&kellyData.data.holdings)||[];
+  const totalEq=parseFloat((kellyData&&kellyData.total_equity)||0);
+
+  // Build AI verdict map for colour coding
+  const aiMap={};
+  (a.holdings_analysis||[]).forEach(h=>{ aiMap[h.symbol]={verdict:h.verdict||'',fv:h.fair_value||{}}; });
+
+  // Sort: TRIM first (P1), ADD second (P2), HOLD last (P3)
+  const actionOrder={TRIM:0,AVOID:1,ADD:2,HOLD:3};
+  const sorted=[...kellyHoldings].sort((x,y)=>(actionOrder[x.action]??4)-(actionOrder[y.action]??4));
+
+  const actColor={ADD:'var(--green)',TRIM:'var(--red)',AVOID:'#ff8c42',HOLD:'var(--muted2)'};
+  const actPri  ={ADD:'P2',TRIM:'P1',AVOID:'P1',HOLD:'P3'};
+
+  if(sorted.length){
+    $('da-recs').innerHTML=`
+      <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">PRI</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">SYMBOL</th>
+          <th style="padding:8px 10px;text-align:center;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ACTION</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">CURR SH</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">Δ SHARES</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">$ IMPACT</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">NOW %</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">KELLY %</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">PRICE</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">AI VERDICT</th>
+        </tr></thead>
+        <tbody>
+        ${sorted.map(k=>{
+          const sym=k.symbol;
+          const price=priceMap[sym]||0;
+          const currQty=qtyMap[sym]||0;
+          const delta=parseFloat(k.delta_usd||0);
+          // share count: BUY=floor, TRIM=ceil
+          let deltaShares=0;
+          if(price>0){
+            if(k.action==='ADD')  deltaShares=Math.floor(Math.abs(delta)/price);
+            if(k.action==='TRIM') deltaShares=-Math.ceil(Math.abs(delta)/price);
+          }
+          const targetQty=Math.max(0,currQty+deltaShares);
+          const dollarImpact=deltaShares*price;
+          const pri=actPri[k.action]||'P3';
+          const ac=actColor[k.action]||'var(--muted2)';
+          const aiV=aiMap[sym]||{};
+          const fvPct=aiV.fv&&aiV.fv.pct_diff!=null?(aiV.fv.pct_diff>=0?'+':'')+Number(aiV.fv.pct_diff).toFixed(1)+'%':'';
+          const rowBg=k.action==='TRIM'?'rgba(255,68,68,.04)':k.action==='ADD'?'rgba(0,230,118,.04)':'';
+          return `<tr style="border-bottom:1px dashed var(--border);background:${rowBg}">
+            <td style="padding:9px 10px"><span class="da-pri" style="${daPriStyle(pri)}">${pri}</span></td>
+            <td style="padding:9px 10px;font-weight:700;color:var(--accent);font-size:15px">${daEsc(sym)}</td>
+            <td style="padding:9px 10px;text-align:center">
+              <span style="font-size:12px;font-weight:700;color:${ac};background:${ac}18;padding:3px 10px;border-radius:4px;border:1px solid ${ac}44">${k.action}</span>
+            </td>
+            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums">${currQty>0?currQty.toFixed(2):'—'}</td>
+            <td style="padding:9px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums">
+              ${deltaShares===0?'—':(deltaShares>0?'+':'')+deltaShares+' sh'}
+              ${deltaShares!==0&&targetQty>=0?`<span style="font-size:11px;opacity:.5;display:block">→ ${targetQty.toFixed(2)} sh</span>`:''}
+            </td>
+            <td style="padding:9px 10px;text-align:right;font-weight:700;color:${dollarImpact>0?'var(--green)':dollarImpact<0?'var(--red)':'var(--muted)'};font-variant-numeric:tabular-nums">
+              ${dollarImpact===0?'—':(dollarImpact>0?'+':'')+daFmt(dollarImpact,0)}
+              <span style="font-size:11px;opacity:.5;display:block">${delta>=0?'+':''}${daFmt(delta,0)} target</span>
+            </td>
+            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums">${daFmt(k.current_pct,1)}%</td>
+            <td style="padding:9px 10px;text-align:right;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums">${daFmt(k.optimal_pct,1)}%</td>
+            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted2)">
+              ${price>0?'$'+daFmt(price,2):'—'}
+            </td>
+            <td style="padding:9px 10px">
+              <span style="${daVerdictStyle(aiV.verdict)}" class="da-holding vrd">${daEsc(aiV.verdict||'—')}</span>
+              ${fvPct?`<span style="font-size:11px;opacity:.6;display:block;margin-top:2px">FV ${fvPct}</span>`:''}
+            </td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+      </div>
+      ${totalEq?`<div style="font-size:12px;color:var(--muted);padding:8px 10px;border-top:1px dashed var(--border)">
+        Kelly allocated: <b style="color:var(--accent)">${daFmt(kellyData.data.total_optimal_allocated_pct,1)}%</b> of $${daFmt(totalEq,0)} portfolio ·
+        Cash recommended: <b style="color:var(--yellow)">${daFmt(kellyData.data.cash_recommended_pct,1)}%</b>
+      </div>`:''}
+    `;
+  } else {
+    // Fallback to AI text recommendations if no Kelly data
+    const recs=a.portfolio_recommendations||[];
+    $('da-recs').innerHTML=recs.length?recs.map(r=>{
+      const p=((r.priority||'P3').replace(/priority/i,'').trim().toUpperCase());
+      const lbl=p.match(/^P[123]$/)?p:'P3';
+      return `<div class="da-rec">
+        <span class="da-pri" style="${daPriStyle(lbl)}">${lbl}</span>
+        <span style="color:var(--accent);font-weight:600;min-width:90px;flex-shrink:0">${daEsc(r.action||'')}</span>
+        <span style="color:var(--muted2)">${daEsc(r.rationale||'')}</span>
+      </div>`;
+    }).join(''):'<div class="da-rec" style="color:var(--muted)">No recommendations</div>';
+  }
+
+  // ── Holdings ─────────────────────────────────────────────────────────
+  const holdings=a.holdings_analysis||[];
+  const regimes=data.regimes||[];
+  const rmap={}; regimes.forEach(r=>{if(r.symbol)rmap[r.symbol]=r.regime||'';});
+  const skeys=['valuation','growth','health','momentum','dividend'];
+
+  $('da-holdings').innerHTML=holdings.length?holdings.map(h=>{
+    const sc=h.scores||{}, fv=h.fair_value||{};
+    const fvPct=fv.pct_diff!=null?((fv.pct_diff>=0?'+':'')+Number(fv.pct_diff).toFixed(1)+'%'):'';
+    const fvColor=fv.pct_diff>5?'var(--green)':fv.pct_diff<-5?'var(--red)':'var(--yellow)';
+    const regime=rmap[h.symbol]||'';
+    return `<div class="da-holding">
+      <div class="hdr">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="sym">${daEsc(h.symbol)}</span>
+            <span class="da-holding vrd" style="${daVerdictStyle(h.verdict)}">${daEsc(h.verdict||'—')}</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px">${daEsc(h.company_type||'')}${regime?' · '+daEsc(regime):''}</div>
+        </div>
+        <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
+          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fv.status||'')} ${fvPct}</span>
+        </div>
+      </div>
+      <div class="da-sbars">
+        ${skeys.map(k=>{const v=sc[k]||0;return `<div class="da-sbar">
+          <span class="nm">${k.slice(0,3).toUpperCase()}</span>
+          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${v}</span>
+          <div class="tr"><div class="fl" style="width:${v}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
+        </div>`;}).join('')}
+      </div>
+      <div style="font-size:13px;color:var(--muted2);margin-bottom:8px;font-style:italic">${daEsc(h.snowflake_summary||'')}</div>
+      ${h.prediction?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">3M: <b style="color:var(--accent)">${daEsc(h.prediction['3m']||'')}</b></span>
+        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">12M: <b style="color:var(--accent)">${daEsc(h.prediction['12m']||'')}</b></span>
+      </div>`:''}
+      ${(h.risks||[]).slice(0,3).map(r=>{
+        const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
+        return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;font-size:13px">
+          <span class="da-dot" style="background:${dot}"></span>
+          <span style="color:var(--muted2)">${daEsc(r.text||'')}</span>
+        </div>`;
+      }).join('')}
+      ${h.analyst_note?`<div style="font-size:13px;color:var(--accent);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">💡 ${daEsc(h.analyst_note)}</div>`:''}
+    </div>`;
+  }).join(''):'<div style="color:var(--muted);padding:10px;font-size:14px">No holdings in analysis</div>';
+
+  // ── Portfolio risks ──────────────────────────────────────────────────
+  const portRisks=a.portfolio_risks||[];
+  $('da-risks').innerHTML=portRisks.length?portRisks.map(r=>{
+    const sev=(r.severity||'LOW').toUpperCase();
+    const dot=sev==='HIGH'?'var(--red)':sev==='MEDIUM'?'var(--yellow)':'var(--green)';
+    return `<div class="da-risk">
+      <span class="da-dot" style="background:${dot}"></span>
+      <span style="font-size:11px;font-weight:700;min-width:52px;flex-shrink:0;color:${dot}">${sev}</span>
+      <span style="color:var(--muted2)">${daEsc(r.text||'')}</span>
+    </div>`;
+  }).join(''):'<div class="da-risk" style="color:var(--muted)">No risks identified</div>';
+
+  // ── Sector breakdown ─────────────────────────────────────────────────
+  const sectors=a.sector_breakdown||[];
+  $('da-sectors').innerHTML=sectors.length?`<table style="width:100%;border-collapse:collapse;font-size:14px">
+    <thead><tr style="border-bottom:1px solid var(--border)">
+      <th style="padding:9px 14px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">SECTOR</th>
+      <th style="padding:9px 14px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ALLOC</th>
+      <th style="padding:9px 14px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ASSESSMENT</th>
+    </tr></thead>
+    <tbody>${sectors.map(s=>`<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:9px 14px;color:var(--accent);font-weight:600">${daEsc(s.sector||'')}</td>
+      <td style="padding:9px 14px;text-align:right;font-variant-numeric:tabular-nums">${daFmt(s.allocation_pct,1)}%</td>
+      <td style="padding:9px 14px;color:var(--muted2)">${daEsc(s.assessment||'')}</td>
+    </tr>`).join('')}</tbody>
+  </table>`:'<div style="color:var(--muted);font-size:13px;padding:12px">No sector data</div>';
+
+  // ── Meta + show ──────────────────────────────────────────────────────
+  $('da-run-meta').textContent=meta||'';
+  $('da-placeholder').style.display='none';
+  $('da-results').style.display='block';
+}
+
+async function daRunAnalysis(){
+  const btn=$('da-btn-run');
+  btn.disabled=true; btn.innerHTML='<span class="spin" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></span> Analysing…';
+  $('da-loading').style.display='block';
+  $('da-placeholder').style.display='none';
+  $('da-results').style.display='none';
+  $('da-ts').textContent='';
+
+  const fill=$('da-load-fill');
+  fill.style.animation='none'; fill.getBoundingClientRect(); fill.style.animation='';
+
+  const msgs=[
+    'Fetching portfolio · building payload…',
+    'Running regime detection across holdings…',
+    'Running Kelly criterion position sizing…',
+    'Sending to Claude deep-analysis engine…',
+    'Reconciling signals · building trade plan…'
+  ];
+  let mi=0;
+  const t=setInterval(()=>{mi=(mi+1)%msgs.length; $('da-loading-msg').textContent=msgs[mi];},5500);
+
+  try{
+    // Run deep analysis + Kelly + portfolio in parallel
+    const [deepRes, kellyRes, portRes] = await Promise.all([
+      fetch('/api/deep-analysis',{method:'POST'}),
+      fetch('/api/kelly',{method:'POST'}),
+      fetch('/api/portfolio'),
+    ]);
+    clearInterval(t);
+    if(!deepRes.ok) throw new Error(await deepRes.text());
+    const deep   = await deepRes.json();
+    const kelly  = kellyRes.ok  ? await kellyRes.json()  : null;
+    const port   = portRes.ok   ? await portRes.json()   : null;
+    const ts=new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    $('da-ts').textContent=ts;
+    daRender(deep, `run #${deep.run_id||'—'} · ${deep.model||'—'} · ${ts}`, kelly, port);
+    daLoadHistory();
+  }catch(e){
+    clearInterval(t);
+    $('da-placeholder').style.display='flex';
+    $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(String(e))}</div>`;
+  }finally{
+    $('da-loading').style.display='none';
+    btn.disabled=false; btn.innerHTML='↻ Re-analyse';
+  }
+}
+
+async function daLoadHistory(){
+  try{
+    const r=await fetch('/api/history?limit=30');
+    if(!r.ok) return;
+    const j=await r.json();
+    const rows=(j.data&&j.data.runs)||j.data||[];
+    const sel=$('da-hist-sel');
+    sel.innerHTML='<option value="">— Load past run —</option>'+
+      rows.map(row=>{
+        const d=new Date(row.run_at||'');
+        const label=`#${row.id} · ${isNaN(d)?row.run_at:d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · score=${row.portfolio_score||'?'}`;
+        return `<option value="${row.id}">${daEsc(label)}</option>`;
+      }).join('');
+  }catch(e){/* silent */}
+}
+
+async function daLoadRun(){
+  const sel=$('da-hist-sel'), id=sel.value;
+  if(!id) return;
+  const btn=$('da-btn-load');
+  btn.disabled=true; btn.innerHTML='<span class="spin" style="width:11px;height:11px;border-width:2px;display:inline-block;vertical-align:middle"></span>';
+  try{
+    const r=await fetch(`/api/history/${encodeURIComponent(id)}`);
+    if(!r.ok) throw new Error('not found');
+    const j=await r.json();
+    const row=j.data;
+    const analysis=row.result||null;
+    const ts=row.run_at?new Date(row.run_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+    $('da-ts').textContent=ts+' (cached)';
+    daRender({analysis,regimes:[],market:{}}, `run #${row.id} · ${row.model||'—'} · ${ts} (historical)`);
+  }catch(e){ alert('Failed to load: '+e.message); }
+  finally{ btn.disabled=false; btn.textContent='Load'; }
+}
 
 // ── Scanner Tab ───────────────────────────────────────────────────────────
 
