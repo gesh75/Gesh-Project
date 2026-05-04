@@ -7,7 +7,7 @@
 [![Claude](https://img.shields.io/badge/Anthropic_Claude-Sonnet_4.6-000?style=flat&logo=anthropic&logoColor=white)](https://anthropic.com)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-GESH combines live Robinhood portfolio data with Claude AI analysis engines to produce deep trading insights, position sizing, risk management, and a full signal → gate → execution pipeline.
+GESH combines live Robinhood portfolio data with Claude AI analysis engines to produce deep trading insights, EWMA/GARCH volatility models, position sizing, risk management, tax-loss harvesting, alpha benchmarking, crypto-equity correlation analysis, AI transparency/explainability, DeFi yield optimization, and a full signal → gate → execution pipeline.
 
 ---
 
@@ -28,6 +28,13 @@ GESH combines live Robinhood portfolio data with Claude AI analysis engines to p
 | **Market Regime** | ADX + Bollinger + RSI + FRED macro layer (Fed funds, yield curve, CPI) |
 | **Consensus Engine** | 10-node voting system (momentum, trend, fundamentals, analyst, news, Kelly, ECG, volume, FFT) |
 | **Risk Management** | 8-gate risk gate, Kelly Criterion sizing, Monte Carlo stress tests (1000 GBM simulations) |
+| **Volatility Models** ✨ | **EWMA** (RiskMetrics λ≈0.94) + **GARCH(1,1)** — recent shock weighting, volatility clustering detection |
+| **Tax-Loss Harvesting** ✨ | IRS wash-sale window tracking (30 days), min $500 threshold, eligible loss scanner |
+| **Alpha Benchmarking** ✨ | Per-holding alpha vs SPY + sector ETF (A–F grade) across 30+ ticker→ETF mappings |
+| **Crypto Correlation** ✨ | Rolling 90-day BTC/ETH correlation per holding — correlated drawdown risk detection |
+| **AI Transparency** ✨ | Plain-English per-node narrative, conflict detection, confidence bar per symbol |
+| **DeFi Yield Optimization** ✨ | 3-tier cash yield comparison: T-bills → bond ETFs → DeFi stablecoins (informational) |
+| **API Security Layer** ✨ | NaN/Inf sanitisation, rate-limit guard, price anomaly detection, secret masking |
 | **News Sentiment** | Yahoo Finance RSS + Finnhub + Polymarket macro prediction market signals |
 | **SEC Watcher** | EDGAR filing alerts for 10-K, 10-Q, 8-K |
 | **FFT Cycles** | Dominant price cycle detection via Fast Fourier Transform |
@@ -35,7 +42,7 @@ GESH combines live Robinhood portfolio data with Claude AI analysis engines to p
 | **Paper Trading** | Full simulated execution with win-rate tracking, no real money at risk |
 | **Trading Autopilot** | Scheduled scan / execute / rebalance / EOD jobs via APScheduler |
 | **Telegram Alerts** | Fill notifications, rejections, EOD P&L summaries |
-| **Web Dashboard** | React-style Chart.js UI with 7 tabs, served at port 9000 |
+| **Web Dashboard** | React-style Chart.js UI with 8 tabs (incl. Daily Analysis), served at port 9000 |
 
 ---
 
@@ -53,7 +60,7 @@ server.py (FastAPI · Port 9000)
 │   ├── news_agent.py        — News sentiment (Yahoo RSS + Finnhub + Polymarket macro)
 │   ├── sec_agent.py         — SEC EDGAR filing watcher (10-K, 10-Q, 8-K)
 │   ├── regime.py            — Market regime + FRED macro (Fed rate, yield curve, CPI)
-│   ├── monte_carlo.py       — Portfolio stress test (1000 GBM simulations)
+│   ├── monte_carlo.py       — EWMA vol + regime-conditional drift, 1000 GBM paths ✨
 │   ├── kelly.py             — Kelly Criterion position sizer
 │   ├── consensus.py         — 10-node consensus voting engine
 │   ├── ecg.py               — Equity Curve Gate (drawdown circuit breaker)
@@ -61,6 +68,16 @@ server.py (FastAPI · Port 9000)
 │   ├── ollama_agent.py      — Local LLM second opinion (Ollama / llama3.2:3b)
 │   ├── gemini_agent.py      — Google Gemini 2.5 Flash + Pro
 │   └── db.py                — SQLite persistence (gesh_financial.db)
+│
+├── SPRINT 3 — ADVANCED ANALYTICS ✨
+│   ├── volatility_models.py  — EWMA (RiskMetrics) + GARCH(1,1) volatility comparison
+│   ├── tax_harvester.py      — IRS wash-sale scanner, $500 min threshold, SQLite log
+│   ├── benchmarks.py         — Alpha vs SPY + 30 sector ETFs, A–F grade
+│   ├── crypto_correlation.py — Rolling 90-day BTC/ETH correlation per holding
+│   ├── explainability.py     — Plain-English consensus narrative + conflict detection
+│   ├── defi_yield.py         — 3-tier cash yield (T-bills → bond ETFs → DeFi)
+│   └── security/
+│       └── api_verifier.py   — NaN/Inf sanitiser, rate-limit guard, anomaly detector
 │
 ├── TRADING PIPELINE LAYER
 │   ├── consolidation_zone.py — 10+ candle tight range detector
@@ -299,6 +316,18 @@ zone_symbols = [r["symbol"] for r in cz_report["found"]]
 | `/api/config` | GET / POST | Get or update allocation config |
 | `/api/scanner/consolidation` | POST | Batch consolidation zone scan |
 | `/api/scanner/sector` | POST | Batch sector pre-filter |
+
+### Sprint 3 — New Endpoints ✨
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/volatility/compare/{symbol}` | GET | EWMA vs GARCH(1,1) annual vol%, preferred model, diff in basis points |
+| `/api/tax/harvest` | GET | Tax-loss harvesting candidates with wash-sale status |
+| `/api/benchmarks/{period}` | GET | Alpha table: each holding vs SPY + sector ETF, A–F grade |
+| `/api/crypto-correlation` | GET | BTC/ETH rolling 90-day correlation per holding, risk label |
+| `/api/explainability/{symbol}` | GET | Plain-English consensus narrative, per-node bullets, conflict notes |
+| `/api/yield/landscape` | GET | 3-tier cash yield comparison with monthly income projection |
+| `/api/security/health` | GET | API source health — rate-limit stats, last errors |
 
 ---
 

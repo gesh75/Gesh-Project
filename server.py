@@ -948,6 +948,102 @@ async def trading_deep_debate(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── Phase 1-3 Enhancement Endpoints ─────────────────────────────────────────
+
+@app.get("/api/tax/harvest")
+async def api_tax_harvest():
+    """Tax-loss harvesting candidates + wash-sale window status."""
+    try:
+        from tax_harvester import get_harvest_summary
+        payload = build_data_payload()
+        positions = {h["symbol"]: h for h in payload.get("holdings", [])}
+        cost_basis = {h["symbol"]: h.get("average_buy_price") for h in payload.get("holdings", [])}
+        result = get_harvest_summary(positions, cost_basis)
+        return _sanitize({"status": "ok", **result})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/benchmarks/{period}")
+async def api_benchmarks(period: str = "1mo"):
+    """Thematic alpha benchmarking vs sector ETFs."""
+    try:
+        from benchmarks import batch_alpha
+        payload = build_data_payload()
+        tickers = [h["symbol"] for h in payload.get("holdings", [])]
+        result  = batch_alpha(tickers, period)
+        return _sanitize({"status": "ok", "period": period, "alpha_table": result})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/explainability/{symbol}")
+async def api_explainability(symbol: str):
+    """Plain-English explanation of consensus verdict for a symbol."""
+    try:
+        from explainability import build_transparency_report
+        from consensus import run_consensus_holding
+        consensus  = run_consensus_holding(symbol.upper())
+        regime_str = consensus.get("regime", "NEUTRAL")
+        report = build_transparency_report(symbol.upper(), consensus, regime=regime_str)
+        return _sanitize({"status": "ok", "symbol": symbol.upper(), **report})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/crypto-correlation")
+async def api_crypto_correlation():
+    """Crypto-equity correlation risk summary for portfolio."""
+    try:
+        from crypto_correlation import crypto_risk_summary
+        payload  = build_data_payload()
+        holdings = payload.get("holdings", [])
+        result   = crypto_risk_summary(holdings)
+        return _sanitize({"status": "ok", **result})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/yield/landscape")
+async def api_yield_landscape():
+    """DeFi & cash yield landscape for idle cash (informational)."""
+    try:
+        from defi_yield import get_yield_landscape
+        payload  = build_data_payload()
+        cash_usd = float(payload.get("equity_summary", {}).get("cash", 0) or 0)
+        result   = get_yield_landscape(cash_usd)
+        return _sanitize({"status": "ok", **result})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/security/health")
+async def api_security_health():
+    """API health report — latency, rate-limit hits, last errors."""
+    try:
+        from security.api_verifier import all_api_health
+        return _sanitize({"status": "ok", "sources": all_api_health()})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/volatility/compare/{symbol}")
+async def api_vol_compare(symbol: str):
+    """Compare EWMA vs GARCH(1,1) volatility for a symbol."""
+    try:
+        import yfinance as yf
+        import numpy as np
+        from volatility_models import compare_vol_models
+        data   = yf.download(symbol.upper(), period="1y", auto_adjust=True, progress=False)["Close"]
+        if isinstance(data, __import__("pandas").DataFrame):
+            data = data.iloc[:, 0]
+        rets   = np.log(data / data.shift(1)).dropna()
+        result = compare_vol_models(rets, symbol.upper())
+        return _sanitize({"status": "ok", **result})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
