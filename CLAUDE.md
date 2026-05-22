@@ -12,6 +12,20 @@ signal→gate→execution pipeline. Built with FastAPI + SQLite + Anthropic Clau
 - Polymarket sentiment in `news_agent.py` — prediction market macro signal blended with news mood
 - Gemini multi-LLM agent `gemini_agent.py` — Google Gemini 2.5 Flash/Pro for sentiment + second opinions
 
+## Commercial Role — Port 9000 is THE PRODUCT ★
+
+> **Port 9000 (this service) is what customers pay for.** It is the GESH intelligence dashboard —
+> 8 tabs covering signals, risk, regime, Kelly sizing, Monte Carlo, SEC alerts, fundamentals, and
+> daily analysis. This is the only layer that ever faces paying users.
+>
+> Port 9003/trading is the **internal engine** — runs silently, accumulates paper trade win-rate
+> data that becomes the public proof of signal accuracy. Customers never see or touch it.
+>
+> Port 9003/crypto is the **premium add-on** — on-chain signals and BTC/ETH options flow,
+> bundled into the $399 Trading Desk tier or offered as a $49 add-on.
+>
+> See `gesh-project-trading/GESH_COMMERCIAL_ROADMAP.md` for the full 12-month plan.
+
 ## Owner
 Georgi — Network Engineer, active trader, Robinhood user via robin_stocks.
 

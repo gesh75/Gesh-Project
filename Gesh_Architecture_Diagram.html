@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Gesh Financial — Architecture Diagram</title>
+<title>Gesh Financial — Architecture &amp; Commercial Map</title>
 <style>
 :root{
   --bg:#05050e;--card:#0a0a18;--border:#1a1a38;
   --accent:#00d4ff;--green:#00e676;--red:#ff4444;
   --yellow:#ffd700;--purple:#a78bfa;--orange:#ff8c42;
-  --teal:#00e5cc;--pink:#ff6eb4;
+  --teal:#00e5cc;--pink:#ff6eb4;--lime:#b2ff59;
   --text:#e2e8f0;--muted:#4a5568;--muted2:#64748b;
   --font:'SF Mono','Fira Code',Consolas,monospace
 }
@@ -23,9 +23,11 @@ h1{text-align:center;font-size:22px;color:var(--accent);letter-spacing:.12em;tex
 .layer-label{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;padding-left:4px;display:flex;align-items:center;gap:8px}
 .layer-label::after{content:'';flex:1;height:1px;background:var(--border)}
 
-/* connectors between layers */
-.connector{display:flex;justify-content:center;align-items:center;height:36px;position:relative}
-.connector::before{content:'';position:absolute;left:50%;top:0;bottom:0;width:2px;background:linear-gradient(to bottom,transparent,var(--border),transparent)}
+.connector{display:flex;justify-content:center;align-items:center;height:44px;position:relative;overflow:hidden}
+.connector::before{content:'';position:absolute;left:50%;top:0;width:2px;height:200%;
+  background:linear-gradient(to bottom,transparent 0%,var(--accent) 50%,transparent 100%);
+  animation:flowDown 1.6s linear infinite;transform:translateX(-50%)}
+@keyframes flowDown{from{top:-100%}to{top:100%}}
 .connector-label{font-size:11px;color:var(--muted2);background:var(--bg);padding:2px 10px;position:relative;z-index:1;border:1px solid var(--border);border-radius:10px;letter-spacing:.06em}
 
 /* ── BOXES ── */
@@ -33,11 +35,13 @@ h1{text-align:center;font-size:22px;color:var(--accent);letter-spacing:.12em;tex
 .box{border-radius:8px;border:1px solid var(--border);padding:12px 14px;transition:border-color .2s,box-shadow .2s;position:relative;overflow:hidden}
 .box:hover{border-color:rgba(0,212,255,.4);box-shadow:0 0 20px rgba(0,212,255,.08)}
 .box::before{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.025) 0%,transparent 60%);pointer-events:none}
-
 .box-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
 .box-body{font-size:11px;color:var(--muted2);line-height:1.6}
 .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:.05em;margin:1px 2px 1px 0;text-transform:uppercase}
 .new-badge{display:inline-block;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:700;background:rgba(0,229,204,.18);color:var(--teal);border:1px solid rgba(0,229,204,.35);letter-spacing:.05em;vertical-align:middle;margin-left:4px}
+.product-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;background:rgba(0,230,118,.18);color:var(--green);border:1px solid rgba(0,230,118,.4);letter-spacing:.06em;vertical-align:middle;margin-left:4px}
+.engine-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;background:rgba(255,110,180,.15);color:var(--pink);border:1px solid rgba(255,110,180,.35);letter-spacing:.06em;vertical-align:middle;margin-left:4px}
+.addon-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;background:rgba(0,229,204,.15);color:var(--teal);border:1px solid rgba(0,229,204,.35);letter-spacing:.06em;vertical-align:middle;margin-left:4px}
 
 /* color variants */
 .c-accent{background:rgba(0,212,255,.08);border-color:rgba(0,212,255,.3)}.c-accent .box-title{color:var(--accent)}
@@ -48,6 +52,7 @@ h1{text-align:center;font-size:22px;color:var(--accent);letter-spacing:.12em;tex
 .c-orange{background:rgba(255,140,66,.06);border-color:rgba(255,140,66,.25)}.c-orange .box-title{color:var(--orange)}
 .c-teal{background:rgba(0,229,204,.06);border-color:rgba(0,229,204,.3)}.c-teal .box-title{color:var(--teal)}
 .c-pink{background:rgba(255,110,180,.06);border-color:rgba(255,110,180,.25)}.c-pink .box-title{color:var(--pink)}
+.c-lime{background:rgba(178,255,89,.06);border-color:rgba(178,255,89,.25)}.c-lime .box-title{color:var(--lime)}
 .c-dark{background:rgba(255,255,255,.02);border-color:var(--border)}.c-dark .box-title{color:var(--muted2)}
 
 .t-accent{background:rgba(0,212,255,.12);color:var(--accent);border:1px solid rgba(0,212,255,.2)}
@@ -59,64 +64,108 @@ h1{text-align:center;font-size:22px;color:var(--accent);letter-spacing:.12em;tex
 .t-teal{background:rgba(0,229,204,.12);color:var(--teal);border:1px solid rgba(0,229,204,.2)}
 .t-pink{background:rgba(255,110,180,.12);color:var(--pink);border:1px solid rgba(255,110,180,.2)}
 .t-muted{background:rgba(255,255,255,.05);color:var(--muted2);border:1px solid var(--border)}
+.t-lime{background:rgba(178,255,89,.12);color:var(--lime);border:1px solid rgba(178,255,89,.2)}
 
-/* size helpers */
-.w1{flex:1;min-width:140px}.w2{flex:2;min-width:200px}.w3{flex:3;min-width:260px}
+.w1{flex:1;min-width:140px}.w2{flex:2;min-width:200px}.w3{flex:3;min-width:260px}.w4{flex:4;min-width:300px}
 .full{width:100%;flex:none}
 
-/* Tab grid */
-.tab-grid{display:grid;grid-template-columns:repeat(9,1fr);gap:10px}
-.tab-box{border-radius:8px;padding:12px;border:1px solid var(--border);background:rgba(255,255,255,.02)}
-.tab-box:hover{border-color:rgba(0,212,255,.35)}
+/* ── COMMERCIAL OVERVIEW ── */
+.commercial-overview{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:8px}
+.com-card{border-radius:12px;padding:20px;position:relative;overflow:hidden}
+.com-card-product{background:linear-gradient(135deg,rgba(0,230,118,.12) 0%,rgba(0,230,118,.04) 100%);border:2px solid rgba(0,230,118,.35)}
+.com-card-engine{background:linear-gradient(135deg,rgba(255,110,180,.10) 0%,rgba(255,110,180,.03) 100%);border:2px solid rgba(255,110,180,.3);opacity:.85}
+.com-card-crypto{background:linear-gradient(135deg,rgba(0,229,204,.10) 0%,rgba(0,229,204,.03) 100%);border:2px solid rgba(0,229,204,.3)}
+.com-card-title{font-size:14px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px}
+.com-card-port{font-size:11px;font-weight:700;letter-spacing:.08em;margin-bottom:12px;opacity:.7}
+.com-card-label{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;padding:3px 8px;border-radius:4px;display:inline-block;margin-bottom:12px}
+.label-product{background:rgba(0,230,118,.2);color:var(--green);border:1px solid rgba(0,230,118,.4)}
+.label-engine{background:rgba(255,110,180,.2);color:var(--pink);border:1px solid rgba(255,110,180,.4)}
+.label-addon{background:rgba(0,229,204,.2);color:var(--teal);border:1px solid rgba(0,229,204,.4)}
+.com-card-desc{font-size:11px;color:var(--muted2);line-height:1.65;margin-bottom:12px}
+.com-card-items{font-size:10px;color:var(--muted2);line-height:1.8}
+.com-card-items span{display:block;padding-left:14px;position:relative}
+.com-card-items span::before{content:'→';position:absolute;left:0;color:var(--muted)}
+.com-price{margin-top:12px;padding:8px 10px;border-radius:6px;font-size:11px;font-weight:700;text-align:center}
+.com-price-product{background:rgba(0,230,118,.12);color:var(--green);border:1px solid rgba(0,230,118,.25)}
+.com-price-engine{background:rgba(255,110,180,.08);color:var(--pink);border:1px solid rgba(255,110,180,.2);font-size:10px}
+.com-price-addon{background:rgba(0,229,204,.10);color:var(--teal);border:1px solid rgba(0,229,204,.2)}
+
+/* ── TAB GRID ── */
+.tab-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:10px}
+.tab-box{border-radius:8px;padding:12px;border:1px solid var(--border);background:rgba(255,255,255,.02);transition:transform .2s,box-shadow .2s,border-color .2s}
+.tab-box:hover{border-color:rgba(0,212,255,.35);transform:translateY(-2px);box-shadow:0 0 16px rgba(0,212,255,.15)}
 .tab-name{font-size:13px;font-weight:700;color:var(--accent);margin-bottom:6px;display:flex;align-items:center;gap:6px}
 .tab-icon{font-size:16px}
 .tab-feat{font-size:10px;color:var(--muted2);line-height:1.65;margin-top:4px}
 .tab-feat span{display:block;padding:1px 0}
 
-/* Node grid */
-.node-grid{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;margin-top:4px}
-.node-box{border-radius:6px;padding:8px 6px;text-align:center;border:1px solid rgba(167,139,250,.2);background:rgba(167,139,250,.05)}
+/* ── NODE GRID ── */
+.node-grid{display:grid;grid-template-columns:repeat(11,1fr);gap:8px;margin-top:4px}
+.node-box{border-radius:6px;padding:8px 6px;text-align:center;border:1px solid rgba(167,139,250,.2);background:rgba(167,139,250,.05);cursor:default;transition:transform .2s,box-shadow .2s,background .2s}
+.node-box:hover{transform:translateY(-3px) scale(1.04);box-shadow:0 0 18px rgba(167,139,250,.3);background:rgba(167,139,250,.12)}
 .node-icon{font-size:16px;margin-bottom:3px}
 .node-name{font-size:10px;font-weight:700;color:var(--purple);text-transform:uppercase;letter-spacing:.04em}
 .node-src{font-size:9px;color:var(--muted);margin-top:2px}
 
-/* AI row */
-.ai-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-
-/* Scanner grid */
-.scanner-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;margin-top:8px}
-.scanner-box{border-radius:6px;padding:8px 6px;text-align:center;border:1px solid rgba(0,229,204,.2);background:rgba(0,229,204,.04)}
-.scanner-box:hover{border-color:rgba(0,229,204,.5);background:rgba(0,229,204,.09)}
-.scanner-name{font-size:10px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.04em}
-.scanner-desc{font-size:9px;color:var(--muted);margin-top:2px;line-height:1.4}
-
-/* Execution tier */
-.exec-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:8px}
-.exec-box{border-radius:6px;padding:10px 8px;border:1px solid rgba(255,110,180,.2);background:rgba(255,110,180,.04)}
+/* ── EXECUTION TIER ── */
+.exec-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-top:8px}
+.exec-box{border-radius:6px;padding:10px 8px;border:1px solid rgba(255,110,180,.2);background:rgba(255,110,180,.04);transition:border-color .2s,transform .2s}
 .exec-box:hover{border-color:rgba(255,110,180,.5);transform:translateY(-2px)}
 .exec-name{font-size:11px;font-weight:700;color:var(--pink);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
 .exec-desc{font-size:10px;color:var(--muted2);line-height:1.5}
 
-/* Legend */
+/* ── CRYPTO GRID ── */
+.crypto-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:8px}
+.crypto-box{border-radius:6px;padding:12px 10px;border:1px solid rgba(0,229,204,.2);background:rgba(0,229,204,.04);transition:border-color .2s,transform .2s}
+.crypto-box:hover{border-color:rgba(0,229,204,.5);transform:translateY(-2px)}
+.crypto-name{font-size:11px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+.crypto-desc{font-size:10px;color:var(--muted2);line-height:1.5}
+
+/* ── SCANNER GRID ── */
+.scanner-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+.scanner-box{border-radius:6px;padding:8px 6px;border:1px solid rgba(0,229,204,.2);background:rgba(0,229,204,.04);text-align:center}
+.scanner-box:hover{border-color:rgba(0,229,204,.5);background:rgba(0,229,204,.09)}
+.scanner-name{font-size:10px;font-weight:700;color:var(--teal);text-transform:uppercase;letter-spacing:.04em}
+.scanner-desc{font-size:9px;color:var(--muted);margin-top:2px;line-height:1.4}
+
+/* ── ROADMAP PHASES ── */
+.phase-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:8px}
+.phase-box{border-radius:8px;padding:14px;position:relative;overflow:hidden}
+.phase-1{background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.3)}
+.phase-2{background:rgba(0,212,255,.06);border:1px solid rgba(0,212,255,.25)}
+.phase-3{background:rgba(167,139,250,.06);border:1px solid rgba(167,139,250,.25)}
+.phase-4{background:rgba(255,215,0,.05);border:1px solid rgba(255,215,0,.25)}
+.phase-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.phase-1 .phase-title{color:var(--green)}
+.phase-2 .phase-title{color:var(--accent)}
+.phase-3 .phase-title{color:var(--purple)}
+.phase-4 .phase-title{color:var(--yellow)}
+.phase-date{font-size:10px;color:var(--muted);margin-bottom:8px}
+.phase-item{font-size:10px;color:var(--muted2);padding:2px 0 2px 12px;position:relative;line-height:1.5}
+.phase-item::before{content:'·';position:absolute;left:0}
+.phase-mrr{margin-top:8px;font-size:11px;font-weight:700;padding:4px 8px;border-radius:4px;display:inline-block}
+.phase-1 .phase-mrr{background:rgba(0,230,118,.15);color:var(--green)}
+.phase-2 .phase-mrr{background:rgba(0,212,255,.15);color:var(--accent)}
+.phase-3 .phase-mrr{background:rgba(167,139,250,.15);color:var(--purple)}
+.phase-4 .phase-mrr{background:rgba(255,215,0,.15);color:var(--yellow)}
+.phase-status{position:absolute;top:10px;right:10px;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;letter-spacing:.06em}
+.status-active{background:rgba(0,230,118,.2);color:var(--green);border:1px solid rgba(0,230,118,.4)}
+.status-next{background:rgba(100,116,139,.15);color:var(--muted2);border:1px solid var(--border)}
+
+/* ── LEGEND ── */
 .legend{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;margin-top:24px;padding:14px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.015)}
 .leg-item{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted2)}
 .leg-dot{width:10px;height:10px;border-radius:3px}
 
-/* arrow */
-.arrows{display:grid;grid-template-columns:repeat(9,1fr);gap:10px;padding:4px 0}
-.arrow{text-align:center;font-size:18px;color:var(--muted);opacity:.5}
-
-/* ── ANIMATIONS ─────────────────────────────────────────────────── */
-.layer,.legend{opacity:0;transform:translateY(28px);transition:opacity .6s ease,transform .6s ease}
-.layer.visible,.legend.visible{opacity:1;transform:translateY(0)}
-
+/* ── ANIMATIONS ── */
+.layer,.legend,.commercial-overview,.phase-grid{opacity:0;transform:translateY(28px);transition:opacity .6s ease,transform .6s ease}
+.layer.visible,.legend.visible,.commercial-overview.visible,.phase-grid.visible{opacity:1;transform:translateY(0)}
 .layer.visible .box{animation:fadeSlide .45s ease both}
 .layer.visible .node-box{animation:fadeSlide .4s ease both}
 .layer.visible .tab-box{animation:fadeSlide .4s ease both}
-.layer.visible .scanner-box{animation:fadeSlide .35s ease both}
 .layer.visible .exec-box{animation:fadeSlide .4s ease both}
+.layer.visible .crypto-box{animation:fadeSlide .4s ease both}
 @keyframes fadeSlide{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-
 .layer.visible .box:nth-child(1),.layer.visible .node-box:nth-child(1),.layer.visible .tab-box:nth-child(1){animation-delay:.05s}
 .layer.visible .box:nth-child(2),.layer.visible .node-box:nth-child(2),.layer.visible .tab-box:nth-child(2){animation-delay:.12s}
 .layer.visible .box:nth-child(3),.layer.visible .node-box:nth-child(3),.layer.visible .tab-box:nth-child(3){animation-delay:.19s}
@@ -128,783 +177,413 @@ h1{text-align:center;font-size:22px;color:var(--accent);letter-spacing:.12em;tex
 .layer.visible .node-box:nth-child(9){animation-delay:.61s}
 .layer.visible .node-box:nth-child(10){animation-delay:.68s}
 .layer.visible .node-box:nth-child(11){animation-delay:.75s}
-
-.connector{position:relative;height:44px;display:flex;justify-content:center;align-items:center;overflow:hidden}
-.connector::before{content:'';position:absolute;left:50%;top:0;width:2px;height:200%;
-  background:linear-gradient(to bottom,transparent 0%,var(--accent) 50%,transparent 100%);
-  animation:flowDown 1.6s linear infinite;transform:translateX(-50%)}
-@keyframes flowDown{from{top:-100%}to{top:100%}}
-
 h1{animation:floatTitle 3.5s ease-in-out infinite}
 @keyframes floatTitle{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
-
 h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
   background:linear-gradient(to right,transparent,var(--accent),transparent);
   animation:sweepGlow 2.5s ease-in-out infinite}
 @keyframes sweepGlow{0%,100%{width:60px;opacity:.4}50%{width:220px;opacity:1}}
-
 .live-pulse{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);
   animation:livePulse 1.5s ease-in-out infinite;vertical-align:middle;margin-right:4px}
 @keyframes livePulse{0%,100%{box-shadow:0 0 0 0 rgba(0,230,118,.6)}70%{box-shadow:0 0 0 6px rgba(0,230,118,0)}}
-
-.node-box{cursor:default;transition:transform .2s,box-shadow .2s,background .2s}
-.node-box:hover{transform:translateY(-3px) scale(1.04);box-shadow:0 0 18px rgba(167,139,250,.3);background:rgba(167,139,250,.12)}
-
-.tab-box{transition:transform .2s,box-shadow .2s,border-color .2s}
-.tab-box:hover{transform:translateY(-2px);box-shadow:0 0 16px rgba(0,212,255,.15)}
-
-.box::after{content:'';position:absolute;inset:0;
-  background:linear-gradient(120deg,transparent 30%,rgba(255,255,255,.04) 50%,transparent 70%);
-  opacity:0;transition:opacity .3s;pointer-events:none}
+.box::after{content:'';position:absolute;inset:0;background:linear-gradient(120deg,transparent 30%,rgba(255,255,255,.04) 50%,transparent 70%);opacity:0;transition:opacity .3s;pointer-events:none}
 .box:hover::after{opacity:1;animation:shimmer .6s ease forwards}
-@keyframes shimmer{from{background-position:-200px 0}to{background-position:200px 0}}
-
-.verdict-bar{animation:barPulse 3s ease-in-out infinite}
-@keyframes barPulse{0%,100%{opacity:.7}50%{opacity:1}}
-
-body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
-  background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,.03) 3px,rgba(0,0,0,.03) 4px);
-  opacity:.6}
-
-.exec-box{transition:transform .2s,box-shadow .2s,border-color .2s}
+@keyframes shimmer{to{background-position:200%}}
+.gate-bar-wrap{margin-top:8px}
+.gate-bar-label{font-size:10px;color:var(--muted2);display:flex;justify-content:space-between;margin-bottom:3px}
+.gate-bar-track{height:5px;border-radius:3px;background:rgba(255,255,255,.07);overflow:hidden}
+.gate-bar-fill{height:100%;border-radius:3px;transition:width 1s ease}
+.gate-bar-fill.green{background:var(--green)}
+.gate-bar-fill.yellow{background:var(--yellow)}
+.gate-bar-fill.red{background:var(--red)}
 </style>
 </head>
 <body>
-
-<h1>⬡ Gesh Financial Observability · v5</h1>
-<p class="subtitle">Full System Architecture · v5 · Monorepo · Dual-App · FRED Macro · Weighted Consensus · 3 Critical Bugs Fixed · New Risk Gates · Trading Layer · April 2026</p>
+<h1>GESH Financial</h1>
+<p class="subtitle"><span class="live-pulse"></span>Architecture &amp; Commercial Map — Updated 2026-05-23</p>
 
 <div class="diagram">
 
-  <!-- ═══ LAYER 1: DATA SOURCES ═══ -->
-  <div class="layer">
-    <div class="layer-label">📡 Layer 1 — External Data Sources</div>
-    <div class="row">
-      <div class="box c-green w2">
-        <div class="box-title">🏦 Robinhood API</div>
-        <div class="box-body">Live portfolio · Holdings · Equity summary · Buying power · Withdrawable cash · Watchlist quotes · Bid/Ask · Authentication (MFA) · Extended hours</div>
-        <div style="margin-top:6px"><span class="tag t-green">robin_stocks</span><span class="tag t-green"><span class="live-pulse"></span>Live</span><span class="tag t-muted">profile["withdrawable_amount"]</span></div>
+<!-- ══════════════════════════════════════════════════════════════════
+     COMMERCIAL OVERVIEW — Three Tools, One System
+════════════════════════════════════════════════════════════════════ -->
+<div class="layer-label" style="margin-bottom:16px">🏗 COMMERCIAL ARCHITECTURE — THREE LAYERS, ONE SYSTEM</div>
+<div class="commercial-overview" id="comOverview">
+
+  <div class="com-card com-card-product">
+    <div class="com-card-label label-product">★ THE PRODUCT</div>
+    <div class="com-card-title" style="color:var(--green)">GESH Intelligence</div>
+    <div class="com-card-port">Port 9000 · gesh-project</div>
+    <div class="com-card-desc">What paying customers see and use. AI-powered portfolio intelligence dashboard — signals, risk analysis, regime detection, SEC alerts.</div>
+    <div class="com-card-items">
+      <span>8-tab web dashboard (FastAPI + Chart.js)</span>
+      <span>11-node consensus signal feed</span>
+      <span>Monte Carlo risk + Kelly sizing</span>
+      <span>SEC/news alerts + fundamental scans</span>
+      <span>Crypto signal add-on (premium tier)</span>
+      <span>Per-user Alpaca broker connection (Phase 2)</span>
+    </div>
+    <div class="com-price com-price-product">$49 / $149 / $399 per month</div>
+  </div>
+
+  <div class="com-card com-card-engine">
+    <div class="com-card-label label-engine">INTERNAL ENGINE</div>
+    <div class="com-card-title" style="color:var(--pink)">GESH Trading Engine</div>
+    <div class="com-card-port">Port 9003/trading · gesh-project-trading</div>
+    <div class="com-card-desc">Never sold directly. Runs silently to generate the signal accuracy proof that makes the product credible. Customers don't need it — they see the results.</div>
+    <div class="com-card-items">
+      <span>APScheduler autopilot (4 daily jobs)</span>
+      <span>Paper trade execution (Alpaca MCP)</span>
+      <span>Signal Accuracy Tracker (tracker.py)</span>
+      <span>Autonomy gate: 30 trades / 55% win rate</span>
+      <span>Risk gate (8-layer protection)</span>
+      <span>Win rate → becomes the sales proof page</span>
+    </div>
+    <div class="com-price com-price-engine">INTERNAL — generates credibility, not revenue</div>
+  </div>
+
+  <div class="com-card com-card-crypto">
+    <div class="com-card-label label-addon">PREMIUM ADD-ON</div>
+    <div class="com-card-title" style="color:var(--teal)">GESH Crypto</div>
+    <div class="com-card-port">Port 9003/crypto · gesh-project-trading</div>
+    <div class="com-card-desc">Crypto-specific signal layer. On-chain data, perpetual funding rates, Deribit options flow, 11-node crypto consensus. Bundled into top plan or sold separately.</div>
+    <div class="com-card-items">
+      <span>15 coins: BTC, ETH, SOL, BNB, AVAX…</span>
+      <span>Binance fapi on-chain (funding, OI, CVD)</span>
+      <span>Deribit options flow (P/C ratio, IV skew)</span>
+      <span>Crypto consensus + regime detection</span>
+      <span>APScheduler crypto daily scan</span>
+      <span>Crypto sim dashboard + Telegram alerts</span>
+    </div>
+    <div class="com-price com-price-addon">Bundled in Trading Desk ($399) or +$49 add-on</div>
+  </div>
+
+</div>
+
+<div class="connector"><span class="connector-label">shared 11-node consensus engine + Claude API</span></div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     PRODUCT LAYER — Port 9000 (what customers pay for)
+════════════════════════════════════════════════════════════════════ -->
+<div class="layer" id="l1">
+  <div class="layer-label">🟢 PRODUCT LAYER — Port 9000 &nbsp;<span class="product-badge">WHAT CUSTOMERS PAY FOR</span></div>
+  <div class="row" style="margin-bottom:12px">
+    <div class="box c-green w4">
+      <div class="box-title">server.py — FastAPI Web App</div>
+      <div class="box-body">
+        <span class="tag t-green">9000</span>
+        <span class="tag t-muted">FastAPI</span>
+        <span class="tag t-muted">Uvicorn</span>
+        <span class="tag t-green">Multi-user (Phase 2)</span><br><br>
+        Primary entry point. Serves the 8-tab dashboard, all API endpoints, and AI analysis results.
+        In commercial version: Auth0 JWT middleware guards every route. Stripe webhooks manage subscriptions.
+        Per-user Alpaca keys stored encrypted in DB.
       </div>
-      <div class="box c-accent w3">
-        <div class="box-title">📈 Yahoo Finance</div>
-        <div class="box-body">90d–252d price history · Analyst targets · Performance returns · Insider transactions · Institutional ownership · Forward PE · Revenue growth · Profit margins · EPS growth · Price targets · Sector ETF volume</div>
-        <div style="margin-top:6px"><span class="tag t-accent">yfinance</span><span class="tag t-muted">REST</span><span class="tag t-muted">Free</span></div>
+    </div>
+    <div class="box c-accent w2">
+      <div class="box-title">Phase 2 Additions</div>
+      <div class="box-body">
+        <span class="tag t-green">Auth0 JWT</span>
+        <span class="tag t-accent">Stripe</span>
+        <span class="tag t-yellow">Rate limiting</span>
+        <span class="tag t-purple">API keys</span>
+        <span class="tag t-muted">DigitalOcean</span><br><br>
+        Auth0 free tier → JWT per request.<br>
+        Stripe webhooks → subscription table.<br>
+        DigitalOcean Droplet $24/mo.
       </div>
-      <div class="box c-yellow w2">
-        <div class="box-title">📋 SEC EDGAR</div>
-        <div class="box-body">10-K · 10-Q · 8-K filings via Atom RSS · CIK resolution · Filing text extraction · No API key required</div>
-        <div style="margin-top:6px"><span class="tag t-yellow">Public API</span><span class="tag t-yellow">Free</span></div>
-      </div>
-      <div class="box c-orange w1">
-        <div class="box-title">📰 News</div>
-        <div class="box-body">Yahoo Finance RSS · Finnhub API (optional key) · Company news articles · Pub dates · Headlines · Batch sentiment scoring</div>
-        <div style="margin-top:6px"><span class="tag t-orange">RSS</span><span class="tag t-orange">Finnhub</span></div>
-      </div>
-      <div class="box c-teal w2">
-        <div class="box-title">🏛️ FRED — St. Louis Fed <span class="new-badge">v2</span></div>
-        <div class="box-body">Fed Funds Rate (DFF) · 10Y-2Y Yield Spread (T10Y2Y) · CPI YoY % (CPIAUCSL) · HY Credit OAS (BAMLH0A0HYM2) · VIX (VIXCLS) · Free CSV endpoint · Optional FRED_API_KEY for accuracy · macro_connector.py Node 11</div>
-        <div style="margin-top:6px"><span class="tag t-teal">Free API</span><span class="tag t-teal">get_macro_regime()</span><span class="tag t-teal">6h cache</span></div>
-      </div>
-      <div class="box c-purple w2">
-        <div class="box-title">🎲 Polymarket <span class="new-badge">v2</span></div>
-        <div class="box-body">Prediction market probabilities · Fed rate decisions · Recession probability · S&amp;P 500 levels · Inflation markets · Free Gamma API · macro_risk_score 0–100 · Blended with news mood</div>
-        <div style="margin-top:6px"><span class="tag t-purple">Free API</span><span class="tag t-purple">_fetch_polymarket_macro()</span><span class="tag t-purple">RISK_ON/OFF</span></div>
-      </div>
-      <div class="box c-red w2">
-        <div class="box-title">🗣️ Reddit — Live Crowd Sentiment <span class="new-badge">v3</span></div>
-        <div class="box-body">r/stocks · r/investing · r/wallstreetbets (0.7× weight) · r/StockMarket · VADER sentiment + upvote-weighting (log-scale) · Replaces static DB in Node 6 · Unauthenticated scrape or PRAW API · 90min cache per symbol</div>
-        <div style="margin-top:6px"><span class="tag t-red">sentiment_connector.py</span><span class="tag t-red">VADER</span><span class="tag t-muted">Optional REDDIT_CLIENT_ID</span></div>
+    </div>
+    <div class="box c-lime w1">
+      <div class="box-title">Proof Page</div>
+      <div class="box-body">
+        <span class="tag t-lime">Public</span><br><br>
+        gesh_proof_page.html — shows live win rate, Sharpe, per-source signal accuracy from tracker.py.<br><br>
+        <em style="color:var(--lime)">The entire sales pitch.</em><br>
+        <span style="color:var(--muted);font-size:9px">📋 June 2026</span>
       </div>
     </div>
   </div>
 
-  <div class="connector"><span class="connector-label">↓ HTTP / REST / RSS Fetch ↓</span></div>
-
-  <!-- ═══ LAYER 2: PYTHON BACKEND ═══ -->
-  <div class="layer">
-    <div class="layer-label">⚙️ Layer 2 — Python Backend (Portfolio Manager :9000 · Trading Engine :9001 · FastAPI · uvicorn · 0.0.0.0)</div>
-    <div class="row" style="margin-bottom:10px">
-      <div class="box c-accent w2">
-        <div class="box-title">🔌 server.py — Two Instances <span class="new-badge">v5</span></div>
-        <div class="box-body">
-          <span style="color:var(--accent);font-weight:700">Portfolio Manager :9000</span> — FastAPI · 40+ endpoints · Deep AI analysis · Weighted 8-node consensus · Human-facing dashboard (8 tabs)<br><br>
-          <span style="color:var(--teal);font-weight:700">Trading Engine :9001</span> — FastAPI · Autonomous execution · 11-node consensus · Macro + Reddit nodes · 8-gate risk gate · Autopilot · Auto-redirects / → /trading
-        </div>
-        <div style="margin-top:6px"><span class="tag t-accent">FastAPI</span><span class="tag t-accent">Uvicorn</span><span class="tag t-muted">:9000 Portfolio</span><span class="tag t-teal">:9001 Trading</span></div>
-      </div>
-      <div class="box c-green w2">
-        <div class="box-title">📥 data_fetcher.py</div>
-        <div class="box-body">Robinhood auth · Build portfolio payload · Holdings DataFrame · Equity summary dict · Watchlist quotes · Snapshot logging · PE-ratio NaN guard</div>
-        <div style="margin-top:6px"><span class="tag t-green">robin_stocks</span><span class="tag t-green">pandas</span></div>
-      </div>
-      <div class="box c-dark w2">
-        <div class="box-title">🗄️ db.py · SQLite</div>
-        <div class="box-body">analysis_log · equity_snapshots · sec_filings · news_sentiment · fundamental_scans · trade_log · paper_trades · Auto-init on startup · VirtioFS-safe fallback</div>
-        <div style="margin-top:6px"><span class="tag t-muted">SQLite</span><span class="tag t-muted">gesh_financial.db</span></div>
-      </div>
-      <div class="box c-accent w2">
-        <div class="box-title">📊 market_data.py</div>
-        <div class="box-body">get_analyst_targets · get_performance_returns · get_insider_transactions · get_institutional_ownership · screen_market (95+ stocks) · SCREENER_UNIVERSE</div>
-        <div style="margin-top:6px"><span class="tag t-accent">yfinance</span><span class="tag t-accent">Batch</span></div>
+  <!-- Dashboard tabs -->
+  <div style="font-size:10px;color:var(--muted);margin-bottom:8px;letter-spacing:.08em;text-transform:uppercase">Dashboard — 8 tabs (templates/dashboard.html)</div>
+  <div class="tab-grid">
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">📊</span>Overview</div>
+      <div class="tab-feat">
+        <span>Portfolio equity</span><span>Holdings table</span><span>Sector breakdown</span><span>Watchlist quotes</span>
       </div>
     </div>
-    <div class="row" style="margin-bottom:10px">
-      <div class="box c-green w2">
-        <div class="box-title">〰️ fft_cycles.py</div>
-        <div class="box-body">FFT spectral cycle detection · Log-detrend + Hanning window · Top 3 dominant cycles · Primary cycle phase · Trough/Peak position · BULLISH/BEARISH signal · Consensus node #10</div>
-        <div style="margin-top:6px"><span class="tag t-green">NumPy FFT</span><span class="tag t-green">252d lookback</span></div>
-      </div>
-      <div class="box c-red w2">
-        <div class="box-title">⚠️ ecg.py</div>
-        <div class="box-body">Equity Curve Gate · Drawdown from peak · Losing streak count · HEALTHY / COOLING / SUSPENDED · VRE26-style monitor · unblock.py reset utility</div>
-        <div style="margin-top:6px"><span class="tag t-red">Risk</span><span class="tag t-red">Auto</span></div>
-      </div>
-      <div class="box c-yellow w2">
-        <div class="box-title">〰️ regime.py <span class="new-badge">+FRED v2</span></div>
-        <div class="box-body">ADX (trend strength) · Bollinger Bands %B · RSI-14 · TRENDING / RANGING / BREAKOUT-READY · <strong style="color:var(--teal)">get_macro_context()</strong>: Fed rate direction · Yield curve state · CPI trend · All injected first in regime_summary → Claude prompts</div>
-        <div style="margin-top:6px"><span class="tag t-yellow">Technical</span><span class="tag t-yellow">NumPy</span><span class="tag t-teal">FRED Macro</span></div>
-      </div>
-      <div class="box c-purple w2">
-        <div class="box-title">🎲 monte_carlo.py</div>
-        <div class="box-body">1,000 GBM path simulations · 21-day horizon · True covariance matrix · VaR 95% · CVaR 95% · Prob. profit/loss · Daily vol · Per-holding σ</div>
-        <div style="margin-top:6px"><span class="tag t-purple">GBM</span><span class="tag t-purple">N=1000</span></div>
-      </div>
-      <div class="box c-green w2">
-        <div class="box-title">⚖️ kelly.py</div>
-        <div class="box-body">Continuous Kelly f*=μ/σ² · Discrete Kelly f*=W−(1−W)/R · 60/40 blend · Analyst upside boost · ½-Kelly · 25% hard cap · ADD/HOLD/TRIM/AVOID signals</div>
-        <div style="margin-top:6px"><span class="tag t-green">Quant</span><span class="tag t-green">90d</span></div>
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">🧠</span>Analysis</div>
+      <div class="tab-feat">
+        <span>Deep AI analysis</span><span>Risk score</span><span>Fair value pills</span><span>Predictions 3M/12M</span>
       </div>
     </div>
-
-    <!-- NEW TRADING LAYER MODULES -->
-    <div class="row">
-      <div class="box c-teal w2">
-        <div class="box-title">🏛️ macro_connector.py <span class="new-badge">v3</span></div>
-        <div class="box-body">Node 11 power source · FRED API (BAMLH0A0HYM2, DFF, T10Y2Y, VIXCLS) · yfinance fallback (^IRX, ^TNX, HYG/LQD, ^VIX) · Scores: FFR · yield curve · HY OAS · VIX · BULLISH/NEUTRAL/BEARISH per indicator · get_macro_regime() · node_macro() · 6h TTL cache → .macro_cache.json</div>
-        <div style="margin-top:6px"><span class="tag t-teal">Consensus Node 11</span><span class="tag t-teal">fredapi</span><span class="tag t-muted">FRED_API_KEY optional</span></div>
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">🔍</span>Screener</div>
+      <div class="tab-feat">
+        <span>95+ stocks scored</span><span>Top 10 by AI</span><span>Fundamental filter</span><span>Momentum rank</span>
       </div>
-      <div class="box c-red w2">
-        <div class="box-title">🗣️ sentiment_connector.py <span class="new-badge">v3</span></div>
-        <div class="box-body">Node 6 upgrade · Live Reddit scraping · r/stocks · r/investing · r/wsb (0.7× weight) · r/StockMarket · VADER sentiment + log-scale upvote boost · Threshold: ±0.15 → BULLISH/BEARISH · get_reddit_sentiment() · node_sentiment() · 90min TTL → .sentiment_cache.json · Fallback: praw → JSON API → gesh.db</div>
-        <div style="margin-top:6px"><span class="tag t-red">Consensus Node 6</span><span class="tag t-red">VADER · praw</span><span class="tag t-muted">REDDIT_CLIENT_ID optional</span></div>
+    </div>
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">📐</span>Kelly</div>
+      <div class="tab-feat">
+        <span>Kelly sizing</span><span>BUY/TRIM shares</span><span>$ impact table</span><span>Portfolio targets</span>
       </div>
-      <div class="box c-teal w2">
-        <div class="box-title">🔍 consolidation_zone.py <span class="new-badge">NEW</span></div>
-        <div class="box-body">10+ candle tight range detector · 2% threshold · Entry = zone midpoint · Stop = zone_low −0.5% · Target = prev zone top or 2:1 R/R fallback · min R/R 2.0× filter · Claude prompt injection</div>
-        <div style="margin-top:6px"><span class="tag t-teal">Black Bot TA</span><span class="tag t-teal">5m/1h/1d</span><span class="tag t-teal">NumPy</span></div>
+    </div>
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">🎲</span>Monte Carlo</div>
+      <div class="tab-feat">
+        <span>1,000-path GBM</span><span>VaR / CVaR</span><span>Sortino ratio</span><span>21-day horizon</span>
       </div>
-      <div class="box c-teal w2">
-        <div class="box-title">🏭 sector_filter.py <span class="new-badge">NEW</span></div>
-        <div class="box-body">ETF sector volume pre-filter · 1.2× spike threshold · 20d avg volume · Maps 80+ stocks → GICS sector ETFs (XLK, XLF, XLV, XLE, XLI, XLY, XLP, XLB, XLU, XLRE, XLC, SOXX) · Batch dedup fetch · HOT/COLD classification</div>
-        <div style="margin-top:6px"><span class="tag t-teal">Pre-filter</span><span class="tag t-teal">GICS sectors</span><span class="tag t-teal">SPY fallback</span></div>
+    </div>
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">🌊</span>Regime</div>
+      <div class="tab-feat">
+        <span>ADX + Bollinger</span><span>FRED macro layer</span><span>Yield curve</span><span>VIX + OAS</span>
       </div>
-      <div class="box c-teal w2">
-        <div class="box-title">⚙️ allocation_config.py <span class="new-badge">NEW</span></div>
-        <div class="box-body">gesh_config.json persistence · max_stock_per_trade ($5k) · max_options_per_trade ($2k) · max_open_positions (5) · min_cash_buffer ($500) · auto_trade gate · paper_mode · extended_hours · scanner_timeframe selector</div>
-        <div style="margin-top:6px"><span class="tag t-teal">Config</span><span class="tag t-teal">validate_action()</span><span class="tag t-teal">gesh_config.json</span></div>
+    </div>
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">📰</span>SEC / News</div>
+      <div class="tab-feat">
+        <span>EDGAR 10-K/8-K</span><span>Reddit sentiment</span><span>Polymarket signal</span><span>Gemini 2nd opinion</span>
       </div>
-      <div class="box c-teal w2">
-        <div class="box-title">📋 trade_log.py <span class="new-badge">NEW</span></div>
-        <div class="box-body">Full trade lifecycle logging · log_trade() · close_trade() · get_win_rate() · get_scanner_performance() · trade_summary_for_report() · WIN/LOSS/BREAKEVEN/OPEN outcomes · Real + paper tables · VirtioFS /tmp fallback</div>
-        <div style="margin-top:6px"><span class="tag t-teal">Audit trail</span><span class="tag t-teal">P&L tracking</span><span class="tag t-teal">SQLite</span></div>
-      </div>
-      <div class="box c-teal w2">
-        <div class="box-title">🧪 paper_trading.py <span class="new-badge">NEW</span></div>
-        <div class="box-body">Simulates full action plan risk-free · run_paper_session() · check_and_close_paper_positions() auto stop/target · get_paper_summary() · Paper vs live edge comparison · paper_edge >5% → scale live</div>
-        <div style="margin-top:6px"><span class="tag t-teal">Simulation</span><span class="tag t-teal">yfinance price check</span><span class="tag t-teal">No broker</span></div>
+    </div>
+    <div class="tab-box">
+      <div class="tab-name"><span class="tab-icon">🔬</span>Daily Analysis</div>
+      <div class="tab-feat">
+        <span>On-demand run</span><span>Kelly trade plan</span><span>Snowflake scores</span><span>History replay</span>
       </div>
     </div>
   </div>
+</div>
 
-  <div class="connector"><span class="connector-label">↓ Pre-filter → Consolidation Scan → Full Engine Pipeline ↓</span></div>
+<div class="connector"><span class="connector-label">consensus engine · Claude API · yfinance · OpenBB · FRED</span></div>
 
-  <!-- ═══ LAYER 2b: SCANNER PIPELINE ═══ -->
-  <div class="layer">
-    <div class="layer-label">🎯 Layer 2b — Multi-Timeframe Scanner Pipeline <span class="new-badge">NEW</span></div>
-    <div class="box c-teal full">
-      <div class="box-title">🗂️ Scanner Modes · allocation_config.scanner_timeframe</div>
-      <div class="scanner-grid">
-        <div class="scanner-box">
-          <div class="scanner-name">Daily</div>
-          <div class="scanner-desc">60d · 1d bars<br>Key levels<br>Sweep setups<br><span style="color:var(--green);font-size:9px">Default</span></div>
-        </div>
-        <div class="scanner-box">
-          <div class="scanner-name">1HR</div>
-          <div class="scanner-desc">5d · 1h bars<br>Multi-TF setups<br>Intraday swing</div>
-        </div>
-        <div class="scanner-box">
-          <div class="scanner-name">5MIN</div>
-          <div class="scanner-desc">1d · 5m bars<br>Momentum<br>High-frequency</div>
-        </div>
-        <div class="scanner-box">
-          <div class="scanner-name">Premarket</div>
-          <div class="scanner-desc">1d · 5m bars<br>Gap moves<br>Volume spikes</div>
-        </div>
-        <div class="scanner-box">
-          <div class="scanner-name">Stock</div>
-          <div class="scanner-desc">30d · 1d bars<br>Penny $0.50–$10<br>Vol ≥200K</div>
-        </div>
-        <div class="scanner-box">
-          <div class="scanner-name">Forex 1HR</div>
-          <div class="scanner-desc">5d · 1h bars<br>Majors · Minors<br>Metals</div>
-        </div>
-        <div class="scanner-box">
-          <div class="scanner-name">Forex 4HR</div>
-          <div class="scanner-desc">10d · 4h bars<br>Higher TF<br>Forex setups</div>
-        </div>
-        <div class="scanner-box">
-          <div class="scanner-name">Forex Daily</div>
-          <div class="scanner-desc">60d · 1d bars<br>Daily trends<br>Forex</div>
-        </div>
+<!-- ══════════════════════════════════════════════════════════════════
+     INTELLIGENCE LAYER — Shared Core (both ports use this)
+════════════════════════════════════════════════════════════════════ -->
+<div class="layer" id="l2">
+  <div class="layer-label">🧠 INTELLIGENCE LAYER — Shared Core (powers ALL three tools)</div>
+  <div class="row" style="margin-bottom:12px">
+    <div class="box c-purple w3">
+      <div class="box-title">11-Node Consensus Engine <span class="new-badge">Regime-Conditional Weights</span></div>
+      <div class="box-body">
+        Regime-conditional weights validated via TradingView MCP backtests (SPY, NVDA, HOOD, BTC, DDOG, GS, IONQ).
+        Requires ≥4 active nodes. Returns STRONG BUY / BUY / HOLD / SELL / STRONG SELL.
       </div>
-      <div style="margin-top:10px;font-size:11px;color:var(--muted2)">
-        Pipeline order: <span style="color:var(--teal)">batch_sector_check()</span> → hot symbols only →
-        <span style="color:var(--teal)">scan_consolidations()</span> → R/R ≥2× setups →
-        <span style="color:var(--purple)">Full 6-engine analysis</span> → <span style="color:var(--green)">validate_action()</span> → action plan
+      <div class="node-grid" style="margin-top:10px">
+        <div class="node-box"><div class="node-icon">📈</div><div class="node-name">Momentum</div><div class="node-src">RSI + MA</div></div>
+        <div class="node-box"><div class="node-icon">🌊</div><div class="node-name">Trend</div><div class="node-src">ADX + BB</div></div>
+        <div class="node-box"><div class="node-icon">⚡</div><div class="node-name">Rel.Str</div><div class="node-src">vs SPY</div></div>
+        <div class="node-box"><div class="node-icon">📊</div><div class="node-name">Fundamentals</div><div class="node-src">OpenBB</div></div>
+        <div class="node-box"><div class="node-icon">🎯</div><div class="node-name">Analyst</div><div class="node-src">OpenBB</div></div>
+        <div class="node-box"><div class="node-icon">📰</div><div class="node-name">News</div><div class="node-src">Reddit</div></div>
+        <div class="node-box"><div class="node-icon">📐</div><div class="node-name">Kelly</div><div class="node-src">Sizing</div></div>
+        <div class="node-box"><div class="node-icon">🛡</div><div class="node-name">ECG</div><div class="node-src">Drawdown</div></div>
+        <div class="node-box"><div class="node-icon">📦</div><div class="node-name">Volume</div><div class="node-src">10d/30d</div></div>
+        <div class="node-box"><div class="node-icon">🔄</div><div class="node-name">FFT Cycle</div><div class="node-src">Spectral</div></div>
+        <div class="node-box"><div class="node-icon">🏦</div><div class="node-name">Macro</div><div class="node-src">FRED/yf</div></div>
+      </div>
+    </div>
+    <div class="box c-accent w2">
+      <div class="box-title">AI Models</div>
+      <div class="box-body">
+        <span class="tag t-accent">Claude Sonnet 4.6</span> Deep analysis, synthesis<br>
+        <span class="tag t-yellow">Claude Haiku 4.5</span> Bull/Bear debate<br>
+        <span class="tag t-green">Gemini 2.5 Flash</span> Batch sentiment<br>
+        <span class="tag t-purple">Gemini 2.5 Pro</span> Contrarian review<br>
+        <span class="tag t-muted">Ollama llama3.2</span> Local fallback<br><br>
+        Bull/Bear Debate: 3-call engine (haiku→haiku→sonnet). $0.01–0.03 per debate.
+      </div>
+    </div>
+    <div class="box c-yellow w1">
+      <div class="box-title">Data Sources</div>
+      <div class="box-body">
+        <span class="tag t-yellow">yfinance</span> prices<br>
+        <span class="tag t-yellow">OpenBB</span> fundamentals<br>
+        <span class="tag t-yellow">FRED</span> macro<br>
+        <span class="tag t-yellow">Reddit</span> sentiment<br>
+        <span class="tag t-yellow">EDGAR</span> SEC<br>
+        <span class="tag t-yellow">Robinhood</span> portfolio<br>
+        <span class="tag t-yellow">Alpaca</span> paper exec
       </div>
     </div>
   </div>
+</div>
 
-  <div class="connector"><span class="connector-label">↓ Data + Context → Claude API ↓</span></div>
+<div class="connector"><span class="connector-label">autopilot jobs → paper fills → tracker → signal accuracy proof</span></div>
 
-  <!-- ═══ LAYER 3: AI LAYER ═══ -->
-  <div class="layer">
-    <div class="layer-label">🧠 Layer 3 — AI Analysis Engine (Anthropic Claude)</div>
-    <div class="ai-grid">
-      <div class="box c-purple">
-        <div class="box-title">🧠 Claude Sonnet 4.6 · ai_analyzer.py</div>
-        <div class="box-body" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px">
-          <div><span class="tag t-purple">analyze_portfolio</span><br><span style="font-size:10px;color:var(--muted2)">Quick portfolio summary</span></div>
-          <div><span class="tag t-purple">deep_analyze_portfolio</span><br><span style="font-size:10px;color:var(--muted2)">Full: snowflake + fair value + predictions</span></div>
-          <div><span class="tag t-purple">analyze_screener</span><br><span style="font-size:10px;color:var(--muted2)">Pick 20 best from 40 candidates</span></div>
-          <div><span class="tag t-purple">Regime-aware</span><br><span style="font-size:10px;color:var(--muted2)">ADX/RSI + sector + CZ context injected</span></div>
-        </div>
-        <div style="margin-top:8px;font-size:10px;color:var(--muted)">Outputs: portfolio score · snowflake scores (5-axis) · fair value estimate · 3M+12M predictions · risk/reward bullets · sector map · P1/P2/P3 recommendations · signal conflict reconciliation</div>
+<!-- ══════════════════════════════════════════════════════════════════
+     ENGINE LAYER — Port 9003/trading (INTERNAL — generates proof)
+════════════════════════════════════════════════════════════════════ -->
+<div class="layer" id="l3">
+  <div class="layer-label">⚙️ ENGINE LAYER — Port 9003/trading &nbsp;<span class="engine-badge">INTERNAL — NOT SOLD</span></div>
+  <div class="row" style="margin-bottom:12px">
+    <div class="box c-pink w2">
+      <div class="box-title">Why this layer exists</div>
+      <div class="box-body">
+        This engine runs silently every day, executing paper trades via Alpaca and recording outcomes
+        in <code>tracker.py</code>. The win rate it generates becomes the public proof page that converts
+        visitors into paying customers. Customers never interact with this layer directly.
       </div>
-      <div class="box c-accent">
-        <div class="box-title">⚡ Claude Haiku · Agents</div>
-        <div class="box-body" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:4px">
-          <div style="padding:6px;border:1px solid rgba(0,212,255,.15);border-radius:5px">
-            <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:3px">📋 sec_agent.py</div>
-            <div style="font-size:10px;color:var(--muted2)">EDGAR RSS · CIK lookup · 10-K/Q/8-K text extract · Red flags · Guidance tone · BULLISH/BEARISH signal · Urgency H/M/L</div>
-          </div>
-          <div style="padding:6px;border:1px solid rgba(0,212,255,.15);border-radius:5px">
-            <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:3px">📰 news_agent.py <span class="new-badge">+PM v2</span></div>
-            <div style="font-size:10px;color:var(--muted2)">Yahoo RSS + Finnhub · Score −100→+100 · 7-day rolling avg · <span style="color:var(--teal)">Polymarket macro overlay</span> · market_mood blended · RISK_ON/NEUTRAL/RISK_OFF<br><span style="color:var(--red)">Node 6 now uses sentiment_connector.py (live Reddit) instead of this cache</span></div>
-          </div>
-          <div style="padding:6px;border:1px solid rgba(0,212,255,.15);border-radius:5px">
-            <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:3px">📊 fundamental_agent.py</div>
-            <div style="font-size:10px;color:var(--muted2)">80+ stocks · Revenue growth · Margins · PE · Analyst upside · Insider buying · Pre-scores top 35 → Claude</div>
-          </div>
+    </div>
+    <div class="box c-orange w2">
+      <div class="box-title">Signal Accuracy Tracker <span class="new-badge">★★★ NEW</span></div>
+      <div class="box-body">
+        <span class="tag t-orange">paper_positions</span>
+        <span class="tag t-orange">paper_outcomes</span>
+        <span class="tag t-orange">signal_overrides</span><br><br>
+        <strong style="color:var(--orange)">Autonomy Gate:</strong> ≥30 closed trades · win_rate ≥55% · Sharpe ≥0.50 · drawdown ≤10%<br>
+        <strong>Status:</strong> 0/30 trades · ETA Aug–Sep 2026
+        <div class="gate-bar-wrap">
+          <div class="gate-bar-label"><span>Closed trades</span><span>0 / 30</span></div>
+          <div class="gate-bar-track"><div class="gate-bar-fill red" style="width:7%"></div></div>
+        </div>
+        <div class="gate-bar-wrap">
+          <div class="gate-bar-label"><span>Win rate target</span><span>≥55%</span></div>
+          <div class="gate-bar-track"><div class="gate-bar-fill yellow" style="width:20%"></div></div>
         </div>
       </div>
-      <div class="box c-green" style="grid-column:1/-1;border-color:rgba(0,232,122,.35);background:rgba(0,232,122,.06)">
-        <div class="box-title" style="color:#00e87a">🧠 Bull / Bear Debate Engine · bull_bear_debate.py <span class="new-badge" style="background:rgba(0,232,122,.2);color:#00e87a;border-color:rgba(0,232,122,.4)">Sprint 3</span></div>
-        <div class="box-body" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:4px">
-          <div style="padding:6px;border:1px solid rgba(0,232,122,.2);border-radius:5px">
-            <div style="font-size:11px;font-weight:700;color:#00e87a;margin-bottom:3px">🐂 Bull Analyst (haiku)</div>
-            <div style="font-size:10px;color:var(--muted2)">Thesis · Arguments · Price target · Conviction % · Key risk</div>
-          </div>
-          <div style="padding:6px;border:1px solid rgba(0,232,122,.2);border-radius:5px">
-            <div style="font-size:11px;font-weight:700;color:var(--red);margin-bottom:3px">🐻 Bear Analyst (haiku)</div>
-            <div style="font-size:10px;color:var(--muted2)">Counter-thesis · Arguments · Price target · Conviction % · Key risk</div>
-          </div>
-          <div style="padding:6px;border:1px solid rgba(0,232,122,.2);border-radius:5px">
-            <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:3px">📋 Portfolio Manager (sonnet)</div>
-            <div style="font-size:10px;color:var(--muted2)">Action · Conviction % · Price target · Upside % · Bull weight · Stop-loss % · Catalysts</div>
-          </div>
-        </div>
-        <div style="margin-top:6px;font-size:10px;color:var(--muted)">Endpoint: POST /api/trading/deep-debate/{symbol} · Cost: ~$0.01–0.03/debate · UI: Deep Debate Engine panel in trading + crypto dashboards · 🧠 button in scanner table</div>
+    </div>
+    <div class="box c-dark w1">
+      <div class="box-title">Weekly Review</div>
+      <div class="box-body">
+        Auto-scheduled every Friday 9am.<br>Pulls gate metrics, compares to phase milestones, appends to <code>tracker_weekly_log.md</code>.<br><br>
+        <span class="tag t-green">LIVE ✓</span>
       </div>
     </div>
   </div>
-
-  <div class="connector"><span class="connector-label">↓ Votes from 11 Independent Nodes ↓</span></div>
-
-  <!-- ═══ LAYER 4: CONSENSUS ═══ -->
-  <div class="layer">
-    <div class="layer-label">🗳️ Layer 4 — 11-Node Consensus Engine · consensus.py <span class="new-badge">v3</span></div>
-    <div class="node-grid" style="grid-template-columns:repeat(11,1fr)">
-      <div class="node-box">
-        <div class="node-icon">📈</div>
-        <div class="node-name">Momentum</div>
-        <div class="node-src">RSI-14 · MA20/50<br>52w high gap · 90d</div>
-      </div>
-      <div class="node-box">
-        <div class="node-icon">〰️</div>
-        <div class="node-name">Trend</div>
-        <div class="node-src">ADX · Bollinger %B<br>regime.py · 60d</div>
-      </div>
-      <div class="node-box">
-        <div class="node-icon">⚡</div>
-        <div class="node-name">Rel. Strength</div>
-        <div class="node-src">vs SPY 1-month<br>±3% threshold · 35d</div>
-      </div>
-      <div class="node-box" style="border-color:rgba(0,232,122,.35);background:rgba(0,232,122,.05)">
-        <div class="node-icon">📊</div>
-        <div class="node-name">Fundamentals</div>
-        <div class="node-src">Rev growth · PE<br>Margins · EPS<br><span style="color:#00e87a;font-size:9px">OpenBB★</span></div>
-      </div>
-      <div class="node-box" style="border-color:rgba(0,232,122,.35);background:rgba(0,232,122,.05)">
-        <div class="node-icon">🏦</div>
-        <div class="node-name">Analyst</div>
-        <div class="node-src">Wall St rec key<br>Target upside<br><span style="color:#00e87a;font-size:9px">OpenBB★</span></div>
-      </div>
-      <div class="node-box" style="border-color:rgba(255,68,68,.35);background:rgba(255,68,68,.07)">
-        <div class="node-icon">🗣️</div>
-        <div class="node-name" style="color:var(--red)">News ★</div>
-        <div class="node-src">Live Reddit<br>VADER · 90min</div>
-      </div>
-      <div class="node-box">
-        <div class="node-icon">⚖️</div>
-        <div class="node-name">Kelly</div>
-        <div class="node-src">ADD/HOLD/TRIM<br>kelly.py · 90d</div>
-      </div>
-      <div class="node-box">
-        <div class="node-icon">❤️</div>
-        <div class="node-name">ECG</div>
-        <div class="node-src">HEALTHY/SUSPENDED<br>ecg.py · SQLite</div>
-      </div>
-      <div class="node-box">
-        <div class="node-icon">🔊</div>
-        <div class="node-name">Volume</div>
-        <div class="node-src">10d/30d vol ratio<br>Price dir · 45d</div>
-      </div>
-      <div class="node-box" style="border-color:rgba(255,140,66,.35);background:rgba(255,140,66,.07)">
-        <div class="node-icon">〰️</div>
-        <div class="node-name" style="color:var(--orange)">FFT Cycle</div>
-        <div class="node-src">Trough/Peak phase<br>fft_cycles.py · 252d</div>
-      </div>
-      <div class="node-box" style="border-color:rgba(0,229,204,.45);background:rgba(0,229,204,.08)">
-        <div class="node-icon">🏛️</div>
-        <div class="node-name" style="color:var(--teal)">Macro ★</div>
-        <div class="node-src">FRED · VIX · HY OAS<br>macro_connector · 6h</div>
-      </div>
-    </div>
-    <div style="margin-top:8px;font-size:11px;color:var(--muted2);text-align:center;padding:6px 0">
-      Each node votes independently: <span style="color:var(--green);font-weight:700">+1 BULLISH</span> · <span style="color:var(--muted2)">0 NEUTRAL</span> · <span style="color:var(--red);font-weight:700">-1 BEARISH</span> · <span style="color:var(--muted)">None ABSTAIN</span> &nbsp;·&nbsp;
-      Verdict: ±0.25 BUY/SELL · ±0.55 STRONG · ≥5 nodes required (out of 11) &nbsp;·&nbsp;
-      <span style="color:var(--red)">★</span> Node 6: Live Reddit (VADER) &nbsp;·&nbsp; <span style="color:var(--teal)">★</span> Node 11: FRED macro (NEW) &nbsp;·&nbsp;
-      Signal reconciliation: Kelly TRIM overrides Analyst STRONG BUY for sizing
-    </div>
+  <div class="exec-grid">
+    <div class="exec-box"><div class="exec-name">autopilot.py</div><div class="exec-desc">APScheduler — 8 jobs daily. pre_market, open_window, midday, EOD. Tracker-hooked on all fills.</div></div>
+    <div class="exec-box"><div class="exec-name">risk_gate.py</div><div class="exec-desc">8-gate protection: kill-switch → hours → confidence → position cap → rate → cash → P&L → freshness.</div></div>
+    <div class="exec-box"><div class="exec-name">execution.py</div><div class="exec-desc">Paper mode (default). 0.10% slippage model. SHA1 idempotency. NotImplementedError for live until gate passes.</div></div>
+    <div class="exec-box"><div class="exec-name">market_scanner.py</div><div class="exec-desc">25 stocks × 3 workers. 4× daily. STRONG BUY auto-injected into autopilot queue. Telegram cards.</div></div>
+    <div class="exec-box"><div class="exec-name">tracker.py</div><div class="exec-desc">record_entry / record_exit wired into all 3 autopilot close paths. Source of truth for autonomy gate.</div></div>
+    <div class="exec-box"><div class="exec-name">state.py</div><div class="exec-desc">trade_intents · risk_decisions · orders tables. 707+ rows. orders WHERE status=SIMULATED = paper fills.</div></div>
+    <div class="exec-box"><div class="exec-name">alerts.py</div><div class="exec-desc">Telegram @gesh755bot. Fill alerts, rejection alerts, daily P&L, scan summaries.</div></div>
   </div>
+</div>
 
-  <div class="connector"><span class="connector-label">↓ Approved Signals → Allocation Gate → Paper / Live Execution ↓</span></div>
+<div class="connector"><span class="connector-label">Binance fapi · CoinGecko · Deribit · CoinDesk</span></div>
 
-  <!-- ═══ LAYER 4b: EXECUTION TIER ═══ -->
-  <div class="layer">
-    <div class="layer-label">🚦 Layer 4b — Execution &amp; Risk Gate Layer <span class="new-badge">LIVE</span></div>
-    <div class="exec-grid">
-      <div class="exec-box">
-        <div class="exec-name">📄 contract.py</div>
-        <div class="exec-desc">TradeIntent dataclass · symbol · action · confidence · target_position_pct · stop_loss · take_profit · time_in_force · source engine · schema_version · JSON-serializable · from_consensus() adapter</div>
-      </div>
-      <div class="exec-box">
-        <div class="exec-name">🛡️ risk_gate.py</div>
-        <div class="exec-desc">8 sequential gates: kill-switch file · market hours (09:30–16:00 ET) · daily loss cap · position size cap · cash floor $500 · rate cap (orders/day) · confidence floor · stale data guard · Every decision logged to risk_decisions table</div>
-      </div>
-      <div class="exec-box">
-        <div class="exec-name">⚡ execution.py</div>
-        <div class="exec-desc">place(intent, mode="paper|live") · Paper → orders table SIMULATED · Live → robin_stocks fractional orders · Idempotency key SHA1(symbol|action|time|qty) · 3× retry exponential backoff · 4xx=reject · 5xx=retry</div>
-      </div>
-      <div class="exec-box">
-        <div class="exec-name">🤖 autopilot.py</div>
-        <div class="exec-desc">APScheduler 4 jobs: 08:30 pre-market scan · 09:35 open window execute · 12:30 midday drift check · 15:55 EOD stop-loss · Paper mode first · 10 clean days before live · Start with 1 job</div>
-      </div>
-      <div class="exec-box">
-        <div class="exec-name">🗃️ state.py</div>
-        <div class="exec-desc">3 new SQLite tables: trade_intents (signal→intent) · risk_decisions (intent→verdict) · orders (verdict→fill) · Full audit chain intent_id FK · All in gesh_financial.db</div>
+<!-- ══════════════════════════════════════════════════════════════════
+     CRYPTO ADD-ON LAYER — Port 9003/crypto
+════════════════════════════════════════════════════════════════════ -->
+<div class="layer" id="l4">
+  <div class="layer-label">🪙 CRYPTO ADD-ON — Port 9003/crypto &nbsp;<span class="addon-badge">PREMIUM TIER</span></div>
+  <div class="row" style="margin-bottom:12px">
+    <div class="box c-teal w2">
+      <div class="box-title">crypto_consensus.py — 11-Node Crypto Engine</div>
+      <div class="box-body">
+        Same consensus architecture as equities but tuned for crypto: FFT uses -USD yfinance tickers,
+        Kelly gate removed (handled by verdict alone), Macro = FUNDING_RATE node (Node 11).
+        15 coins: BTC, ETH, SOL, BNB, AVAX, LINK, DOT, POL, TRX, LTC, UNI, ATOM + more.
       </div>
     </div>
-    <div style="margin-top:8px;font-size:11px;color:var(--muted2);padding:6px 0">
-      <span style="color:var(--pink)">Kill switch:</span> file ~/.gesh/KILL (honored mid-loop) &nbsp;·&nbsp;
-      <span style="color:var(--pink)">REQUIRE_APPROVAL=true</span> env var queues every intent for manual confirm &nbsp;·&nbsp;
-      <span style="color:var(--pink)">paper_mode=True</span> by default — flip one symbol at a time to live
-    </div>
-  </div>
-
-  <div class="connector"><span class="connector-label">↓ JSON Responses over REST API ↓</span></div>
-
-  <!-- ═══ LAYER 5: WEB DASHBOARD ═══ -->
-  <div class="layer">
-    <div class="layer-label">💻 Layer 5 — Web Dashboard (HTML · Chart.js 4.4 · 8 Tabs) <span class="new-badge">v5</span></div>
-    <div class="tab-grid">
-      <div class="tab-box">
-        <div class="tab-name"><span class="tab-icon">📊</span>Overview</div>
-        <div class="tab-feat">
-          <span>📉 Price Chart (6 periods)</span>
-          <span>1D · 5D · 1M · 3M · 6M · 1Y</span>
-          <span>Gradient + hover tooltip</span>
-          <span>📋 Holdings Table</span>
-          <span>Symbol · Qty · Cost · Price</span>
-          <span>Equity · Alloc% · Chng%</span>
-          <span>ECG badge inline</span>
-          <span>🍩 Allocation Donut</span>
-          <span>Chart.js animated</span>
-          <span>📌 Watchlist</span>
-          <span>Bid / Ask / Last / Chng%</span>
-        </div>
-      </div>
-      <div class="tab-box">
-        <div class="tab-name"><span class="tab-icon">🧠</span>AI Analysis</div>
-        <div class="tab-feat">
-          <span>◈ Portfolio Score ring</span>
-          <span>Risk + Diversification</span>
-          <span>🕸️ Snowflake radar charts</span>
-          <span>Value · Growth · Health</span>
-          <span>Momentum · Dividend</span>
-          <span>💲 Fair Value bars</span>
-          <span>UNDER/OVER/FAIR badge</span>
-          <span>🔮 AI Predictions</span>
-          <span>3M + 12M directional</span>
-          <span>⚠️ Risk / 🌟 Reward bullets</span>
-          <span>📊 Analyst Strip</span>
-          <span>Sector Map</span>
-        </div>
-      </div>
-      <div class="tab-box">
-        <div class="tab-name"><span class="tab-icon">🗳️</span>Signals</div>
-        <div class="tab-feat">
-          <span>🗳️ Consensus Engine</span>
-          <span>10 vote chips per holding</span>
-          <span>Score bar −1 → +1</span>
-          <span>Confidence %</span>
-          <span>STRONG BUY→STRONG SELL</span>
-          <span>Portfolio summary</span>
-          <span>⚖️ Kelly Position Sizer</span>
-          <span>Optimal % per holding</span>
-          <span>ADD/TRIM/HOLD/AVOID</span>
-          <span>Win rate · Payoff R</span>
-          <span>Sharpe · Vol tier · MaxDD</span>
-          <span>Delta USD to optimal</span>
-        </div>
-      </div>
-      <div class="tab-box">
-        <div class="tab-name"><span class="tab-icon">⚠️</span>Risk</div>
-        <div class="tab-feat">
-          <span>🎲 Monte Carlo</span>
-          <span>1,000 GBM simulations</span>
-          <span>VaR 95% · CVaR 95%</span>
-          <span>Median / Best / Worst</span>
-          <span>Prob bars (profit/loss)</span>
-          <span>Histogram chart</span>
-          <span>❤️ ECG Gate</span>
-          <span>DD% · Streak · Status</span>
-          <span>Gate banner (portfolio)</span>
-          <span>〰️ Market Regime</span>
-          <span>ADX · %B · RSI per stock</span>
-          <span>Strategy suggestion</span>
-        </div>
-      </div>
-      <div class="tab-box">
-        <div class="tab-name"><span class="tab-icon">🤖</span>Intelligence</div>
-        <div class="tab-feat">
-          <span>📋 SEC Agent</span>
-          <span>10-K · 10-Q · 8-K</span>
-          <span>Red flags · Signals</span>
-          <span>Urgency: H/M/L</span>
-          <span>BULLISH/BEARISH pill</span>
-          <span>🗣️ Node 6: Live Reddit</span>
-          <span>r/stocks · r/wsb · VADER</span>
-          <span>Score −100 → +100</span>
-          <span>RISK_ON / RISK_OFF · 90min</span>
-          <span>📊 Fundamental Momentum</span>
-          <span>80+ stocks · Improving pre-move</span>
-        </div>
-      </div>
-      <div class="tab-box">
-        <div class="tab-name"><span class="tab-icon">📡</span>Radar</div>
-        <div class="tab-feat">
-          <span>🎯 Investment Radar</span>
-          <span>95+ stocks screened</span>
-          <span>Sector ETF pre-filter 🆕</span>
-          <span>Consolidation zone scan 🆕</span>
-          <span>Top 40 → Claude AI</span>
-          <span>20 best picks selected</span>
-          <span>3-column card grid</span>
-          <span>Composite score /100</span>
-          <span>Key thesis paragraph</span>
-          <span>Main risk warning</span>
-          <span>1W/1M/3M/1Y returns</span>
-          <span>Market Bias + Hot sectors</span>
-        </div>
-      </div>
-      <div class="tab-box" style="border-color:rgba(0,229,204,.3);background:rgba(0,229,204,.04)">
-        <div class="tab-name" style="color:var(--teal)"><span class="tab-icon">🔍</span>Scanner <span class="new-badge">v4</span></div>
-        <div class="tab-feat">
-          <span>⚙️ Scanner Config</span>
-          <span>8 timeframe modes</span>
-          <span>Min R/R · Symbol list</span>
-          <span>🔥 Sector Pre-Filter</span>
-          <span>GICS ETF vol check</span>
-          <span>HOT/COLD classification</span>
-          <span>🎯 Consolidation Zones</span>
-          <span>10+ candle tight range</span>
-          <span>Entry · Stop · Target</span>
-          <span>R/R ≥ 2× filter</span>
-          <span>Black Bot TA methodology</span>
-          <span>Claude prompt injection</span>
-        </div>
+    <div class="box c-teal w3">
+      <div class="box-title">On-Chain + Options Signal Nodes <span class="new-badge">★★★ NEW</span></div>
+      <div class="box-body">
+        <span class="tag t-teal">onchain_connector.py</span> Binance fapi primary → CoinGecko fallback · Funding rate · OI trend · CVD divergence · Long/Short ratio<br>
+        <span class="tag t-teal">options_flow_connector.py</span> Deribit public REST · P/C ratio · IV skew · Whale trades ($100k+) · BTC+ETH only
       </div>
     </div>
   </div>
+  <div class="crypto-grid">
+    <div class="crypto-box"><div class="crypto-name">Funding Rate</div><div class="crypto-desc">&gt;+0.10% → BEARISH (longs over-leveraged). &lt;-0.05% → BULLISH (squeeze fuel). Contrarian signal.</div></div>
+    <div class="crypto-box"><div class="crypto-name">Open Interest</div><div class="crypto-desc">OI↑ + price↑ → BULLISH. OI↑ + price↓ → BEARISH. New conviction vs short accumulation.</div></div>
+    <div class="crypto-box"><div class="crypto-name">CVD Divergence</div><div class="crypto-desc">CVD↑ + price flat → BULLISH hidden accumulation. Tracks cumulative volume delta.</div></div>
+    <div class="crypto-box"><div class="crypto-name">Options Flow</div><div class="crypto-desc">P/C &gt;0.70 = bearish hedging. IV skew &gt;5% = tail risk buying. Whale net flow direction.</div></div>
+  </div>
+</div>
 
-  <div class="connector"><span class="connector-label">↓ REST API → Browser / Android / CLI ↓</span></div>
+<div class="connector"><span class="connector-label">12-month commercial roadmap → GESH_COMMERCIAL_ROADMAP.md</span></div>
 
-  <!-- ═══ HOW TO START ═══ -->
-  <div class="layer">
-    <div class="layer-label">🚀 How to Start — Dual-App Monorepo <span class="new-badge">v5</span></div>
-    <div class="row">
-      <div class="box c-teal full" style="margin-bottom:10px">
-        <div class="box-title">🗂️ Monorepo Structure — ~/Projects/gesh/ <span class="new-badge">v5</span></div>
-        <div class="box-body" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:6px">
-          <div style="padding:8px;border:1px solid rgba(0,229,204,.2);border-radius:6px">
-            <div style="font-size:11px;font-weight:700;color:var(--teal);margin-bottom:4px">📁 gesh/shared/ (22 modules)</div>
-            <div style="font-size:10px;color:var(--muted2)">consensus.py · kelly.py · regime.py · monte_carlo.py · fft_cycles.py · ecg.py · market_data.py · db.py · trade_log.py · paper_trading.py · consolidation_zone.py · sector_filter.py · allocation_config.py · fundamental_agent.py · sec_agent.py · ai_analyzer.py · data_fetcher.py · auth.py + more</div>
-          </div>
-          <div style="padding:8px;border:1px solid rgba(0,212,255,.2);border-radius:6px">
-            <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:4px">📁 gesh/portfolio-manager/ → :9000</div>
-            <div style="font-size:10px;color:var(--muted2)">Branch: <span style="color:var(--accent)">main</span><br>Regime: Full version<br>Consensus: 11-node<br>Dashboard: 8 tabs (Overview · AI · Signals · Risk · Intelligence · Radar · Scanner · 🔬 Daily Analysis)</div>
-          </div>
-          <div style="padding:8px;border:1px solid rgba(0,229,204,.2);border-radius:6px">
-            <div style="font-size:11px;font-weight:700;color:var(--teal);margin-bottom:4px">📁 gesh/trading-engine/ → :9001</div>
-            <div style="font-size:10px;color:var(--muted2)">Branch: <span style="color:var(--teal)">trading</span><br>Unique: macro_connector.py, sentiment_connector.py<br>Regime: Streamlined 248-line<br>News: Live Reddit VADER<br>Consensus: 11-node (+ MACRO node)<br>Dashboard: Trading Control panel · auto-redirects / → /trading</div>
-          </div>
-        </div>
-        <div style="margin-top:8px;font-size:10px;color:var(--muted2)">Single unified <span style="color:var(--yellow)">.env</span> at repo root — symlinked into both apps &nbsp;·&nbsp; Two git branches: <span style="color:var(--accent)">main</span> (portfolio-manager) · <span style="color:var(--teal)">trading</span> (trading-engine)</div>
-      </div>
-      <div class="box c-green w3">
-        <div class="box-title">▶ Start Both Apps (Mac / Linux)</div>
-        <div class="box-body" style="font-family:var(--font);line-height:2">
-          <span style="color:var(--muted2)"># Terminal 1 — Portfolio Manager</span><br>
-          <span style="color:var(--accent)">cd ~/Projects/gesh-project</span><br>
-          <span style="color:var(--accent)">source venv/bin/activate</span><br>
-          <span style="color:var(--green)">python server.py</span> <span style="color:var(--muted2)"># → localhost:9000</span><br><br>
-          <span style="color:var(--muted2)"># Terminal 2 — Trading Engine</span><br>
-          <span style="color:var(--teal)">cd ~/Projects/gesh-project-trading</span><br>
-          <span style="color:var(--teal)">source venv/bin/activate</span><br>
-          <span style="color:var(--teal)">python server.py</span> <span style="color:var(--muted2)"># → localhost:9001 (→ /trading)</span>
-        </div>
-        <div style="margin-top:6px"><span class="tag t-green">:9000 Portfolio</span><span class="tag t-teal">:9001 Trading</span><span class="tag t-muted">uvicorn</span></div>
-      </div>
-      <div class="box c-accent w2">
-        <div class="box-title">⚙️ Required .env keys</div>
-        <div class="box-body" style="font-family:var(--font);line-height:2;font-size:11px">
-          <span style="color:var(--red)">ANTHROPIC_API_KEY</span>=sk-ant-...<br>
-          <span style="color:var(--green)">ROBINHOOD_USER</span>=your@email.com<br>
-          <span style="color:var(--green)">ROBINHOOD_PASS</span>=yourpassword<br>
-          <span style="color:var(--muted2)">CLAUDE_MODEL</span>=sonnet <span style="color:var(--muted);font-size:10px">(optional)</span><br>
-          <span style="color:var(--muted2)">FINNHUB_API_KEY</span>=... <span style="color:var(--muted);font-size:10px">(optional)</span><br>
-          <span style="color:var(--teal)">FRED_API_KEY</span>=... <span class="new-badge">v3</span> <span style="color:var(--muted);font-size:10px">Node 11 accuracy</span><br>
-          <span style="color:var(--red)">REDDIT_CLIENT_ID</span>=... <span class="new-badge">v3</span> <span style="color:var(--muted);font-size:10px">Node 6 rate limit</span><br>
-          <span style="color:var(--red)">REDDIT_CLIENT_SECRET</span>=...<br>
-          <span style="color:var(--red)">REDDIT_USER_AGENT</span>=gesh-financial/1.0
-        </div>
-        <div style="margin-top:6px"><span class="tag t-muted">.env in project root</span></div>
-      </div>
-      <div class="box c-teal w2">
-        <div class="box-title">🤖 Autopilot Mode</div>
-        <div class="box-body" style="font-family:var(--font);line-height:2;font-size:11px">
-          <span style="color:var(--muted2)">Paper trading autopilot:</span><br>
-          <span style="color:var(--teal)">PAPER_MODE=true python -m trading.autopilot</span><br>
-          <span style="color:var(--muted2)">Test one job:</span><br>
-          <span style="color:var(--teal)">python -m trading.autopilot --job pre_market_scan</span><br>
-          <span style="color:var(--muted2)">Quick CLI report:</span><br>
-          <span style="color:var(--teal)">python main.py</span>
-        </div>
-        <div style="margin-top:6px"><span class="tag t-teal">APScheduler</span><span class="tag t-teal">PAPER_MODE=true</span></div>
-      </div>
-      <div class="box c-yellow w2">
-        <div class="box-title">📦 First-time Setup</div>
-        <div class="box-body" style="font-family:var(--font);line-height:2;font-size:11px">
-          <span style="color:var(--muted2)">Create venv:</span><br>
-          <span style="color:var(--yellow)">python3 -m venv venv</span><br>
-          <span style="color:var(--yellow)">source venv/bin/activate</span><br>
-          <span style="color:var(--muted2)">Install deps:</span><br>
-          <span style="color:var(--yellow)">pip install -r requirements.txt</span><br>
-          <span style="color:var(--muted2)">Install optional deps:</span><br>
-          <span style="color:var(--yellow)">pip install fredapi praw nltk</span>
-        </div>
-        <div style="margin-top:6px"><span class="tag t-yellow">One-time</span><span class="tag t-yellow">Python 3.9+</span></div>
-      </div>
-      <div class="box c-red w2">
-        <div class="box-title">🔴 Kill Switch</div>
-        <div class="box-body" style="font-family:var(--font);line-height:2;font-size:11px">
-          <span style="color:var(--muted2)">Block all orders immediately:</span><br>
-          <span style="color:var(--red)">touch ~/.gesh/KILL</span><br>
-          <span style="color:var(--muted2)">Remove kill switch:</span><br>
-          <span style="color:var(--green)">rm ~/.gesh/KILL</span><br>
-          <span style="color:var(--muted2)">Honored mid-loop by risk gate</span>
-        </div>
-        <div style="margin-top:6px"><span class="tag t-red">Gate 1</span><span class="tag t-red">Instant</span></div>
-      </div>
+<!-- ══════════════════════════════════════════════════════════════════
+     COMMERCIAL ROADMAP — 4 Phases
+════════════════════════════════════════════════════════════════════ -->
+<div class="layer" id="l5">
+  <div class="layer-label">🗺 COMMERCIAL ROADMAP — May 2026 → April 2027</div>
+  <div class="phase-grid">
+    <div class="phase-box phase-1">
+      <div class="phase-status status-active">● ACTIVE</div>
+      <div class="phase-title">Phase 1 — Proof</div>
+      <div class="phase-date">May – July 2026</div>
+      <div class="phase-item">30 closed paper trades</div>
+      <div class="phase-item">Win rate ≥55%, Sharpe ≥0.5</div>
+      <div class="phase-item">Public proof page (June)</div>
+      <div class="phase-item">Discord + Substack (June)</div>
+      <div class="phase-item">Weekly Friday auto-review ✓</div>
+      <div class="phase-mrr">Gate: autonomy pass</div>
     </div>
-    <div style="margin-top:10px;padding:10px 14px;border:1px solid rgba(0,212,255,.2);border-radius:8px;background:rgba(0,212,255,.04);font-size:11px;color:var(--muted2)">
-      <span style="color:var(--accent);font-weight:700">localhost:9000 (Portfolio Manager):</span>
-      /api/portfolio · /api/analyze · /api/deep-analysis · /api/screener · /api/regime · /api/kelly · /api/monte-carlo · /api/consensus · /api/ecg · /api/fft-cycles
-      · /api/agents/sec · /api/agents/news · /api/agents/fundamentals
-      · /api/config · /api/trades · /api/paper/run · /api/trading/consensus-order
-      &nbsp;·&nbsp; <span style="color:var(--green)">Total: 40+ endpoints</span>
+    <div class="phase-box phase-2">
+      <div class="phase-status status-next">NEXT</div>
+      <div class="phase-title">Phase 2 — SaaS</div>
+      <div class="phase-date">Aug – Oct 2026</div>
+      <div class="phase-item">Auth0 JWT multi-user</div>
+      <div class="phase-item">Stripe subscriptions</div>
+      <div class="phase-item">Per-user Alpaca keys</div>
+      <div class="phase-item">DigitalOcean deploy</div>
+      <div class="phase-item">Landing page + beta launch</div>
+      <div class="phase-mrr">Target: $745 MRR</div>
     </div>
-    <div style="margin-top:8px;padding:10px 14px;border:1px solid rgba(0,229,204,.2);border-radius:8px;background:rgba(0,229,204,.04);font-size:11px;color:var(--muted2)">
-      <span style="color:var(--teal);font-weight:700">localhost:9003/trading (Trading Engine):</span>
-      /trading · /api/trading/dry-run · /api/trading/paper-order · /api/trading/consensus-order
-      · /api/consensus (11-node) · /api/regime · /api/kelly · /api/ecg
-      · /api/scanner/consolidation · /api/scanner/sector
-      · /api/trades · /api/paper/run · /api/paper/summary
-      · <span style="color:#00e87a;font-weight:700">POST /api/trading/deep-debate/{symbol}</span> <span style="font-size:10px;color:#00e87a">(Sprint 3)</span>
-      &nbsp;·&nbsp; <span style="color:var(--teal)">Auto-redirects / → /trading</span>
+    <div class="phase-box phase-3">
+      <div class="phase-status status-next">NEXT</div>
+      <div class="phase-title">Phase 3 — Commercial</div>
+      <div class="phase-date">Nov 2026 – Feb 2027</div>
+      <div class="phase-item">Audit trail export (RIA)</div>
+      <div class="phase-item">SOC 2 Type I prep</div>
+      <div class="phase-item">Rate limiting + API keys</div>
+      <div class="phase-item">RIA white-label pipeline</div>
+      <div class="phase-item">Affiliate program</div>
+      <div class="phase-mrr">Target: $5,000 MRR</div>
+    </div>
+    <div class="phase-box phase-4">
+      <div class="phase-status status-next">NEXT</div>
+      <div class="phase-title">Phase 4 — Scale</div>
+      <div class="phase-date">Mar – Apr 2027</div>
+      <div class="phase-item">Enterprise RIA tier</div>
+      <div class="phase-item">iOS/Android app</div>
+      <div class="phase-item">Press + Product Hunt</div>
+      <div class="phase-item">Alpaca live execution</div>
+      <div class="phase-item">$1K–5K/mo RIA deals</div>
+      <div class="phase-mrr">Target: $14,400 MRR</div>
     </div>
   </div>
-
-  <div class="connector"><span class="connector-label">↔ Retrofit HTTP Client · LAN WiFi ↔</span></div>
-
-  <!-- ═══ LAYER 6: ANDROID ═══ -->
-  <div class="layer">
-    <div class="layer-label">📱 Layer 6 — Android App (Kotlin · MVVM · Retrofit)</div>
-    <div class="row">
-      <div class="box c-green w2">
-        <div class="box-title">🔐 Authentication</div>
-        <div class="box-body">Robinhood login · MFA handling · Token storage · auth.py backend login/logout lifecycle</div>
-        <div style="margin-top:6px"><span class="tag t-green">Kotlin</span><span class="tag t-green">Retrofit</span></div>
-      </div>
-      <div class="box c-accent w2">
-        <div class="box-title">📡 RetrofitClient.kt</div>
-        <div class="box-body">BASE_URL = http://[LAN-IP]:9000 (Portfolio) · http://[LAN-IP]:9001 (Trading) · OkHttp client · API service interface · Timeout config</div>
-        <div style="margin-top:6px"><span class="tag t-accent">OkHttp</span><span class="tag t-muted">:9000 Portfolio</span><span class="tag t-teal">:9001 Trading</span></div>
-      </div>
-      <div class="box c-purple w2">
-        <div class="box-title">📊 Portfolio View</div>
-        <div class="box-body">Live holdings screen · Equity summary cards · 30s auto-refresh · MVVM ViewModel · Jetpack Compose UI</div>
-        <div style="margin-top:6px"><span class="tag t-purple">Compose</span><span class="tag t-purple">ViewModel</span></div>
-      </div>
-      <div class="box c-dark w2">
-        <div class="box-title">📁 Project Structure</div>
-        <div class="box-body">android/ · GeshFinancial-Android.zip · Kotlin data binding · Gradle build</div>
-        <div style="margin-top:6px"><span class="tag t-muted">Android Studio</span><span class="tag t-muted">Gradle</span></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ═══ STORAGE ═══ -->
-  <div style="margin-top:10px" class="layer">
-    <div class="layer-label">🗄️ Persistence — SQLite · gesh_financial.db</div>
-    <div class="row">
-      <div class="box c-dark w1"><div class="box-title">analysis_log</div><div class="box-body">AI analysis runs · JSON results · Timestamps · Model used</div></div>
-      <div class="box c-dark w1"><div class="box-title">equity_snapshots</div><div class="box-body">Per-symbol equity per refresh · ECG history source · 30d rolling</div></div>
-      <div class="box c-dark w1"><div class="box-title">sec_filings</div><div class="box-body">Filing type · Signal · Red flags · Urgency · Analysis JSON</div></div>
-      <div class="box c-dark w1"><div class="box-title">news_sentiment</div><div class="box-body">Score −100→+100 · Sentiment · Impact level · Analysis JSON</div></div>
-      <div class="box c-dark w1"><div class="box-title">fundamental_scans</div><div class="box-body">Top opportunities · Sector rotation · Macro signals · Scan JSON</div></div>
-      <div class="box c-teal w1"><div class="box-title">trade_log <span class="new-badge">NEW</span></div><div class="box-body">Real trades · Entry/exit · P&L · Stop · Target · Scanner source · WIN/LOSS/OPEN</div></div>
-      <div class="box c-teal w1"><div class="box-title">paper_trades <span class="new-badge">NEW</span></div><div class="box-body">Simulated trades · Same schema + simulated_portfolio_value · Auto stop/target close</div></div>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <div class="box c-teal w1"><div class="box-title">trade_intents <span class="new-badge">LIVE</span></div><div class="box-body">Signal→intent chain · Confidence · Source engine · schema_version · audit trail</div></div>
-      <div class="box c-teal w1"><div class="box-title">risk_decisions <span class="new-badge">LIVE</span></div><div class="box-body">intent_id FK · Verdict APPROVE/REJECT · Per-gate breakdown · Config snapshot</div></div>
-      <div class="box c-teal w1"><div class="box-title">orders <span class="new-badge">LIVE</span></div><div class="box-body">intent_id FK · mode paper/live · idempotency key · fill_price · fill_qty · error</div></div>
-      <div class="box c-dark w1"><div class="box-title">gesh_config.json</div><div class="box-body">allocation_config.py managed · max per trade · open positions · auto_trade gate · scanner_timeframe · paper_mode</div></div>
-      <div class="box c-teal w1"><div class="box-title">.macro_cache.json <span class="new-badge">v3</span></div><div class="box-body">macro_connector.py TTL cache · 6-hour expiry · FFR · yield curve · HY OAS · VIX scores · Avoids rate limits on repeated runs</div></div>
-      <div class="box c-red w1"><div class="box-title">.sentiment_cache.json <span class="new-badge">v3</span></div><div class="box-body">sentiment_connector.py TTL cache · 90-min per symbol · Reddit VADER scores · Avoids repeat scraping · Falls back to gesh.db if stale</div></div>
-    </div>
-  </div>
-
 </div>
 
 <!-- LEGEND -->
-<div class="legend">
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(0,230,118,.4)"></div> Live / Real-time data</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(0,212,255,.4)"></div> Core infrastructure</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(167,139,250,.4)"></div> AI / Claude powered</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,215,0,.4)"></div> External public data</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,68,68,.4)"></div> Risk monitoring</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,140,66,.4)"></div> News / filings agents</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(0,229,204,.4)"></div> v2 — FRED macro · Polymarket · Trading layer</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,68,68,.4)"></div> v3 — Live Reddit sentiment · macro_connector · sentiment_connector</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,110,180,.4)"></div> Execution tier · paper mode · 8-gate risk gate · LIVE</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,255,255,.15)"></div> Storage / cache</div>
-  <div class="leg-item"><div class="leg-dot" style="background:rgba(0,229,204,.4)"></div> v4 — Monorepo consolidation · Dual-app architecture · :9000 Portfolio · :9001 Trading</div>
-  <div class="leg-item" style="margin-left:12px;color:var(--muted)">Built by Georgi Gaydarov · Claude Sonnet 4.6 · May 2026 · v6: Daily Analysis Tab (8 tabs) · Kelly Share Counts · trading.html Cleanup · :9000 Portfolio · :9003 Trading · PAPER MODE</div>
+<div class="legend" id="legend">
+  <div class="leg-item"><div class="leg-dot" style="background:rgba(0,230,118,.6)"></div>Product — what customers pay for (port 9000)</div>
+  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,110,180,.6)"></div>Engine — internal proof generator (port 9003/trading)</div>
+  <div class="leg-item"><div class="leg-dot" style="background:rgba(0,229,204,.6)"></div>Crypto — premium add-on (port 9003/crypto)</div>
+  <div class="leg-item"><div class="leg-dot" style="background:rgba(167,139,250,.6)"></div>Shared intelligence layer (both ports)</div>
+  <div class="leg-item"><div class="leg-dot" style="background:rgba(255,215,0,.6)"></div>Data sources</div>
+  <div class="leg-item" style="margin-left:16px;color:var(--muted);font-size:10px;font-style:italic">NOT FINANCIAL ADVICE — FOR INFORMATIONAL AND RESEARCH PURPOSES ONLY</div>
 </div>
 
+</div><!-- /diagram -->
+
 <script>
-const observer = new IntersectionObserver((entries) => {
-  entries.forEach(entry => {
-    if(entry.isIntersecting){
-      entry.target.classList.add('visible');
-      observer.unobserve(entry.target);
+const io = new IntersectionObserver(entries=>{
+  entries.forEach(e=>{if(e.isIntersecting){e.target.classList.add('visible')}})
+},{threshold:.08});
+
+document.querySelectorAll('.layer,.legend,.commercial-overview,.phase-grid').forEach(el=>io.observe(el));
+
+// Animate gate bars on scroll
+const gateObs = new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting){
+      e.target.querySelectorAll('.gate-bar-fill').forEach(bar=>{
+        const w = bar.style.width;
+        bar.style.width='0%';
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{bar.style.width=w}));
+      });
     }
   });
-}, {threshold: 0.08});
-document.querySelectorAll('.layer, .legend').forEach(el => observer.observe(el));
-setTimeout(() => {
-  document.querySelectorAll('.layer, .legend').forEach(el => {
-    const rect = el.getBoundingClientRect();
-    if(rect.top < window.innerHeight) el.classList.add('visible');
-  });
-}, 60);
-
-// Consensus node vote simulation
-const nodes = document.querySelectorAll('.node-box');
-function randomVote(){
-  nodes.forEach(n => {
-    const roll = Math.random();
-    if(roll < 0.40){
-      n.style.borderColor='rgba(0,230,118,.55)';
-      n.style.boxShadow='0 0 12px rgba(0,230,118,.22)';
-      n.style.background='rgba(0,230,118,.07)';
-    } else if(roll < 0.65){
-      n.style.borderColor='rgba(255,68,68,.45)';
-      n.style.boxShadow='0 0 12px rgba(255,68,68,.18)';
-      n.style.background='rgba(255,68,68,.07)';
-    } else {
-      n.style.borderColor='rgba(167,139,250,.2)';
-      n.style.boxShadow='none';
-      n.style.background='rgba(167,139,250,.05)';
-    }
-  });
-}
-setTimeout(randomVote, 1500);
-setInterval(randomVote, 3200);
-
-// Scanner box pulse
-const scannerBoxes = document.querySelectorAll('.scanner-box');
-function pulseScanners(){
-  scannerBoxes.forEach((b,i) => {
-    setTimeout(() => {
-      b.style.borderColor='rgba(0,229,204,.7)';
-      b.style.background='rgba(0,229,204,.12)';
-      setTimeout(() => {
-        b.style.borderColor='rgba(0,229,204,.2)';
-        b.style.background='rgba(0,229,204,.04)';
-      }, 400);
-    }, i * 180);
-  });
-}
-setTimeout(pulseScanners, 2000);
-setInterval(pulseScanners, 5000);
-
-// Connector labels cycling
-const connectors = document.querySelectorAll('.connector-label');
-const flowLabels = [
-  ['↓ HTTP / REST / RSS Fetch ↓','↓ Polling every 30s ↓','↓ Live market data ↓'],
-  ['↓ Pre-filter → Consolidation Scan → Full Engine Pipeline ↓','↓ Sector hot? → CZ found? → R/R ≥2× → analyze ↓','↓ Cheap checks first · expensive engines last ↓'],
-  ['↓ Data + Context → Claude API ↓','↓ Token-streamed prompts ↓','↓ Structured JSON responses ↓'],
-  ['↓ Votes from 11 Independent Nodes ↓','↓ Score: −1.0 → +1.0 ↓','↓ Quorum: ≥5 of 11 nodes required ↓'],
-  ['↓ Approved Signals → Allocation Gate → Paper / Live Execution ↓','↓ validate_action() → risk_gate → execution ↓','↓ paper_mode=True by default ↓'],
-  ['↓ JSON Responses over REST API ↓','↓ 30s auto-refresh ↓','↓ :9000 Portfolio · :9001 Trading ↓'],
-  ['↔ Retrofit HTTP Client · LAN WiFi ↔','↔ :9000 Portfolio · :9001 Trading ↔','↔ OkHttp · Timeout 10s ↔']
-];
-connectors.forEach((el, i) => {
-  if(!flowLabels[i]) return;
-  let idx = 0;
-  setInterval(() => {
-    idx = (idx + 1) % flowLabels[i].length;
-    el.style.transition = 'opacity .35s';
-    el.style.opacity = '0';
-    setTimeout(() => { el.textContent = flowLabels[i][idx]; el.style.opacity = '1'; }, 380);
-  }, 4200 + i * 600);
-});
+},{threshold:.2});
+document.querySelectorAll('.box').forEach(b=>gateObs.observe(b));
 </script>
-
 </body>
 </html>
