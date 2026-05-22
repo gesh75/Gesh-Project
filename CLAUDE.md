@@ -80,7 +80,13 @@ server.py (FastAPI · Port 9000)
 │   ├── trading/risk_gate.py  — 8-gate risk gate (kill-switch → hours → conf → cap → rate → cash → loss → freshness)
 │   ├── trading/execution.py  — Paper/live broker wrapper with idempotency (PAPER_MODE=true default)
 │   ├── trading/alerts.py     — Telegram alerts (@gesh755bot) for fills, rejections, EOD P&L
+│   ├── trading/tracker.py ★  — Signal Accuracy Tracker: paper_positions/paper_outcomes/signal_overrides
+│   │                           win_rate/Sharpe/max_drawdown/per-source stats, autonomy gate check,
+│   │                           manual signal rating. Source of truth for live-trading readiness.
+│   │                           ★★ Fully wired into autopilot (2026-05-23): record_entry on BUY fills,
+│   │                              record_exit on SELL/stop-loss — autonomy gate now accumulates automatically.
 │   └── trading/autopilot.py  — APScheduler: 08:30 scan / 09:35 execute / 12:30 rebalance / 15:55 EOD
+│                               ★★ Tracker-hooked: open_window, midday_rebalance, close_risk_check
 │
 └── templates/dashboard.html  — Web UI (Chart.js, 8 tabs: Overview, Analysis, Screener, Kelly, Monte Carlo, Regime, SEC/News, 🔬 Daily Analysis)
 ```
@@ -535,6 +541,39 @@ Added on-demand daily portfolio analysis to the main dashboard. Button: **▶ Ru
 - History dropdown — replays any past run from `/api/history` without re-running Claude
 
 **JS functions:** `daRunAnalysis()`, `daRender(data, meta, kellyData, portData)`, `daLoadHistory()`, `daLoadRun()`
+
+---
+
+## Execution Layer Notes — Updated 2026-05-21 ★★★
+
+### Paper Trading Table Clarification (CRITICAL)
+
+The **`orders` table in `gesh_financial.db`** is the source of truth for paper fills — NOT `paper_trades`.
+
+- `orders` table: 707+ rows, `status='SIMULATED'` for actual fills, `mode='paper'` — written by `trading/execution.py`
+- `paper_trades` table: 0 rows — legacy table from `paper_trading.py`, not used by the autopilot pipeline
+- Any analytics, win-rate, or weekly review queries must use: `orders WHERE status='SIMULATED' AND mode='paper'`
+
+The `weekly-portfolio-review` skill currently reads `paper_trades` (empty). When running the skill manually, supplement with:
+```python
+conn = sqlite3.connect('gesh_financial.db')
+fills = conn.execute(
+    "SELECT * FROM orders WHERE status='SIMULATED' AND mode='paper' ORDER BY placed_at DESC"
+).fetchall()
+```
+
+### Known Bug Fixes Applied to gesh-project-trading (2026-05-21)
+
+Six compounding bugs blocked all paper fills for 34 days. All fixed — see `gesh-project-trading/CLAUDE.md` rules 20–25 for the full list. Key ones affecting this project's analytics:
+
+1. `MAX_ORDERS_PER_DAY` raised from 3 → 15 (`.env`)
+2. REJECTED orders no longer count toward daily cap (`trading/state.py`)
+3. Market scanner BUY intents now include `target_position_pct` (`trading/autopilot.py`)
+
+### Autonomy Gate
+
+Live trading on Alpaca requires: ≥30 closed paper trades · win_rate ≥55% · Sharpe ≥0.5 · max drawdown &lt;10%.
+Current: 0 closed trades. ETA: Aug–Sep 2026.
 
 ---
 
