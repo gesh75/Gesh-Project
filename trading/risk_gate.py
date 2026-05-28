@@ -55,8 +55,11 @@ def _within_market_hours(cfg: RiskConfig) -> bool:
     now = datetime.now(tz)
     if now.weekday() >= 5:           # Sat/Sun
         return False
-    open_h, open_m = (int(p) for p in cfg.market_open_hhmm.split(":"))
-    close_h, close_m = (int(p) for p in cfg.market_close_hhmm.split(":"))
+    try:
+        open_h, open_m = (int(p) for p in cfg.market_open_hhmm.split(":"))
+        close_h, close_m = (int(p) for p in cfg.market_close_hhmm.split(":"))
+    except (ValueError, AttributeError):
+        return False   # malformed time config → fail closed (treat as outside hours)
     return dtime(open_h, open_m) <= now.time() <= dtime(close_h, close_m)
 
 
@@ -129,7 +132,7 @@ def evaluate(
     # 1. Kill switch
     gates["KILL_SWITCH"] = not _kill_switch_present(cfg.kill_switch_path)
     if not gates["KILL_SWITCH"]:
-        rejection_reason = f"Kill switch present at {cfg.kill_switch_path}"
+        rejection_reason = "Kill switch active — trading suspended"
 
     # 2. Market hours
     if rejection_reason is None:
@@ -197,7 +200,8 @@ def evaluate(
     if rejection_reason is None:
         age = _quote_age_seconds(portfolio_snapshot)
         if age is None:
-            gates["DATA_FRESH"] = True       # unknown age → don't block, but flag in log
+            gates["DATA_FRESH"] = False      # fail closed: no timestamp → cannot prove freshness
+            rejection_reason = "Quote age unknown — snapshot missing 'as_of' timestamp"
         else:
             gates["DATA_FRESH"] = age <= cfg.max_price_age_seconds
             if not gates["DATA_FRESH"]:

@@ -212,7 +212,7 @@ def log_order(
 def count_orders_today(mode: str | None = None) -> int:
     """Orders submitted since 00:00 UTC today. Pass mode='paper' to filter."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    sql = "SELECT COUNT(*) AS n FROM orders WHERE placed_at >= ?"
+    sql = "SELECT COUNT(*) AS n FROM orders WHERE placed_at >= ? AND status != 'REJECTED'"
     params: list[Any] = [today + "T00:00:00+00:00"]
     if mode:
         sql += " AND mode = ?"

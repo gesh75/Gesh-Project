@@ -56,7 +56,7 @@ class TradeIntent:
             problems.append("stop_loss must be > 0")
         if self.take_profit is not None and self.take_profit <= 0:
             problems.append("take_profit must be > 0")
-        if not self.symbol or not self.symbol.isascii():
+        if not self.symbol or not self.symbol.isascii() or len(self.symbol) > 12:
             problems.append(f"symbol invalid: {self.symbol!r}")
         return problems
 

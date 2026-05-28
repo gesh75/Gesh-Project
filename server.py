@@ -1,9 +1,12 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
-import math, time, threading, uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+import math, time, threading, uvicorn, os, hmac
+from fastapi import FastAPI, HTTPException, Request, Depends, Header, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+import logging, re
+from collections import defaultdict, deque
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
 # Long-running uvicorn + yfinance + sqlite + robin_stocks tends to leak FDs
@@ -30,6 +33,79 @@ def _sanitize(obj):
     if isinstance(obj, list):
         return [_sanitize(v) for v in obj]
     return obj
+
+
+def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> bool:
+    """Auth gate for mutating endpoints (config changes + trade execution).
+
+    Fails closed: if GESH_API_KEY is unset in the environment, the endpoint is
+    blocked entirely (503) rather than left open. Set GESH_API_KEY in .env and
+    send it as the `X-API-Key` request header.
+    """
+    expected = os.getenv("GESH_API_KEY", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Endpoint disabled: GESH_API_KEY not configured")
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return True
+
+
+logger = logging.getLogger("gesh.server")
+
+
+def _server_error(exc: Exception) -> HTTPException:
+    """Log the real exception server-side; return a generic 500 so internal
+    details (paths, SQL, upstream API bodies) never leak to clients. An
+    HTTPException raised intentionally inside a handler passes through unchanged."""
+    if isinstance(exc, HTTPException):
+        return exc
+    logger.exception("Unhandled server error: %s", exc)
+    return HTTPException(status_code=500, detail="Internal server error")
+
+
+_ALLOWED_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
+_ALLOWED_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max", "10d", "30d", "60d"}
+
+
+def _validate_timeframe(interval: str, period: str) -> None:
+    if interval not in _ALLOWED_INTERVALS or period not in _ALLOWED_PERIODS:
+        raise HTTPException(status_code=400, detail="Invalid interval or period")
+
+
+_SYMBOL_RE = re.compile(r"^[A-Z0-9.\-=^]{1,15}$")
+
+
+def _safe_symbol(symbol: str) -> str:
+    """Validate + normalize a ticker path param — blocks traversal/injection.
+    Allows stocks, crypto (BTC-USD), forex (EURUSD=X), and ^indices."""
+    s = (symbol or "").strip().upper()
+    if not _SYMBOL_RE.match(s):
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+    return s
+
+
+# ── Lightweight per-IP rate limiting (dependency-free, single-process) ────────
+_RATE_LOCK = threading.Lock()
+_RATE_HITS: dict[tuple, deque] = defaultdict(deque)
+_HEAVY_PREFIXES = (
+    "/api/deep-analysis", "/api/screener", "/api/consensus", "/api/monte-carlo",
+    "/api/agents/", "/api/gemini/", "/api/trading/deep-debate",
+)
+
+
+def _rate_ok(ip: str, heavy: bool) -> bool:
+    limit, window = (30, 60) if heavy else (300, 60)
+    now = time.time()
+    key = (ip, "heavy" if heavy else "all")
+    with _RATE_LOCK:
+        hits = _RATE_HITS[key]
+        while hits and hits[0] <= now - window:
+            hits.popleft()
+        if len(hits) >= limit:
+            return False
+        hits.append(now)
+        return True
+
 
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, analyze_screener
 from auth import login, logout
@@ -74,6 +150,13 @@ async def lifespan(app):
     try:
         login()
         print("✓ Robinhood session established")
+        # Write live cache immediately on startup so the daily-analysis
+        # skill always has fresh data even before the first dashboard poll.
+        try:
+            from fetch_live_data import fetch_and_cache
+            fetch_and_cache(logout_after=False)  # keep session alive for server
+        except Exception as _ce:
+            print(f"⚠  Startup cache write failed: {_ce}")
     except Exception as e:
         print(f"⚠  Auth failed: {e}")
     yield
@@ -84,6 +167,26 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Gesh Financial Observability", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _rate_limit_middleware(request: Request, call_next):
+    if request.url.path.startswith("/api/"):
+        ip = request.client.host if request.client else "unknown"
+        heavy = request.url.path.startswith(_HEAVY_PREFIXES)
+        if not _rate_ok(ip, heavy):
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded — slow down"})
+    return await call_next(request)
+
+
+# Explicit CORS policy: same-origin dashboard only, no credentialed cross-origin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:9000", "http://127.0.0.1:9000"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 HTML = Path(__file__).parent / "templates" / "dashboard.html"
 
 # ─── In-process throttles / caches (FD-leak mitigation) ──────────────────────
@@ -96,7 +199,7 @@ _last_snapshot_at: float = 0.0
 _snapshot_lock = threading.Lock()
 
 def _maybe_log_snapshot(holdings: list[dict]) -> None:
-    """Rate-limited equity snapshot. Silently skips if last write < interval ago."""
+    """Rate-limited equity snapshot + live cache write. Skips if last write < interval ago."""
     global _last_snapshot_at
     now = time.monotonic()
     with _snapshot_lock:
@@ -107,6 +210,13 @@ def _maybe_log_snapshot(holdings: list[dict]) -> None:
         log_equity_snapshot(holdings)
     except Exception as snap_err:
         print(f"⚠  Snapshot log failed: {snap_err}")
+    # Refresh live cache so the daily-analysis skill always gets current data
+    try:
+        from fetch_live_data import fetch_and_cache
+        import threading as _t
+        _t.Thread(target=fetch_and_cache, kwargs={"logout_after": False}, daemon=True).start()
+    except Exception as cache_err:
+        print(f"⚠  Live cache refresh failed: {cache_err}")
 
 # /api/chart/{symbol}?period=… cache. yfinance opens its tz cache + a fresh
 # session every call; back-to-back polls were a major FD churn source.
@@ -139,7 +249,7 @@ def get_portfolio():
 
         return _sanitize({"status": "ok", "data": payload})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Quick AI analysis ────────────────────────────────────────────────────────
@@ -151,7 +261,7 @@ def run_analysis():
         analysis = analyze_portfolio(payload)
         return {"status": "ok", "analysis": analysis, "model": MODEL}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Deep AI analysis (with regime injection + DB logging) ───────────────────
@@ -195,7 +305,7 @@ def run_deep_analysis():
             "run_id":   run_id,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Step 2 — Monte Carlo stress test ────────────────────────────────────────
@@ -209,7 +319,7 @@ def monte_carlo():
         result   = run_monte_carlo(holdings, eq_sum)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Step 3 — Equity Curve Gate ──────────────────────────────────────────────
@@ -226,7 +336,7 @@ def equity_curve_gate():
         result = compute_ecg(holdings, history_fn)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Step 4 — Regime detection standalone ────────────────────────────────────
@@ -239,18 +349,18 @@ def regime_endpoint():
         result   = detect_regimes(symbols)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Step 1 — Analysis history ────────────────────────────────────────────────
 
 @app.get("/api/history")
-def analysis_history(limit: int = 20):
+def analysis_history(limit: int = Query(20, ge=1, le=500)):
     try:
         rows = get_analysis_history(limit=limit)
         return {"status": "ok", "data": rows}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/history/{run_id}")
@@ -263,7 +373,7 @@ def analysis_detail(run_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Market Intelligence (SWS-style) ──────────────────────────────────────────────────
@@ -276,7 +386,7 @@ def market_data_endpoint():
         result  = get_all_market_data(symbols)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Company Intelligence Agents ─────────────────────────────────────────────
@@ -290,7 +400,7 @@ def agent_sec():
         result  = watch_filings(symbols, days_back=7)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/agents/sec/history")
@@ -302,7 +412,7 @@ def agent_sec_history(days: int = 30):
         result  = get_filing_history(symbols, days=days)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.post("/api/agents/news")
@@ -314,7 +424,7 @@ def agent_news():
         result  = scan_news(symbols, days_back=7)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/agents/news/history")
@@ -326,7 +436,7 @@ def agent_news_history(days: int = 7):
         result  = get_news_history(symbols, days=days)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.post("/api/agents/fundamentals")
@@ -336,7 +446,7 @@ def agent_fundamentals():
         result = run_fundamental_scan()
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/agents/fundamentals/latest")
@@ -348,7 +458,7 @@ def agent_fundamentals_latest():
             return {"status": "ok", "data": None, "message": "No scan yet — run POST /api/agents/fundamentals first"}
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Investment Screener ──────────────────────────────────────────────────────
@@ -365,7 +475,7 @@ def run_screener():
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Kelly Criterion Position Sizer ──────────────────────────────────────────
@@ -399,7 +509,7 @@ def kelly_endpoint():
         result         = run_kelly_analysis(holdings, total_equity, analyst_upside, ai_verdicts)
         return {"status": "ok", "data": result, "total_equity": total_equity}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Price Chart ─────────────────────────────────────────────────────────────
@@ -409,7 +519,7 @@ def price_chart(symbol: str, period: str = "1mo"):
     # 30s TTL cache — dashboard polls this per holding; without the cache
     # every refresh would spawn a fresh yfinance session + crumb fetch +
     # tz-cache file open, which is the dominant FD-leak path.
-    sym = symbol.upper()
+    sym = _safe_symbol(symbol)
     key = (sym, period)
     now = time.monotonic()
     with _chart_cache_lock:
@@ -440,7 +550,7 @@ def price_chart(symbol: str, period: str = "1mo"):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Consensus Engine ────────────────────────────────────────────────────────
@@ -454,7 +564,7 @@ def consensus_endpoint():
         result       = run_consensus_portfolio(holdings, total_equity)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── FFT Cycle Detection ──────────────────────────────────────────────────────
@@ -472,7 +582,7 @@ def fft_cycles_endpoint():
         result  = batch_fft_cycles(symbols)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/fft-cycles/{symbol}")
@@ -480,10 +590,10 @@ def fft_cycles_single(symbol: str):
     """FFT cycle analysis for a single symbol."""
     try:
         from fft_cycles import detect_fft_cycles
-        result = detect_fft_cycles(symbol.upper())
+        result = detect_fft_cycles(_safe_symbol(symbol))
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Ollama Local LLM — REMOVED ─────────────────────────────────────────────
@@ -512,10 +622,10 @@ def gemini_status_endpoint():
         result = get_gemini_status()
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/gemini/analyze")
+@app.post("/api/gemini/analyze", dependencies=[Depends(require_api_key)])
 def gemini_analyze_endpoint():
     """
     Fast Gemini Flash portfolio commentary.
@@ -555,7 +665,7 @@ def gemini_analyze_endpoint():
     return {"status": "ok", "data": _sanitize(result)}
 
 
-@app.post("/api/gemini/second-opinion/{symbol}")
+@app.post("/api/gemini/second-opinion/{symbol}", dependencies=[Depends(require_api_key)])
 async def gemini_second_opinion_endpoint(symbol: str, request: Request):
     """
     Gemini 1.5 Pro contrarian second opinion on a symbol.
@@ -563,19 +673,20 @@ async def gemini_second_opinion_endpoint(symbol: str, request: Request):
     Independent reasoning from Claude — surfaces missed risks.
     """
     try:
+        symbol = _safe_symbol(symbol)
         try:
             body = await request.json()
         except Exception:
             body = {}
-        analysis = body.get("analysis", f"Symbol: {symbol.upper()}")
-        verdict  = body.get("verdict", "")
+        analysis = "".join(c for c in str(body.get("analysis", f"Symbol: {symbol}")) if c.isprintable() or c in "\n\t")[:2000]
+        verdict  = "".join(c for c in str(body.get("verdict", "")) if c.isprintable())[:64]
         result   = gemini_second_opinion(symbol.upper(), analysis, verdict)
         return {"status": "ok", "data": _sanitize(result)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/gemini/market-commentary")
+@app.post("/api/gemini/market-commentary", dependencies=[Depends(require_api_key)])
 async def gemini_market_commentary_endpoint(request: Request):
     """
     Gemini Flash broad market commentary.
@@ -606,7 +717,7 @@ async def gemini_market_commentary_endpoint(request: Request):
         )
         return {"status": "ok", "data": _sanitize(result)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Allocation Config ────────────────────────────────────────────────────────
@@ -618,10 +729,10 @@ def get_config():
         cfg = load_config()
         return {"status": "ok", "data": cfg}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/config")
+@app.post("/api/config", dependencies=[Depends(require_api_key)])
 async def set_config(request: Request):
     """Update one or more config keys. Body: {key: value, ...}"""
     try:
@@ -631,7 +742,7 @@ async def set_config(request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Consolidation Zone + Sector Filter ──────────────────────────────────────
@@ -640,10 +751,11 @@ async def set_config(request: Request):
 def consolidation_zone_single(symbol: str, interval: str = "5m", period: str = "1d"):
     """Detect consolidation zone for a single symbol."""
     try:
-        result = detect_consolidation(symbol.upper(), interval=interval, period=period)
+        _validate_timeframe(interval, period)
+        result = detect_consolidation(_safe_symbol(symbol), interval=interval, period=period)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.post("/api/scanner/consolidation")
@@ -659,25 +771,28 @@ async def consolidation_zone_batch(request: Request):
             payload = build_data_payload(DEFAULT_WATCHLIST)
             symbols = list({h["symbol"] for h in payload["holdings"]} |
                            {w["symbol"] for w in payload["watchlist"]})
+        _interval = body.get("interval", "5m")
+        _period   = body.get("period", "1d")
+        _validate_timeframe(_interval, _period)
         result = scan_consolidations(
             symbols,
-            interval=body.get("interval", "5m"),
-            period=body.get("period", "1d"),
+            interval=_interval,
+            period=_period,
             min_rr=float(body.get("min_rr", 2.0)),
         )
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/scanner/sector/{symbol}")
 def sector_hot_single(symbol: str):
     """Check if the sector ETF for a symbol has unusual volume (≥1.2× 20d avg)."""
     try:
-        result = is_sector_hot(symbol.upper())
+        result = is_sector_hot(_safe_symbol(symbol))
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.post("/api/scanner/sector")
@@ -696,19 +811,19 @@ async def sector_hot_batch(request: Request):
         result = batch_sector_check(symbols)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Trade Log ────────────────────────────────────────────────────────────────
 
 @app.get("/api/trades")
-def get_trades(symbol: str = None, limit: int = 50, open_only: bool = False, paper: bool = False):
+def get_trades(symbol: str = None, limit: int = Query(50, ge=1, le=500), open_only: bool = False, paper: bool = False):
     """Return trade history. ?paper=true for paper trades."""
     try:
         rows = get_trade_history(symbol=symbol, limit=limit, open_only=open_only, is_paper=paper)
         return {"status": "ok", "data": rows}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/trades/stats")
@@ -718,10 +833,10 @@ def trade_stats(days: int = 30, paper: bool = False):
         summary = trade_summary_for_report(days=days)
         return {"status": "ok", "data": summary}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/trades/log")
+@app.post("/api/trades/log", dependencies=[Depends(require_api_key)])
 async def log_trade_endpoint(request: Request):
     """
     Log a new trade entry.
@@ -746,10 +861,10 @@ async def log_trade_endpoint(request: Request):
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/trades/{trade_id}/close")
+@app.post("/api/trades/{trade_id}/close", dependencies=[Depends(require_api_key)])
 async def close_trade_endpoint(trade_id: int, request: Request):
     """Close an open trade. Body: {exit_price, notes?, is_paper?}"""
     try:
@@ -762,7 +877,7 @@ async def close_trade_endpoint(trade_id: int, request: Request):
         )
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Paper Trading ────────────────────────────────────────────────────────────
@@ -786,7 +901,7 @@ async def paper_run_endpoint(request: Request):
         )
         return {"status": "ok", "data": results, "total_portfolio": total}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.post("/api/paper/check-closes")
@@ -796,7 +911,7 @@ def paper_check_closes():
         closed = check_and_close_paper_positions()
         return {"status": "ok", "closed": closed, "count": len(closed)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/paper/summary")
@@ -806,12 +921,12 @@ def paper_summary_endpoint(days: int = 7):
         result = get_paper_summary(days=days)
         return {"status": "ok", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Trading Execution Layer (Risk Gate + Paper Execution) ───────────────────
 
-@app.post("/api/trading/dry-run")
+@app.post("/api/trading/dry-run", dependencies=[Depends(require_api_key)])
 async def trading_dry_run(request: Request):
     """
     Dry-run a trade intent through the risk gate. No order placed.
@@ -835,10 +950,10 @@ async def trading_dry_run(request: Request):
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/trading/paper-order")
+@app.post("/api/trading/paper-order", dependencies=[Depends(require_api_key)])
 async def trading_paper_order(request: Request):
     """
     Run intent through risk gate then paper-execute it.
@@ -867,10 +982,10 @@ async def trading_paper_order(request: Request):
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/trading/consensus-order")
+@app.post("/api/trading/consensus-order", dependencies=[Depends(require_api_key)])
 async def trading_consensus_order(request: Request):
     """
     Run full consensus for a symbol, build TradeIntent, push through risk gate, paper-execute.
@@ -906,17 +1021,17 @@ async def trading_consensus_order(request: Request):
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
-@app.post("/api/trading/deep-debate/{symbol}")
+@app.post("/api/trading/deep-debate/{symbol}", dependencies=[Depends(require_api_key)])
 async def trading_deep_debate(symbol: str):
     """
     Bull / Bear debate engine: haiku x2 (bull + bear) → sonnet x1 (PM synthesis).
     Returns structured decision with price target, conviction, and catalysts.
     """
     try:
-        symbol = symbol.upper()
+        symbol = _safe_symbol(symbol)
         payload = build_data_payload(DEFAULT_WATCHLIST)
 
         eq = cost = price = 0.0
@@ -945,7 +1060,7 @@ async def trading_deep_debate(symbol: str):
             "consensus_score":   consensus.get("raw_score"),
         })
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Phase 1-3 Enhancement Endpoints ─────────────────────────────────────────
@@ -961,7 +1076,7 @@ async def api_tax_harvest():
         result = get_harvest_summary(positions, cost_basis)
         return _sanitize({"status": "ok", **result})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/benchmarks/{period}")
@@ -974,7 +1089,7 @@ async def api_benchmarks(period: str = "1mo"):
         result  = batch_alpha(tickers, period)
         return _sanitize({"status": "ok", "period": period, "alpha_table": result})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/explainability/{symbol}")
@@ -988,7 +1103,7 @@ async def api_explainability(symbol: str):
         report = build_transparency_report(symbol.upper(), consensus, regime=regime_str)
         return _sanitize({"status": "ok", "symbol": symbol.upper(), **report})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/crypto-correlation")
@@ -1001,7 +1116,7 @@ async def api_crypto_correlation():
         result   = crypto_risk_summary(holdings)
         return _sanitize({"status": "ok", **result})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/yield/landscape")
@@ -1014,7 +1129,7 @@ async def api_yield_landscape():
         result   = get_yield_landscape(cash_usd)
         return _sanitize({"status": "ok", **result})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/security/health")
@@ -1024,7 +1139,7 @@ async def api_security_health():
         from security.api_verifier import all_api_health
         return _sanitize({"status": "ok", "sources": all_api_health()})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 @app.get("/api/volatility/compare/{symbol}")
@@ -1041,7 +1156,7 @@ async def api_vol_compare(symbol: str):
         result = compare_vol_models(rets, symbol.upper())
         return _sanitize({"status": "ok", **result})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error(e)
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
@@ -1049,4 +1164,5 @@ async def api_vol_compare(symbol: str):
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 9000))
+    # host=127.0.0.1 is intentional — never bind 0.0.0.0; the API has no network-level auth.
     uvicorn.run("server:app", host="127.0.0.1", port=port, reload=False)

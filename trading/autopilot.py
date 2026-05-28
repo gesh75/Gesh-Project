@@ -180,8 +180,22 @@ def open_window() -> None:
         return
 
     approved = rejected = 0
-    for sym, (intent, _row) in list(_CANDIDATES.items()):
+    for sym, (_stale_intent, _row) in list(_CANDIDATES.items()):
         try:
+            # Re-run consensus against the fresh open snapshot — the 08:30
+            # confidence may be stale by 09:35. Skip if the signal has weakened.
+            try:
+                fresh_row = run_consensus_holding(sym, snapshot)
+                intent = from_consensus(fresh_row, max_position_pct=cfg.max_position_pct)
+            except Exception as e:
+                logger.warning("  ✗ %s re-consensus failed (%s) — skipping", sym, e)
+                rejected += 1
+                continue
+            if intent.action not in ("BUY", "SELL") or intent.confidence < cfg.min_confidence:
+                logger.info("  ✗ %s no longer actionable at open (action=%s conf=%.2f) — skipping",
+                            sym, intent.action, intent.confidence)
+                rejected += 1
+                continue
             verdict = evaluate(intent, snapshot, cfg)
             result = place(intent, verdict, snapshot, cfg)
             if verdict.approved:

@@ -55,12 +55,15 @@ class OrderResult:
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _client_order_id(intent: TradeIntent) -> str:
+    # Deterministic over (symbol, action, minute-bucket, target_pct) so an HTTP
+    # retry of the SAME logical order collides on the UNIQUE index and is rejected
+    # as a duplicate. intent_uuid is intentionally excluded — it is regenerated per
+    # TradeIntent and would defeat retry idempotency.
     seed = "|".join([
         intent.symbol,
         intent.action,
-        intent.generated_at,
+        (intent.generated_at or "")[:16],   # YYYY-MM-DDTHH:MM — minute granularity
         f"{intent.target_position_pct or 0:.6f}",
-        intent.intent_uuid,
     ])
     return "gesh-" + hashlib.sha1(seed.encode()).hexdigest()[:16]
 

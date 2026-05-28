@@ -47,7 +47,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:21
 .b-purple{background:var(--pdim);color:var(--purple);border:1px solid var(--purple)}
 .b-muted{background:transparent;color:var(--muted);border:1px solid var(--border)}
 .ts{color:var(--muted);font-size:17px}
-.main{padding:20px 24px;max-width:1700px;margin:0 auto}
+.main{padding:20px 24px;max-width:1700px;margin:0 auto;overflow-x:hidden}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
 .scard{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;transition:border-color .25s,box-shadow .25s;position:relative;overflow:hidden}
 .scard::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(0,212,255,.03) 0%,transparent 60%);pointer-events:none}
@@ -174,7 +174,7 @@ tr:hover td{background:var(--hover)}
 .da-holding:hover{border-color:rgba(0,212,255,.3)}
 .da-holding .hdr{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;flex-wrap:wrap;gap:6px}
 .da-holding .sym{font-size:18px;font-weight:700;color:var(--accent)}
-.da-holding .vrd{font-size:12px;font-weight:700;padding:3px 9px;border-radius:4px;letter-spacing:.05em;white-space:nowrap}
+.da-holding .vrd{font-size:12px;font-weight:700;padding:3px 9px;border-radius:4px;letter-spacing:.05em;white-space:normal;word-break:break-word}
 .da-sbars{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:10px}
 .da-sbar{display:flex;flex-direction:column;align-items:center;gap:3px}
 .da-sbar .nm{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
@@ -194,7 +194,8 @@ tr:hover td{background:var(--hover)}
 .da-load-bar{height:3px;width:100%;background:var(--border);border-radius:2px;overflow:hidden;margin-top:10px}
 .da-load-fill{height:100%;width:0%;background:var(--accent);border-radius:2px;animation:da-grow 28s linear forwards}
 @keyframes da-grow{0%{width:0%}75%{width:80%}100%{width:88%}}
-.da-holdings-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.da-holdings-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;min-width:0}
+.da-holdings-grid>.da-holding{min-width:0;overflow:hidden;word-break:break-word}
 .da-sec-lbl{font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);padding-left:8px;border-left:2px solid var(--accent);margin-bottom:8px}
 .da-btn-load{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:8px 16px;font-family:var(--font);font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.05em;text-transform:uppercase;transition:all .2s}
 .da-btn-load:hover{color:var(--accent);border-color:var(--accent)}
@@ -945,6 +946,20 @@ tr:hover td{background:var(--hover)}
 <script>
 const REFRESH=30000;
 const $=id=>document.getElementById(id);
+
+// ── API key for protected (config + trade) endpoints ─────────────────────────
+// Held in localStorage (same-origin protected), never embedded in page source.
+// Run geshClearApiKey() in the console if you mistype it.
+function geshApiKey(){
+  let k=localStorage.getItem('gesh_api_key');
+  if(!k){
+    k=(prompt('Enter GESH_API_KEY (from your .env) — needed for config & trade actions:')||'').trim();
+    if(k) localStorage.setItem('gesh_api_key',k);
+  }
+  return k||'';
+}
+const authHeaders=extra=>Object.assign({'X-API-Key':geshApiKey()},extra||{});
+window.geshClearApiKey=()=>{localStorage.removeItem('gesh_api_key');console.log('GESH API key cleared — next protected action will re-prompt.');};
 const fmt=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
 const fmtp=n=>(n>=0?'+':'')+n.toFixed(2)+'%';
 const cls=n=>n>=0?'pos':'neg';
@@ -2092,7 +2107,7 @@ function daRender(data, meta, kellyData, portData){
           <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">NOW %</th>
           <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">KELLY %</th>
           <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">PRICE</th>
-          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">AI VERDICT</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;min-width:200px;max-width:320px">AI VERDICT</th>
         </tr></thead>
         <tbody>
         ${sorted.map(k=>{
@@ -2133,8 +2148,8 @@ function daRender(data, meta, kellyData, portData){
             <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted2)">
               ${price>0?'$'+daFmt(price,2):'—'}
             </td>
-            <td style="padding:9px 10px">
-              <span style="${daVerdictStyle(aiV.verdict)}" class="da-holding vrd">${daEsc(aiV.verdict||'—')}</span>
+            <td style="padding:9px 10px;max-width:320px;word-break:break-word">
+              <span style="${daVerdictStyle(aiV.verdict)};white-space:normal" class="da-holding vrd">${daEsc(aiV.verdict||'—')}</span>
               ${fvPct?`<span style="font-size:11px;opacity:.6;display:block;margin-top:2px">FV ${fvPct}</span>`:''}
             </td>
           </tr>`;
@@ -2338,7 +2353,7 @@ async function loadScannerConfig(){
 
 async function saveScannerTf(val){
   try{
-    await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scanner_timeframe:val})});
+    await fetch('/api/config',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({scanner_timeframe:val})});
     $('scanner-mode-badge').textContent=val.toUpperCase();
   }catch(e){console.error('save tf',e);}
 }
@@ -2377,23 +2392,23 @@ async function runScanner(){
     const sd=await sr.json();
     renderSectorResults(sd, symbols.length);
 
-    // Step 2 — consolidation zones on hot symbols only
+    // Step 2 — consolidation zones (hot symbols, or all if none are hot)
     const hotSyms=(sd.hot||[]).map(x=>x.symbol);
-    if(!hotSyms.length){
-      $('cz-container').innerHTML='<div class="empty" style="color:var(--yellow)">⚠️ No hot sectors found — all symbols skipped. Try different symbols or wait for higher-volume session.</div>';
-      btn.disabled=false; btn.textContent='▶ Run Scanner';
-      return;
+    const scanSyms = hotSyms.length ? hotSyms : symbols;
+    const fallback = !hotSyms.length;
+    if(fallback){
+      $('cz-container').innerHTML='<div class="empty" style="color:var(--yellow);margin-bottom:8px">⚠️ No sectors above 1.2× volume threshold — scanning all symbols anyway (low-volume session).</div>';
     }
-    $('cz-container').innerHTML=`<div class="empty"><span class="spin"></span> Scanning ${hotSyms.length} hot-sector symbols for consolidation zones…</div>`;
+    $('cz-container').innerHTML+= `<div class="empty"><span class="spin"></span> Scanning ${scanSyms.length} symbols for consolidation zones…</div>`;
 
     const tf=$('scanner-tf').value;
     const rr=parseFloat($('scanner-rr').value)||2.0;
     const tfParams={daily:{interval:'1d',period:'60d'},'1HR':{interval:'1h',period:'5d'},'5MIN':{interval:'5m',period:'1d'},premarket:{interval:'5m',period:'1d'},stock:{interval:'1d',period:'30d'}};
     const params=tfParams[tf]||tfParams.daily;
 
-    const czr=await fetch('/api/scanner/consolidation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:hotSyms,interval:params.interval,period:params.period,min_rr:rr})});
+    const czr=await fetch('/api/scanner/consolidation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:scanSyms,interval:params.interval,period:params.period,min_rr:rr})});
     const czd=await czr.json();
-    renderCZResults(czd, hotSyms.length);
+    renderCZResults(czd, scanSyms.length);
   }catch(e){
     $('sector-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${e.message}</div>`;
     $('cz-container').innerHTML='';
@@ -2584,7 +2599,7 @@ async function runPaperSession(){
     const results=[];
     for(const h of holdings){
       try{
-        const r=await fetch('/api/trading/consensus-order',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:h.symbol})});
+        const r=await fetch('/api/trading/consensus-order',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbol:h.symbol})});
         const d=await r.json();
         results.push({symbol:h.symbol,...d});
       }catch(e){results.push({symbol:h.symbol,error:e.message});}
@@ -2634,7 +2649,7 @@ async function runDryRun(){
     const conf=parseFloat($('gate-conf').value)||0.85;
     const pct=parseFloat($('gate-pct').value)/100||0.02;
     const body={symbol:sym,action,confidence:conf,target_position_pct:pct};
-    const r=await fetch('/api/trading/dry-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r=await fetch('/api/trading/dry-run',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body)});
     const d=await r.json();
     renderGateVerdict(d, sym, action);
   }catch(e){
@@ -2687,7 +2702,7 @@ async function runMainDebate(){
   document.getElementById('main-debate-result').style.display='none';
   document.getElementById('main-debate-meta').textContent='calling Claude — ~15s…';
   try {
-    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{method:'POST'});
+    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{method:'POST',headers:authHeaders()});
     const r=await resp.json();
     if(!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
     const dec=r.debate.decision, bull=r.debate.bull, bear=r.debate.bear;

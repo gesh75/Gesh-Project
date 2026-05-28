@@ -10,9 +10,9 @@ Sends structured alerts to @gesh755bot for:
   - Autopilot job start/stop
   - Daily EOD summary
 
-Configuration via .env:
-  TELEGRAM_BOT_TOKEN=TELEGRAM_BOT_TOKEN_REDACTED
-  TELEGRAM_CHAT_ID=5015900830
+Configuration via .env (never commit real values):
+  TELEGRAM_BOT_TOKEN=<your-bot-token>   # from @BotFather
+  TELEGRAM_CHAT_ID=<your-chat-id>
   TELEGRAM_ALERTS=true   # set false to silence all alerts
 
 Usage:
@@ -39,9 +39,10 @@ logger = logging.getLogger("alerts")
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "5015900830")
+CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "")
 ENABLED    = os.getenv("TELEGRAM_ALERTS", "true").strip().lower() in {"1", "true", "yes"}
-API_URL    = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+# Send URL is built inside _send() at call time so the bot token is never stored
+# in a module-level constant that could surface in a traceback or log line.
 TIMEOUT    = 8   # seconds
 
 
@@ -57,9 +58,13 @@ def _send(text: str, silent: bool = False) -> bool:
     if not BOT_TOKEN:
         logger.warning("TELEGRAM_BOT_TOKEN not set — alert suppressed")
         return False
+    if not CHAT_ID:
+        logger.warning("TELEGRAM_CHAT_ID not set — alert suppressed")
+        return False
     try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         resp = requests.post(
-            API_URL,
+            url,
             json={
                 "chat_id":                  CHAT_ID,
                 "text":                     text,
@@ -73,8 +78,8 @@ def _send(text: str, silent: bool = False) -> bool:
             logger.warning("Telegram API error %s: %s", resp.status_code, resp.text[:200])
             return False
         return True
-    except Exception as e:
-        logger.warning("Telegram send failed: %s", e)
+    except Exception:
+        logger.warning("Telegram send failed (network/timeout) — token redacted")
         return False
 
 

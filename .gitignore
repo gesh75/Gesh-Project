@@ -12,3 +12,15 @@ gesh_report.html
 test.txt
 analysis_*.json
 trade_*_exit_*.json
+
+# Credentials & live financial data — never commit
+.rh_session/
+*.session
+gesh_live_cache.json
+portfolio_live.json
+live_portfolio_snapshot.json
+gesh_daily_log.json
+gesh_analysis_data.json
+latest_analysis.json
+last_analysis_snapshot.json
+last_action_plan.json

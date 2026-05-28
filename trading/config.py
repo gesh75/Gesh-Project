@@ -13,15 +13,21 @@ from pathlib import Path
 
 
 def _env_float(key: str, default: float) -> float:
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
     try:
-        return float(os.getenv(key, default))
+        return float(raw)
     except (TypeError, ValueError):
         return default
 
 
 def _env_int(key: str, default: int) -> int:
+    raw = os.getenv(key)
+    if raw is None or raw == "":
+        return default
     try:
-        return int(os.getenv(key, default))
+        return int(raw)
     except (TypeError, ValueError):
         return default
 

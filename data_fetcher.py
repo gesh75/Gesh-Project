@@ -1,6 +1,7 @@
 from __future__ import annotations
 import robin_stocks.robinhood as rh
 import pandas as pd
+from datetime import datetime, timezone
 from typing import Any
 
 DEFAULT_WATCHLIST: list[str] = ["MSTR", "SPY", "QQQ"]
@@ -82,17 +83,25 @@ def get_portfolio_holdings() -> pd.DataFrame:
 def get_total_equity() -> dict[str, float]:
     profile = rh.load_portfolio_profile()
     account = rh.load_account_profile()
-    # GOLD ACCOUNT WARNING: account["cash"] is a negative margin-accounting figure — always wrong.
-    # cash display uses withdrawable_amount (real spendable, ~$39).
-    # buying_power uses account["buying_power"] (includes Gold margin, ~$1,378) — correct for risk gate.
-    withdrawable = float(profile.get("withdrawable_amount", 0) or 0)
-    buying_power = float(account.get("buying_power", 0) or 0)
+
+    # GOLD ACCOUNT WARNING:
+    #   account["buying_power"] = Gold margin extended credit (~$17k) — NEVER use for cash display
+    #   profile["withdrawable_amount"] = None for Gold accounts — unreliable
+    #   margin_balances["portfolio_cash"] = real uninvested cash (e.g. $535.44) — USE THIS
+    #   margin_balances["unallocated_margin_cash"] = same as portfolio_cash for cash accounts
+    margin = account.get("margin_balances") or {}
+    real_cash = (
+        float(margin.get("portfolio_cash") or 0)
+        or float(margin.get("unallocated_margin_cash") or 0)
+        or float(profile.get("withdrawable_amount") or 0)
+    )
+
     return {
         "portfolio_equity":               float(profile.get("equity", 0) or 0),
         "extended_hours_equity":          float(profile.get("extended_hours_equity", 0) or 0),
         "adjusted_equity_previous_close": float(profile.get("adjusted_equity_previous_close", 0) or 0),
-        "cash":                           withdrawable,   # real withdrawable (display only)
-        "buying_power":                   buying_power,   # tradeable buying power (risk gate)
+        "cash":                           real_cash,      # real uninvested cash (not Gold margin)
+        "buying_power":                   real_cash,      # same — real deployable cash
     }
 
 def get_watchlist_quotes(symbols: list[str] | None = None) -> pd.DataFrame:
@@ -114,4 +123,9 @@ def build_data_payload(watchlist: list[str] | None = None) -> dict[str, Any]:
     holdings_df = get_portfolio_holdings()
     equity_info = get_total_equity()
     watchlist_df = get_watchlist_quotes(watchlist)
-    return {"equity_summary": equity_info, "holdings": holdings_df.to_dict(orient="records"), "watchlist": watchlist_df.to_dict(orient="records")}
+    return {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "equity_summary": equity_info,
+        "holdings": holdings_df.to_dict(orient="records"),
+        "watchlist": watchlist_df.to_dict(orient="records"),
+    }
