@@ -169,6 +169,26 @@ def get_equity_history(symbol: str, days: int = 30) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_portfolio_equity_history(points: int = 60) -> list[dict]:
+    """Total portfolio equity per snapshot timestamp (summed across holdings).
+
+    Returns up to `points` most recent snapshots in chronological order — the
+    series that feeds the dashboard KPI sparklines.
+    """
+    with _conn() as con:
+        rows = con.execute(
+            """
+            SELECT snapshot_at, SUM(equity) AS total_equity
+            FROM   equity_snapshots
+            GROUP  BY snapshot_at
+            ORDER  BY snapshot_at DESC
+            LIMIT  ?
+            """,
+            (points,),
+        ).fetchall()
+    return [dict(r) for r in rows][::-1]  # oldest → newest
+
+
 def get_all_latest_snapshots() -> list[dict]:
     """Return the most recent snapshot for each tracked symbol."""
     with _conn() as con:

@@ -1214,6 +1214,7 @@ function renderStats(eq){
   $('s-day').className='sval '+cls(dc);$('s-day').innerHTML='<span class="arrow">'+arrow+'</span>'+fmt(dc);
   // color the Day Change KPI accent bar green/red
   const dayCard=$('kpi-day'); if(dayCard){dayCard.classList.remove('k-green','k-red');dayCard.classList.add(dc>=0?'k-green':'k-red');}
+  loadKpiSparklines(dc);
   const cash=parseFloat(eq.cash)||0;
   _lastCash=cash;
   $('s-cash').textContent=fmt(cash);
@@ -1446,6 +1447,26 @@ function piCard(a){
   </div>`;
 }
 
+// Shared deep-analysis renderer (used by live run + cached loaders)
+function renderDeepAnalysis(a, mkt, cached){
+  const cont=$('deep-container'); if(!cont||!a) return;
+  const cards=(a.holdings_analysis||[]).map((h,i)=>stockCard(h,i,mkt)).join('');
+  const n=(a.holdings_analysis||[]).length;
+  const head=cached
+    ? `📦 Cached — ${n} Holdings <span style="margin-left:8px;padding:2px 7px;border-radius:3px;background:rgba(0,212,255,.08);color:var(--accent);font-size:11px">CACHED RESULT</span>`
+    : `${n} Holdings — Snowflake Analysis`;
+  cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}</style>
+    ${piCard(a)}
+    <div style="padding:0 18px 18px">
+      <div style="font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">${head}</div>
+      <div class="stock-grid">${cards}</div>
+    </div>`;
+  setTimeout(()=>{
+    buildScoreRing('score-ring-canvas',a.portfolio_score||0);
+    (a.holdings_analysis||[]).forEach(h=>buildRadarChart(`radar-${h.symbol}`,h.scores||{}));
+  },60);
+}
+
 async function runDeepAnalysis(){
   _cachedAnalysisLoaded=false; // allow re-cache after fresh run
   const btn=$('btn-deep'),cont=$('deep-container');
@@ -1457,20 +1478,13 @@ async function runDeepAnalysis(){
     const j=await r.json();
     const a=j.analysis;
     const mkt=j.market||null;
+    renderDeepAnalysis(a, mkt);
+    _cachedAnalysisLoaded=true;
     $('deep-ts').textContent=j.model+' · '+new Date().toLocaleTimeString();
-    const cards=(a.holdings_analysis||[]).map((h,i)=>stockCard(h,i,mkt)).join('');
-    cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}</style>
-      ${piCard(a)}
-      <div style="padding:0 18px 18px">
-        <div style="font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">${(a.holdings_analysis||[]).length} Holdings — Snowflake Analysis</div>
-        <div class="stock-grid">${cards}</div>
-      </div>`;
-    setTimeout(()=>{
-      buildScoreRing('score-ring-canvas',a.portfolio_score||0);
-      (a.holdings_analysis||[]).forEach(h=>buildRadarChart(`radar-${h.symbol}`,h.scores||{}));
-    },60);
+    toast('Deep analysis complete','success'); refreshSectionBadges();
   }catch(e){
     cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${e.message}</div></div>`;
+    toast('Deep analysis failed','error');
     console.error(e);
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-analyze';}
 }
@@ -2158,34 +2172,26 @@ async function tryLoadCachedAnalysis(){
     if(!r.ok) return;
     const j=await r.json();
     const runs=(j.data&&j.data.runs)||[];
-    if(!runs.length){
-      // No cached data — update placeholder to say so clearly
-      const ph=cont.querySelector('.deep-ph-text');
-      if(ph) ph.innerHTML='<strong style="color:var(--text)">No analysis run yet today.</strong><br>Click ▶ Run Deep Analysis to generate AI scores, fair value estimates, and 12M predictions.';
-      return;
-    }
     const run=runs[0];
-    if(run.result_json){
+    if(run&&run.result_json){
       // result_json stores the full analysis response — render it
       const a=run.result_json.analysis||run.result_json;
       const mkt=run.result_json.market||null;
-      const cards=(a.holdings_analysis||[]).map((h,i)=>stockCard(h,i,mkt)).join('');
-      const cont=$('deep-container');
-      cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}</style>
-        ${piCard(a)}
-        <div style="padding:0 18px 18px">
-          <div style="font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px">
-            📦 Cached — ${(a.holdings_analysis||[]).length} Holdings
-            <span style="margin-left:8px;padding:2px 7px;border-radius:3px;background:rgba(0,212,255,.08);color:var(--accent);font-size:11px">CACHED RESULT</span>
-          </div>
-          <div class="stock-grid">${cards}</div>
-        </div>`;
-      setTimeout(()=>{
-        buildScoreRing('score-ring-canvas',a.portfolio_score||0);
-        (a.holdings_analysis||[]).forEach(h=>buildRadarChart(`radar-${h.symbol}`,h.scores||{}));
-      },60);
+      renderDeepAnalysis(a, mkt, true);
       _cachedAnalysisLoaded=true;
       $('deep-ts').textContent='Cached '+(run.created_at?new Date(run.created_at).toLocaleTimeString():'');
+      return;
+    }
+    // Fallback: no DB run today → use the engine_results.json ai_result cache
+    const cr=await fetch('/api/deep-analysis/cached'); const cj=await cr.json();
+    const a=cj&&cj.cached?(cj.analysis||cj.data):null;
+    if(a&&a.holdings_analysis){
+      renderDeepAnalysis(a, (cj.market||null), true);
+      _cachedAnalysisLoaded=true;
+      $('deep-ts').textContent='Cached '+relTime(cj.ran_at);
+    }else{
+      const ph=cont.querySelector('.deep-ph-text');
+      if(ph) ph.innerHTML='<strong style="color:var(--text)">No analysis run yet.</strong><br>Click ▶ Run Deep Analysis to generate AI scores, fair value estimates, and 12M predictions.';
     }
   }catch(e){/* silent — user can run manually */}
 }
@@ -2921,6 +2927,26 @@ function relTime(iso){
   if(s<3600) return Math.floor(s/60)+'m ago';
   if(s<86400) return Math.floor(s/3600)+'h ago';
   return Math.floor(s/86400)+'d ago';
+}
+// KPI sparklines from portfolio equity history (graceful when empty)
+let _sparkSeries=null, _sparkLoading=false;
+async function loadKpiSparklines(dayChange){
+  const paint=()=>{
+    if(!_sparkSeries||_sparkSeries.length<2) return;
+    const up=(dayChange||0)>=0;
+    const accent=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    const grn=getComputedStyle(document.documentElement).getPropertyValue('--green').trim();
+    const red=getComputedStyle(document.documentElement).getPropertyValue('--red').trim();
+    drawSparkline('spark-equity', _sparkSeries, accent);
+    drawSparkline('spark-day', _sparkSeries, up?grn:red);
+  };
+  if(_sparkSeries){ paint(); return; }
+  if(_sparkLoading) return; _sparkLoading=true;
+  try{
+    const r=await fetch('/api/portfolio/history?points=60'); const j=await r.json();
+    _sparkSeries=(j&&j.series)||[];
+  }catch(e){ _sparkSeries=[]; }
+  finally{ _sparkLoading=false; paint(); }
 }
 function toast(msg, type='info', ms=4200){
   const wrap=document.getElementById('toast-wrap'); if(!wrap) return;

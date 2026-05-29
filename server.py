@@ -678,6 +678,20 @@ def screener_cached():
     return _cached_response("screener")
 
 
+@app.get("/api/portfolio/history")
+def portfolio_history(points: int = 60):
+    """Portfolio equity series for the KPI sparklines. Always returns a list."""
+    try:
+        from db import get_portfolio_equity_history
+        hist = get_portfolio_equity_history(points)
+        series = [round(float(h["total_equity"]), 2)
+                  for h in hist if h.get("total_equity") is not None]
+        return {"status": "ok", "series": series, "points": len(series)}
+    except Exception as e:
+        # Graceful — the sparkline draws nothing rather than erroring.
+        return {"status": "error", "series": [], "error": str(e)}
+
+
 @app.get("/api/sections/status")
 def sections_status():
     """Per-section freshness for the sidebar badges. {tab:{ran_at,fresh}}."""
