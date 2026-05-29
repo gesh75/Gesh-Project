@@ -4,25 +4,48 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Gesh — Financial Observability</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 :root{
-  --bg:#05050e;--card:#0a0a18;--card2:#0e0e1f;--hover:#12122a;--border:#1a1a38;
-  --accent:#00d4ff;--adim:rgba(0,212,255,.10);
-  --green:#00e676;--gdim:rgba(0,230,118,.10);
-  --red:#ff4444;--rdim:rgba(255,68,68,.10);
-  --yellow:#ffd700;--ydim:rgba(255,215,0,.10);
-  --orange:#ff8c42;--odim:rgba(255,140,66,.10);
-  --purple:#a78bfa;--pdim:rgba(167,139,250,.10);
-  --text:#e2e8f0;--muted:#4a5568;--muted2:#64748b;
-  --font:'SF Mono','Fira Code','Consolas',monospace;
+  /* Surfaces — elevated dark observability palette */
+  --bg:#0A0E14;--card:#121821;--card2:#161D28;--hover:#1A2230;--border:#1E2733;--border2:#2A3645;
+  /* Single signature accent — electric cyan */
+  --accent:#00d4ff;--adim:rgba(0,212,255,.10);--accent-dim:rgba(0,212,255,.10);
+  --accent-glow:0 0 0 1px rgba(0,212,255,.25),0 0 20px rgba(0,212,255,.12);
+  /* Semantic — DATA ONLY */
+  --green:#00e676;--gdim:rgba(0,230,118,.12);
+  --red:#ff5370;--rdim:rgba(255,83,112,.12);
+  --amber:#ffb020;--admdim:rgba(255,176,32,.12);
+  --yellow:#ffb020;--ydim:rgba(255,176,32,.12);      /* legacy alias → amber */
+  --orange:#ff8c42;--odim:rgba(255,140,66,.12);
+  --purple:#a78bfa;--violet:#a78bfa;--pdim:rgba(167,139,250,.12);
+  /* Text */
+  --text:#e2e8f0;--text-dim:#94a3b8;--muted:#5b6878;--muted2:#94a3b8;
+  /* Typography — sans for prose/chrome, mono reserved for data */
+  --font-sans:'Inter','SF Pro Text',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --font-mono:'SF Mono','Fira Code','JetBrains Mono','Consolas',monospace;
+  --font:var(--font-sans);                            /* legacy alias → sans for UI chrome */
+  /* Radii, elevation, motion */
+  --r-sm:8px;--r-md:12px;--r-lg:16px;
+  --shadow:0 1px 3px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+  --ease:cubic-bezier(.4,0,.2,1);--t-fast:120ms;--t-base:180ms;
   --glow-a:0 0 24px rgba(0,212,255,.15);
   --glow-g:0 0 24px rgba(0,230,118,.15);
-  --glow-r:0 0 24px rgba(255,68,68,.15);
-  --tab-h:56px
+  --glow-r:0 0 24px rgba(255,83,112,.15);
+  --tab-h:56px;
+  /* shell metrics */
+  --sidebar-w:220px;--sidebar-rail:60px;--header-h:58px
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:21px;min-height:100vh}
+body{background:var(--bg);color:var(--text);font-family:var(--font-sans);font-size:15px;line-height:1.55;min-height:100vh;-webkit-font-smoothing:antialiased}
+/* Data values stay monospace + tabular */
+td,.sval,.sym,.sc-sym,.score-num,.ts,.num,.mono,input,select,textarea{font-family:var(--font-mono)}
+td,.sval,.num{font-variant-numeric:tabular-nums}
+/* Readable prose blocks */
+.prose,.pi-context,.pi-verdict,.rec-rationale,.deep-ph-text{font-family:var(--font-sans)}
 .nav{display:flex;align-items:center;justify-content:space-between;padding:10px 24px;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;backdrop-filter:blur(10px)}
 .brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;color:var(--accent);letter-spacing:.08em;text-transform:uppercase}
 /* Tab bar */
@@ -368,27 +391,131 @@ tr:hover td{background:var(--hover)}
 .mc-prob-val{font-size:14px;font-weight:600;width:40px;text-align:right;flex-shrink:0}
 .mc-chart-wrap{display:flex;align-items:flex-end;justify-content:center;height:100%;min-height:180px}
 @media(max-width:900px){.mc-body{grid-template-columns:1fr}}
+
+/* ══════════════ REDESIGN SHELL — sidebar + topbar + KPI ══════════════ */
+body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--ease)}
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:var(--sidebar-w);background:var(--card);border-right:1px solid var(--border);z-index:200;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}
+.sidebar::-webkit-scrollbar{width:0}
+.sb-brand{display:flex;align-items:center;gap:10px;padding:18px 18px 14px;font-weight:800;font-size:16px;letter-spacing:.06em;color:var(--accent);text-transform:uppercase;white-space:nowrap}
+.sb-brand .dot{flex-shrink:0}
+.sb-brand .brand-txt{overflow:hidden;text-overflow:ellipsis}
+.sb-group{padding:8px 0 2px}
+.sb-group-title{font-size:10.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);padding:8px 20px 6px}
+.nav-item{display:flex;align-items:center;gap:11px;width:100%;padding:9px 18px;background:transparent;border:none;border-left:3px solid transparent;color:var(--text-dim);font-family:var(--font-sans);font-size:13.5px;font-weight:500;letter-spacing:.01em;cursor:pointer;transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast);white-space:nowrap;text-align:left}
+.nav-item svg{width:18px;height:18px;flex-shrink:0;stroke-width:2;opacity:.85}
+.nav-item .nav-label{flex:1;overflow:hidden;text-overflow:ellipsis}
+.nav-item:hover{background:var(--hover);color:var(--text)}
+.nav-item.active{background:var(--card2);color:var(--accent);border-left-color:var(--accent)}
+.nav-item.active svg{opacity:1}
+.nav-badge{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:transparent;border:1px solid var(--border2);transition:all var(--t-fast)}
+.nav-badge.fresh{background:var(--green);border-color:var(--green);box-shadow:0 0 6px rgba(0,230,118,.5)}
+.nav-badge.stale{background:var(--amber);border-color:var(--amber)}
+.sb-foot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
+/* Topbar */
+.topbar{display:flex;align-items:center;justify-content:flex-end;gap:12px;height:var(--header-h);padding:0 24px;background:rgba(10,14,20,.7);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:150}
+.topbar .live-wrap{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--green);text-transform:uppercase}
+/* KPI row enhancements */
+.scard{position:relative;padding-left:22px}
+.scard .kpi-bar{position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px;background:var(--accent)}
+.scard.k-green .kpi-bar{background:var(--green)} .scard.k-red .kpi-bar{background:var(--red)} .scard.k-amber .kpi-bar{background:var(--amber)}
+.kpi-spark{position:absolute;right:14px;bottom:12px;width:84px;height:28px;opacity:.55;pointer-events:none}
+.sval .arrow{font-size:.6em;margin-right:4px;vertical-align:middle}
+/* Command palette */
+.cmdk-overlay{position:fixed;inset:0;background:rgba(5,7,11,.6);backdrop-filter:blur(3px);z-index:500;display:none;align-items:flex-start;justify-content:center;padding-top:14vh}
+.cmdk-overlay.open{display:flex}
+.cmdk{width:min(620px,92vw);background:var(--card2);border:1px solid var(--border2);border-radius:var(--r-md);box-shadow:var(--shadow);overflow:hidden}
+.cmdk input{width:100%;padding:16px 18px;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);font-family:var(--font-sans);font-size:16px;outline:none}
+.cmdk-list{max-height:46vh;overflow-y:auto;padding:6px}
+.cmdk-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:var(--r-sm);cursor:pointer;font-size:14px;color:var(--text-dim)}
+.cmdk-item .cmdk-kind{margin-left:auto;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.cmdk-item.sel,.cmdk-item:hover{background:var(--accent-dim);color:var(--text)}
+.cmdk-empty{padding:22px;text-align:center;color:var(--muted);font-size:13px}
+/* Toasts */
+.toast-wrap{position:fixed;right:20px;bottom:20px;z-index:600;display:flex;flex-direction:column;gap:10px;max-width:340px}
+.toast{display:flex;align-items:flex-start;gap:10px;padding:13px 16px;background:var(--card2);border:1px solid var(--border2);border-left:3px solid var(--accent);border-radius:var(--r-sm);box-shadow:var(--shadow);font-size:13.5px;color:var(--text);animation:toastIn .25s var(--ease)}
+.toast.success{border-left-color:var(--green)} .toast.error{border-left-color:var(--red)} .toast.info{border-left-color:var(--accent)}
+.toast .toast-x{margin-left:auto;color:var(--muted);cursor:pointer;background:none;border:none;font-size:16px;line-height:1}
+@keyframes toastIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+/* Skeleton shimmer */
+.skel{background:linear-gradient(100deg,var(--card2) 30%,var(--hover) 50%,var(--card2) 70%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:6px}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.skel-prev{opacity:.5;pointer-events:none}
+.run-chip{font-size:11px;font-weight:600;color:var(--muted);padding:3px 9px;border:1px solid var(--border);border-radius:20px;white-space:nowrap}
+.ecard-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ecard-foot .last-run{font-size:12px;color:var(--muted)}
+/* responsive rail */
+@media(max-width:1180px){
+  body{padding-left:var(--sidebar-rail)}
+  .sidebar{width:var(--sidebar-rail)}
+  .sidebar .nav-label,.sidebar .sb-group-title,.sidebar .brand-txt,.sidebar .sb-foot,.sidebar .nav-badge{display:none}
+  .nav-item{justify-content:center;padding:11px 0}
+  .sb-brand{justify-content:center;padding:18px 0 14px}
+}
 </style>
 </head>
 <body>
-<nav class="nav">
-  <div class="brand"><span class="dot"></span>Gesh Financial Observability</div>
-  <div class="nav-r">
-    <span class="badge b-cyan" id="model-badge">{{ model }}</span>
-    <span class="badge b-muted" id="conn-badge">Connecting...</span>
-    <span class="ts" id="ts">—</span>
-    <button class="btn-ref" onclick="loadPortfolio()">↻ Refresh</button>
+<!-- ═══ SIDEBAR NAV ═══ -->
+<aside class="sidebar">
+  <div class="sb-brand"><span class="dot"></span><span class="brand-txt">Gesh</span></div>
+
+  <div class="sb-group">
+    <div class="sb-group-title">Monitor</div>
+    <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+      <span class="nav-label">Overview</span><span class="nav-badge" id="navb-overview"></span></button>
+    <button class="nav-item" data-tab="risk" onclick="switchTab('risk')" title="Risk">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
+      <span class="nav-label">Risk</span><span class="nav-badge" id="navb-risk"></span></button>
+    <button class="nav-item" data-tab="scanner" onclick="switchTab('scanner')" title="Scanner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <span class="nav-label">Scanner</span><span class="nav-badge" id="navb-scanner"></span></button>
   </div>
-</nav>
+
+  <div class="sb-group">
+    <div class="sb-group-title">Intelligence</div>
+    <button class="nav-item" data-tab="analysis" onclick="switchTab('analysis')" title="AI Analysis">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3A3.5 3.5 0 0 0 9 19a3 3 0 0 0 3 0 3 3 0 0 0 3 0 3.5 3.5 0 0 0 3-5.7A3.5 3.5 0 0 0 16 7a4 4 0 0 0-4-4z"/><line x1="12" y1="3" x2="12" y2="19"/></svg>
+      <span class="nav-label">AI Analysis</span><span class="nav-badge" id="navb-analysis"></span></button>
+    <button class="nav-item" data-tab="intelligence" onclick="switchTab('intelligence')" title="Intelligence">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M9 4h6"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg>
+      <span class="nav-label">Intelligence</span><span class="nav-badge" id="navb-intelligence"></span></button>
+    <button class="nav-item" data-tab="radar" onclick="switchTab('radar')" title="Radar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M19.07 4.93A10 10 0 1 0 22 12"/><path d="M12 12 17 7"/><circle cx="12" cy="12" r="4"/></svg>
+      <span class="nav-label">Radar</span><span class="nav-badge" id="navb-radar"></span></button>
+    <button class="nav-item" data-tab="daily" onclick="switchTab('daily')" title="Daily Analysis">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
+      <span class="nav-label">Daily Analysis</span><span class="nav-badge" id="navb-daily"></span></button>
+  </div>
+
+  <div class="sb-group">
+    <div class="sb-group-title">Execution</div>
+    <button class="nav-item" data-tab="signals" onclick="switchTab('signals')" title="Signals">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+      <span class="nav-label">Signals</span><span class="nav-badge" id="navb-signals"></span></button>
+    <button class="nav-item" data-tab="trading" onclick="switchTab('trading')" title="Paper Trades">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+      <span class="nav-label">Paper Trades</span><span class="nav-badge" id="navb-trading"></span></button>
+  </div>
+
+  <div class="sb-foot">⌘K to search · <span id="sb-model">{{ model }}</span></div>
+</aside>
+
+<!-- ═══ TOPBAR ═══ -->
+<header class="topbar">
+  <span class="badge b-cyan" id="model-badge">{{ model }}</span>
+  <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
+  <span class="ts" id="ts">—</span>
+  <button class="btn-ref" onclick="loadPortfolio()">↻ Refresh</button>
+</header>
 
 <!-- Persistent stats bar -->
 <div style="background:var(--card);border-bottom:1px solid var(--border);padding:14px 24px">
   <div style="max-width:1700px;margin:0 auto">
     <div class="stats">
-      <div class="scard"><div class="slabel">Portfolio Value</div><div class="sval" id="s-equity">—</div><div class="ssub" id="s-equity-sub">—</div></div>
-      <div class="scard"><div class="slabel">Day Change</div><div class="sval" id="s-day">—</div><div class="ssub">vs. previous close</div></div>
-      <div class="scard"><div class="slabel">Cash</div><div class="sval" id="s-cash">—</div><div class="ssub">available balance</div></div>
-      <div class="scard"><div class="slabel">Buying Power</div><div class="sval" id="s-bp">—</div><div class="ssub">available to trade</div></div>
+      <div class="scard" id="kpi-equity"><span class="kpi-bar"></span><div class="slabel">Portfolio Value</div><div class="sval" id="s-equity">—</div><div class="ssub" id="s-equity-sub">—</div><canvas class="kpi-spark" id="spark-equity"></canvas></div>
+      <div class="scard" id="kpi-day"><span class="kpi-bar"></span><div class="slabel">Day Change</div><div class="sval" id="s-day">—</div><div class="ssub">vs. previous close</div><canvas class="kpi-spark" id="spark-day"></canvas></div>
+      <div class="scard"><span class="kpi-bar"></span><div class="slabel">Cash</div><div class="sval" id="s-cash">—</div><div class="ssub">available balance</div></div>
+      <div class="scard"><span class="kpi-bar"></span><div class="slabel">Buying Power</div><div class="sval" id="s-bp">—</div><div class="ssub">available to trade</div></div>
     </div>
   </div>
 </div>
@@ -405,18 +532,14 @@ tr:hover td{background:var(--hover)}
   </div>
 </div>
 
-<!-- Tab navigation -->
-<div class="tab-bar">
-  <button class="tab-btn active" onclick="switchTab('overview',this)"><span class="tab-icon">📊</span> Overview</button>
-  <button class="tab-btn" onclick="switchTab('analysis',this)"><span class="tab-icon">🧠</span> AI Analysis</button>
-  <button class="tab-btn" onclick="switchTab('signals',this)"><span class="tab-icon">🗳️</span> Signals</button>
-  <button class="tab-btn" onclick="switchTab('risk',this)"><span class="tab-icon">⚠️</span> Risk</button>
-  <button class="tab-btn" onclick="switchTab('intelligence',this)"><span class="tab-icon">🤖</span> Intelligence</button>
-  <button class="tab-btn" onclick="switchTab('radar',this)"><span class="tab-icon">📡</span> Radar</button>
-  <button class="tab-btn" onclick="switchTab('scanner',this);loadScannerConfig()"><span class="tab-icon">🔍</span> Scanner</button>
-  <button class="tab-btn" onclick="switchTab('trading',this);loadTradeStats()"><span class="tab-icon">📄</span> Paper Trades</button>
-  <button class="tab-btn" onclick="switchTab('daily',this);daLoadHistory()" style="border-bottom-color:transparent" id="tab-btn-daily"><span class="tab-icon">🔬</span> Daily Analysis</button>
+<!-- Command palette + toast host -->
+<div class="cmdk-overlay" id="cmdk" onclick="if(event.target===this)closeCmdk()">
+  <div class="cmdk">
+    <input id="cmdk-input" placeholder="Jump to a tab, symbol, or run an action…" autocomplete="off">
+    <div class="cmdk-list" id="cmdk-list"></div>
+  </div>
 </div>
+<div class="toast-wrap" id="toast-wrap"></div>
 
 <div class="main">
 
@@ -1060,7 +1183,7 @@ function renderPriceChart(d){
   });
 }
 
-function setConn(ok){const el=$('conn-badge');el.textContent=ok?'Live':'Error';el.className='badge '+(ok?'b-green':'b-red');}
+function setConn(ok){const w=$('live-wrap'),d=$('live-dot'),t=$('live-txt');if(!w)return;t.textContent=ok?'Live':'Offline';w.style.color=ok?'var(--green)':'var(--red)';if(d)d.style.background=ok?'var(--green)':'var(--red)';}
 function setTs(){$('ts').textContent='Updated '+new Date().toLocaleTimeString();}
 
 async function loadPortfolio(){
@@ -1077,7 +1200,10 @@ function renderStats(eq){
   $('s-equity').textContent=fmt(eq.portfolio_equity);
   const dc=eq.day_change||0,dcp=eq.day_change_pct||0;
   $('s-equity-sub').innerHTML='<span class="'+cls(dcp)+'">'+fmtp(dcp)+'</span> today';
-  $('s-day').className='sval '+cls(dc);$('s-day').textContent=fmt(dc);
+  const arrow=dc>=0?'▲':'▼';
+  $('s-day').className='sval '+cls(dc);$('s-day').innerHTML='<span class="arrow">'+arrow+'</span>'+fmt(dc);
+  // color the Day Change KPI accent bar green/red
+  const dayCard=$('kpi-day'); if(dayCard){dayCard.classList.remove('k-green','k-red');dayCard.classList.add(dc>=0?'k-green':'k-red');}
   const cash=parseFloat(eq.cash)||0;
   _lastCash=cash;
   $('s-cash').textContent=fmt(cash);
@@ -1957,28 +2083,16 @@ async function loadPortfolioWithECG(){
 // ── Tab switching ─────────────────────────────────────────────────────────
 function switchTab(name, btn){
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
   const pane=document.getElementById('tab-'+name);
   if(pane) pane.classList.add('active');
-  // btn may be null when called from JS (e.g. tabs_context_mcp click); find the right button
-  if(btn){
-    btn.classList.add('active');
-  } else {
-    const tabMap={'overview':0,'analysis':1,'signals':2,'risk':3,'intelligence':4,'radar':5,'scanner':6,'trading':7};
-    const idx=tabMap[name];
-    if(idx!==undefined){
-      const buttons=document.querySelectorAll('.tab-btn');
-      if(buttons[idx]) buttons[idx].classList.add('active');
-    }
-  }
+  // drive sidebar nav active state by data-tab (works for clicks AND programmatic calls)
+  document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
   // lazy-load data per tab
-  if(name==='risk'){
-    loadECG();
-    loadRegime();
-  }
-  if(name==='analysis'){
-    tryLoadCachedAnalysis();
-  }
+  if(name==='risk'){ loadECG(); loadRegime(); }
+  if(name==='analysis'){ tryLoadCachedAnalysis(); }
+  if(name==='scanner' && typeof loadScannerConfig==='function'){ loadScannerConfig(); }
+  if(name==='trading' && typeof loadTradeStats==='function'){ loadTradeStats(); }
+  if(name==='daily' && typeof daLoadHistory==='function'){ daLoadHistory(); }
 }
 
 // Try to load the most recent cached deep analysis from /api/history
@@ -2737,6 +2851,75 @@ async function runMainDebate(){
   }
   btn.disabled=false; btn.textContent='▶ Run Debate';
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// REDESIGN — shared UI helpers: toast · command palette · sparkline · badges
+// ══════════════════════════════════════════════════════════════════════
+function toast(msg, type='info', ms=4200){
+  const wrap=document.getElementById('toast-wrap'); if(!wrap) return;
+  const el=document.createElement('div'); el.className='toast '+type;
+  el.innerHTML=`<span>${msg}</span><button class="toast-x" aria-label="dismiss">×</button>`;
+  el.querySelector('.toast-x').onclick=()=>el.remove();
+  wrap.appendChild(el);
+  setTimeout(()=>{el.style.opacity='0';el.style.transform='translateX(20px)';setTimeout(()=>el.remove(),250);}, ms);
+}
+
+// Tiny canvas sparkline — graceful no-op when no data (spec risk #1 fallback)
+function drawSparkline(canvasId, series, color){
+  const c=document.getElementById(canvasId); if(!c) return;
+  const dpr=window.devicePixelRatio||1, w=c.clientWidth||84, h=c.clientHeight||28;
+  c.width=w*dpr; c.height=h*dpr; const ctx=c.getContext('2d'); ctx.scale(dpr,dpr); ctx.clearRect(0,0,w,h);
+  if(!series||series.length<2) return;
+  const mn=Math.min(...series), mx=Math.max(...series), rng=(mx-mn)||1;
+  ctx.beginPath();
+  series.forEach((v,i)=>{const x=(i/(series.length-1))*w, y=h-((v-mn)/rng)*(h-4)-2; i?ctx.lineTo(x,y):ctx.moveTo(x,y);});
+  ctx.strokeStyle=color||getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(); ctx.lineWidth=1.5; ctx.stroke();
+  const last=series[series.length-1];
+  ctx.lineTo(w,h); ctx.lineTo(0,h); ctx.closePath();
+  ctx.fillStyle=(color||'#00d4ff')+'22'; ctx.fill();
+}
+
+// ── Command palette (Cmd/Ctrl+K) ──
+const CMDK_TABS=[['overview','Overview'],['risk','Risk'],['scanner','Scanner'],['analysis','AI Analysis'],['intelligence','Intelligence'],['radar','Radar'],['daily','Daily Analysis'],['signals','Signals'],['trading','Paper Trades']];
+const CMDK_ACTIONS=[['Run Deep Analysis',()=>{switchTab('analysis');runDeepAnalysis&&runDeepAnalysis();}],['Run Consensus',()=>{switchTab('signals');runConsensus&&runConsensus();}],['Size Positions (Kelly)',()=>{switchTab('signals');runKelly&&runKelly();}],['Run Monte Carlo',()=>{switchTab('risk');runMonteCarlo&&runMonteCarlo();}],['Run Daily Analysis',()=>{switchTab('daily');daRunAnalysis&&daRunAnalysis();}],['Scan Market (Radar)',()=>{switchTab('radar');runScreener&&runScreener();}]];
+let _cmdkSel=0, _cmdkItems=[];
+function openCmdk(){const o=document.getElementById('cmdk');o.classList.add('open');const inp=document.getElementById('cmdk-input');inp.value='';renderCmdk('');inp.focus();}
+function closeCmdk(){document.getElementById('cmdk').classList.remove('open');}
+function renderCmdk(q){
+  q=(q||'').toLowerCase().trim();
+  const items=[];
+  CMDK_TABS.forEach(([id,label])=>{ if(!q||label.toLowerCase().includes(q)) items.push({label:'Go to '+label,kind:'tab',run:()=>switchTab(id)}); });
+  CMDK_ACTIONS.forEach(([label,fn])=>{ if(!q||label.toLowerCase().includes(q)) items.push({label,kind:'action',run:fn}); });
+  (typeof chartSymbols!=='undefined'?chartSymbols:[]).forEach(s=>{ if(!q||s.toLowerCase().includes(q)) items.push({label:s,kind:'symbol',run:()=>{switchTab('overview');const sel=document.getElementById('chart-sym');if(sel){sel.value=s;loadChart&&loadChart();}}}); });
+  _cmdkItems=items; _cmdkSel=0;
+  const list=document.getElementById('cmdk-list');
+  list.innerHTML = items.length? items.map((it,i)=>`<div class="cmdk-item${i===0?' sel':''}" data-i="${i}"><span>${it.label}</span><span class="cmdk-kind">${it.kind}</span></div>`).join('') : '<div class="cmdk-empty">No matches</div>';
+  list.querySelectorAll('.cmdk-item').forEach(el=>{el.onclick=()=>{items[+el.dataset.i].run();closeCmdk();};});
+}
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();const o=document.getElementById('cmdk');o.classList.contains('open')?closeCmdk():openCmdk();return;}
+  const o=document.getElementById('cmdk'); if(!o||!o.classList.contains('open')) return;
+  if(e.key==='Escape'){closeCmdk();}
+  else if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();const n=_cmdkItems.length;if(!n)return;_cmdkSel=(_cmdkSel+(e.key==='ArrowDown'?1:n-1))%n;document.querySelectorAll('.cmdk-item').forEach((el,i)=>el.classList.toggle('sel',i===_cmdkSel));}
+  else if(e.key==='Enter'){const it=_cmdkItems[_cmdkSel];if(it){it.run();closeCmdk();}}
+});
+document.addEventListener('input',e=>{ if(e.target&&e.target.id==='cmdk-input') renderCmdk(e.target.value); });
+
+// ── Sidebar section freshness badges (populated from backend in Pass 5) ──
+async function refreshSectionBadges(){
+  try{
+    const r=await fetch('/api/sections/status'); if(!r.ok) return;
+    const s=await r.json();
+    Object.entries(s).forEach(([tab,info])=>{
+      const b=document.getElementById('navb-'+tab); if(!b||!info) return;
+      b.classList.remove('fresh','stale');
+      if(info.fresh) b.classList.add('fresh'); else if(info.ran_at) b.classList.add('stale');
+      if(info.ran_at) b.title='Last run '+new Date(info.ran_at).toLocaleString();
+    });
+  }catch(e){/* endpoint optional — silent */}
+}
+refreshSectionBadges();
+setInterval(refreshSectionBadges, 60000);
 
 </script>
 </body>
