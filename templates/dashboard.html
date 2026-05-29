@@ -443,6 +443,16 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
 .run-chip{font-size:11px;font-weight:600;color:var(--muted);padding:3px 9px;border:1px solid var(--border);border-radius:20px;white-space:nowrap}
 .ecard-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ecard-foot .last-run{font-size:12px;color:var(--muted)}
+/* Bull/Bear debate — conviction meters + balance bar */
+.deb-head{display:flex;align-items:center;justify-content:space-between;font-weight:700;font-size:15px;margin-bottom:4px}
+.conv-meter{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin:0 0 10px}
+.conv-meter>i{display:block;height:100%;border-radius:3px;transition:width .4s var(--ease)}
+.deb-arg{margin:8px 0 0;padding-left:18px;font-size:13.5px;line-height:1.65;font-family:var(--font-sans)}
+.deb-arg li{margin-bottom:4px}
+.verdict-balance{height:10px;border-radius:5px;overflow:hidden;display:flex;margin:10px 0 4px;background:var(--border)}
+.verdict-balance .vb-bull{background:var(--green);transition:width .4s var(--ease)}
+.verdict-balance .vb-bear{background:var(--red);transition:width .4s var(--ease)}
+.vb-legend{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
 /* responsive rail */
 @media(max-width:1180px){
   body{padding-left:var(--sidebar-rail)}
@@ -2871,17 +2881,22 @@ async function runMainDebate(){
       `<div style="text-align:right;min-width:120px">` +
       `<div style="font-size:18px;font-weight:600;color:${aCol}">$${_fmt(dec.price_target,2)}</div>` +
       `<div style="font-size:11px;opacity:.6">${dec.upside_pct>=0?'+':''}${_fmt(dec.upside_pct,1)}% target</div>` +
-      `<div style="font-size:11px;opacity:.5">Stop −${_fmt(dec.stop_loss_pct,1)}%</div></div></div>`;
+      `<div style="font-size:11px;opacity:.5">Stop −${_fmt(dec.stop_loss_pct,1)}%</div></div></div>` +
+      (()=>{const bw=Math.max(0,Math.min(100,Number(dec.bull_weight)||50));return `<div class="verdict-balance"><div class="vb-bull" style="width:${bw}%"></div><div class="vb-bear" style="width:${100-bw}%"></div></div><div class="vb-legend"><span style="color:var(--green)">🐂 Bull ${bw}%</span><span style="color:var(--red)">Bear ${100-bw}% 🐻</span></div>`;})();
+    const bullConf=Math.max(0,Math.min(100,Number(bull.confidence)||0));
+    const bearConf=Math.max(0,Math.min(100,Number(bear.confidence)||0));
     document.getElementById('main-debate-bull').innerHTML=
-      `<div style="color:#00e87a;font-weight:700;margin-bottom:6px">🐂 BULL — ${_esc(bull.confidence)}%</div>` +
-      `<div style="font-size:12px;margin-bottom:8px;font-style:italic">${_esc(bull.thesis)}</div>` +
-      `<ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.7">${_debArgs(bull.arguments)}</ul>` +
-      `<div style="font-size:11px;opacity:.5;margin-top:8px">Target $${_fmt(bull.price_target,2)} · Risk: ${_esc(bull.key_risk)}</div>`;
+      `<div class="deb-head" style="color:var(--green)"><span>🐂 BULL</span><span>${_esc(bull.confidence)}%</span></div>` +
+      `<div class="conv-meter"><i style="width:${bullConf}%;background:var(--green)"></i></div>` +
+      `<div class="prose" style="font-size:13px;margin-bottom:4px;font-style:italic;color:var(--text-dim)">${_esc(bull.thesis)}</div>` +
+      `<ul class="deb-arg">${_debArgs(bull.arguments)}</ul>` +
+      `<div style="font-size:11.5px;color:var(--muted);margin-top:10px">Target $${_fmt(bull.price_target,2)} · Risk: ${_esc(bull.key_risk)}</div>`;
     document.getElementById('main-debate-bear').innerHTML=
-      `<div style="color:#ff3c5a;font-weight:700;margin-bottom:6px">🐻 BEAR — ${_esc(bear.confidence)}%</div>` +
-      `<div style="font-size:12px;margin-bottom:8px;font-style:italic">${_esc(bear.thesis)}</div>` +
-      `<ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.7">${_debArgs(bear.arguments)}</ul>` +
-      `<div style="font-size:11px;opacity:.5;margin-top:8px">Target $${_fmt(bear.price_target,2)} · Risk: ${_esc(bear.key_risk)}</div>`;
+      `<div class="deb-head" style="color:var(--red)"><span>🐻 BEAR</span><span>${_esc(bear.confidence)}%</span></div>` +
+      `<div class="conv-meter"><i style="width:${bearConf}%;background:var(--red)"></i></div>` +
+      `<div class="prose" style="font-size:13px;margin-bottom:4px;font-style:italic;color:var(--text-dim)">${_esc(bear.thesis)}</div>` +
+      `<ul class="deb-arg">${_debArgs(bear.arguments)}</ul>` +
+      `<div style="font-size:11.5px;color:var(--muted);margin-top:10px">Target $${_fmt(bear.price_target,2)} · Risk: ${_esc(bear.key_risk)}</div>`;
     const cats=(dec.catalysts||[]).map(c=>`<span style="display:inline-block;background:var(--hover);border-radius:4px;padding:3px 8px;margin:3px;font-size:12px">${_esc(c)}</span>`).join('');
     document.getElementById('main-debate-catalysts').innerHTML=`<div style="font-size:12px;opacity:.6;margin-bottom:6px">CATALYSTS TO WATCH</div>${cats||'—'}`;
     document.getElementById('main-debate-meta').textContent=`${sym} · ${new Date().toLocaleTimeString()}`;
