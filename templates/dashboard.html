@@ -1542,10 +1542,18 @@ async function runConsensus(){
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
     renderConsensus(j.data);
+    cont.dataset.loaded='1';
     $('cons-ts').textContent='Updated '+new Date().toLocaleTimeString();
+    toast('Consensus vote complete','success'); refreshSectionBadges();
   }catch(e){
     cont.innerHTML=`<div style="color:var(--red);padding:16px">Consensus failed: ${e.message}</div>`;
+    toast('Consensus failed','error');
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-Vote';}
+}
+async function loadCachedConsensus(){
+  const cont=$('cons-container'); if(!cont||cont.dataset.loaded) return;
+  try{ const r=await fetch('/api/consensus/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
 }
 
 const NODE_ICONS={
@@ -1646,10 +1654,18 @@ async function runKelly(){
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
     renderKelly(j.data, j.total_equity);
+    cont.dataset.loaded='1';
     $('kelly-ts').textContent='Updated '+new Date().toLocaleTimeString();
+    toast('Kelly position sizing complete','success'); refreshSectionBadges();
   }catch(e){
     cont.innerHTML=`<div style="color:var(--red);padding:16px">Kelly failed: ${e.message}</div>`;
+    toast('Kelly sizing failed','error');
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-Size';}
+}
+async function loadCachedKelly(){
+  const cont=$('kelly-container'); if(!cont||cont.dataset.loaded) return;
+  try{ const r=await fetch('/api/kelly/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderKelly(j.data, j.total_equity); cont.dataset.loaded='1'; const ts=$('kelly-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
 }
 
 function kellyBar(currentPct, optimalPct){
@@ -1746,7 +1762,16 @@ async function runMonteCarlo(){
     const r=await fetch('/api/monte-carlo',{method:'POST'});
     if(!r.ok) throw new Error(await r.text());
     const mc=(await r.json()).data;
-    if(mc.error){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${mc.error}</div></div>`;return;}
+    renderMonteCarlo(mc);
+    toast('Monte Carlo stress test complete','success'); refreshSectionBadges();
+  }catch(e){
+    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Stress test failed: ${e.message}</div></div>`;
+  }finally{btn.disabled=false;btn.innerHTML='↻ Re-run';}
+}
+
+function renderMonteCarlo(mc, cachedMeta){
+    const cont=$('mc-container'); if(!cont) return;
+    if(!mc||mc.error){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${(mc&&mc.error)||'No data'}</div></div>`;return;}
     const curr=mc.current_equity, varPct=mc.var_95_pct;
     const varColor=varPct>15?'var(--red)':varPct>8?'var(--yellow)':'var(--green)';
     cont.innerHTML=`
@@ -1778,10 +1803,14 @@ async function runMonteCarlo(){
         options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` ${c.raw.toFixed(1)}% of simulations`}}},scales:{x:{ticks:{color:'#4a5568',font:{size:9},maxRotation:30},grid:{display:false}},y:{ticks:{color:'#4a5568',font:{size:9},callback:v=>v+'%'},grid:{color:'rgba(28,28,53,.6)'}}}}
       });
     },60);
-    $('mc-ts').textContent='Updated '+new Date().toLocaleTimeString();
-  }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Stress test failed: ${e.message}</div></div>`;
-  }finally{btn.disabled=false;btn.innerHTML='↻ Re-run';}
+    $('mc-ts').textContent=(cachedMeta?('Cached '+relTime(cachedMeta)):'Updated '+new Date().toLocaleTimeString());
+}
+async function loadCachedMonteCarlo(){
+  const cont=$('mc-container'); if(!cont||cont.dataset.loaded) return;
+  try{
+    const r=await fetch('/api/monte-carlo/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data){ renderMonteCarlo(j.data, j.ran_at); cont.dataset.loaded='1'; }
+  }catch(e){/* keep placeholder */}
 }
 
 /* ── Company Intelligence Agents ── */
@@ -1966,28 +1995,39 @@ async function runScreener(){
     const r=await fetch('/api/screener',{method:'POST'});
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
-    const d=j.data;
-    const picks=d.picks||[];
-    const biasColor=d.market_bias==='BULLISH'?'var(--green)':d.market_bias==='BEARISH'?'var(--red)':'var(--yellow)';
-    const sectors=(d.top_sectors||[]).map(s=>`<span class="sector-pill sa-bullish">${s}</span>`).join('');
-    cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}</style>
-      <div class="radar-summary">
-        <div class="radar-summary-text">${d.screen_summary||''}</div>
-        <div class="radar-meta">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="font-size:15px;color:var(--muted)">Market Bias:</span>
-            <span style="font-weight:700;color:${biasColor}">${d.market_bias||'NEUTRAL'}</span>
-          </div>
-          ${sectors?`<div style="display:flex;gap:5px;flex-wrap:wrap">${sectors}</div>`:''}
-          <div style="font-size:14px;color:var(--muted)">${j.candidates_screened||0} stocks screened · ${picks.length} picks</div>
-        </div>
-      </div>
-      <div class="radar-grid">${picks.map((p,i)=>radarCard(p,i)).join('')}</div>`;
-    $('radar-ts').textContent='Updated '+new Date().toLocaleTimeString();
+    renderScreener(j);
+    toast('Market scan complete · '+((j.data&&j.data.picks||[]).length)+' picks','success'); refreshSectionBadges();
   }catch(e){
     cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Screener failed: ${e.message}</div></div>`;
     console.error(e);
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-scan';}
+}
+
+function renderScreener(j, cachedMeta){
+  const cont=$('radar-container'); if(!cont||!j||!j.data) return;
+  const d=j.data;
+  const picks=d.picks||[];
+  const biasColor=d.market_bias==='BULLISH'?'var(--green)':d.market_bias==='BEARISH'?'var(--red)':'var(--yellow)';
+  const sectors=(d.top_sectors||[]).map(s=>`<span class="sector-pill sa-bullish">${s}</span>`).join('');
+  cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}</style>
+    <div class="radar-summary">
+      <div class="radar-summary-text">${d.screen_summary||''}</div>
+      <div class="radar-meta">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:15px;color:var(--muted)">Market Bias:</span>
+          <span style="font-weight:700;color:${biasColor}">${d.market_bias||'NEUTRAL'}</span>
+        </div>
+        ${sectors?`<div style="display:flex;gap:5px;flex-wrap:wrap">${sectors}</div>`:''}
+        <div style="font-size:14px;color:var(--muted)">${j.candidates_screened||0} stocks screened · ${picks.length} picks</div>
+      </div>
+    </div>
+    <div class="radar-grid">${picks.map((p,i)=>radarCard(p,i)).join('')}</div>`;
+  $('radar-ts').textContent=(cachedMeta?('Cached '+relTime(cachedMeta)):'Updated '+new Date().toLocaleTimeString());
+}
+async function loadCachedScreener(){
+  const cont=$('radar-container'); if(!cont||cont.dataset.loaded) return;
+  try{ const r=await fetch('/api/screener/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data){ renderScreener(j, j.ran_at); cont.dataset.loaded='1'; } }catch(e){}
 }
 
 // ── Ollama removed — stubs kept to avoid JS errors if any old bookmark triggers them ──
@@ -2087,9 +2127,11 @@ function switchTab(name, btn){
   if(pane) pane.classList.add('active');
   // drive sidebar nav active state by data-tab (works for clicks AND programmatic calls)
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
-  // lazy-load data per tab
-  if(name==='risk'){ loadECG(); loadRegime(); }
+  // lazy-load data per tab (cached results render by default → never empty)
+  if(name==='risk'){ loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
   if(name==='analysis'){ tryLoadCachedAnalysis(); }
+  if(name==='signals'){ if(typeof loadCachedConsensus==='function') loadCachedConsensus(); if(typeof loadCachedKelly==='function') loadCachedKelly(); }
+  if(name==='radar'){ if(typeof loadCachedScreener==='function') loadCachedScreener(); }
   if(name==='scanner' && typeof loadScannerConfig==='function'){ loadScannerConfig(); }
   if(name==='trading' && typeof loadTradeStats==='function'){ loadTradeStats(); }
   if(name==='daily' && typeof daLoadHistory==='function'){ daLoadHistory(); }
@@ -2855,6 +2897,16 @@ async function runMainDebate(){
 // ══════════════════════════════════════════════════════════════════════
 // REDESIGN — shared UI helpers: toast · command palette · sparkline · badges
 // ══════════════════════════════════════════════════════════════════════
+// Relative time for "cached / last run" footers
+function relTime(iso){
+  if(!iso) return 'recently';
+  const t=new Date(iso).getTime(); if(isNaN(t)) return 'recently';
+  const s=Math.max(0,(Date.now()-t)/1000);
+  if(s<60) return 'just now';
+  if(s<3600) return Math.floor(s/60)+'m ago';
+  if(s<86400) return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
 function toast(msg, type='info', ms=4200){
   const wrap=document.getElementById('toast-wrap'); if(!wrap) return;
   const el=document.createElement('div'); el.className='toast '+type;
@@ -2913,8 +2965,9 @@ async function refreshSectionBadges(){
     Object.entries(s).forEach(([tab,info])=>{
       const b=document.getElementById('navb-'+tab); if(!b||!info) return;
       b.classList.remove('fresh','stale');
-      if(info.fresh) b.classList.add('fresh'); else if(info.ran_at) b.classList.add('stale');
-      if(info.ran_at) b.title='Last run '+new Date(info.ran_at).toLocaleString();
+      if(tab==='overview') return;                 // live tab, no badge
+      if(info.fresh) b.classList.add('fresh'); else b.classList.add('stale');
+      b.title=info.ran_at?('Last run '+new Date(info.ran_at).toLocaleString()):'Cached result available';
     });
   }catch(e){/* endpoint optional — silent */}
 }
