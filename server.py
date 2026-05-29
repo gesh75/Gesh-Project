@@ -189,6 +189,63 @@ app.add_middleware(
 )
 HTML = Path(__file__).parent / "templates" / "dashboard.html"
 
+# ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
+# Reuses the engine_results.json file Gesh already maintains. POST run-handlers
+# persist their result here; the dashboard reads it back via GET /api/*/cached
+# so each run-tab shows the last result by default instead of a blank screen.
+import json as _json
+from datetime import datetime as _dt, timezone as _tz
+
+ENGINE_RESULTS = Path(__file__).parent / "engine_results.json"
+_engine_cache_lock = threading.Lock()
+
+
+def _load_engine_results() -> dict:
+    try:
+        return _json.loads(ENGINE_RESULTS.read_text())
+    except Exception:
+        return {}
+
+
+def _save_engine_result(key: str, value) -> None:
+    """Merge one engine result into engine_results.json with a *_ran_at stamp.
+
+    Builds a new dict and atomic-writes (temp file + replace) so a concurrent
+    reader never sees a half-written file (immutability of the on-disk artifact).
+    """
+    try:
+        with _engine_cache_lock:
+            data = dict(_load_engine_results())
+            data[key] = value
+            data[f"{key}_ran_at"] = _dt.now(_tz.utc).isoformat()
+            tmp = ENGINE_RESULTS.with_name(ENGINE_RESULTS.name + ".tmp")
+            tmp.write_text(_json.dumps(_sanitize(data), default=str))
+            tmp.replace(ENGINE_RESULTS)
+    except Exception as _e:
+        print(f"⚠  engine-result cache write failed for {key}: {_e}")
+
+
+def _cached_engine(key: str) -> dict:
+    """Return the cached result for an engine key, or {cached:false} if absent."""
+    data = _load_engine_results()
+    val = data.get(key)
+    if val is not None:
+        return {"status": "ok", "cached": True, "data": val,
+                "ran_at": data.get(f"{key}_ran_at")}
+    return {"cached": False}
+
+
+def _is_fresh(ran_at: str | None, max_age_h: float = 24.0) -> bool:
+    if not ran_at:
+        return False
+    try:
+        ts = _dt.fromisoformat(ran_at)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_tz.utc)
+        return (_dt.now(_tz.utc) - ts).total_seconds() < max_age_h * 3600
+    except Exception:
+        return False
+
 # ─── In-process throttles / caches (FD-leak mitigation) ──────────────────────
 # Dashboard polls /api/portfolio every few seconds. Logging an equity snapshot
 # on *every* poll is pointless for ECG (which only needs minute-level cadence)
@@ -296,7 +353,7 @@ def run_deep_analysis():
             print(f"⚠  DB log failed: {db_err}")
             run_id = None
 
-        return {
+        resp = {
             "status":   "ok",
             "analysis": analysis,
             "model":    MODEL,
@@ -304,6 +361,8 @@ def run_deep_analysis():
             "market":   mkt,
             "run_id":   run_id,
         }
+        _save_engine_result("ai_result", resp)
+        return resp
     except Exception as e:
         raise _server_error(e)
 
@@ -317,7 +376,9 @@ def monte_carlo():
         holdings = payload["holdings"]
         eq_sum   = payload["equity_summary"]
         result   = run_monte_carlo(holdings, eq_sum)
-        return {"status": "ok", "data": result}
+        resp = {"status": "ok", "data": result}
+        _save_engine_result("monte_carlo", resp)
+        return resp
     except Exception as e:
         raise _server_error(e)
 
@@ -471,7 +532,9 @@ def run_screener():
         if not candidates:
             raise HTTPException(status_code=503, detail="No screener data returned — market may be closed")
         result = analyze_screener(candidates)
-        return {"status": "ok", "data": result, "candidates_screened": len(candidates), "as_of": __import__('datetime').datetime.utcnow().isoformat() + "Z"}
+        resp = {"status": "ok", "data": result, "candidates_screened": len(candidates), "as_of": __import__('datetime').datetime.utcnow().isoformat() + "Z"}
+        _save_engine_result("screener", resp)
+        return resp
     except HTTPException:
         raise
     except Exception as e:
@@ -507,7 +570,9 @@ def kelly_endpoint():
             print(f"Failed to fetch AI verdicts for Kelly: {err}")
 
         result         = run_kelly_analysis(holdings, total_equity, analyst_upside, ai_verdicts)
-        return {"status": "ok", "data": result, "total_equity": total_equity}
+        resp = {"status": "ok", "data": result, "total_equity": total_equity}
+        _save_engine_result("kelly", resp)
+        return resp
     except Exception as e:
         raise _server_error(e)
 
@@ -562,9 +627,88 @@ def consensus_endpoint():
         holdings     = payload["holdings"]
         total_equity = payload["equity_summary"].get("portfolio_equity", 0)
         result       = run_consensus_portfolio(holdings, total_equity)
-        return {"status": "ok", "data": result}
+        resp = {"status": "ok", "data": result}
+        _save_engine_result("consensus", resp)
+        return resp
     except Exception as e:
         raise _server_error(e)
+
+
+# ─── Cached engine results (power the dashboard's "never empty" run-tabs) ─────
+def _cached_response(key: str) -> dict:
+    """Normalize a stored engine result into a frontend-friendly envelope.
+
+    Returns the same shape the matching POST returns, plus cached/ran_at/fresh.
+    Handles both wrapped responses (this server) and raw results (run_engines2).
+    """
+    data = _load_engine_results()
+    val = data.get(key)
+    ran = data.get(f"{key}_ran_at")
+    if val is None:
+        return {"cached": False}
+    out = dict(val) if isinstance(val, dict) and ("data" in val or "analysis" in val) else {"data": val}
+    out["cached"] = True
+    out["ran_at"] = ran
+    out["fresh"] = _is_fresh(ran)
+    return _sanitize(out)
+
+
+@app.get("/api/deep-analysis/cached")
+def deep_analysis_cached():
+    return _cached_response("ai_result")
+
+
+@app.get("/api/consensus/cached")
+def consensus_cached():
+    return _cached_response("consensus")
+
+
+@app.get("/api/kelly/cached")
+def kelly_cached():
+    return _cached_response("kelly")
+
+
+@app.get("/api/monte-carlo/cached")
+def monte_carlo_cached():
+    return _cached_response("monte_carlo")
+
+
+@app.get("/api/screener/cached")
+def screener_cached():
+    return _cached_response("screener")
+
+
+@app.get("/api/sections/status")
+def sections_status():
+    """Per-section freshness for the sidebar badges. {tab:{ran_at,fresh}}."""
+    data = _load_engine_results()
+
+    def _stamp(key: str):
+        ran = data.get(f"{key}_ran_at")
+        if ran:
+            return {"ran_at": ran, "fresh": _is_fresh(ran)}
+        # cached data exists but age unknown (e.g. written by run_engines2) → stale badge
+        if data.get(key) is not None:
+            return {"ran_at": None, "fresh": False}
+        return None
+
+    cons, kelly = _stamp("consensus"), _stamp("kelly")
+    # Signals tab is "fresh" if either engine has a fresh result; ran_at = newest.
+    sig = None
+    stamps = [s for s in (cons, kelly) if s]
+    if stamps:
+        newest = max(stamps, key=lambda s: s["ran_at"] or "")
+        sig = {"ran_at": newest["ran_at"], "fresh": any(s["fresh"] for s in stamps)}
+
+    out = {
+        "overview":     {"ran_at": None, "fresh": True},   # always live
+        "analysis":     _stamp("ai_result"),
+        "daily":        _stamp("ai_result"),
+        "risk":         _stamp("monte_carlo"),
+        "radar":        _stamp("screener"),
+        "signals":      sig,
+    }
+    return {k: v for k, v in out.items() if v is not None}
 
 
 # ─── FFT Cycle Detection ──────────────────────────────────────────────────────
