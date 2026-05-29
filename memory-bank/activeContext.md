@@ -8,6 +8,11 @@ Security remediation of the GESH platform — **complete**. Full audit run again
 `gesh-project-trading` (port 9003, trading engine). Both services restarted onto
 the new code; Telegram alerts restored.
 
+**2026-05-29 follow-up — complete:** purged the dead Telegram token from git
+history of both repos (`filter-repo`, force-pushed); recovered a `crypto_data.py`
+edit that `filter-repo --force` wiped, reconstructing it byte-for-byte from the
+9003 service's cached `.pyc`. Both committed/pushed; 9003 restarted (PID 38854).
+
 ## Key decisions this session
 - **API-key auth** on all mutating endpoints (`/api/config`, `/api/trading/*`,
   `/api/trades/*`, `/api/gemini/*`). Header `X-API-Key`, constant-time compare,
@@ -38,5 +43,6 @@ the new code; Telegram alerts restored.
 - (done) Telegram token rotated via @BotFather; the malformed paste
   (`oldBotID:newBotID:secret`, two colons) was auto-repaired in
   `gesh-project-trading/.env`.
-- Optional: scrub the old (now-revoked) token from **git history** of both repos
-  (BFG/filter-repo) — currently harmless since the token is dead.
+- (done 2026-05-29) Old revoked token scrubbed from **git history** of both
+  repos via `filter-repo` + force-push; stale remote branch deleted.
+- None open.

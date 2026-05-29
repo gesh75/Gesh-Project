@@ -29,6 +29,25 @@ live fetch/autopilot) with parallel `security-reviewer` agents. Findings:
 - `gesh-project` → `7841ea8` (pushed to origin/main).
 - `gesh-project-trading` → `3dccff3` dry-run JSON fix + token scrub (pushed).
 
+## Done — Git history scrub + lost-code recovery (2026-05-29)
+
+- **Purged the dead Telegram token from git history** of both repos with
+  `git filter-repo --replace-text` (regex on the token shape, secret never
+  handled). Verified gone: `git log --all -S` + full-history grep both empty.
+  Force-pushed: gesh-project `e9a0f6e→dafcf9c`, gesh-project-trading
+  `3dccff3→30e1ce5`. Deleted stale remote branch
+  `claude/ai-financial-observability-tool-8uo6w`. Backups: `/tmp/*.bundle`.
+- **Side effect + full recovery:** `filter-repo --force` reset the trading
+  working tree, discarding the uncommitted `crypto_data.py` edit (no reflog/
+  stash/blob — unrecoverable via git). Recovered it from the running 9003
+  service's cached bytecode `__pycache__/crypto_data.cpython-314.pyc`:
+  disassembled, reconstructed the source, and verified **byte-for-byte
+  equivalent** (600/600 instrs). Committed `daf71ee` + pushed.
+  - Restored edit: POL `MATIC-USD→POL-USD`, UNI `UNI1-USD→UNI-USD`, and a
+    CoinGecko OHLC fallback in `fetch_ohlcv` (free tier, ≤365d) for when a
+    Yahoo ticker delists/misresolves.
+- 9003 service restarted (PID 38854); recovered module imports clean.
+
 ## Done — Operational fixes
 - 9000 service was running 6-day-old code → restarted; "sonnet" error cleared.
 - 9003 `Unexpected token 'I'` (dry-run plain-text 500) → fixed + verified clean
@@ -38,8 +57,14 @@ live fetch/autopilot) with parallel `security-reviewer` agents. Findings:
   delivered; autopilot restarted. Alerts confirmed flowing by Georgi.
 
 ## Pending / known
-- Old revoked Telegram token remains in **git history** of both repos (dead, so
-  low risk). History rewrite is optional.
-- `gesh-project-trading/crypto_data.py` has an unrelated uncommitted change
-  (left untouched this session).
+- (done 2026-05-29) Old Telegram token purged from git history of both repos;
+  force-pushed. GitHub may still surface old commits by direct SHA until it
+  GCs — harmless since the token is revoked.
+- (done 2026-05-29) `gesh-project-trading/crypto_data.py` recovered + committed
+  (`daf71ee`).
 - No open CRITICAL/HIGH/MEDIUM/LOW from the 2026-05-28 audit.
+
+## Lesson — never run `filter-repo --force` on a dirty tree
+It silently discards uncommitted tracked changes (no git recovery path).
+Always `git stash`/commit working-tree edits first. This time the running
+service's cached `.pyc` saved us — won't always be available.
