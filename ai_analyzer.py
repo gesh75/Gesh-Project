@@ -27,7 +27,8 @@ def analyze_portfolio(payload: dict[str, Any]) -> str:
         raise EnvironmentError("ANTHROPIC_API_KEY must be set in your .env file.")
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model=MODEL, max_tokens=2048, system=SYSTEM_PROMPT,
+        model=MODEL, max_tokens=2048,
+        system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": f"Analyze this portfolio:\n\n```json\n{json.dumps(payload, indent=2)}\n```"}]
     )
     return message.content[0].text
@@ -213,8 +214,12 @@ def deep_analyze_portfolio(
     message = client.messages.create(
         model=MODEL,
         max_tokens=8000,
-        system=DEEP_SYSTEM_PROMPT,
-        tools=[{"name": "return_portfolio_analysis", "input_schema": DEEP_ANALYSIS_SCHEMA}],
+        system=[{"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        tools=[{
+            "name": "return_portfolio_analysis",
+            "input_schema": DEEP_ANALYSIS_SCHEMA,
+            "cache_control": {"type": "ephemeral"},
+        }],
         tool_choice={"type": "tool", "name": "return_portfolio_analysis"},
         messages=[{
             "role": "user",
@@ -262,8 +267,12 @@ def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
     message = client.messages.create(
         model=MODEL,
         max_tokens=6000,
-        system=SCREENER_SYSTEM_PROMPT,
-        tools=[{"name": "return_screener_picks", "input_schema": SCREENER_SCHEMA}],
+        system=[{"type": "text", "text": SCREENER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        tools=[{
+            "name": "return_screener_picks",
+            "input_schema": SCREENER_SCHEMA,
+            "cache_control": {"type": "ephemeral"},
+        }],
         tool_choice={"type": "tool", "name": "return_screener_picks"},
         messages=[{
             "role": "user",
