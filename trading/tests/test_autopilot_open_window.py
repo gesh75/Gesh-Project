@@ -31,8 +31,9 @@ if str(REPO_ROOT) not in sys.path:
 
 
 # ─── Stub heavy top-level modules BEFORE importing trading.autopilot ──────────
-# autopilot.py imports `from consensus import run_consensus_holding` at module
-# top; consensus imports yfinance. Stubbing it keeps the test fully offline.
+# autopilot.py lazy-loads consensus via _load_consensus() (which does
+# `from consensus import run_consensus_holding`); consensus imports yfinance.
+# Stubbing it keeps the test fully offline even if the lazy path runs.
 def _install_stub_modules() -> None:
     if "consensus" not in sys.modules:
         consensus_stub = types.ModuleType("consensus")
@@ -139,7 +140,9 @@ def test_open_window_executes_candidate_without_nameerror(monkeypatch, snapshot)
     )
     autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
 
-    monkeypatch.setattr(autopilot, "run_consensus_holding", fake_consensus)
+    # open_window obtains run_consensus_holding via _load_consensus() (lazy),
+    # exactly like pre_market_scan and midday_rebalance — patch that seam.
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: fake_consensus)
     monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
     monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
     monkeypatch.setattr(autopilot, "evaluate", lambda intent, snap, cfg: _Verdict(True))
@@ -184,3 +187,30 @@ def test_open_window_no_candidates_is_noop(monkeypatch):
     autopilot._CANDIDATES.clear()
     autopilot.open_window()
     assert called["place"] is False
+
+
+def test_open_window_swallows_consensus_error_and_rejects(monkeypatch, snapshot):
+    """If re-consensus raises, the candidate is rejected (not executed) and the
+    error is swallowed safely — open_window must not crash or place an order.
+
+    This recreates the *behavioural* shape of the original bug (every candidate
+    silently rejected) and proves the recovery path is intentional, not a crash.
+    """
+    def boom(*a, **k):
+        raise RuntimeError("consensus exploded")
+
+    placed: list = []
+    seed_intent = TradeIntent(
+        symbol="MSTR", action="BUY", confidence=0.9,
+        source="consensus", target_position_pct=0.02,
+    )
+    autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
+
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: boom)
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
+    monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
+
+    autopilot.open_window()  # must not raise
+
+    assert placed == [], "a failing re-consensus must not reach execution"

@@ -41,7 +41,6 @@ from .contract import from_consensus, TradeIntent
 from .risk_gate import evaluate
 from .execution import place
 from .state import init_trading_tables, recent_intents
-from consensus import run_consensus_holding
 from .alerts import (
     alert_autopilot_start, alert_autopilot_stop,
     alert_scan_summary, alert_error, alert_daily_pnl,
@@ -205,6 +204,7 @@ def open_window() -> None:
     cfg = load_risk_config()
     try:
         build_data_payload = _load_data_fetcher()
+        run_consensus_holding = _load_consensus()
     except ImportError as e:
         logger.error("open_window: import failure — %s", e)
         return
