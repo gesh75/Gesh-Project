@@ -1,0 +1,23 @@
+# Minimal config — pytest + ruff only. This repo is run as loose modules
+# (not an installed package), so no [build-system] / packaging metadata is added.
+# Additive on purpose: introduces test discovery + markers without touching app code.
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "unit: fast, fully-offline unit tests (no network, no DB, no broker, no LLM)",
+    "integration: tests that touch a real DB, filesystem, or external service",
+]
+
+[tool.ruff]
+# Scope ruff to the new test suite only — do not retro-lint the owner's app code.
+include = ["tests/**/*.py"]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+# Tests legitimately import after sys.path manipulation and stub modules.
+ignore = ["E402"]

@@ -1,0 +1,56 @@
+name: tests
+
+# Minimal, additive CI: lint the new test suite with ruff, then run the
+# fully-offline money-moving unit tests. No secrets, no network calls at test
+# time (yfinance/Anthropic/Robinhood are all mocked inside the tests).
+
+on:
+  push:
+    branches: [main, "optimize/**"]
+    paths:
+      - "kelly.py"
+      - "consensus.py"
+      - "fft_cycles.py"
+      - "trading/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/tests.yml"
+  pull_request:
+    paths:
+      - "kelly.py"
+      - "consensus.py"
+      - "fft_cycles.py"
+      - "trading/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime + test deps
+        run: |
+          python -m pip install --upgrade pip
+          # Import-time deps for the four modules under test:
+          pip install "numpy>=2,<3" "pandas>=2" "yfinance>=0.2"
+          # Test + lint tooling:
+          pip install pytest pytest-cov ruff
+
+      - name: Ruff (new test suite only)
+        run: ruff check tests/
+
+      - name: Run offline money-logic unit tests
+        run: |
+          pytest tests/ -q \
+            --cov=kelly --cov=consensus --cov=fft_cycles --cov=trading/risk_gate \
+            --cov-report=term-missing
