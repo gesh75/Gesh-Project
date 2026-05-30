@@ -41,6 +41,7 @@ from .contract import from_consensus, TradeIntent
 from .risk_gate import evaluate
 from .execution import place
 from .state import init_trading_tables, recent_intents
+from consensus import run_consensus_holding
 from .alerts import (
     alert_autopilot_start, alert_autopilot_stop,
     alert_scan_summary, alert_error, alert_daily_pnl,
@@ -88,6 +89,45 @@ def _load_data_fetcher():
     return build_data_payload
 
 
+def _consensus_args(sym: str, snapshot: dict[str, Any]) -> dict[str, float]:
+    """
+    Derive run_consensus_holding() arguments for one symbol from the live snapshot.
+
+    run_consensus_holding(symbol, equity, total_portfolio, avg_cost, current_price):
+      - equity / avg_cost come from the held position if `sym` is currently held,
+        otherwise default to 0 (watchlist candidate not yet held).
+      - total_portfolio is the whole-account equity.
+      - current_price falls back to the watchlist quote when the symbol is unheld.
+    """
+    total_portfolio = float(
+        snapshot.get("equity_summary", {}).get("portfolio_equity", 0) or 0
+    ) or 1.0
+
+    holding = next(
+        (h for h in snapshot.get("holdings", []) if h.get("symbol") == sym),
+        None,
+    )
+    if holding is not None:
+        return {
+            "equity": float(holding.get("equity", 0) or 0),
+            "total_portfolio": total_portfolio,
+            "avg_cost": float(holding.get("average_buy_price", 0) or 0),
+            "current_price": float(holding.get("current_price", 0) or 0),
+        }
+
+    quote = next(
+        (w for w in snapshot.get("watchlist", []) if w.get("symbol") == sym),
+        None,
+    )
+    current_price = float((quote or {}).get("last_trade_price", 0) or 0)
+    return {
+        "equity": 0.0,
+        "total_portfolio": total_portfolio,
+        "avg_cost": 0.0,
+        "current_price": current_price,
+    }
+
+
 # ─── Candidate storage (in-memory between pre-market and open-window) ─────────
 # Keyed by symbol → (TradeIntent, consensus_row)
 _CANDIDATES: dict[str, tuple[TradeIntent, dict]] = {}
@@ -131,7 +171,7 @@ def pre_market_scan() -> None:
     _CANDIDATES.clear()
     for sym in symbols:
         try:
-            row = run_consensus_holding(sym, snapshot)
+            row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
             intent = from_consensus(row, max_position_pct=cfg.max_position_pct)
             if intent.action in ("BUY", "SELL") and intent.confidence >= cfg.min_confidence:
                 _CANDIDATES[sym] = (intent, row)
@@ -185,10 +225,13 @@ def open_window() -> None:
             # Re-run consensus against the fresh open snapshot — the 08:30
             # confidence may be stale by 09:35. Skip if the signal has weakened.
             try:
-                fresh_row = run_consensus_holding(sym, snapshot)
+                fresh_row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
                 intent = from_consensus(fresh_row, max_position_pct=cfg.max_position_pct)
             except Exception as e:
-                logger.warning("  ✗ %s re-consensus failed (%s) — skipping", sym, e)
+                logger.warning(
+                    "  ✗ %s re-consensus failed (%s: %s) — skipping",
+                    sym, type(e).__name__, e,
+                )
                 rejected += 1
                 continue
             if intent.action not in ("BUY", "SELL") or intent.confidence < cfg.min_confidence:
@@ -256,7 +299,7 @@ def midday_rebalance() -> None:
             continue
         try:
             current_pct = float(h.get("portfolio_percentage", 0) or 0) / 100.0
-            row = run_consensus_holding(sym, snapshot)
+            row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
             intent = from_consensus(row, max_position_pct=cfg.max_position_pct)
 
             # Drift check: current_pct vs target_pct
