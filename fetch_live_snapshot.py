@@ -76,9 +76,12 @@ def fetch():
     # Profile / cash
     profile = r.profiles.load_portfolio_profile()
     account = r.profiles.load_account_profile()
-    # ALWAYS use withdrawable_amount — account["cash"] is negative for Gold accounts
-    cash = float(profile.get('withdrawable_amount') or
-                 profile.get('unwithdrawable_deposits') or 0)
+    # ALWAYS use withdrawable_amount — account["cash"] is negative for Gold accounts.
+    # Gold/margin accounts return withdrawable_amount=0 even with settled cash, so fall
+    # back to account['portfolio_cash'] (settled free cash, matches the app's "Buying power").
+    cash = float(profile.get('withdrawable_amount') or 0)
+    if cash <= 0:
+        cash = float(account.get('portfolio_cash') or 0)
 
     # Holdings
     positions = r.account.get_open_stock_positions()
