@@ -31,3 +31,6 @@ gesh_financial_learning_path.html
 .scratch/
 *.bak-*
 *.bak
+
+# Retired/experimental code, kept on disk but out of git (reversible)
+_archive/
