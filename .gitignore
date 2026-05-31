@@ -24,3 +24,10 @@ gesh_analysis_data.json
 latest_analysis.json
 last_analysis_snapshot.json
 last_action_plan.json
+
+# Generated report artifacts + scratch/backups (triage 2026-05-30)
+engine_results.json
+gesh_financial_learning_path.html
+.scratch/
+*.bak-*
+*.bak
