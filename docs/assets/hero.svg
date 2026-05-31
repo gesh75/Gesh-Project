@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="heroTitle heroDesc" fill="none">
+  <title id="heroTitle">GESH Financial — architecture</title>
+  <desc id="heroDesc">Animated trading-terminal banner: an emerald price line sweeps across a slate grid, firing gold consensus-node signal pulses, breathing violet FFT cycle waves beneath, and passing through an eight-bar risk gate before producing a simulated paper order.</desc>
+
+  <defs>
+    <linearGradient id="bgFill" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0" stop-color="#0B0F14"/>
+      <stop offset="0.55" stop-color="#0E141C"/>
+      <stop offset="1" stop-color="#121821"/>
+    </linearGradient>
+    <radialGradient id="glowFill" cx="0.5" cy="0.35" r="0.75">
+      <stop offset="0" stop-color="#10B981" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#8B5CF6" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#0B0F14" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="titleFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#34D399"/>
+      <stop offset="0.5" stop-color="#F5B301"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <linearGradient id="priceFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#10B981" stop-opacity="0.2"/>
+      <stop offset="0.5" stop-color="#10B981"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#10B981" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#10B981" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softWide" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <style>
+      @keyframes pulse   { 0%,100%{opacity:.45} 50%{opacity:1} }
+      @keyframes breathe { 0%,100%{opacity:.25; transform:translateY(0)} 50%{opacity:.6; transform:translateY(-4px)} }
+      @keyframes ripple  { 0%{r:5; opacity:.9} 100%{r:26; opacity:0} }
+      @keyframes drawline{ to { stroke-dashoffset:0 } }
+      @keyframes flicker { 0%,92%,100%{opacity:.85} 94%{opacity:.25} 96%{opacity:1} }
+      @keyframes gateGreen { 0%,46%,100%{opacity:.35} 12%,30%{opacity:1} }
+      @keyframes gateRed   { 0%,70%,100%{opacity:.18} 84%{opacity:.9} }
+
+      .node      { transform-box: fill-box; transform-origin: center; }
+      .pulse     { animation: pulse 2.8s ease-in-out infinite; }
+      .wave      { transform-box: fill-box; transform-origin: center; animation: breathe 6s ease-in-out infinite; }
+      .wave2     { animation-delay: -3s; animation-duration: 7.5s; }
+      .ripple    { animation: ripple 2.6s ease-out infinite; }
+      .r2{animation-delay:.5s} .r3{animation-delay:1s} .r4{animation-delay:1.5s} .r5{animation-delay:2s}
+      .priceDraw { stroke-dasharray: 1300; stroke-dashoffset: 1300; animation: drawline 3.4s ease-out .2s forwards; }
+      .underline { stroke-dasharray: 360; stroke-dashoffset: 360; animation: drawline 1.5s ease-out .5s forwards; }
+      .ticker    { animation: flicker 5s linear infinite; }
+      .gbar      { transform-box: fill-box; transform-origin: center; }
+      .g1{animation:gateGreen 4s ease-in-out infinite;animation-delay:0s}
+      .g2{animation:gateGreen 4s ease-in-out infinite;animation-delay:.18s}
+      .g3{animation:gateGreen 4s ease-in-out infinite;animation-delay:.36s}
+      .g4{animation:gateGreen 4s ease-in-out infinite;animation-delay:.54s}
+      .g5{animation:gateRed   4s ease-in-out infinite;animation-delay:.72s}
+      .g6{animation:gateGreen 4s ease-in-out infinite;animation-delay:.90s}
+      .g7{animation:gateGreen 4s ease-in-out infinite;animation-delay:1.08s}
+      .g8{animation:gateGreen 4s ease-in-out infinite;animation-delay:1.26s}
+
+      @media (prefers-reduced-motion: reduce) {
+        * { animation: none !important; }
+        .priceDraw, .underline { stroke-dashoffset: 0 !important; }
+        .wave { opacity:.45 !important; }
+      }
+    </style>
+  </defs>
+
+  <!-- canvas -->
+  <rect width="1200" height="360" fill="url(#bgFill)"/>
+  <rect width="1200" height="360" fill="url(#glowFill)"/>
+
+  <!-- grid -->
+  <g stroke="#1F2A37" stroke-width="1" opacity="0.55">
+    <path d="M0 60 H1200 M0 120 H1200 M0 180 H1200 M0 240 H1200 M0 300 H1200"/>
+    <path d="M120 0 V360 M240 0 V360 M360 0 V360 M480 0 V360 M600 0 V360 M720 0 V360 M840 0 V360 M960 0 V360 M1080 0 V360"/>
+  </g>
+
+  <!-- ===== FFT cycle waves (violet, breathing) ===== -->
+  <g class="wave" opacity="0.4">
+    <path d="M40 252 C 130 210, 220 294, 310 252 C 400 210, 490 294, 580 252 C 670 210, 760 294, 850 252 C 940 210, 1030 294, 1120 252"
+          stroke="#8B5CF6" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
+  </g>
+  <g class="wave wave2" opacity="0.32">
+    <path d="M40 268 C 160 236, 280 300, 400 268 C 520 236, 640 300, 760 268 C 880 236, 1000 300, 1120 268"
+          stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 6"/>
+  </g>
+
+  <!-- ===== price area + emerald sweep line ===== -->
+  <path d="M40 210 L150 168 L255 196 L355 138 L455 162 L560 108 L660 134 L735 96 L735 318 L40 318 Z"
+        fill="url(#areaFill)" opacity="0.9"/>
+  <path id="priceLine"
+        d="M40 210 L150 168 L255 196 L355 138 L455 162 L560 108 L660 134 L735 96"
+        stroke="url(#priceFill)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
+        class="priceDraw" filter="url(#soft)"/>
+
+  <!-- traveling tick that rides the price line -->
+  <circle r="5" fill="#34D399" filter="url(#softWide)">
+    <animateMotion dur="3.4s" begin="0.2s" repeatCount="indefinite" rotate="auto">
+      <mpath href="#priceLine"/>
+    </animateMotion>
+  </circle>
+
+  <!-- ===== 10-node consensus pulses fired along the line ===== -->
+  <g fill="#F5B301">
+    <circle cx="150" cy="168" r="3.5" class="ripple" fill="none" stroke="#F5B301" stroke-width="2"/>
+    <circle cx="255" cy="196" r="3.5" class="ripple r2" fill="none" stroke="#F5B301" stroke-width="2"/>
+    <circle cx="355" cy="138" r="3.5" class="ripple r3" fill="none" stroke="#FBBF24" stroke-width="2"/>
+    <circle cx="560" cy="108" r="3.5" class="ripple r4" fill="none" stroke="#F5B301" stroke-width="2"/>
+    <circle cx="660" cy="134" r="3.5" class="ripple r5" fill="none" stroke="#FBBF24" stroke-width="2"/>
+    <circle cx="150" cy="168" r="3" filter="url(#soft)"/>
+    <circle cx="255" cy="196" r="3" filter="url(#soft)"/>
+    <circle cx="355" cy="138" r="3" filter="url(#soft)"/>
+    <circle cx="560" cy="108" r="3" filter="url(#soft)"/>
+    <circle cx="660" cy="134" r="3" filter="url(#soft)"/>
+  </g>
+
+  <!-- ===== 8-bar risk gate ===== -->
+  <g transform="translate(770 70)">
+    <text x="32" y="-12" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#64748B" letter-spacing="2">8-GATE</text>
+    <rect class="gbar g1" x="0"  y="0" width="6" height="200" rx="3" fill="#10B981"/>
+    <rect class="gbar g2" x="9"  y="0" width="6" height="200" rx="3" fill="#10B981"/>
+    <rect class="gbar g3" x="18" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+    <rect class="gbar g4" x="27" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+    <rect class="gbar g5" x="36" y="0" width="6" height="200" rx="3" fill="#EF4444"/>
+    <rect class="gbar g6" x="45" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+    <rect class="gbar g7" x="54" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+    <rect class="gbar g8" x="63" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+  </g>
+
+  <!-- packet flowing from gate into the SIMULATED order node -->
+  <path id="orderPath" d="M845 170 C 900 170, 940 200, 985 222" stroke="#334155" stroke-width="1.5" stroke-dasharray="3 5"/>
+  <circle r="4" fill="#10B981" filter="url(#soft)">
+    <animateMotion dur="2.2s" begin="1.4s" repeatCount="indefinite"><mpath href="#orderPath"/></animateMotion>
+  </circle>
+
+  <!-- ===== component nodes (right column) ===== -->
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" font-weight="600">
+    <g class="node pulse" filter="url(#soft)">
+      <rect x="965" y="96" width="150" height="36" rx="9" fill="#F5B301" opacity="0.92"/>
+      <text x="1040" y="119" text-anchor="middle" fill="#1A1206">Claude · deep-analysis</text>
+    </g>
+    <g class="node pulse" style="animation-delay:.7s" filter="url(#soft)">
+      <rect x="965" y="158" width="150" height="36" rx="9" fill="#8B5CF6" opacity="0.92"/>
+      <text x="1040" y="181" text-anchor="middle" fill="#fff">10-node consensus</text>
+    </g>
+    <g class="node pulse" style="animation-delay:1.4s" filter="url(#soft)">
+      <rect x="965" y="220" width="150" height="36" rx="9" fill="#10B981" opacity="0.95"/>
+      <text x="1040" y="243" text-anchor="middle" fill="#04140D">order · SIMULATED</text>
+    </g>
+  </g>
+
+  <!-- ===== title block ===== -->
+  <text x="44" y="62" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="48" font-weight="800" fill="url(#titleFill)" letter-spacing="-0.5">GESH Financial</text>
+  <path class="underline" d="M46 78 H372" stroke="#10B981" stroke-width="3" stroke-linecap="round"/>
+  <text x="46" y="104" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="16.5" fill="#94A3B8">Live Robinhood portfolio → quant engines → AI consensus → gated paper trades</text>
+
+  <!-- tech-stack chips -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#CBD5E1">
+    <g class="ticker">
+      <rect x="46" y="324" width="92" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+      <text x="92" y="339" text-anchor="middle">FastAPI · 9000</text>
+    </g>
+    <g class="ticker" style="animation-delay:.8s">
+      <rect x="146" y="324" width="62" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+      <text x="177" y="339" text-anchor="middle">Claude</text>
+    </g>
+    <g class="ticker" style="animation-delay:1.6s">
+      <rect x="216" y="324" width="78" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+      <text x="255" y="339" text-anchor="middle">yfinance</text>
+    </g>
+    <g class="ticker" style="animation-delay:2.4s">
+      <rect x="302" y="324" width="58" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+      <text x="331" y="339" text-anchor="middle">FRED</text>
+    </g>
+    <g class="ticker" style="animation-delay:3.2s">
+      <rect x="368" y="324" width="70" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+      <text x="403" y="339" text-anchor="middle">SQLite</text>
+    </g>
+  </g>
+</svg>

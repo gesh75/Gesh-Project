@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/hero.svg" alt="GESH Financial — architecture" width="100%">
+</p>
+
 # GESH Financial Observability Platform
 
 > AI-powered financial analysis and trading intelligence for Robinhood portfolios.
@@ -8,6 +12,53 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 GESH combines live Robinhood portfolio data with Claude AI analysis engines to produce deep trading insights, EWMA/GARCH volatility models, position sizing, risk management, tax-loss harvesting, alpha benchmarking, crypto-equity correlation analysis, AI transparency/explainability, DeFi yield optimization, and a full signal → gate → execution pipeline.
+
+---
+
+## 🏛️ Architecture
+
+GESH ingests a live Robinhood portfolio, runs it through quantitative engines and a 10-node consensus voting engine, routes structured prompts to Claude/Gemini/Ollama, then passes every signal through an 8-gate risk gate before a paper-mode execution layer simulates orders. The diagram below is the system-context view — **[see `docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** for the full set of container, sequence, data-flow, consensus, autopilot, and persistence diagrams.
+
+```mermaid
+flowchart TB
+    operator(["👤 Operator / Trader"]):::actor
+    gesh{{"🏦 GESH Financial<br/>FastAPI · port 9000"}}:::core
+
+    subgraph MKT["Market & Brokerage"]
+        rh["Robinhood"]:::ext
+        yf["yfinance / Yahoo"]:::ext
+        fred["FRED macro"]:::ext
+    end
+
+    subgraph AI["AI Models"]
+        claude["Claude · Sonnet/Haiku"]:::ai
+        gemini["Gemini 2.5"]:::ai
+        ollama["Ollama llama3.2"]:::ai
+    end
+
+    subgraph INTEL["Intelligence & Alerts"]
+        news["Finnhub · Polymarket · RSS"]:::ext
+        edgar["SEC EDGAR"]:::ext
+        tg["Telegram Bot"]:::alert
+    end
+
+    operator -->|"dashboard · skills"| gesh
+    gesh -->|"holdings · equity"| rh
+    gesh -->|"history · fundamentals"| yf
+    gesh -->|"rates · curve · CPI"| fred
+    gesh -->|"forced-tool JSON"| claude
+    gesh -->|"second opinion"| gemini
+    gesh -->|"offline fallback"| ollama
+    gesh -->|"sentiment · macro"| news
+    gesh -->|"10-K / 10-Q / 8-K"| edgar
+    gesh -->|"fills · EOD P&L"| tg
+
+    classDef actor fill:#0f766e,stroke:#5eead4,color:#fff
+    classDef core  fill:#b45309,stroke:#fbbf24,color:#fff
+    classDef ai    fill:#7c3aed,stroke:#c4b5fd,color:#fff
+    classDef ext   fill:#475569,stroke:#94a3b8,color:#fff
+    classDef alert fill:#be123c,stroke:#fda4af,color:#fff
+```
 
 ---
 
