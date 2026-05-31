@@ -28,37 +28,37 @@ The platform sits between a single **operator/trader** and a fan of external mar
 
 ```mermaid
 flowchart TB
-    operator(["👤 Operator / Trader"]):::actor
-    gesh{{"🏦 GESH Financial<br/>FastAPI · port 9000"}}:::core
+    operator(["Operator or Trader"]):::actor
+    gesh{{"GESH Financial - FastAPI port 9000"}}:::core
 
-    subgraph MKT["Market & Brokerage"]
-        rh["Robinhood<br/>robin_stocks"]:::ext
-        yf["yfinance / Yahoo"]:::ext
+    subgraph MKT["Market and Brokerage"]
+        rh["Robinhood - robin_stocks"]:::ext
+        yf["yfinance or Yahoo"]:::ext
         fred["FRED macro CSV"]:::ext
     end
 
     subgraph AI["AI Models"]
-        claude["Anthropic Claude<br/>Sonnet · Haiku"]:::ai
+        claude["Anthropic Claude - Sonnet and Haiku"]:::ai
         gemini["Google Gemini 2.5"]:::ai
         ollama["Ollama llama3.2"]:::ai
     end
 
     subgraph INTEL["Intelligence Feeds"]
-        news["Finnhub · Polymarket<br/>Yahoo RSS"]:::ext
+        news["Finnhub, Polymarket, Yahoo RSS"]:::ext
         edgar["SEC EDGAR"]:::ext
         tg["Telegram Bot"]:::alert
     end
 
-    operator -->|"dashboard · skills"| gesh
-    gesh -->|"holdings · equity · quotes"| rh
-    gesh -->|"history · fundamentals"| yf
-    gesh -->|"rates · yield curve · CPI"| fred
+    operator -->|"dashboard, skills"| gesh
+    gesh -->|"holdings, equity, quotes"| rh
+    gesh -->|"history, fundamentals"| yf
+    gesh -->|"rates, yield curve, CPI"| fred
     gesh -->|"forced-tool JSON"| claude
     gesh -->|"second opinion"| gemini
     gesh -->|"offline fallback"| ollama
-    gesh -->|"sentiment · macro"| news
-    gesh -->|"10-K / 10-Q / 8-K"| edgar
-    gesh -->|"fills · rejections · EOD P&L"| tg
+    gesh -->|"sentiment, macro"| news
+    gesh -->|"10-K, 10-Q, 8-K"| edgar
+    gesh -->|"fills, rejections, EOD PnL"| tg
 
     classDef actor  fill:#0f766e,stroke:#5eead4,color:#fff
     classDef core   fill:#b45309,stroke:#fbbf24,color:#fff
@@ -76,45 +76,45 @@ Inside the single `server.py` process, work is layered: **ingestion** feeds **qu
 ```mermaid
 flowchart TB
     subgraph EDGE["Edge"]
-        api["server.py<br/>~60 /api/* routes · auth · caches"]:::core
-        dash["templates/dashboard.html<br/>Chart.js · 8 tabs"]:::core
-        cli["main.py · CLI"]:::core
+        api["server.py - 60 api routes, auth, caches"]:::core
+        dash["dashboard.html - Chart.js, 8 tabs"]:::core
+        cli["main.py CLI"]:::core
     end
 
     subgraph INGEST["Ingestion"]
-        fetch["auth · data_fetcher<br/>fetch_live_data → cache.json"]:::svc
+        fetch["auth and data_fetcher to cache.json"]:::svc
     end
 
     subgraph QUANT["Quant Engines"]
-        regime["regime · monte_carlo<br/>kelly · fft_cycles · volatility"]:::data
+        regime["regime, monte_carlo, kelly, fft, volatility"]:::data
     end
 
     subgraph AGENTS["Intelligence Agents"]
-        intel["news · sec · fundamental<br/>gemini · ollama"]:::ai
+        intel["news, sec, fundamental, gemini, ollama"]:::ai
     end
 
-    subgraph BRAIN["Consensus & AI Routing"]
-        cons["consensus.py · 10 nodes"]:::data
-        ai["ai_analyzer.py<br/>Claude routing + schemas"]:::ai
+    subgraph BRAIN["Consensus and AI Routing"]
+        cons["consensus.py - 10 nodes"]:::data
+        ai["ai_analyzer.py - Claude routing and schemas"]:::ai
     end
 
-    subgraph EXEC["trading/ Execution"]
-        gate["contract · risk_gate<br/>execution · autopilot · alerts"]:::danger
+    subgraph EXEC["trading Execution"]
+        gate["contract, risk_gate, execution, autopilot, alerts"]:::danger
     end
 
-    store[("SQLite<br/>gesh_financial.db · gesh.db")]:::store
+    store[("SQLite - gesh_financial.db and gesh.db")]:::store
 
     dash --> api
     cli --> fetch
-    api --> fetch --> QUANT
-    fetch --> AGENTS
-    QUANT --> cons
-    AGENTS --> cons
+    api --> fetch --> regime
+    fetch --> intel
+    regime --> cons
+    intel --> cons
     cons --> ai
     ai --> gate
     cons --> gate
-    QUANT --> store
-    AGENTS --> store
+    regime --> store
+    intel --> store
     gate --> store
 
     classDef core   fill:#b45309,stroke:#fbbf24,color:#fff
@@ -139,25 +139,25 @@ sequenceDiagram
     participant DF as data_fetcher
     participant RG as regime.py
     participant AI as ai_analyzer
-    participant CL as Claude (Sonnet)
+    participant CL as Claude Sonnet
     participant CN as consensus.py
     participant DB as gesh_financial.db
 
     Op->>API: POST /api/deep-analysis
-    API->>DF: build_data_payload() / live cache
-    DF-->>API: holdings · equity · quotes
-    API->>RG: detect_regimes() + FRED macro
+    API->>DF: build_data_payload or live cache
+    DF-->>API: holdings, equity, quotes
+    API->>RG: detect_regimes plus FRED macro
     RG-->>API: regime_summary string
-    API->>AI: deep_analyze_portfolio(pruned + regime)
+    API->>AI: deep_analyze_portfolio pruned plus regime
     AI->>CL: forced return_portfolio_analysis tool
     CL-->>AI: structured per-holding JSON
-    AI-->>API: scores · fair value · risks
+    AI-->>API: scores, fair value, risks
     par parallel engines
-        API->>CN: run_consensus_portfolio()
-        CN-->>API: verdict + confidence per symbol
+        API->>CN: run_consensus_portfolio
+        CN-->>API: verdict plus confidence per symbol
     end
-    API->>DB: log_analysis() + warm engine cache
-    API-->>Op: sanitized JSON → Chart.js dashboard
+    API->>DB: log_analysis plus warm engine cache
+    API-->>Op: sanitized JSON to Chart.js dashboard
 ```
 
 ---
@@ -177,18 +177,18 @@ sequenceDiagram
     participant ST as trading/state.py
     participant TG as Telegram
 
-    SRC->>CT: from_consensus(verdict)
+    SRC->>CT: from_consensus verdict
     CT->>API: typed TradeIntent
-    API->>RG: evaluate(intent)
-    Note over RG: 8 gates — kill-switch · hours · confidence<br/>cap · rate · cash · daily-loss · data-fresh
+    API->>RG: evaluate intent
+    Note over RG: 8 gates - kill-switch, hours, confidence, cap, rate, cash, daily-loss, data-fresh
     RG->>ST: write risk_decisions row
     alt all gates pass
         RG-->>API: APPROVED
-        API->>EX: place(intent)
-        EX->>ST: orders row · status=SIMULATED
+        API->>EX: place intent
+        EX->>ST: orders row, status=SIMULATED
         EX->>TG: fill alert
     else any gate fails
-        RG-->>API: REJECTED + reason
+        RG-->>API: REJECTED plus reason
         API->>TG: rejection alert
     end
 ```
@@ -201,17 +201,17 @@ Live brokerage and market data converge with external intelligence, feed the qua
 
 ```mermaid
 flowchart LR
-    rh["Robinhood"]:::ext --> cache["gesh_live_cache.json<br/>atomic snapshot"]:::svc
-    yf["yfinance .info<br/>15-min cache"]:::ext --> eng["quant engines<br/>regime · MC · kelly · FFT"]:::data
+    rh["Robinhood"]:::ext --> cache["gesh_live_cache.json - atomic snapshot"]:::svc
+    yf["yfinance .info - 15-min cache"]:::ext --> eng["quant engines - regime, MC, kelly, FFT"]:::data
     fred["FRED macro"]:::ext --> eng
     cache --> eng
-    news["news · SEC · fundamentals"]:::ai --> gdb[("gesh.db<br/>sentiment")]:::store
-    gdb --> cons["consensus<br/>10 nodes → verdict"]:::data
+    news["news, SEC, fundamentals"]:::ai --> gdb[("gesh.db - sentiment")]:::store
+    gdb --> cons["consensus - 10 nodes to verdict"]:::data
     eng --> cons
-    cons --> claude["Claude forced-JSON<br/>deep analysis"]:::ai
-    claude --> persist[("gesh_financial.db<br/>analysis · orders")]:::store
+    cons --> claude["Claude forced-JSON - deep analysis"]:::ai
+    claude --> persist[("gesh_financial.db - analysis, orders")]:::store
     cons --> persist
-    persist --> ui["Chart.js dashboard<br/>+ /api/*/cached"]:::core
+    persist --> ui["Chart.js dashboard plus cached api"]:::core
     persist --> cliout["CLI report"]:::core
 
     classDef ext   fill:#475569,stroke:#94a3b8,color:#fff
@@ -243,13 +243,15 @@ flowchart TB
         n9["Volume"]:::node
         n10["FFT Cycle"]:::node
     end
-    vote["score = Σ votes / voting-nodes"]:::data
-    thr{"|score| threshold"}:::gate
-    strong["STRONG BUY / SELL<br/>≥ 0.55"]:::buy
-    weak["BUY / SELL<br/>≥ 0.25"]:::buy
-    hold["HOLD / NEUTRAL"]:::neutral
+    vote["score = sum of votes over voting-nodes"]:::data
+    thr{"abs score threshold"}:::gate
+    strong["STRONG BUY or SELL - over 0.55"]:::buy
+    weak["BUY or SELL - over 0.25"]:::buy
+    hold["HOLD or NEUTRAL"]:::neutral
 
-    sym --> NODES --> vote --> thr
+    sym --> n1
+    n1 --> vote
+    vote --> thr
     thr -->|"high"| strong
     thr -->|"mid"| weak
     thr -->|"low"| hold
@@ -273,11 +275,11 @@ stateDiagram-v2
     [*] --> Idle
     Idle --> PreMarketScan: 08:30 ET
     PreMarketScan --> OpenWindow: candidates stored
-    OpenWindow --> Rebalance: 09:35 gate + execute
-    Rebalance --> CloseRiskCheck: 12:30 drift > 5%
-    CloseRiskCheck --> Idle: 15:55 EOD sweep + alert
-    OpenWindow --> Halted: kill-switch / daily-loss
-    Rebalance --> Halted: kill-switch / daily-loss
+    OpenWindow --> Rebalance: 09:35 gate and execute
+    Rebalance --> CloseRiskCheck: 12:30 drift over 5 pct
+    CloseRiskCheck --> Idle: 15:55 EOD sweep and alert
+    OpenWindow --> Halted: kill-switch or daily-loss
+    Rebalance --> Halted: kill-switch or daily-loss
     Halted --> Idle: next session reset
     Idle --> [*]: shutdown
 ```

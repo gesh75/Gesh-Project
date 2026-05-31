@@ -21,37 +21,37 @@ GESH ingests a live Robinhood portfolio, runs it through quantitative engines an
 
 ```mermaid
 flowchart TB
-    operator(["👤 Operator / Trader"]):::actor
-    gesh{{"🏦 GESH Financial<br/>FastAPI · port 9000"}}:::core
+    operator(["Operator or Trader"]):::actor
+    gesh{{"GESH Financial - FastAPI port 9000"}}:::core
 
-    subgraph MKT["Market & Brokerage"]
+    subgraph MKT["Market and Brokerage"]
         rh["Robinhood"]:::ext
-        yf["yfinance / Yahoo"]:::ext
+        yf["yfinance or Yahoo"]:::ext
         fred["FRED macro"]:::ext
     end
 
     subgraph AI["AI Models"]
-        claude["Claude · Sonnet/Haiku"]:::ai
+        claude["Claude - Sonnet and Haiku"]:::ai
         gemini["Gemini 2.5"]:::ai
         ollama["Ollama llama3.2"]:::ai
     end
 
-    subgraph INTEL["Intelligence & Alerts"]
-        news["Finnhub · Polymarket · RSS"]:::ext
+    subgraph INTEL["Intelligence and Alerts"]
+        news["Finnhub, Polymarket, RSS"]:::ext
         edgar["SEC EDGAR"]:::ext
         tg["Telegram Bot"]:::alert
     end
 
-    operator -->|"dashboard · skills"| gesh
-    gesh -->|"holdings · equity"| rh
-    gesh -->|"history · fundamentals"| yf
-    gesh -->|"rates · curve · CPI"| fred
+    operator -->|"dashboard, skills"| gesh
+    gesh -->|"holdings, equity"| rh
+    gesh -->|"history, fundamentals"| yf
+    gesh -->|"rates, curve, CPI"| fred
     gesh -->|"forced-tool JSON"| claude
     gesh -->|"second opinion"| gemini
     gesh -->|"offline fallback"| ollama
-    gesh -->|"sentiment · macro"| news
-    gesh -->|"10-K / 10-Q / 8-K"| edgar
-    gesh -->|"fills · EOD P&L"| tg
+    gesh -->|"sentiment, macro"| news
+    gesh -->|"10-K, 10-Q, 8-K"| edgar
+    gesh -->|"fills, EOD PnL"| tg
 
     classDef actor fill:#0f766e,stroke:#5eead4,color:#fff
     classDef core  fill:#b45309,stroke:#fbbf24,color:#fff
