@@ -34,3 +34,6 @@ gesh_financial_learning_path.html
 
 # Retired/experimental code, kept on disk but out of git (reversible)
 _archive/
+
+# career-ops is an independent repo (own remote) — not tracked inside gesh-project
+career-ops/
