@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GESH Financial — AI Trading Intelligence for Robinhood Portfolios</title>
+<meta name="description" content="GESH Financial is a single-node Python platform that turns a live Robinhood portfolio into AI-driven trading intelligence — a 10-node consensus engine, multi-model AI routing, 8-gate risk gate, and an auditable paper-trading pipeline served by a FastAPI dashboard.">
+<style>
+  :root{
+    --bg-0:#0b1020; --bg-1:#131a2e; --bg-2:#0E141C;
+    --panel:rgba(255,255,255,.04); --panel-border:rgba(255,255,255,.09);
+    --ink:#e7edf6; --ink-dim:#9fb0c6; --ink-faint:#6c7e96;
+    --emerald:#10b981; --emerald-bright:#34d399;
+    --gold:#f59e0b; --gold-bright:#fbbf24;
+    --violet:#a78bfa; --violet-deep:#8b5cf6;
+    --danger:#f43f5e;
+    --grad: linear-gradient(100deg,#34d399 0%,#f5b301 50%,#a78bfa 100%);
+    --radius:16px;
+    --maxw:1180px;
+    --shadow:0 18px 50px -20px rgba(0,0,0,.7);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    line-height:1.65; font-size:16px;
+    background:
+      radial-gradient(1100px 620px at 78% -8%, rgba(16,185,129,.16), transparent 60%),
+      radial-gradient(900px 560px at 8% 8%, rgba(167,139,250,.14), transparent 60%),
+      radial-gradient(800px 500px at 50% 110%, rgba(245,158,11,.10), transparent 60%),
+      linear-gradient(165deg,var(--bg-0) 0%,var(--bg-1) 60%,#0c1326 100%);
+    background-attachment:fixed;
+    -webkit-font-smoothing:antialiased;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.4;
+    background-image:radial-gradient(rgba(255,255,255,.045) 1px, transparent 1px);
+    background-size:34px 34px; mask:radial-gradient(circle at 50% 30%, #000 0%, transparent 78%);
+  }
+  a{color:var(--emerald-bright); text-decoration:none}
+  a:hover{color:var(--gold-bright)}
+  h1,h2,h3{line-height:1.15; margin:0 0 .4em}
+  p{margin:0 0 1em}
+  ::selection{background:rgba(245,179,1,.3); color:#fff}
+
+  /* skip link */
+  .skip{position:absolute; left:-999px; top:0; z-index:200; background:var(--gold); color:#1a1206;
+    padding:.6rem 1rem; border-radius:0 0 10px 0; font-weight:700}
+  .skip:focus{left:0}
+
+  :focus-visible{outline:2px solid var(--gold-bright); outline-offset:3px; border-radius:6px}
+
+  /* progress + nav */
+  .progress{position:fixed; top:0; left:0; height:3px; width:0%; z-index:120;
+    background:var(--grad); box-shadow:0 0 14px rgba(245,179,1,.6)}
+  header.nav{position:sticky; top:0; z-index:100;
+    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    background:rgba(9,13,24,.62); border-bottom:1px solid var(--panel-border)}
+  .nav-inner{max-width:var(--maxw); margin:0 auto; display:flex; align-items:center; gap:1rem;
+    padding:.7rem 1.1rem}
+  .brand{display:flex; align-items:center; gap:.6rem; font-weight:800; letter-spacing:-.3px; font-size:1.05rem}
+  .brand .dot{width:11px; height:11px; border-radius:50%; background:var(--emerald);
+    box-shadow:0 0 0 4px rgba(16,185,129,.18); animation:beat 2.6s ease-in-out infinite}
+  .brand b{background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent}
+  nav.links{margin-left:auto; display:flex; gap:.2rem; flex-wrap:wrap}
+  nav.links a{position:relative; color:var(--ink-dim); font-size:.86rem; font-weight:600;
+    padding:.42rem .62rem; border-radius:9px; white-space:nowrap}
+  nav.links a::after{content:""; position:absolute; left:.62rem; right:.62rem; bottom:.18rem; height:2px;
+    background:var(--grad); border-radius:2px; transform:scaleX(0); transform-origin:left; transition:transform .25s ease}
+  nav.links a:hover{color:var(--ink)}
+  nav.links a.active{color:#fff}
+  nav.links a.active::after{transform:scaleX(1)}
+  .nav-cta{margin-left:.3rem; padding:.45rem .8rem!important; border:1px solid rgba(16,185,129,.4);
+    border-radius:10px; color:var(--emerald-bright)!important; font-size:.84rem}
+  .nav-cta:hover{background:rgba(16,185,129,.12)}
+  .menu-btn{display:none; margin-left:auto; background:var(--panel); border:1px solid var(--panel-border);
+    color:var(--ink); border-radius:10px; padding:.45rem .7rem; font-size:1.1rem; cursor:pointer}
+
+  main{position:relative; z-index:1}
+  section{max-width:var(--maxw); margin:0 auto; padding:5.2rem 1.1rem 1rem}
+  .eyebrow{display:inline-flex; align-items:center; gap:.5rem; font-size:.74rem; font-weight:700;
+    letter-spacing:.18em; text-transform:uppercase; color:var(--gold-bright);
+    border:1px solid rgba(245,158,11,.3); background:rgba(245,158,11,.07);
+    padding:.3rem .7rem; border-radius:999px; margin-bottom:1rem}
+  h2.title{font-size:clamp(1.7rem,3.4vw,2.5rem); font-weight:800; letter-spacing:-.5px}
+  h2.title .g{background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent}
+  .lead{color:var(--ink-dim); max-width:760px; font-size:1.05rem}
+
+  /* HERO */
+  .hero{max-width:var(--maxw); margin:0 auto; padding:3.4rem 1.1rem 1rem; position:relative}
+  .hero-art{position:relative; border-radius:22px; overflow:hidden; border:1px solid var(--panel-border);
+    box-shadow:var(--shadow); background:#0b0f14}
+  .hero-art svg{display:block; width:100%; height:auto}
+  .hero-art::after{content:""; position:absolute; inset:0; pointer-events:none;
+    background:linear-gradient(180deg,transparent 55%, rgba(11,16,32,.55) 100%)}
+  .hero-head{padding:2.2rem .2rem 0}
+  .hero h1{font-size:clamp(2.3rem,6vw,4.1rem); font-weight:900; letter-spacing:-1.5px; margin-bottom:.2em}
+  .hero h1 .g{background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent;
+    background-size:200% auto; animation:shimmer 7s linear infinite}
+  .hero .tagline{font-size:clamp(1.05rem,2.4vw,1.4rem); color:var(--ink-dim); max-width:720px}
+  .chips{display:flex; flex-wrap:wrap; gap:.7rem; margin:1.6rem 0 1.4rem}
+  .chip{display:flex; flex-direction:column; gap:.1rem; min-width:108px; padding:.7rem .95rem;
+    background:var(--panel); border:1px solid var(--panel-border); border-radius:14px;
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); box-shadow:var(--shadow)}
+  .chip .num{font-size:1.5rem; font-weight:800; font-variant-numeric:tabular-nums;
+    background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent}
+  .chip .lbl{font-size:.7rem; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); font-weight:600}
+  .cta-row{display:flex; flex-wrap:wrap; gap:.8rem; margin-top:.4rem}
+  .btn{display:inline-flex; align-items:center; gap:.5rem; font-weight:700; font-size:.95rem;
+    padding:.75rem 1.25rem; border-radius:12px; cursor:pointer; border:1px solid transparent; transition:transform .15s ease, box-shadow .25s ease}
+  .btn:hover{transform:translateY(-2px)}
+  .btn-primary{background:var(--grad); color:#0c1326; box-shadow:0 12px 30px -10px rgba(245,179,1,.55)}
+  .btn-ghost{background:var(--panel); border-color:var(--panel-border); color:var(--ink)}
+  .btn-ghost:hover{border-color:rgba(16,185,129,.5); color:var(--emerald-bright)}
+
+  /* glass cards */
+  .grid{display:grid; gap:1.1rem}
+  .feat-grid{grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); margin-top:2rem}
+  .card{position:relative; background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:var(--radius); padding:1.4rem; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+    box-shadow:var(--shadow); transition:transform .25s ease, border-color .25s ease, box-shadow .25s ease}
+  .card:hover{transform:translateY(-4px); border-color:rgba(16,185,129,.4);
+    box-shadow:0 24px 60px -22px rgba(16,185,129,.4)}
+  .card .ico{font-size:1.7rem; display:inline-grid; place-items:center; width:48px; height:48px; border-radius:13px;
+    background:rgba(16,185,129,.1); border:1px solid rgba(16,185,129,.22); margin-bottom:.85rem}
+  .card h3{font-size:1.12rem; font-weight:700}
+  .card p{color:var(--ink-dim); font-size:.92rem; margin:0}
+  .card::before{content:""; position:absolute; inset:0; border-radius:var(--radius); padding:1px;
+    background:linear-gradient(140deg, rgba(52,211,153,.4), transparent 40%, transparent 60%, rgba(167,139,250,.34));
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask-composite:exclude; opacity:0; transition:opacity .3s ease}
+  .card:hover::before{opacity:1}
+
+  /* overview stat strip */
+  .ov-wrap{display:grid; grid-template-columns:1.4fr 1fr; gap:1.4rem; align-items:start; margin-top:1.6rem}
+  .ov-points{list-style:none; padding:0; margin:1.2rem 0 0; display:grid; gap:.7rem}
+  .ov-points li{display:flex; gap:.7rem; align-items:flex-start; color:var(--ink-dim); font-size:.95rem}
+  .ov-points .k{flex:0 0 auto; width:9px; height:9px; margin-top:.5rem; border-radius:50%; background:var(--gold);
+    box-shadow:0 0 0 4px rgba(245,158,11,.16)}
+
+  /* diagrams */
+  .diagram-block{margin-top:1.6rem}
+  .diagram-head{display:flex; align-items:baseline; gap:.7rem; flex-wrap:wrap; margin-bottom:.3rem}
+  .diagram-head h3{font-size:1.18rem; font-weight:700; margin:0}
+  .diagram-head .tag{font-size:.72rem; color:var(--violet); border:1px solid rgba(167,139,250,.3);
+    padding:.12rem .5rem; border-radius:999px; background:rgba(167,139,250,.08)}
+  .diagram-desc{color:var(--ink-dim); font-size:.92rem; max-width:820px; margin:0 0 .9rem}
+  .mermaid-shell{background:rgba(8,12,20,.55); border:1px solid var(--panel-border); border-radius:var(--radius);
+    padding:1rem; overflow-x:auto; box-shadow:var(--shadow)}
+  pre.mermaid{margin:0; text-align:center; min-height:40px}
+  .mermaid svg{max-width:100%; height:auto}
+
+  /* tech chips */
+  .tech-grid{display:flex; flex-wrap:wrap; gap:.6rem; margin-top:1.6rem}
+  .tech{font-size:.86rem; font-weight:600; color:var(--ink); padding:.5rem .85rem; border-radius:11px;
+    background:var(--panel); border:1px solid var(--panel-border); transition:transform .15s ease, border-color .2s ease, color .2s ease}
+  .tech:hover{transform:translateY(-2px); border-color:rgba(245,158,11,.5); color:var(--gold-bright)}
+  .tech::before{content:"▹ "; color:var(--emerald)}
+
+  /* components table */
+  .comp-wrap{margin-top:1.7rem; overflow-x:auto; border:1px solid var(--panel-border); border-radius:var(--radius);
+    box-shadow:var(--shadow)}
+  table{width:100%; border-collapse:collapse; min-width:640px; font-size:.92rem}
+  thead th{text-align:left; background:rgba(255,255,255,.04); color:var(--gold-bright); font-size:.74rem;
+    text-transform:uppercase; letter-spacing:.08em; padding:.85rem 1rem; border-bottom:1px solid var(--panel-border)}
+  tbody td{padding:.85rem 1rem; border-bottom:1px solid rgba(255,255,255,.05); vertical-align:top; color:var(--ink-dim)}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:rgba(16,185,129,.05)}
+  td.mod{color:var(--emerald-bright); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.85rem; white-space:nowrap; font-weight:600}
+  td .tch{display:block; margin-top:.35rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.74rem; color:var(--ink-faint)}
+
+  /* quickstart code */
+  .qs-grid{display:grid; gap:1.1rem; margin-top:1.7rem; grid-template-columns:1fr 1fr}
+  .code-card{background:rgba(8,12,20,.6); border:1px solid var(--panel-border); border-radius:var(--radius);
+    overflow:hidden; box-shadow:var(--shadow)}
+  .code-head{display:flex; align-items:center; justify-content:space-between; padding:.6rem .9rem;
+    background:rgba(255,255,255,.03); border-bottom:1px solid var(--panel-border)}
+  .code-head .ttl{font-size:.78rem; font-weight:700; color:var(--ink-dim); letter-spacing:.04em; display:flex; gap:.45rem; align-items:center}
+  .code-head .ttl::before{content:""; width:10px; height:10px; border-radius:50%; background:var(--emerald); box-shadow:0 0 8px var(--emerald)}
+  .copy{background:var(--panel); border:1px solid var(--panel-border); color:var(--ink-dim); cursor:pointer;
+    font-size:.72rem; font-weight:600; padding:.3rem .6rem; border-radius:8px; transition:all .2s ease}
+  .copy:hover{color:var(--emerald-bright); border-color:rgba(16,185,129,.5)}
+  .copy.done{color:var(--emerald-bright); border-color:var(--emerald)}
+  pre.code{margin:0; padding:1rem; overflow-x:auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-size:.82rem; line-height:1.7; color:#cfe3d6}
+  pre.code .cm{color:var(--ink-faint)}
+  pre.code .pr{color:var(--gold-bright)}
+
+  /* footer */
+  footer{max-width:var(--maxw); margin:3rem auto 0; padding:2.2rem 1.1rem 3rem; border-top:1px solid var(--panel-border);
+    color:var(--ink-faint); font-size:.88rem}
+  .foot-grid{display:flex; flex-wrap:wrap; gap:1.4rem; justify-content:space-between; align-items:flex-start}
+  .foot-links{display:flex; flex-wrap:wrap; gap:1.1rem}
+  .foot-links a{color:var(--ink-dim); font-weight:600}
+  .foot-note{margin-top:1.4rem; font-size:.78rem; color:var(--ink-faint)}
+  .badge-disc{display:inline-block; margin-top:.8rem; font-size:.74rem; color:var(--gold-bright);
+    border:1px solid rgba(245,158,11,.28); background:rgba(245,158,11,.06); padding:.35rem .7rem; border-radius:10px}
+
+  /* back to top */
+  .top-btn{position:fixed; right:1.2rem; bottom:1.2rem; z-index:90; width:46px; height:46px; border-radius:50%;
+    background:var(--grad); color:#0c1326; border:none; cursor:pointer; font-size:1.25rem; font-weight:800;
+    box-shadow:0 12px 30px -8px rgba(245,179,1,.6); opacity:0; transform:translateY(14px) scale(.85);
+    transition:opacity .3s ease, transform .3s ease; display:grid; place-items:center}
+  .top-btn.show{opacity:1; transform:translateY(0) scale(1)}
+
+  /* reveal animation */
+  .reveal{opacity:0; transform:translateY(22px); transition:opacity .6s ease, transform .6s ease}
+  .reveal.in{opacity:1; transform:none}
+
+  @keyframes shimmer{to{background-position:200% center}}
+  @keyframes beat{0%,100%{box-shadow:0 0 0 4px rgba(16,185,129,.18)} 50%{box-shadow:0 0 0 9px rgba(16,185,129,.04)}}
+
+  @media (max-width:900px){
+    .ov-wrap{grid-template-columns:1fr}
+    .qs-grid{grid-template-columns:1fr}
+  }
+  @media (max-width:760px){
+    nav.links{display:none; position:absolute; top:100%; left:0; right:0; flex-direction:column; gap:0;
+      background:rgba(9,13,24,.97); border-bottom:1px solid var(--panel-border); padding:.6rem}
+    nav.links.open{display:flex}
+    nav.links a{padding:.7rem .8rem; border-radius:8px}
+    nav.links a::after{display:none}
+    .menu-btn{display:block}
+    section{padding-top:3.8rem}
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation:none!important; transition:none!important; scroll-behavior:auto!important}
+    .reveal{opacity:1; transform:none}
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#overview">Skip to content</a>
+<div class="progress" id="progress" aria-hidden="true"></div>
+
+<header class="nav">
+  <div class="nav-inner">
+    <div class="brand"><span class="dot" aria-hidden="true"></span><span>GESH&nbsp;<b>Financial</b></span></div>
+    <button class="menu-btn" id="menuBtn" aria-label="Toggle navigation" aria-expanded="false">☰</button>
+    <nav class="links" id="navLinks" aria-label="Section navigation">
+      <a href="#overview">Overview</a>
+      <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#dataflow">Data Flow</a>
+      <a href="#stack">Tech Stack</a>
+      <a href="#components">Components</a>
+      <a href="#quickstart">Quickstart</a>
+      <a class="nav-cta" href="https://github.com/gesh75/Gesh-Project" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-head">
+      <h1><span class="g">GESH Financial</span></h1>
+      <p class="tagline">AI-powered financial analysis and trading intelligence for Robinhood portfolios.</p>
+    </div>
+
+    <div class="chips" id="chips">
+      <div class="chip"><span class="num" data-count="10">10</span><span class="lbl">Consensus Nodes</span></div>
+      <div class="chip"><span class="num" data-count="8">8</span><span class="lbl">Risk Gates</span></div>
+      <div class="chip"><span class="num" data-count="60">60</span><span class="lbl">API Routes</span></div>
+      <div class="chip"><span class="num" data-count="8">8</span><span class="lbl">Dashboard Tabs</span></div>
+      <div class="chip"><span class="num" data-count="1000" data-suffix=" GBM">1000</span><span class="lbl">Monte Carlo Paths</span></div>
+      <div class="chip"><span class="num" data-count="9000">9000</span><span class="lbl">Server Port</span></div>
+    </div>
+
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/gesh75/Gesh-Project" target="_blank" rel="noopener">↗ View on GitHub</a>
+      <a class="btn btn-ghost" href="#quickstart">↓ Quickstart</a>
+    </div>
+
+    <div class="hero-art" style="margin-top:2.2rem">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="heroTitle heroDesc" fill="none">
+        <title id="heroTitle">GESH Financial — architecture</title>
+        <desc id="heroDesc">Animated trading-terminal banner: an emerald price line sweeps across a slate grid, firing gold consensus-node signal pulses, breathing violet FFT cycle waves beneath, and passing through an eight-bar risk gate before producing a simulated paper order.</desc>
+        <defs>
+          <linearGradient id="bgFill" x1="0" y1="0" x2="0.6" y2="1">
+            <stop offset="0" stop-color="#0B0F14"/>
+            <stop offset="0.55" stop-color="#0E141C"/>
+            <stop offset="1" stop-color="#121821"/>
+          </linearGradient>
+          <radialGradient id="glowFill" cx="0.5" cy="0.35" r="0.75">
+            <stop offset="0" stop-color="#10B981" stop-opacity="0.16"/>
+            <stop offset="0.55" stop-color="#8B5CF6" stop-opacity="0.06"/>
+            <stop offset="1" stop-color="#0B0F14" stop-opacity="0"/>
+          </radialGradient>
+          <linearGradient id="titleFill" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#34D399"/>
+            <stop offset="0.5" stop-color="#F5B301"/>
+            <stop offset="1" stop-color="#A78BFA"/>
+          </linearGradient>
+          <linearGradient id="priceFill" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#10B981" stop-opacity="0.2"/>
+            <stop offset="0.5" stop-color="#10B981"/>
+            <stop offset="1" stop-color="#34D399"/>
+          </linearGradient>
+          <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#10B981" stop-opacity="0.34"/>
+            <stop offset="1" stop-color="#10B981" stop-opacity="0"/>
+          </linearGradient>
+          <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="5" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="softWide" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="9" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <style>
+            @keyframes pulse   { 0%,100%{opacity:.45} 50%{opacity:1} }
+            @keyframes breathe { 0%,100%{opacity:.25; transform:translateY(0)} 50%{opacity:.6; transform:translateY(-4px)} }
+            @keyframes ripple  { 0%{r:5; opacity:.9} 100%{r:26; opacity:0} }
+            @keyframes drawline{ to { stroke-dashoffset:0 } }
+            @keyframes flicker { 0%,92%,100%{opacity:.85} 94%{opacity:.25} 96%{opacity:1} }
+            @keyframes gateGreen { 0%,46%,100%{opacity:.35} 12%,30%{opacity:1} }
+            @keyframes gateRed   { 0%,70%,100%{opacity:.18} 84%{opacity:.9} }
+            .node      { transform-box: fill-box; transform-origin: center; }
+            .pulse     { animation: pulse 2.8s ease-in-out infinite; }
+            .wave      { transform-box: fill-box; transform-origin: center; animation: breathe 6s ease-in-out infinite; }
+            .wave2     { animation-delay: -3s; animation-duration: 7.5s; }
+            .ripple    { animation: ripple 2.6s ease-out infinite; }
+            .r2{animation-delay:.5s} .r3{animation-delay:1s} .r4{animation-delay:1.5s} .r5{animation-delay:2s}
+            .priceDraw { stroke-dasharray: 1300; stroke-dashoffset: 1300; animation: drawline 3.4s ease-out .2s forwards; }
+            .underline { stroke-dasharray: 360; stroke-dashoffset: 360; animation: drawline 1.5s ease-out .5s forwards; }
+            .ticker    { animation: flicker 5s linear infinite; }
+            .gbar      { transform-box: fill-box; transform-origin: center; }
+            .g1{animation:gateGreen 4s ease-in-out infinite;animation-delay:0s}
+            .g2{animation:gateGreen 4s ease-in-out infinite;animation-delay:.18s}
+            .g3{animation:gateGreen 4s ease-in-out infinite;animation-delay:.36s}
+            .g4{animation:gateGreen 4s ease-in-out infinite;animation-delay:.54s}
+            .g5{animation:gateRed   4s ease-in-out infinite;animation-delay:.72s}
+            .g6{animation:gateGreen 4s ease-in-out infinite;animation-delay:.90s}
+            .g7{animation:gateGreen 4s ease-in-out infinite;animation-delay:1.08s}
+            .g8{animation:gateGreen 4s ease-in-out infinite;animation-delay:1.26s}
+            @media (prefers-reduced-motion: reduce) {
+              * { animation: none !important; }
+              .priceDraw, .underline { stroke-dashoffset: 0 !important; }
+              .wave { opacity:.45 !important; }
+            }
+          </style>
+        </defs>
+        <rect width="1200" height="360" fill="url(#bgFill)"/>
+        <rect width="1200" height="360" fill="url(#glowFill)"/>
+        <g stroke="#1F2A37" stroke-width="1" opacity="0.55">
+          <path d="M0 60 H1200 M0 120 H1200 M0 180 H1200 M0 240 H1200 M0 300 H1200"/>
+          <path d="M120 0 V360 M240 0 V360 M360 0 V360 M480 0 V360 M600 0 V360 M720 0 V360 M840 0 V360 M960 0 V360 M1080 0 V360"/>
+        </g>
+        <g class="wave" opacity="0.4">
+          <path d="M40 252 C 130 210, 220 294, 310 252 C 400 210, 490 294, 580 252 C 670 210, 760 294, 850 252 C 940 210, 1030 294, 1120 252"
+                stroke="#8B5CF6" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>
+        </g>
+        <g class="wave wave2" opacity="0.32">
+          <path d="M40 268 C 160 236, 280 300, 400 268 C 520 236, 640 300, 760 268 C 880 236, 1000 300, 1120 268"
+                stroke="#A78BFA" stroke-width="2" stroke-linecap="round" stroke-dasharray="2 6"/>
+        </g>
+        <path d="M40 210 L150 168 L255 196 L355 138 L455 162 L560 108 L660 134 L735 96 L735 318 L40 318 Z"
+              fill="url(#areaFill)" opacity="0.9"/>
+        <path id="priceLine"
+              d="M40 210 L150 168 L255 196 L355 138 L455 162 L560 108 L660 134 L735 96"
+              stroke="url(#priceFill)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"
+              class="priceDraw" filter="url(#soft)"/>
+        <circle r="5" fill="#34D399" filter="url(#softWide)">
+          <animateMotion dur="3.4s" begin="0.2s" repeatCount="indefinite" rotate="auto">
+            <mpath href="#priceLine"/>
+          </animateMotion>
+        </circle>
+        <g fill="#F5B301">
+          <circle cx="150" cy="168" r="3.5" class="ripple" fill="none" stroke="#F5B301" stroke-width="2"/>
+          <circle cx="255" cy="196" r="3.5" class="ripple r2" fill="none" stroke="#F5B301" stroke-width="2"/>
+          <circle cx="355" cy="138" r="3.5" class="ripple r3" fill="none" stroke="#FBBF24" stroke-width="2"/>
+          <circle cx="560" cy="108" r="3.5" class="ripple r4" fill="none" stroke="#F5B301" stroke-width="2"/>
+          <circle cx="660" cy="134" r="3.5" class="ripple r5" fill="none" stroke="#FBBF24" stroke-width="2"/>
+          <circle cx="150" cy="168" r="3" filter="url(#soft)"/>
+          <circle cx="255" cy="196" r="3" filter="url(#soft)"/>
+          <circle cx="355" cy="138" r="3" filter="url(#soft)"/>
+          <circle cx="560" cy="108" r="3" filter="url(#soft)"/>
+          <circle cx="660" cy="134" r="3" filter="url(#soft)"/>
+        </g>
+        <g transform="translate(770 70)">
+          <text x="32" y="-12" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#64748B" letter-spacing="2">8-GATE</text>
+          <rect class="gbar g1" x="0"  y="0" width="6" height="200" rx="3" fill="#10B981"/>
+          <rect class="gbar g2" x="9"  y="0" width="6" height="200" rx="3" fill="#10B981"/>
+          <rect class="gbar g3" x="18" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+          <rect class="gbar g4" x="27" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+          <rect class="gbar g5" x="36" y="0" width="6" height="200" rx="3" fill="#EF4444"/>
+          <rect class="gbar g6" x="45" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+          <rect class="gbar g7" x="54" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+          <rect class="gbar g8" x="63" y="0" width="6" height="200" rx="3" fill="#10B981"/>
+        </g>
+        <path id="orderPath" d="M845 170 C 900 170, 940 200, 985 222" stroke="#334155" stroke-width="1.5" stroke-dasharray="3 5"/>
+        <circle r="4" fill="#10B981" filter="url(#soft)">
+          <animateMotion dur="2.2s" begin="1.4s" repeatCount="indefinite"><mpath href="#orderPath"/></animateMotion>
+        </circle>
+        <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="12" font-weight="600">
+          <g class="node pulse" filter="url(#soft)">
+            <rect x="965" y="96" width="150" height="36" rx="9" fill="#F5B301" opacity="0.92"/>
+            <text x="1040" y="119" text-anchor="middle" fill="#1A1206">Claude · deep-analysis</text>
+          </g>
+          <g class="node pulse" style="animation-delay:.7s" filter="url(#soft)">
+            <rect x="965" y="158" width="150" height="36" rx="9" fill="#8B5CF6" opacity="0.92"/>
+            <text x="1040" y="181" text-anchor="middle" fill="#fff">10-node consensus</text>
+          </g>
+          <g class="node pulse" style="animation-delay:1.4s" filter="url(#soft)">
+            <rect x="965" y="220" width="150" height="36" rx="9" fill="#10B981" opacity="0.95"/>
+            <text x="1040" y="243" text-anchor="middle" fill="#04140D">order · SIMULATED</text>
+          </g>
+        </g>
+        <text x="44" y="62" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="48" font-weight="800" fill="url(#titleFill)" letter-spacing="-0.5">GESH Financial</text>
+        <path class="underline" d="M46 78 H372" stroke="#10B981" stroke-width="3" stroke-linecap="round"/>
+        <text x="46" y="104" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="16.5" fill="#94A3B8">Live Robinhood portfolio → quant engines → AI consensus → gated paper trades</text>
+        <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11.5" fill="#CBD5E1">
+          <g class="ticker">
+            <rect x="46" y="324" width="92" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+            <text x="92" y="339" text-anchor="middle">FastAPI · 9000</text>
+          </g>
+          <g class="ticker" style="animation-delay:.8s">
+            <rect x="146" y="324" width="62" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+            <text x="177" y="339" text-anchor="middle">Claude</text>
+          </g>
+          <g class="ticker" style="animation-delay:1.6s">
+            <rect x="216" y="324" width="78" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+            <text x="255" y="339" text-anchor="middle">yfinance</text>
+          </g>
+          <g class="ticker" style="animation-delay:2.4s">
+            <rect x="302" y="324" width="58" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+            <text x="331" y="339" text-anchor="middle">FRED</text>
+          </g>
+          <g class="ticker" style="animation-delay:3.2s">
+            <rect x="368" y="324" width="70" height="22" rx="11" fill="#121821" stroke="#1F2A37"/>
+            <text x="403" y="339" text-anchor="middle">SQLite</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <!-- OVERVIEW -->
+  <section id="overview" aria-labelledby="overview-h">
+    <span class="eyebrow reveal">⬡ Overview</span>
+    <h2 class="title reveal" id="overview-h">What is <span class="g">GESH Financial</span>?</h2>
+    <div class="ov-wrap">
+      <div>
+        <p class="lead reveal">GESH Financial is a single-node Python platform that turns a live Robinhood portfolio into AI-driven trading intelligence. A FastAPI server on port 9000 ingests holdings via <code>robin_stocks</code>, runs a stack of quantitative engines and a 10-node consensus voting engine, then routes structured prompts to Claude and Gemini for deep analysis and contrarian second opinions.</p>
+        <p class="lead reveal">Every signal is funneled through a typed <code>TradeIntent</code> contract and an 8-gate risk gate before a paper-mode execution layer simulates orders — with the whole signal → gate → execute chain audited to SQLite and scheduled by an APScheduler autopilot. It is built for an individual operator/trader who wants quantified, explainable portfolio insight without risking real capital.</p>
+      </div>
+      <div class="card reveal">
+        <span class="ico" aria-hidden="true">🎯</span>
+        <h3>Built for one operator</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span><b>Problem:</b> raw brokerage data isn't a trading decision — it needs quant signals, AI reasoning, and disciplined risk control.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span><b>Approach:</b> uncorrelated signals → consensus → multi-model AI → gated paper execution.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span><b>Promise:</b> explainable, quantified insight with zero real capital at risk.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features" aria-labelledby="features-h">
+    <span class="eyebrow reveal">✦ Capabilities</span>
+    <h2 class="title reveal" id="features-h">Key <span class="g">Features</span></h2>
+    <p class="lead reveal">Eight intelligence layers, each independently auditable, from raw signal nodes to gated execution.</p>
+    <div class="grid feat-grid" id="featGrid">
+      <article class="card reveal"><span class="ico" aria-hidden="true">🗳️</span><h3>10-Node Consensus Engine</h3><p>Ten intentionally uncorrelated signal nodes (momentum, trend, relative strength, fundamentals, analyst, news, Kelly, ECG, volume, FFT cycle) each vote BULLISH/NEUTRAL/BEARISH/ABSTAIN; the normalized score thresholds into STRONG BUY/SELL (≥0.55) or BUY/SELL (≥0.25).</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">🛡️</span><h3>8-Gate Risk Gate</h3><p>Every TradeIntent passes through ordered gates — kill-switch, market hours, confidence floor, position cap, order rate, cash floor, daily loss, data freshness — and each approve/reject verdict is persisted before returning.</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">🤖</span><h3>Multi-Model AI Routing</h3><p>Claude Sonnet for deep reasoning, Claude Haiku and Gemini 2.5 Flash for cheap batch sentiment, and Gemini 2.5 Pro for contrarian second opinions via <code>/api/gemini/second-opinion</code> — cost-aware routing by task complexity.</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">📈</span><h3>Quant Engine Stack</h3><p>Market regime detection (ADX/Bollinger/RSI) with a live FRED macro layer, Monte Carlo stress tests (1000 GBM paths), Kelly Criterion sizing, FFT cycle detection, and EWMA vs GARCH(1,1) volatility comparison.</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">⚙️</span><h3>Paper Execution + Autopilot</h3><p>PAPER_MODE-by-default execution layer with SHA idempotency and a Telegram-alerting APScheduler autopilot running scan/execute/rebalance/EOD jobs on an Eastern-Time cron — accumulating win-rate proof with no real money at risk.</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">🗄️</span><h3>Auditable Signal Pipeline</h3><p>The full signal → gate → execute chain is logged across SQLite tables (trade_intents, risk_decisions, orders) so every simulated fill traces back to the signal and gate verdict that produced it.</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">🔎</span><h3>Scanner Pipeline</h3><p>Cheap ETF sector pre-filter, then consolidation-zone detection (10+ candle tight ranges, min 2.0× R/R), then full engine analysis only on hot symbols — across eight timeframe modes from 5MIN to forex-daily.</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">💡</span><h3>Advanced Portfolio Analytics</h3><p>IRS wash-sale tax-loss harvesting, per-holding alpha vs SPY and 30+ sector ETFs (A–F grade), rolling 90-day BTC/ETH correlation, plain-English consensus explainability, and 3-tier DeFi yield comparison.</p></article>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="architecture" aria-labelledby="architecture-h">
+    <span class="eyebrow reveal">▣ Architecture</span>
+    <h2 class="title reveal" id="architecture-h">System <span class="g">Architecture</span></h2>
+    <p class="lead reveal">GESH runs as a single FastAPI process. It sits between one operator and a fan of external market, AI, and intelligence APIs — ingestion feeds the quant engines and intelligence agents, which feed the consensus and AI-routing layer, which hands verdicts to the trading execution subpackage, all backed by dual SQLite stores.</p>
+
+    <div class="diagram-block reveal">
+      <div class="diagram-head"><h3>System Context</h3><span class="tag">flowchart</span></div>
+      <p class="diagram-desc">GESH sits between a single operator/trader and a fan of external market, AI, and intelligence APIs — pulling live portfolio and market data in, pushing structured analysis to a dashboard and Telegram alerts out.</p>
+      <div class="mermaid-shell">
+<pre class="mermaid">
+flowchart TB
+    operator(["Operator / Trader"]):::actor
+    gesh{{"GESH Financial - FastAPI :9000"}}:::core
+    subgraph MKT["Market &amp; Brokerage"]
+        rh["Robinhood - robin_stocks"]:::ext
+        yf["yfinance / Yahoo"]:::ext
+        fred["FRED macro"]:::ext
+    end
+    subgraph AI["AI Models"]
+        claude["Claude Sonnet / Haiku"]:::ai
+        gemini["Gemini 2.5 Flash / Pro"]:::ai
+    end
+    subgraph INTEL["Intelligence &amp; Alerts"]
+        news["Finnhub / RSS + FRED macro"]:::ext
+        edgar["SEC EDGAR"]:::ext
+        tg["Telegram Bot"]:::alert
+    end
+    operator -->|"dashboard"| gesh
+    gesh -->|"holdings, equity"| rh
+    gesh -->|"history, fundamentals"| yf
+    gesh -->|"rates, curve, CPI"| fred
+    gesh -->|"forced-tool JSON"| claude
+    gesh -->|"second opinion"| gemini
+    gesh -->|"sentiment, macro"| news
+    gesh -->|"10-K, 10-Q, 8-K"| edgar
+    gesh -->|"fills, EOD PnL"| tg
+    classDef actor fill:#0f766e,stroke:#5eead4,color:#f0fdfa
+    classDef core fill:#b45309,stroke:#f59e0b,color:#fffbeb
+    classDef ai fill:#7c3aed,stroke:#a78bfa,color:#f5f3ff
+    classDef ext fill:#475569,stroke:#94a3b8,color:#f8fafc
+    classDef alert fill:#be123c,stroke:#fda4af,color:#fff1f2
+</pre>
+      </div>
+    </div>
+
+    <div class="diagram-block reveal">
+      <div class="diagram-head"><h3>Container &amp; Component Map</h3><span class="tag">flowchart</span></div>
+      <p class="diagram-desc">Inside the single server.py process: ingestion feeds quant engines and intelligence agents, which feed the consensus + AI routing layer, which hands verdicts to the trading execution subpackage — all backed by dual SQLite stores.</p>
+      <div class="mermaid-shell">
+<pre class="mermaid">
+flowchart TB
+    subgraph EDGE["Edge"]
+        api["server.py - 60 routes, caches"]:::core
+        dash["dashboard.html - Chart.js, 8 tabs"]:::core
+        cli["main.py CLI"]:::core
+    end
+    fetch["auth + data_fetcher to cache.json"]:::svc
+    regime["quant: regime, MC, kelly, FFT, vol"]:::data
+    intel["agents: news, sec, fundamental, gemini"]:::ai
+    cons["consensus.py - 10 nodes"]:::data
+    ai["ai_analyzer.py - Claude routing"]:::ai
+    gate["trading: contract, risk_gate, execution, autopilot"]:::danger
+    store[("SQLite - gesh_financial.db + gesh.db")]:::store
+    dash --> api
+    cli --> fetch
+    api --> fetch --> regime
+    fetch --> intel
+    regime --> cons
+    intel --> cons
+    cons --> ai
+    ai --> gate
+    cons --> gate
+    regime --> store
+    intel --> store
+    gate --> store
+    classDef core fill:#b45309,stroke:#f59e0b,color:#fffbeb
+    classDef svc fill:#0e7490,stroke:#67e8f9,color:#ecfeff
+    classDef data fill:#047857,stroke:#10b981,color:#ecfdf5
+    classDef ai fill:#7c3aed,stroke:#a78bfa,color:#f5f3ff
+    classDef danger fill:#be123c,stroke:#fda4af,color:#fff1f2
+    classDef store fill:#475569,stroke:#cbd5e1,color:#f8fafc
+</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- DATA FLOW -->
+  <section id="dataflow" aria-labelledby="dataflow-h">
+    <span class="eyebrow reveal">↳ Runtime</span>
+    <h2 class="title reveal" id="dataflow-h">How It <span class="g">Works</span></h2>
+    <p class="lead reveal">A chosen verdict becomes a typed TradeIntent, runs through the eight ordered risk gates (each persisted), and on approval writes a SIMULATED paper order with an idempotency key — optionally firing a Telegram alert. The data flow below traces the primary <code>POST /api/deep-analysis</code> path and the signal → gate → execute pipeline.</p>
+
+    <div class="ov-wrap" style="grid-template-columns:1fr">
+      <div class="card reveal">
+        <span class="ico" aria-hidden="true">🔁</span>
+        <h3>End-to-end data flow</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span>Robinhood holdings, equity and quotes are pulled via robin_stocks and written to <code>gesh_live_cache.json</code> as an atomic snapshot.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>yfinance history/fundamentals and FRED macro (Fed funds, yield curve, CPI) feed the quant engines (regime, Monte Carlo, Kelly, FFT, volatility).</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Intelligence agents (news, SEC, fundamentals) write per-symbol sentiment and filing scores into <code>gesh.db</code>.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>The 10-node consensus engine combines quant signals plus cached sentiment into a per-symbol verdict and confidence.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Consensus output and regime context are routed to Claude (forced tool-use JSON) for deep per-holding analysis.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Analysis runs, equity snapshots and signals are persisted to <code>gesh_financial.db</code>.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>A chosen verdict becomes a typed TradeIntent through the 8-gate risk gate, each verdict persisted to <code>risk_decisions</code>.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>On approval the execution layer writes a SIMULATED paper order (idempotency key) to the <code>orders</code> table and optionally fires a Telegram alert.</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="diagram-block reveal">
+      <div class="diagram-head"><h3>Signal → Gate → Execute Pipeline</h3><span class="tag">sequenceDiagram</span></div>
+      <p class="diagram-desc">A chosen verdict becomes a typed TradeIntent, runs through the eight ordered risk gates (each persisted), and on approval writes a SIMULATED paper order with an idempotency key — optionally firing a Telegram alert.</p>
+      <div class="mermaid-shell">
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant SRC as Consensus / Manual
+    participant CT as contract.TradeIntent
+    participant API as /api/trading/consensus-order
+    participant RG as risk_gate.evaluate
+    participant EX as execution.place
+    participant ST as trading/state.py
+    participant TG as Telegram
+    SRC->>CT: from_consensus verdict
+    CT->>API: typed TradeIntent
+    API->>RG: evaluate intent
+    Note over RG: 8 gates - kill, hours, conf, cap, rate, cash, loss, fresh
+    RG->>ST: write risk_decisions row
+    alt all gates pass
+        RG-->>API: APPROVED
+        API->>EX: place intent
+        EX->>ST: orders row status=SIMULATED
+        EX->>TG: fill alert
+    else any gate fails
+        RG-->>API: REJECTED + reason
+        API->>TG: rejection alert
+    end
+</pre>
+      </div>
+    </div>
+
+    <div class="diagram-block reveal">
+      <div class="diagram-head"><h3>Persistence Model</h3><span class="tag">erDiagram</span></div>
+      <p class="diagram-desc">The audit chain links every signal to its gate verdict and resulting simulated order across the gesh_financial.db analysis and trading tables.</p>
+      <div class="mermaid-shell">
+<pre class="mermaid">
+erDiagram
+    ANALYSIS_RUNS ||--o{ EQUITY_SNAPSHOTS : produces
+    TRADE_INTENTS ||--|| RISK_DECISIONS : evaluated_by
+    RISK_DECISIONS ||--o| ORDERS : approves
+    NEWS_SENTIMENT }o--o{ TRADE_INTENTS : informs
+    ANALYSIS_RUNS {
+        int id PK
+        string model
+        json result
+        string created_at
+    }
+    TRADE_INTENTS {
+        string intent_id PK
+        string symbol
+        string action
+        float confidence
+    }
+    RISK_DECISIONS {
+        int id PK
+        string intent_id FK
+        string verdict
+        string failed_gate
+    }
+    ORDERS {
+        string idempotency_key PK
+        string intent_id FK
+        string status
+        string mode
+    }
+    NEWS_SENTIMENT {
+        string symbol PK
+        int score
+        string updated_at
+    }
+    EQUITY_SNAPSHOTS {
+        int id PK
+        string symbol
+        float equity
+    }
+</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- TECH STACK -->
+  <section id="stack" aria-labelledby="stack-h">
+    <span class="eyebrow reveal">⚒ Stack</span>
+    <h2 class="title reveal" id="stack-h">Tech <span class="g">Stack</span></h2>
+    <p class="lead reveal">Pure Python single-node platform — quant in numpy/pandas, AI via the Anthropic and Google SDKs, persistence in SQLite, and a Chart.js dashboard.</p>
+    <div class="tech-grid reveal" id="techGrid"></div>
+  </section>
+
+  <!-- COMPONENTS -->
+  <section id="components" aria-labelledby="components-h">
+    <span class="eyebrow reveal">▤ Modules</span>
+    <h2 class="title reveal" id="components-h">Components &amp; <span class="g">Modules</span></h2>
+    <p class="lead reveal">Real source modules mapped to their responsibility and key technology.</p>
+    <div class="comp-wrap reveal">
+      <table>
+        <thead><tr><th>Module</th><th>Responsibility</th></tr></thead>
+        <tbody id="compBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- QUICKSTART -->
+  <section id="quickstart" aria-labelledby="quickstart-h">
+    <span class="eyebrow reveal">⟶ Get Started</span>
+    <h2 class="title reveal" id="quickstart-h">Quick<span class="g">start</span></h2>
+    <p class="lead reveal">Clone, create a virtualenv, install dependencies, add your keys, and launch the dashboard on port 9000.</p>
+    <div class="qs-grid">
+      <div class="code-card reveal">
+        <div class="code-head"><span class="ttl">Install</span><button class="copy" type="button" data-code="install">Copy</button></div>
+<pre class="code" id="code-install"><span class="cm"># 1 — clone &amp; enter</span>
+git clone https://github.com/gesh75/gesh-project.git
+cd gesh-project
+
+<span class="cm"># 2 — virtualenv</span>
+python -m venv venv
+source venv/bin/activate
+
+<span class="cm"># 3 — dependencies</span>
+pip install -r requirements.txt
+
+<span class="cm"># 4 — create .env with ANTHROPIC_API_KEY</span>
+<span class="cm">#     and your trading defaults</span></pre>
+      </div>
+      <div class="code-card reveal">
+        <div class="code-head"><span class="ttl">Run</span><button class="copy" type="button" data-code="run">Copy</button></div>
+<pre class="code" id="code-run"><span class="cm"># web dashboard on port 9000</span>
+python server.py
+
+<span class="cm"># CLI quick analysis</span>
+python main.py
+
+<span class="cm"># autopilot, paper mode</span>
+<span class="pr">PAPER_MODE=true</span> python -m trading.autopilot
+
+<span class="cm"># single autopilot job</span>
+python -m trading.autopilot \
+  --job pre_market_scan</pre>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="foot-grid">
+      <div>
+        <div class="brand" style="font-size:1.1rem"><span class="dot" aria-hidden="true"></span><span>GESH&nbsp;<b>Financial</b></span></div>
+        <p style="margin:.7rem 0 0; max-width:420px; color:var(--ink-faint)">AI-powered financial analysis and trading intelligence for Robinhood portfolios — quant engines, multi-model AI consensus, and a gated paper-trading pipeline.</p>
+        <span class="badge-disc">⚠ Educational / informational only — not financial advice. PAPER_MODE by default.</span>
+      </div>
+      <div class="foot-links">
+        <a href="https://github.com/gesh75/Gesh-Project" target="_blank" rel="noopener">GitHub Repository ↗</a>
+        <a href="#overview">Overview</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#quickstart">Quickstart</a>
+        <span>© 2026 Georgi Gaydarov · Proprietary — All Rights Reserved</span>
+      </div>
+    </div>
+    <p class="foot-note">Auto-generated documentation · single self-contained page · diagrams rendered live with Mermaid. Content grounded in the repository's README, docs/ARCHITECTURE.md, and source tree.</p>
+  </footer>
+</main>
+
+<button class="top-btn" id="topBtn" aria-label="Back to top">↑</button>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    securityLevel: 'strict',
+    themeVariables: {
+      primaryColor:'#1e293b', primaryTextColor:'#e2e8f0', lineColor:'#64748b',
+      primaryBorderColor:'#475569', fontFamily:'ui-sans-serif, system-ui, sans-serif',
+      fontSize:'14px'
+    }
+  });
+
+  /* ---- data models (grounded in repo) ---- */
+  const TECH = [
+    "Python 3.14","FastAPI","uvicorn","robin_stocks","pyotp","yfinance","pandas","numpy",
+    "Anthropic Claude (Sonnet 4.6 / Haiku 4.5)","google-genai (Gemini 2.5)",
+    "APScheduler","SQLite (sqlite3)","fredapi (FRED macro)","vaderSentiment","beautifulsoup4",
+    "requests","Chart.js","Telegram Bot API","pytest","ruff","macOS launchd"
+  ];
+  const COMPONENTS = [
+    ["server.py","FastAPI application on port 9000 — exposes ~60 API routes, serves the Chart.js dashboard, owns request caches and orchestrates every analysis/trading flow.","FastAPI + uvicorn · threading · hmac X-API-Key"],
+    ["consensus.py","10-node uncorrelated consensus voting engine (momentum, trend, relative strength, fundamentals, analyst, news, Kelly, ECG, volume, FFT) that normalizes votes into STRONG/BUY/SELL/HOLD verdicts.","numpy · pandas"],
+    ["ai_analyzer.py","Claude routing layer with forced tool-use JSON schemas (3 analyzers) for deep portfolio analysis, screening, SEC and fundamentals.","Anthropic Claude Sonnet/Haiku · forced tool-use · prompt caching"],
+    ["data_fetcher.py / auth.py","Robinhood ingestion — MFA-aware login plus live holdings, equity and watchlist quotes written to an atomic JSON snapshot cache.","robin_stocks · pyotp"],
+    ["regime.py","Market regime detection (ADX + Bollinger + RSI) with a live FRED macro layer (Fed funds, 10Y-2Y yield curve, CPI) injected into Claude prompts.","pandas · FRED CSV API (fredapi)"],
+    ["monte_carlo.py / kelly.py / fft_cycles.py","Quant engines — 1000-path GBM stress test with EWMA vol, Kelly Criterion sizer, and FFT dominant price-cycle detection.","numpy · pandas"],
+    ["volatility_models.py / tax_harvester.py / benchmarks.py / crypto_correlation.py","Sprint-3 advanced analytics — EWMA vs GARCH(1,1), IRS wash-sale harvesting, alpha vs SPY+sector ETFs, rolling 90-day BTC/ETH correlation.","numpy · pandas · yfinance"],
+    ["trading/","Execution subpackage — typed TradeIntent contract, 8-gate risk gate, paper/live execution with SHA idempotency, Telegram alerts and APScheduler autopilot, audited to SQLite.","dataclasses · APScheduler · zoneinfo · Telegram Bot API · sqlite3"],
+    ["db.py / gesh_financial.db","SQLite persistence — analysis_runs, equity_snapshots, news_sentiment, sec_filings, trade_intents, risk_decisions, orders audit chain.","sqlite3"],
+    ["templates/dashboard.html","Customer-facing web UI — Chart.js dashboard with 8 tabs (Overview, Analysis, Screener, Kelly, Monte Carlo, Regime, SEC/News, Daily Analysis).","Chart.js · vanilla JS"],
+    ["news_agent.py / sec_agent.py / fundamental_agent.py","Intelligence agents — Yahoo RSS + Finnhub with a FRED macro overlay (replaced the removed Polymarket scraper), SEC EDGAR filing watcher, and fundamental momentum scanner.","requests · beautifulsoup4 · vaderSentiment · yfinance"],
+    ["gemini_agent.py","Alternative LLM agent — Google Gemini 2.5 Flash/Pro for batch sentiment and contrarian second opinions (the legacy ollama_agent.py / llama3.2 path was removed; its endpoints now return 410 Gone).","google-genai"]
+  ];
+
+  /* ---- render tech chips ---- */
+  const techGrid = document.getElementById('techGrid');
+  TECH.forEach(t => {
+    const el = document.createElement('span');
+    el.className = 'tech';
+    el.textContent = t;
+    techGrid.appendChild(el);
+  });
+
+  /* ---- render components table ---- */
+  const compBody = document.getElementById('compBody');
+  COMPONENTS.forEach(([mod, resp, tech]) => {
+    const tr = document.createElement('tr');
+    const td1 = document.createElement('td'); td1.className = 'mod'; td1.textContent = mod;
+    const td2 = document.createElement('td');
+    td2.textContent = resp;
+    const tch = document.createElement('span'); tch.className = 'tch'; tch.textContent = tech;
+    td2.appendChild(tch);
+    tr.append(td1, td2);
+    compBody.appendChild(tr);
+  });
+
+  /* ---- scroll progress bar ---- */
+  const progress = document.getElementById('progress');
+  const onScroll = () => {
+    const h = document.documentElement;
+    const scrolled = h.scrollTop / (h.scrollHeight - h.clientHeight);
+    progress.style.width = (scrolled * 100).toFixed(2) + '%';
+    topBtn.classList.toggle('show', h.scrollTop > 600);
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+
+  /* ---- back to top ---- */
+  const topBtn = document.getElementById('topBtn');
+  topBtn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' }));
+
+  /* ---- mobile menu ---- */
+  const menuBtn = document.getElementById('menuBtn');
+  const navLinks = document.getElementById('navLinks');
+  menuBtn.addEventListener('click', () => {
+    const open = navLinks.classList.toggle('open');
+    menuBtn.setAttribute('aria-expanded', String(open));
+  });
+  navLinks.querySelectorAll('a').forEach(a => a.addEventListener('click', () => {
+    navLinks.classList.remove('open');
+    menuBtn.setAttribute('aria-expanded', 'false');
+  }));
+
+  /* ---- scroll reveal ---- */
+  const revealEls = document.querySelectorAll('.reveal');
+  if (reduceMotion || !('IntersectionObserver' in window)) {
+    revealEls.forEach(el => el.classList.add('in'));
+  } else {
+    const ro = new IntersectionObserver((entries) => {
+      entries.forEach((e, i) => {
+        if (e.isIntersecting) {
+          const sibs = Array.from(e.target.parentElement.children).filter(c => c.classList.contains('reveal'));
+          const idx = sibs.indexOf(e.target);
+          e.target.style.transitionDelay = Math.min(idx, 6) * 70 + 'ms';
+          e.target.classList.add('in');
+          ro.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    revealEls.forEach(el => ro.observe(el));
+  }
+
+  /* ---- count-up stat chips ---- */
+  const counters = document.querySelectorAll('.num[data-count]');
+  const animateCount = (el) => {
+    const target = parseInt(el.dataset.count, 10);
+    const suffix = el.dataset.suffix || '';
+    if (reduceMotion) { el.textContent = target.toLocaleString() + suffix; return; }
+    const dur = 1100, start = performance.now();
+    const step = (now) => {
+      const p = Math.min((now - start) / dur, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * eased).toLocaleString() + suffix;
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+  if ('IntersectionObserver' in window) {
+    const co = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { animateCount(e.target); co.unobserve(e.target); } });
+    }, { threshold: 0.6 });
+    counters.forEach(c => co.observe(c));
+  } else {
+    counters.forEach(animateCount);
+  }
+
+  /* ---- scroll-spy nav ---- */
+  const sections = Array.from(document.querySelectorAll('main section[id]'));
+  const navMap = new Map();
+  document.querySelectorAll('nav.links a[href^="#"]').forEach(a => navMap.set(a.getAttribute('href').slice(1), a));
+  if ('IntersectionObserver' in window) {
+    const so = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          navMap.forEach(a => a.classList.remove('active'));
+          const link = navMap.get(e.target.id);
+          if (link) link.classList.add('active');
+        }
+      });
+    }, { rootMargin: '-45% 0px -50% 0px', threshold: 0 });
+    sections.forEach(s => so.observe(s));
+  }
+
+  /* ---- copy buttons ---- */
+  document.querySelectorAll('.copy').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const pre = document.getElementById('code-' + btn.dataset.code);
+      const text = pre.textContent.trim();
+      try {
+        await navigator.clipboard.writeText(text);
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copied'; btn.classList.add('done');
+        setTimeout(() => { btn.textContent = orig; btn.classList.remove('done'); }, 1600);
+      } catch (err) {
+        btn.textContent = 'Copy failed';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
+      }
+    });
+  });
+</script>
+</body>
+</html>
