@@ -4,6 +4,13 @@
 
 # GESH Financial Observability Platform
 
+## 📖 Documentation
+
+![GESH Financial — documentation](docs/assets/preview.png)
+
+> Open **`docs/index.html`** for the full animated single-page documentation (architecture diagrams, data flow, quickstart).
+
+
 > AI-powered financial analysis and trading intelligence for Robinhood portfolios.
 
 [![Python](https://img.shields.io/badge/Python-3.14-3776AB?style=flat&logo=python&logoColor=white)](https://python.org)
