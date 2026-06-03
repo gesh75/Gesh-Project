@@ -534,6 +534,29 @@ DEFAULT_WATCHLIST = ["MSTR", "SPY", "QQQ"]
 this at import and falls back to `/tmp/gesh_trades.db` for trade_log / paper_trades tables
 if DDL fails. Analysis data always writes to the primary DB via db.py.
 
+### DB corruption recovery (2026-06-02)
+A daily-analysis write to `gesh_financial.db` failed with `database disk image is malformed`
+— this is **real corruption** (`PRAGMA integrity_check` showed a page cross-link "2nd
+reference to page 597" + broken indexes), NOT the VirtioFS DDL limitation above. Do not
+confuse the two: DDL-block falls back to `/tmp` and is harmless; "malformed" means the file
+needs rebuilding. Recovery procedure (run on the **host**, where the file is plain APFS):
+```bash
+cp -p gesh_financial.db gesh_financial.db.corrupt.bak
+sqlite3 gesh_financial.db '.recover' | sqlite3 gesh_financial_recovered.db
+sqlite3 gesh_financial_recovered.db 'PRAGMA integrity_check'   # must print: ok
+# verify rowcounts >= original, then swap:
+mv gesh_financial.db gesh_financial.db.corrupt.orig && mv gesh_financial_recovered.db gesh_financial.db
+```
+`.recover` walks raw pages and restores records the corrupt b-tree can't reach (this run:
+analysis_runs 39 → 119 rows recovered, equity_snapshots intact at 28,442). The DB is
+gitignored (`*.db`) so recovery never needs a commit.
+
+### Sandbox Yahoo 401 / Invalid Crumb
+yfinance 401s in the **sandbox** are burst rate-limiting from the shared egress IP, not a
+hard block — single calls succeed; the consensus engine's many parallel calls trip the
+limiter. The **host venv** has clean Yahoo access. For daily analysis, run the engine suite
+on the host (`./venv/bin/python3.14`) for complete data rather than degraded sandbox results.
+
 ---
 
 ## UI Changes — 2026-05-02
