@@ -59,6 +59,11 @@ def _server_error(exc: Exception) -> HTTPException:
     HTTPException raised intentionally inside a handler passes through unchanged."""
     if isinstance(exc, HTTPException):
         return exc
+    if isinstance(exc, RobinhoodOfflineError):
+        # Expected, non-secret condition: the broker session expired. Degrade to a
+        # clean 503 (frontend renders this as "Offline") instead of a 500 + traceback.
+        logger.warning("Robinhood offline: %s", exc)
+        return HTTPException(status_code=503, detail=str(exc))
     logger.exception("Unhandled server error: %s", exc)
     return HTTPException(status_code=500, detail="Internal server error")
 
@@ -109,7 +114,7 @@ def _rate_ok(ip: str, heavy: bool) -> bool:
 
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, analyze_screener
 from auth import login, logout
-from data_fetcher import DEFAULT_WATCHLIST, build_data_payload
+from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
 from news_agent import scan_news, get_news_history
 from sec_agent import watch_filings, get_filing_history
