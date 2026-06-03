@@ -19,9 +19,36 @@ description: >
 This skill runs every tool in the GESH Financial Observability stack against Georgi's live
 Robinhood portfolio and produces a single HTML report with reconciled signals and clear actions.
 
-**Project path:** `/sessions/great-serene-shannon/mnt/gesh-project/`
+**Project path (host):** `/Users/georgigaydarov/Projects/gesh-project`
 **Output report:** `gesh_report.html` (overwrites previous day's report)
 **Database:** `gesh.db` (news/SEC) + `gesh_financial.db` (analysis history)
+
+---
+
+## Step 0 — Execution Environment (run on the HOST) ★
+
+**Default for every run — especially the 10:30 scheduled trigger — execute on the host, not the sandbox.**
+
+```bash
+cd /Users/georgigaydarov/Projects/gesh-project
+./venv/bin/python3.14 <script>          # Python 3.14, clean Yahoo access
+# or: source venv/bin/activate && python <script>
+```
+
+Why host-only (see project `CLAUDE.md` → "Sandbox Yahoo 401" + "DB corruption recovery"):
+
+- **Yahoo data:** yfinance 401s ("Invalid Crumb") in the sandbox are burst rate-limiting from
+  the shared egress IP — the consensus engine's many parallel calls trip it, yielding
+  *degraded / incomplete* engine output. The host venv has clean Yahoo access, so all 6 engines
+  get full data.
+- **Database:** the sandbox DB sits on a VirtioFS/FUSE mount where SQLite DDL writes fail, so
+  `trade_log.py` silently falls back to `/tmp/gesh_trades.db` (`trade_log.py:27`), fragmenting
+  trade data across two files. On the host the DB is plain APFS — writes land in the primary
+  `gesh_financial.db` directly. **Do not rely on the /tmp fallback;** running on host means it
+  never triggers.
+
+Do not produce a real daily report from the sandbox. If only the sandbox is available, label the
+output explicitly as **degraded / partial** so it is never mistaken for a clean run.
 
 ---
 
@@ -32,8 +59,8 @@ live fetch is optional if the server is running).
 
 ```python
 import sqlite3, json, os, sys
-sys.path.insert(0, '/sessions/great-serene-shannon/mnt/gesh-project')
-os.chdir('/sessions/great-serene-shannon/mnt/gesh-project')
+sys.path.insert(0, '/Users/georgigaydarov/Projects/gesh-project')
+os.chdir('/Users/georgigaydarov/Projects/gesh-project')
 
 conn = sqlite3.connect('gesh_financial.db')
 cur = conn.cursor()
@@ -61,8 +88,8 @@ margin-accounting figure for Gold accounts — this is a known bug in `data_fetc
 Run these in order. Each takes ~10–30s due to yfinance calls.
 
 ```python
-# Install deps if needed
-# pip install yfinance pandas numpy --break-system-packages -q
+# Install deps if needed (host venv — no --break-system-packages):
+# ./venv/bin/pip install yfinance pandas numpy -q
 
 from consensus import run_consensus_portfolio
 from monte_carlo import run_monte_carlo
@@ -139,7 +166,7 @@ Always keep $500+ cash buffer. Never suggest using full buying power.
 
 ## Step 5 — Generate HTML Report
 
-Save to `/sessions/great-serene-shannon/mnt/gesh-project/gesh_report.html`.
+Save to `/Users/georgigaydarov/Projects/gesh-project/gesh_report.html`.
 
 The report must include all of the following sections:
 
