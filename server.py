@@ -4,7 +4,7 @@ from pathlib import Path
 import math, time, threading, uvicorn, os, hmac
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import logging, re
 from collections import defaultdict, deque
 
@@ -143,6 +143,7 @@ from trading.state import init_trading_tables
 from trading.contract import from_consensus, manual as manual_intent
 from trading.risk_gate import evaluate as risk_gate_evaluate
 from trading.execution import place as execution_place
+import auth_users   # multi-user login wall (OFF unless GESH_AUTH_ENABLED is set)
 
 
 # ─── Startup / Shutdown ───────────────────────────────────────────────────────
@@ -184,6 +185,23 @@ async def _rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _auth_gate_middleware(request: Request, call_next):
+    """Login wall — INERT unless GESH_AUTH_ENABLED is set. When enabled, GET / and
+    every /api/* read requires a valid session cookie (public paths exempt):
+      protected HTML page → 302 /login   ·   protected /api/* → 401 JSON.
+    Leaves the existing per-endpoint X-API-Key gate on mutating endpoints intact."""
+    if auth_users.auth_enabled():
+        decision = auth_users.gate_decision(
+            request.url.path, request.cookies.get(auth_users.COOKIE_NAME)
+        )
+        if decision == "redirect":
+            return RedirectResponse(url="/login", status_code=302)
+        if decision == "unauthorized":
+            return JSONResponse(status_code=401, content={"detail": "Authentication required — sign in"})
+    return await call_next(request)
+
+
 # Explicit CORS policy: same-origin dashboard only, no credentialed cross-origin.
 app.add_middleware(
     CORSMiddleware,
@@ -193,6 +211,70 @@ app.add_middleware(
     allow_headers=["*"],
 )
 HTML = Path(__file__).parent / "templates" / "dashboard.html"
+
+
+# ─── Login wall routes (active only when GESH_AUTH_ENABLED) ────────────────────
+_LOGIN_PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>GESH — Sign in</title>
+<style>body{background:#080d14;color:#e8eef6;font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.card{background:#0d1520;border:1px solid #1a2840;border-radius:12px;padding:32px;width:320px}
+h1{color:#00d4ff;font-size:20px;margin:0 0 4px}.sub{color:#5b7290;font-size:12px;margin-bottom:20px}
+label{display:block;color:#5b7290;font-size:12px;margin:12px 0 4px}
+input{width:100%;box-sizing:border-box;background:#080d14;border:1px solid #1a2840;border-radius:8px;
+color:#e8eef6;padding:10px;font-size:14px}
+button{width:100%;margin-top:20px;background:#00d4ff;color:#03121a;border:0;border-radius:8px;
+padding:11px;font-weight:700;font-size:14px;cursor:pointer}
+.err{color:#ff3c5a;font-size:12px;margin-top:12px;min-height:14px}</style></head>
+<body><form class=card id=f>
+<h1>GESH Financial</h1><div class=sub>Signal-accuracy research · sign in</div>
+<label>Email</label><input name=email type=email autocomplete=username required autofocus>
+<label>Password</label><input name=password type=password autocomplete=current-password required>
+<button type=submit>Sign in</button><div class=err id=e></div></form>
+<script>document.getElementById('f').addEventListener('submit',async function(ev){ev.preventDefault();
+var r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({email:ev.target.email.value,password:ev.target.password.value})});
+if(r.ok){location.href='/';}else{document.getElementById('e').textContent='Invalid email or password.';}});
+</script></body></html>"""
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "auth": auth_users.auth_enabled()}
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    return _LOGIN_PAGE
+
+
+@app.post("/auth/login")
+async def auth_login(request: Request):
+    """JSON login → sets an httpOnly session cookie. (JSON, not form, to avoid a
+    python-multipart dependency on the running server.)"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    email = (body.get("email") or "").strip()
+    password = body.get("password") or ""
+    if not auth_users.verify_credentials(email, password):
+        return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid email or password"})
+    auth_users.touch_last_login(email)
+    resp = JSONResponse(content={"ok": True})
+    resp.set_cookie(
+        auth_users.COOKIE_NAME, auth_users.issue_token(email),
+        httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
+        secure=False,   # set True once :9000 is served over TLS
+    )
+    return resp
+
+
+@app.post("/auth/logout")
+def auth_logout():
+    resp = JSONResponse(content={"ok": True})
+    resp.delete_cookie(auth_users.COOKIE_NAME)
+    return resp
 
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
 # Reuses the engine_results.json file Gesh already maintains. POST run-handlers
