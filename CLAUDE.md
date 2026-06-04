@@ -614,6 +614,21 @@ Current: 0 closed trades. ETA: Aug–Sep 2026.
 
 ---
 
+## Commercial Surface — 2026-06 ★ (proof page · auth wall · routes · /progress)
+
+New modules + routes on :9000 (full writeups: `../gesh-project-trading/docs/SYSTEM_OVERVIEW.md` + `RUNBOOK.md`):
+
+| Module | Route | Purpose |
+|---|---|---|
+| `proof_page.py` | `GET /track-record` (public) | Signal-accuracy proof page — the #1 sales asset; reads the -trading tracker DB read-only; honest "day X/180, N/30 closed" |
+| `legal_pages.py` | `GET /terms` `/disclaimer` (public) | Renders `TERMS_OF_SERVICE.md`; **strips the internal "Compliance notes" section** — never serve it |
+| `auth_users.py` | login wall (env-gated **OFF**) | Per-user credentials for the paid alpha; `GESH_AUTH_ENABLED=1` + `GESH_AUTH_SECRET` to enable; immediate revoke via `auth_users.py disable`. Stdlib-only (PBKDF2 + HMAC cookie), no new deps. `gesh_auth.db`. |
+| `progress_view.py` | `GET /progress` (internal, wall-gated) | Founder cockpit — weekly burndown to the Sep alpha; reads `weekly_snapshots` (written by the -trading Friday job) |
+| `db.py::_safe_json` | `/api/history/{id}` | Malformed `result_json` degrades to `parse_error` instead of HTTP 500 |
+
+Public routes are exempt from the login wall (`auth_users.PUBLIC_PREFIXES`); `/progress` is **not** (internal).
+The product is single-tenant (one Robinhood account); the alpha model is "10 users view the owner's research."
+
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.
 All trading decisions remain the user's responsibility.
