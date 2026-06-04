@@ -296,6 +296,18 @@ def terms_page():
     import legal_pages
     return legal_pages.render_terms_html()
 
+
+@app.get("/progress", response_class=HTMLResponse)
+def progress_page():
+    """Internal founder cockpit — weekly autonomy-gate burndown to the Sep alpha.
+    Reads the weekly_snapshots row written by the Friday tracker job. NOT public:
+    no /progress in the auth public-prefix list, so the login wall gates it."""
+    try:
+        import progress_view
+        return progress_view.render_progress_html(progress_view.load_progress())
+    except Exception as exc:
+        raise _server_error(exc)
+
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
 # Reuses the engine_results.json file Gesh already maintains. POST run-handlers
 # persist their result here; the dashboard reads it back via GET /api/*/cached
