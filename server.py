@@ -276,6 +276,26 @@ def auth_logout():
     resp.delete_cookie(auth_users.COOKIE_NAME)
     return resp
 
+
+# ─── Public pages: signal-accuracy proof + legal (no auth required) ───────────
+@app.get("/track-record", response_class=HTMLResponse)
+def track_record_page():
+    """Public signal-accuracy proof page — renders live closed-trade stats from
+    the tracker (honest 'day X of 180, N/30 closed' until the gate is met)."""
+    try:
+        import proof_page
+        return proof_page.render_html(proof_page.load_track_record())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/terms", response_class=HTMLResponse)
+@app.get("/disclaimer", response_class=HTMLResponse)
+def terms_page():
+    """Public Terms of Service & Disclaimer (internal compliance notes stripped)."""
+    import legal_pages
+    return legal_pages.render_terms_html()
+
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
 # Reuses the engine_results.json file Gesh already maintains. POST run-handlers
 # persist their result here; the dashboard reads it back via GET /api/*/cached
