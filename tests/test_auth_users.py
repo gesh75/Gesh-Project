@@ -144,6 +144,7 @@ class TestGate:
         assert au.gate_decision("/login", None) == "allow"
 
     def test_gate_allows_valid_cookie(self):
+        au.create_user("a@b.com", "pw")
         tok = au.issue_token("a@b.com")
         assert au.gate_decision("/api/portfolio", tok) == "allow"
 
@@ -154,5 +155,32 @@ class TestGate:
         assert au.gate_decision("/", None) == "redirect"
 
     def test_gate_rejects_expired_cookie(self):
+        au.create_user("a@b.com", "pw")
         tok = au.issue_token("a@b.com", ttl=-1)
         assert au.gate_decision("/api/portfolio", tok) == "unauthorized"
+
+    # ── session revocation (immediate, not after TTL) ──────────────────────────
+    def test_gate_rejects_disabled_user_immediately(self):
+        au.create_user("churned@x.com", "pw")
+        tok = au.issue_token("churned@x.com")
+        assert au.gate_decision("/api/portfolio", tok) == "allow"        # active
+        au.set_active("churned@x.com", False)                           # revoke
+        assert au.gate_decision("/api/portfolio", tok) == "unauthorized"  # same valid token now rejected
+
+    def test_gate_rejects_unknown_subject(self):
+        tok = au.issue_token("ghost@x.com")   # crypto-valid token, no such user
+        assert au.gate_decision("/", tok) == "redirect"
+
+    def test_authenticate_session_active_user(self):
+        au.create_user("s@x.com", "pw")
+        assert au.authenticate_session(au.issue_token("s@x.com")) == "s@x.com"
+
+    def test_authenticate_session_inactive_user_none(self):
+        au.create_user("s@x.com", "pw")
+        au.set_active("s@x.com", False)
+        assert au.authenticate_session(au.issue_token("s@x.com")) is None
+
+    def test_verify_token_stays_pure_crypto_check(self):
+        # verify_token validates signature+expiry only (no user lookup) — the
+        # active-user check lives in authenticate_session / gate_decision.
+        assert au.verify_token(au.issue_token("anyone@x.com")) == "anyone@x.com"

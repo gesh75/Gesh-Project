@@ -224,18 +224,37 @@ def is_public_path(path: str) -> bool:
     return any(path == p or path.startswith(p) for p in PUBLIC_PREFIXES)
 
 
+def authenticate_session(token: str | None) -> str | None:
+    """
+    Full session check used by the gate on every request: a cryptographically
+    valid, unexpired token AND a subject that is still a CURRENT, ACTIVE user.
+
+    This makes set_active(False) (revocation — e.g. churn / non-payment) and user
+    deletion take effect on the very next request, instead of leaving a signed
+    cookie valid until it expires. (verify_token alone only proves the token was
+    issued by us and hasn't expired — it cannot know the user was since revoked.)
+    """
+    sub = verify_token(token)
+    if not sub:
+        return None
+    u = get_user(sub)
+    if not u or not u["is_active"]:
+        return None
+    return sub
+
+
 def gate_decision(path: str, cookie_value: str | None) -> str:
     """
     Decide what to do with a request, assuming auth IS enabled.
 
     Returns one of:
-      'allow'         — public path, or a valid session cookie
+      'allow'         — public path, or a valid session for a still-active user
       'unauthorized'  — protected /api/* call without a valid session (→ 401 JSON)
       'redirect'      — protected HTML page without a valid session (→ 302 /login)
     """
     if is_public_path(path):
         return "allow"
-    if verify_token(cookie_value):
+    if authenticate_session(cookie_value):
         return "allow"
     return "unauthorized" if path.startswith("/api/") else "redirect"
 
