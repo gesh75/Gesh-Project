@@ -332,6 +332,22 @@ def watch_data(lookback_days: int = 7, activity_limit: int = 50):
     except Exception as exc:
         raise _server_error(exc)
 
+
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect width="32" height="32" rx="7" fill="#080d14"/>'
+    '<path d="M6 22 L13 14 L18 18 L26 8" fill="none" stroke="#00d4ff" '
+    'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Inline SVG favicon (cyan up-trend on the dark house background) — silences the
+    /favicon.ico 404. Already in auth_users.PUBLIC_PREFIXES, so it stays public."""
+    from fastapi.responses import Response
+    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
+
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
 # Reuses the engine_results.json file Gesh already maintains. POST run-handlers
 # persist their result here; the dashboard reads it back via GET /api/*/cached
