@@ -308,6 +308,30 @@ def progress_page():
     except Exception as exc:
         raise _server_error(exc)
 
+
+@app.get("/watch", response_class=HTMLResponse)
+def watch_page():
+    """Internal live paper-trading cockpit — open positions, recent closes, the
+    gate→fill→exit activity feed, and N/30 autonomy progress. Read-only, paper-only.
+    NOT public: not in the auth public-prefix list, so the login wall gates it."""
+    try:
+        import watch_view
+        return watch_view.render_watch_html(watch_view.load_watch_data())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/watch/data")
+def watch_data(lookback_days: int = 7, activity_limit: int = 50):
+    """Read-only JSON snapshot powering the /watch 12s poll. Same auth gate as /watch."""
+    try:
+        import watch_view
+        return JSONResponse(
+            watch_view.load_watch_data(lookback_days=lookback_days, activity_limit=activity_limit)
+        )
+    except Exception as exc:
+        raise _server_error(exc)
+
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
 # Reuses the engine_results.json file Gesh already maintains. POST run-handlers
 # persist their result here; the dashboard reads it back via GET /api/*/cached
