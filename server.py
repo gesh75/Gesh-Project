@@ -333,6 +333,31 @@ def watch_data(lookback_days: int = 7, activity_limit: int = 50):
         raise _server_error(exc)
 
 
+@app.get("/invest", response_class=HTMLResponse)
+def invest_page():
+    """Internal Diversification Radar — book sector concentration, ranked NEW
+    (non-held) candidates with multi-factor scores + suggested sizing, and swap
+    ideas when slots/cash are full. Read-only, advisory-only (never auto-trades).
+    NOT public: not in the auth public-prefix list, so the login wall gates it
+    (the dollar figures are account-identifying)."""
+    try:
+        import invest_view
+        return invest_view.render_invest_html(invest_view.load_invest_data())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/invest/data")
+def invest_data():
+    """Read-only JSON snapshot powering the /invest 12s poll. Reads the radar the
+    daily 10:30 pipeline persisted into engine_results.json. Same auth gate as /invest."""
+    try:
+        import invest_view
+        return JSONResponse(invest_view.load_invest_data())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
 _FAVICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
     '<rect width="32" height="32" rx="7" fill="#080d14"/>'

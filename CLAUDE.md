@@ -72,6 +72,7 @@ server.py (FastAPI · Port 9000)
 │   ├── regime.py            — Market regime detection (ADX + Bollinger + RSI + FRED macro)
 │   ├── monte_carlo.py       — Portfolio stress test (1000 GBM simulations)
 │   ├── kelly.py             — Kelly Criterion position sizer
+│   ├── invest_radar.py      — Diversification radar: advisory NEW-name screen (5-factor, cash-aware, read-only)
 │   ├── consensus.py         — 10-node consensus voting engine
 │   ├── ecg.py               — Equity Curve Gate (drawdown circuit breaker)
 │   ├── fft_cycles.py        — FFT dominant price cycle detection
@@ -624,6 +625,7 @@ New modules + routes on :9000 (full writeups: `../gesh-project-trading/docs/SYST
 | `legal_pages.py` | `GET /terms` `/disclaimer` (public) | Renders `TERMS_OF_SERVICE.md`; **strips the internal "Compliance notes" section** — never serve it |
 | `auth_users.py` | login wall (env-gated **OFF**) | Per-user credentials for the paid alpha; `GESH_AUTH_ENABLED=1` + `GESH_AUTH_SECRET` to enable; immediate revoke via `auth_users.py disable`. Stdlib-only (PBKDF2 + HMAC cookie), no new deps. `gesh_auth.db`. |
 | `progress_view.py` | `GET /progress` (internal, wall-gated) | Founder cockpit — weekly burndown to the Sep alpha; reads `weekly_snapshots` (written by the -trading Friday job) |
+| `invest_radar.py` + `invest_view.py` | `GET /invest` `/invest/data` (internal, wall-gated) | **Diversification Radar** — advisory-only daily scan of NEW (non-held) names with a 5-factor score + cash-aware sizing; surfaces book sector concentration + swap ideas. Computed in `run_ai2.py` (the 10:30 job), persisted to `engine_results.json`, rendered in the daily report + `/invest`. **Never auto-trades; read-only; no PII.** Full writeup: `docs/DIVERSIFICATION_RADAR.md` |
 | `db.py::_safe_json` | `/api/history/{id}` | Malformed `result_json` degrades to `parse_error` instead of HTTP 500 |
 
 Public routes are exempt from the login wall (`auth_users.PUBLIC_PREFIXES`); `/progress` is **not** (internal).

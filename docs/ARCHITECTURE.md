@@ -76,8 +76,9 @@ Inside the single `server.py` process, work is layered: **ingestion** feeds **qu
 ```mermaid
 flowchart TB
     subgraph EDGE["Edge"]
-        api["server.py - 60 api routes, auth, caches"]:::core
+        api["server.py - 60+ api routes, auth, caches"]:::core
         dash["dashboard.html - Chart.js, 8 tabs"]:::core
+        invest["/invest - diversification radar panel"]:::core
         cli["main.py CLI"]:::core
     end
 
@@ -87,6 +88,7 @@ flowchart TB
 
     subgraph QUANT["Quant Engines"]
         regime["regime, monte_carlo, kelly, fft, volatility"]:::data
+        radar["invest_radar - diversification radar (advisory, new-name screen)"]:::data
     end
 
     subgraph AGENTS["Intelligence Agents"]
@@ -113,6 +115,10 @@ flowchart TB
     cons --> ai
     ai --> gate
     cons --> gate
+    regime --> radar
+    radar --> ai
+    radar --> invest
+    api --> invest
     regime --> store
     intel --> store
     gate --> store

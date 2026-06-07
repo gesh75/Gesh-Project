@@ -390,7 +390,7 @@ def render_watch_html(data: dict[str, Any]) -> str:
    <div class="feed" id="feed"></div></div>
 
  <p class="card" style="color:{_DIM};font-size:11px;line-height:1.6">{_DISCLAIMER}
-   &nbsp;·&nbsp;<a href="/track-record">Track record</a> · <a href="/progress">Progress</a></p>
+   &nbsp;·&nbsp;<a href="/track-record">Track record</a> · <a href="/progress">Progress</a> · <a href="/invest">💎 Invest</a></p>
 </div>
 <script>
 const C={{green:"{_GREEN}",red:"{_RED}",dim:"{_DIM}",yellow:"{_YELLOW}",orange:"{_ORANGE}",border:"{_BORDER}"}};

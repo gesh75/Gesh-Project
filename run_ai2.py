@@ -89,13 +89,41 @@ payload = {
     'signal_overrides': override_context,
 }
 
+# ── Diversification radar (advisory-only) ─────────────────────────────────────
+# Scans NEW, non-held names for diversification opportunities and surfaces them in
+# the daily report + the /invest tab. Fail-soft: a radar error must NEVER break the
+# deep-analysis pipeline. Reuses the holdings regime to avoid a second fetch.
+diversification_context = ""
+try:
+    import invest_radar
+    radar_regime = {rd.get('symbol'): rd for rd in regimes_list if rd.get('symbol')}
+    radar = invest_radar.scan_candidates(holdings, equity_sum, regime_lookup=radar_regime)
+    eng['diversification_candidates'] = radar          # persisted for report + /invest tab
+    _radar_txt = invest_radar.summarize_for_prompt(radar)
+    if _radar_txt:
+        diversification_context = (
+            "\n\n" + _radar_txt
+            + "\n  → In portfolio_recommendations, you MAY add up to 2-4 ADVISORY new-name ideas "
+              "from the radar above (set category='DIVERSIFICATION' and symbol=<ticker>); these are "
+              "research suggestions only, never auto-traded, and only when extra cash should be "
+              "diversified into NON-held names. If mode=SWAP_ONLY, frame them as swap/trim ideas, not buys."
+        )
+    print(f"[ai] Radar: mode={radar['mode']} candidates={len(radar['candidates'])} "
+          f"swaps={len(radar['swap_suggestions'])} "
+          f"book_top_sector={max(radar['existing_sector_weights'], key=radar['existing_sector_weights'].get) if radar['existing_sector_weights'] else '—'}")
+except Exception as e:
+    print(f"[ai] Radar skipped (non-fatal): {e}")
+
 print(f"\n[ai] Calling deep_analyze_portfolio ...")
 print(f"[ai] Portfolio: ${total:,.2f}  Cash: ${cash:.2f}  Holdings: {len(holdings)}")
 
 # ── Call AI ───────────────────────────────────────────────────────────────────
 try:
     from ai_analyzer import deep_analyze_portfolio
-    ai_result = deep_analyze_portfolio(payload, regime_context=regime_summary + override_context)
+    ai_result = deep_analyze_portfolio(
+        payload,
+        regime_context=regime_summary + override_context + diversification_context,
+    )
     print(f"[ai] Done. Score={ai_result.get('portfolio_score',0)}  Risk={ai_result.get('risk_score',0)}")
     print(f"[ai] Verdict: {ai_result.get('overall_verdict','?')}")
 

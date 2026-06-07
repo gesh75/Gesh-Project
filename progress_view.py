@@ -209,6 +209,7 @@ def _page(body: str) -> str:
 <div style="display:flex;justify-content:space-between;align-items:baseline">
  <h1 style="color:{_CYAN};font-size:20px;margin:0">GESH — Fall-Launch Progress</h1>
  <span style="font-size:13px"><a href="/watch" style="color:{_CYAN}">📡 Live watch</a>
+ &nbsp;·&nbsp; <a href="/invest" style="color:{_CYAN}">💎 Invest</a>
  &nbsp;·&nbsp; <a href="/" style="color:{_DIM}">← Dashboard</a></span></div>
 {body}
 <p style="margin-top:24px;padding:12px 14px;background:{_SURFACE};border:1px solid {_BORDER};border-radius:8px;
