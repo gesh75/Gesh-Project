@@ -58,10 +58,34 @@ Missing data never manufactures a confluence point.
 - Each pick sized at the **minimum binding constraint**: half-Kelly, inverse-vol
   risk-parity slice, 7% hard cap, `max_stock_per_trade`, and remaining budget. Sub-1-share
   suggestions are dropped.
-- **Sector caps**: a sector may not exceed 30% post-trade; top-3 sectors ≤70%. Two-pass
-  greedy selection prefers *new* sectors first, then fills remaining slots.
-- **Modes**: `BUY` (slots + cash) · `SWAP_ONLY` (slots full or cash<buffer → surface the
-  trim that funds the best diversifier) · `NO_ACTION`.
+- **Sector caps**: blocks *adding* to a sector that would exceed 30% post-trade — but
+  never blocks buys into under-weight / new sectors, even when the book's top-3 already
+  exceeds 70% (blocking those would defeat diversification, since deploying cash can only
+  raise the top-3 share). Two-pass greedy selection prefers *new* sectors first.
+- **Modes**: `BUY` (sized picks) · `SWAP_ONLY` (no room/cash — surfaces the same ranked
+  diversifiers **unsized** as "fund via swap" previews **plus** a trim-to-fund swap idea)
+  · `NO_ACTION` (no survivors).
+
+#### Config gating — why you see SWAP_ONLY vs BUY (operational)
+
+Two independent gates must BOTH open for actionable (sized) buys; otherwise the radar
+shows unsized previews so you still see *where* new cash should go:
+
+| Gate | Open when | Config key |
+|---|---|---|
+| **Open slots** | `max_open_positions − len(holdings) > 0` | `max_open_positions` (default 5) |
+| **Deployable cash** | `cash − min_cash_buffer > 0` | `min_cash_buffer` (default $500) |
+
+Consequences to remember:
+- Raising `max_open_positions` **alone** does *not* flip to BUY if `cash ≤ min_cash_buffer`
+  — you'll get open slots but `deployable = $0`, so candidates stay **previews**.
+- A small deployable balance sizes each pick to its inverse-vol fair share; names whose
+  share rounds to **< 1 whole share are dropped** — so a few hundred dollars typically
+  yields **one** affordable name, not the full sector spread.
+- These are **paper/advisory** config values in `gesh_config.json` (read by the product's
+  `validate_action` + the radar). The `-trading` autopilot uses its **own** env `RiskConfig`
+  and is unaffected; with `auto_trade=false` nothing executes regardless. Lowering
+  `min_cash_buffer` removes a safety floor — restore it after any deploy-preview experiment.
 
 > **Live account at build time** (8 holdings > 5 slots, $448 < $500 buffer) correctly
 > resolves to **SWAP_ONLY** and surfaces the book's real concentration: **Technology 71%**.
