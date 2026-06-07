@@ -595,19 +595,23 @@ def _select(survivors, sector_value, total, n, deployable, vols, cfg) -> list[di
     preference); pass 2 = fill remaining slots/budget. Enforces sector caps and
     candidate-vs-candidate de-correlation; drops sub-1-share suggestions."""
     inv = {s["symbol"]: (1.0 / (vols.get(s["symbol"]) or 0.02)) for s in survivors}
-    inv_sum = sum(inv.values()) or 1.0
+    # Normalize inverse-vol weights over the INTENDED pick count (top-n by composite),
+    # so each slice targets a fair share of deployable cash — not 1/len(all survivors),
+    # which would systematically under-deploy when many names survive but few are picked.
+    inv_sum = sum(inv[s["symbol"]] for s in survivors[:max(n, 1)]) or 1.0
     sv = dict(sector_value)
     picks: list[dict] = []
     remaining = deployable
     used_sectors: set[str] = set()
 
     def cap_ok(sec: str, size: float) -> bool:
-        after = dict(sv)
-        after[sec] = after.get(sec, 0.0) + size
-        if after[sec] / total > SECTOR_CAP:
-            return False
-        top3 = sum(sorted(after.values(), reverse=True)[:3])
-        return top3 / total <= TOP3_SECTOR_CAP
+        # Block ADDING to a sector that is (or would become) over the 30% cap — this
+        # stops the radar piling into the existing concentration. Buys into under-weight
+        # / NEW sectors always pass, EVEN when the book's top-3 already exceeds the
+        # advisory 70% line: blocking those would defeat diversification (total is fixed,
+        # so deploying cash can only raise the top-3 share — it must not be a hard gate).
+        # The top-3 figure is surfaced as advisory context via existing_sector_weights.
+        return (sv.get(sec, 0.0) + size) / total <= SECTOR_CAP
 
     def decorrelated(cand) -> bool:
         for p in picks:
@@ -622,8 +626,12 @@ def _select(survivors, sector_value, total, n, deployable, vols, cfg) -> list[di
             return False
         if not decorrelated(s):
             return False
-        sz = size_one(s["price"], vols.get(s["symbol"]), inv[s["symbol"]] / inv_sum,
-                      remaining, total, cfg)
+        # target this name's fair share of the ORIGINAL deployable; size_one computes
+        # rp = weight * remaining, so scale the weight by deployable/remaining to hit
+        # the target (still capped by remaining/7%/max_stock/Kelly inside size_one).
+        target = (inv[s["symbol"]] / inv_sum) * deployable
+        weight = target / max(remaining, 1e-9)
+        sz = size_one(s["price"], vols.get(s["symbol"]), weight, remaining, total, cfg)
         if sz["recommended_shares"] < 1:
             return False
         if not cap_ok(s["sector"], sz["recommended_usd"]):

@@ -226,6 +226,26 @@ def test_buy_mode_when_slots_and_cash():
     deployed = sum(c["recommended_usd"] for c in out["candidates"])
     assert deployed <= out["deployable_cash"] + 1e-6      # never breach cash floor
 
+def test_diversifying_buy_allowed_when_book_already_concentrated():
+    # The book is ~68% Technology (two large tech holdings), but open slots + cash
+    # exist. A buy into an UNDER-weighted NEW sector (Energy) must be selectable —
+    # diversification is the whole point. A further Technology buy must still be
+    # blocked by the 30% per-sector cap. (Regression: a hard top-3<=70% gate used to
+    # block ALL buys once the existing book already breached it.)
+    holdings = [holding("BIGTECH1", equity=12000.0), holding("BIGTECH2", equity=12000.0)]
+    eq = {"cash": 10000.0, "portfolio_equity": 24000.0, "total": 35000.0,
+          "withdrawable_amount": 9000.0}
+    screened = [mk("XOM", sector="Energy", price=110.0),
+                mk("MORETECH", sector="Technology", price=300.0)]
+    inj = _inject(["XOM", "MORETECH"],
+                  sector_map={"XOM": "Energy", "MORETECH": "Technology"})
+    out = ir.scan_candidates(holdings, eq, screened=screened, **inj)
+    syms = {c["symbol"] for c in out["candidates"]}
+    assert out["mode"] == "BUY"
+    assert "XOM" in syms                 # diversifier into a new sector → allowed
+    assert "MORETECH" not in syms        # piling into ~68% tech → blocked by 30% cap
+
+
 def test_empty_universe_no_action():
     holdings = [holding("NVDA"), holding("MSFT")]
     out = ir.scan_candidates(holdings, EQUITY_CASHED, screened=[],
