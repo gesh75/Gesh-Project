@@ -204,10 +204,14 @@ def test_live_state_is_swap_only():
                   sector_map={"KO": "Consumer Defensive", "XOM": "Energy"})
     out = ir.scan_candidates(holdings, EQUITY_LIVE, screened=screened, **inj)
     assert out["mode"] == "SWAP_ONLY"
-    assert out["candidates"] == []                       # no buys when slots full & no cash
     assert out["open_slots"] == 0
     assert out["deployable_cash"] == 0.0
     assert out["swap_suggestions"]                       # surfaces a funding-source swap
+    # Still surface UNSIZED advisory previews so the user sees WHERE to diversify
+    # even with no slots/cash — and never suggest piling into the all-Tech book.
+    assert len(out["candidates"]) >= 1
+    assert all(c.get("actionable") is False for c in out["candidates"])
+    assert "DELL" not in {c["symbol"] for c in out["candidates"]}
 
 def test_buy_mode_when_slots_and_cash():
     holdings = [holding("NVDA"), holding("MSFT")]         # 2 of 5 slots used
@@ -225,6 +229,24 @@ def test_buy_mode_when_slots_and_cash():
         assert c["symbol"] not in {"NVDA", "MSFT"}
     deployed = sum(c["recommended_usd"] for c in out["candidates"])
     assert deployed <= out["deployable_cash"] + 1e-6      # never breach cash floor
+    assert all(c["actionable"] is True for c in out["candidates"])   # BUY picks are sized
+
+
+def test_swap_only_surfaces_unsized_preview():
+    # With no slots/cash the radar must STILL surface the top sector-diversified
+    # diversifiers (unsized) so the user can see where new cash should go.
+    holdings = [holding(s) for s in ["NVDA", "QQQ", "MU", "AMD", "IONQ", "EEM", "APP", "RKLB"]]
+    screened = [mk("KO", sector="Consumer Defensive"), mk("XOM", sector="Energy"),
+                mk("JPM", sector="Financial Services")]
+    inj = _inject(["KO", "XOM", "JPM"],
+                  sector_map={"KO": "Consumer Defensive", "XOM": "Energy",
+                              "JPM": "Financial Services"})
+    out = ir.scan_candidates(holdings, EQUITY_LIVE, screened=screened, **inj)
+    assert out["mode"] == "SWAP_ONLY"
+    assert len(out["candidates"]) >= 2
+    for c in out["candidates"]:
+        assert c["actionable"] is False        # unsized preview
+        assert "composite_score" in c and "sector" in c
 
 def test_diversifying_buy_allowed_when_book_already_concentrated():
     # The book is ~68% Technology (two large tech holdings), but open slots + cash

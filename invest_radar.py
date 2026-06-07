@@ -556,11 +556,16 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
     # rank survivors: best composite first, lower correlation breaks ties
     survivors.sort(key=lambda s: (-s["composite_z"], (s["max_corr_to_holdings"] or 0.0)))
 
-    # 6. BUY selection (only when slots + cash allow), else SWAP advisory.
+    # 6. BUY selection (slots + cash), else an UNSIZED advisory PREVIEW so the user can
+    #    still see WHERE new cash should go even with no room/cash right now.
     sector_value = holdings_sector_value(holdings, sector_of)
     picks: list[dict] = []
+    preview = False
     if new_names > 0 and deployable > 0:
         picks = _select(survivors, sector_value, total, new_names, deployable, vols, cfg)
+    if not picks and survivors:
+        picks = _shortlist(survivors, sector_value, total, MAX_NEW_NAMES)
+        preview = True
 
     # 7. Consensus only on the FINAL picks (bounded ≤ MAX_NEW_NAMES) as a display field.
     if picks:
@@ -574,7 +579,8 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
             p["consensus_verdict"] = cons.get("verdict", "N/A")
             p["consensus_raw_score"] = cons.get("raw_score")
 
-    mode = "BUY" if picks else ("SWAP_ONLY" if survivors else "NO_ACTION")
+    sized_n = sum(1 for p in picks if "recommended_shares" in p)
+    mode = "BUY" if (picks and not preview) else ("SWAP_ONLY" if survivors else "NO_ACTION")
     swaps = [] if mode == "BUY" else _build_swaps(holdings, sector_value, survivors, total, sector_of)
 
     return {
@@ -585,33 +591,20 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
         "diagnostics": {
             "universe_size": universe_n, "after_exclusions": after_excl,
             "after_timing_gate": after_timing, "after_corr_filter": after_corr,
-            "after_sector_cap": len(picks), "data_warnings": warnings,
+            "after_sector_cap": sized_n, "data_warnings": warnings,
         },
     }
 
 
-def _select(survivors, sector_value, total, n, deployable, vols, cfg) -> list[dict]:
-    """Two-pass sized selection: pass 1 = best name per NEW sector (diversification
-    preference); pass 2 = fill remaining slots/budget. Enforces sector caps and
-    candidate-vs-candidate de-correlation; drops sub-1-share suggestions."""
-    inv = {s["symbol"]: (1.0 / (vols.get(s["symbol"]) or 0.02)) for s in survivors}
-    # Normalize inverse-vol weights over the INTENDED pick count (top-n by composite),
-    # so each slice targets a fair share of deployable cash — not 1/len(all survivors),
-    # which would systematically under-deploy when many names survive but few are picked.
-    inv_sum = sum(inv[s["symbol"]] for s in survivors[:max(n, 1)]) or 1.0
-    sv = dict(sector_value)
+def _shortlist(survivors, sector_value, total, n) -> list[dict]:
+    """Top-n sector-diversified survivors (two-pass: one per NEW sector, then fill).
+    EXCLUDES sectors the book is already over-concentrated in (>=30%) — never suggest
+    piling into the concentration — and applies candidate-vs-candidate de-correlation.
+    No sizing: this is both the BUY pick set and the unsized SWAP_ONLY preview list."""
+    over = {sec for sec, val in (sector_value or {}).items()
+            if total and val / total >= SECTOR_CAP}
     picks: list[dict] = []
-    remaining = deployable
-    used_sectors: set[str] = set()
-
-    def cap_ok(sec: str, size: float) -> bool:
-        # Block ADDING to a sector that is (or would become) over the 30% cap — this
-        # stops the radar piling into the existing concentration. Buys into under-weight
-        # / NEW sectors always pass, EVEN when the book's top-3 already exceeds the
-        # advisory 70% line: blocking those would defeat diversification (total is fixed,
-        # so deploying cash can only raise the top-3 share — it must not be a hard gate).
-        # The top-3 figure is surfaced as advisory context via existing_sector_weights.
-        return (sv.get(sec, 0.0) + size) / total <= SECTOR_CAP
+    used: set[str] = set()
 
     def decorrelated(cand) -> bool:
         for p in picks:
@@ -620,42 +613,56 @@ def _select(survivors, sector_value, total, n, deployable, vols, cfg) -> list[di
                 return False
         return True
 
-    def try_take(s) -> bool:
-        nonlocal remaining
-        if len(picks) >= n or remaining <= 0:
+    def take(s) -> bool:
+        if len(picks) >= n or s["sector"] in over or not decorrelated(s):
             return False
-        if not decorrelated(s):
-            return False
-        # target this name's fair share of the ORIGINAL deployable; size_one computes
-        # rp = weight * remaining, so scale the weight by deployable/remaining to hit
-        # the target (still capped by remaining/7%/max_stock/Kelly inside size_one).
-        target = (inv[s["symbol"]] / inv_sum) * deployable
-        weight = target / max(remaining, 1e-9)
-        sz = size_one(s["price"], vols.get(s["symbol"]), weight, remaining, total, cfg)
-        if sz["recommended_shares"] < 1:
-            return False
-        if not cap_ok(s["sector"], sz["recommended_usd"]):
-            return False
-        s = {**s, **sz, "sector_weight_after": round((sv.get(s["sector"], 0.0) + sz["recommended_usd"]) / total, 4),
-             "sector_cap_ok": True}
-        sv[s["sector"]] = sv.get(s["sector"], 0.0) + sz["recommended_usd"]
-        remaining -= sz["recommended_usd"]
-        used_sectors.add(s["sector"])
         picks.append(s)
+        used.add(s["sector"])
         return True
 
     for s in survivors:                          # pass 1 — one per new sector
         if len(picks) >= n:
             break
-        if s["sector"] in used_sectors:
+        if s["sector"] in used:
             continue
-        try_take(s)
+        take(s)
     for s in survivors:                          # pass 2 — fill remaining
         if len(picks) >= n:
             break
         if any(p["symbol"] == s["symbol"] for p in picks):
             continue
-        try_take(s)
+        take(s)
+    return picks
+
+
+def _select(survivors, sector_value, total, n, deployable, vols, cfg) -> list[dict]:
+    """BUY pick set: take the sector-diversified shortlist and SIZE each at the minimum
+    binding constraint (half-Kelly / inverse-vol risk-parity / 7% cap / max-stock /
+    budget). Drops sub-1-share, sector-cap-breaching, or over-budget names. Inverse-vol
+    weights normalize over the shortlist so the slice targets a fair share of deployable
+    cash (not 1/len(all survivors), which systematically under-deploys)."""
+    shortlist = _shortlist(survivors, sector_value, total, n)
+    inv = {s["symbol"]: (1.0 / (vols.get(s["symbol"]) or 0.02)) for s in shortlist}
+    inv_sum = sum(inv.values()) or 1.0
+    sv = dict(sector_value)
+    picks: list[dict] = []
+    remaining = deployable
+    for s in shortlist:
+        if remaining <= 0:
+            break
+        target = (inv[s["symbol"]] / inv_sum) * deployable
+        weight = target / max(remaining, 1e-9)
+        sz = size_one(s["price"], vols.get(s["symbol"]), weight, remaining, total, cfg)
+        if sz["recommended_shares"] < 1:
+            continue
+        if (sv.get(s["sector"], 0.0) + sz["recommended_usd"]) / total > SECTOR_CAP:
+            continue
+        sized = {**s, **sz,
+                 "sector_weight_after": round((sv.get(s["sector"], 0.0) + sz["recommended_usd"]) / total, 4),
+                 "sector_cap_ok": True}
+        sv[s["sector"]] = sv.get(s["sector"], 0.0) + sz["recommended_usd"]
+        remaining -= sz["recommended_usd"]
+        picks.append(sized)
     return picks
 
 
@@ -694,6 +701,7 @@ _PUBLIC_FIELDS = (
 def _public(p: dict) -> dict:
     """Whitelist the fields surfaced downstream — never spread raw inputs (PII guard)."""
     out = {k: p[k] for k in _PUBLIC_FIELDS if k in p}
+    out["actionable"] = "recommended_shares" in p   # False = unsized preview (no cash/slots)
     out["composite_score"] = _to_score(p.get("composite_z"))
     out["horizon_view"] = {
         "day": (p.get("timing") or {}).get("fft_signal") or "—",

@@ -41,6 +41,7 @@ _CARD_FIELDS = (
     "consensus_verdict", "analyst_upside", "num_analysts", "max_corr_to_holdings",
     "correlation_ok", "sector_weight_after", "recommended_usd", "recommended_shares",
     "sizing_binding_constraint", "factor_scores", "timing", "horizon_view", "rationale",
+    "actionable",
 )
 _MODE_NOTE = {
     "BUY": "Deployable cash + open slots — ranked new-name candidates below.",
@@ -220,7 +221,7 @@ function renderInvest(d){{
       <td>${{esc(c.consensus_verdict||"—")}}</td>
       <td class="r num" style="color:${{C.green}}">${{up}}</td>
       <td class="r num">${{corr}}</td>
-      <td class="r num">${{c.recommended_shares||0}} <span style="color:${{C.dim}}">≈${{usd(c.recommended_usd)}}</span></td>
+      <td class="r num">${{c.actionable===false?`<span style="color:${{C.yellow}}">fund via swap</span>`:(c.recommended_shares||0)+` <span style="color:${{C.dim}}">≈`+usd(c.recommended_usd)+`</span>`}}</td>
       <td style="color:${{C.dim}};font-size:11px">${{esc(c.rationale||"")}}</td></tr>`;}}).join("")
     :`<tr><td colspan="8" class="empty">${{esc(d.note||"No new-name candidates.")}}</td></tr>`;
 

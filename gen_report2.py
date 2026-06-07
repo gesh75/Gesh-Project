@@ -290,6 +290,10 @@ def _radar_section(radar: dict) -> str:
             up_txt = f'{up:+.0f}%' if isinstance(up, (int, float)) else '—'
             corr = c.get('max_corr_to_holdings')
             corr_txt = f'{corr:.2f}' if isinstance(corr, (int, float)) else '—'
+            if c.get('actionable') is False:
+                suggest = '<span style="color:#f0b429">preview · fund via swap</span>'
+            else:
+                suggest = f'{c.get("recommended_shares", 0)} ≈${c.get("recommended_usd", 0):,.0f}'
             rows += (
                 f'<tr><td><b style="color:#00d4ff">{_esc(str(c.get("symbol", "")))}</b></td>'
                 f'<td>{_esc(str(c.get("sector", "")))}</td>'
@@ -297,7 +301,7 @@ def _radar_section(radar: dict) -> str:
                 f'<td>{_esc(str(c.get("consensus_verdict", "—")))}</td>'
                 f'<td style="text-align:right;color:#00e87a">{up_txt}</td>'
                 f'<td style="text-align:right">{corr_txt}</td>'
-                f'<td style="text-align:right">{c.get("recommended_shares", 0)} ≈${c.get("recommended_usd", 0):,.0f}</td>'
+                f'<td style="text-align:right">{suggest}</td>'
                 f'<td style="color:#888;font-size:11px">{_esc(str(c.get("rationale", "")))}</td></tr>'
             )
         body += (
