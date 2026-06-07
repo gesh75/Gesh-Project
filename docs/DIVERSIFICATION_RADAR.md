@@ -6,6 +6,11 @@
 > research → design → adversarial-review workflow. **PAPER_MODE / autonomy gate
 > unaffected; nothing is ever auto-traded.**
 
+![The /invest Diversification Radar panel in its SWAP_ONLY state: the book's 71% Technology
+concentration is flagged, four low-correlation new-name diversifiers (RDDT/UNH/BAC/MPC across
+Communication Services, Healthcare, Financials, and Energy) are surfaced as unsized "fund via
+swap" previews, and a trim-IONQ→fund-RDDT swap idea is offered.](assets/diversification-radar.png)
+
 ## Why
 
 The 10:30 daily analysis scores and recommends actions on the **current portfolio
