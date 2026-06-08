@@ -125,7 +125,16 @@ DEEP_ANALYSIS_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"action": {"type": "string"}, "priority": {"type": "string"}, "rationale": {"type": "string"}},
+                "properties": {
+                    "action": {"type": "string"},
+                    "priority": {"type": "string"},
+                    "rationale": {"type": "string"},
+                    # Optional (backward-compatible): set when the recommendation is an
+                    # advisory NEW-name diversification idea from the radar. category
+                    # "DIVERSIFICATION" lets the UI group it; symbol names the new ticker.
+                    "category": {"type": "string"},
+                    "symbol": {"type": "string"}
+                },
                 "required": ["action", "priority", "rationale"]
             }
         },

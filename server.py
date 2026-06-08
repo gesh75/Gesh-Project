@@ -4,7 +4,7 @@ from pathlib import Path
 import math, time, threading, uvicorn, os, hmac
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import logging, re
 from collections import defaultdict, deque
 
@@ -59,6 +59,11 @@ def _server_error(exc: Exception) -> HTTPException:
     HTTPException raised intentionally inside a handler passes through unchanged."""
     if isinstance(exc, HTTPException):
         return exc
+    if isinstance(exc, RobinhoodOfflineError):
+        # Expected, non-secret condition: the broker session expired. Degrade to a
+        # clean 503 (frontend renders this as "Offline") instead of a 500 + traceback.
+        logger.warning("Robinhood offline: %s", exc)
+        return HTTPException(status_code=503, detail=str(exc))
     logger.exception("Unhandled server error: %s", exc)
     return HTTPException(status_code=500, detail="Internal server error")
 
@@ -109,7 +114,7 @@ def _rate_ok(ip: str, heavy: bool) -> bool:
 
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, analyze_screener
 from auth import login, logout
-from data_fetcher import DEFAULT_WATCHLIST, build_data_payload
+from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
 from news_agent import scan_news, get_news_history
 from sec_agent import watch_filings, get_filing_history
@@ -138,6 +143,7 @@ from trading.state import init_trading_tables
 from trading.contract import from_consensus, manual as manual_intent
 from trading.risk_gate import evaluate as risk_gate_evaluate
 from trading.execution import place as execution_place
+import auth_users   # multi-user login wall (OFF unless GESH_AUTH_ENABLED is set)
 
 
 # ─── Startup / Shutdown ───────────────────────────────────────────────────────
@@ -179,6 +185,23 @@ async def _rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def _auth_gate_middleware(request: Request, call_next):
+    """Login wall — INERT unless GESH_AUTH_ENABLED is set. When enabled, GET / and
+    every /api/* read requires a valid session cookie (public paths exempt):
+      protected HTML page → 302 /login   ·   protected /api/* → 401 JSON.
+    Leaves the existing per-endpoint X-API-Key gate on mutating endpoints intact."""
+    if auth_users.auth_enabled():
+        decision = auth_users.gate_decision(
+            request.url.path, request.cookies.get(auth_users.COOKIE_NAME)
+        )
+        if decision == "redirect":
+            return RedirectResponse(url="/login", status_code=302)
+        if decision == "unauthorized":
+            return JSONResponse(status_code=401, content={"detail": "Authentication required — sign in"})
+    return await call_next(request)
+
+
 # Explicit CORS policy: same-origin dashboard only, no credentialed cross-origin.
 app.add_middleware(
     CORSMiddleware,
@@ -188,6 +211,168 @@ app.add_middleware(
     allow_headers=["*"],
 )
 HTML = Path(__file__).parent / "templates" / "dashboard.html"
+
+
+# ─── Login wall routes (active only when GESH_AUTH_ENABLED) ────────────────────
+_LOGIN_PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>GESH — Sign in</title>
+<style>body{background:#080d14;color:#e8eef6;font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.card{background:#0d1520;border:1px solid #1a2840;border-radius:12px;padding:32px;width:320px}
+h1{color:#00d4ff;font-size:20px;margin:0 0 4px}.sub{color:#5b7290;font-size:12px;margin-bottom:20px}
+label{display:block;color:#5b7290;font-size:12px;margin:12px 0 4px}
+input{width:100%;box-sizing:border-box;background:#080d14;border:1px solid #1a2840;border-radius:8px;
+color:#e8eef6;padding:10px;font-size:14px}
+button{width:100%;margin-top:20px;background:#00d4ff;color:#03121a;border:0;border-radius:8px;
+padding:11px;font-weight:700;font-size:14px;cursor:pointer}
+.err{color:#ff3c5a;font-size:12px;margin-top:12px;min-height:14px}</style></head>
+<body><form class=card id=f>
+<h1>GESH Financial</h1><div class=sub>Signal-accuracy research · sign in</div>
+<label>Email</label><input name=email type=email autocomplete=username required autofocus>
+<label>Password</label><input name=password type=password autocomplete=current-password required>
+<button type=submit>Sign in</button><div class=err id=e></div></form>
+<script>document.getElementById('f').addEventListener('submit',async function(ev){ev.preventDefault();
+var r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({email:ev.target.email.value,password:ev.target.password.value})});
+if(r.ok){location.href='/';}else{document.getElementById('e').textContent='Invalid email or password.';}});
+</script></body></html>"""
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok", "auth": auth_users.auth_enabled()}
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    return _LOGIN_PAGE
+
+
+@app.post("/auth/login")
+async def auth_login(request: Request):
+    """JSON login → sets an httpOnly session cookie. (JSON, not form, to avoid a
+    python-multipart dependency on the running server.)"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    email = (body.get("email") or "").strip()
+    password = body.get("password") or ""
+    if not auth_users.verify_credentials(email, password):
+        return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid email or password"})
+    auth_users.touch_last_login(email)
+    resp = JSONResponse(content={"ok": True})
+    resp.set_cookie(
+        auth_users.COOKIE_NAME, auth_users.issue_token(email),
+        httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
+        secure=False,   # set True once :9000 is served over TLS
+    )
+    return resp
+
+
+@app.post("/auth/logout")
+def auth_logout():
+    resp = JSONResponse(content={"ok": True})
+    resp.delete_cookie(auth_users.COOKIE_NAME)
+    return resp
+
+
+# ─── Public pages: signal-accuracy proof + legal (no auth required) ───────────
+@app.get("/track-record", response_class=HTMLResponse)
+def track_record_page():
+    """Public signal-accuracy proof page — renders live closed-trade stats from
+    the tracker (honest 'day X of 180, N/30 closed' until the gate is met)."""
+    try:
+        import proof_page
+        return proof_page.render_html(proof_page.load_track_record())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/terms", response_class=HTMLResponse)
+@app.get("/disclaimer", response_class=HTMLResponse)
+def terms_page():
+    """Public Terms of Service & Disclaimer (internal compliance notes stripped)."""
+    import legal_pages
+    return legal_pages.render_terms_html()
+
+
+@app.get("/progress", response_class=HTMLResponse)
+def progress_page():
+    """Internal founder cockpit — weekly autonomy-gate burndown to the Sep alpha.
+    Reads the weekly_snapshots row written by the Friday tracker job. NOT public:
+    no /progress in the auth public-prefix list, so the login wall gates it."""
+    try:
+        import progress_view
+        return progress_view.render_progress_html(progress_view.load_progress())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/watch", response_class=HTMLResponse)
+def watch_page():
+    """Internal live paper-trading cockpit — open positions, recent closes, the
+    gate→fill→exit activity feed, and N/30 autonomy progress. Read-only, paper-only.
+    NOT public: not in the auth public-prefix list, so the login wall gates it."""
+    try:
+        import watch_view
+        return watch_view.render_watch_html(watch_view.load_watch_data())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/watch/data")
+def watch_data(lookback_days: int = 7, activity_limit: int = 50):
+    """Read-only JSON snapshot powering the /watch 12s poll. Same auth gate as /watch."""
+    try:
+        import watch_view
+        return JSONResponse(
+            watch_view.load_watch_data(lookback_days=lookback_days, activity_limit=activity_limit)
+        )
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/invest", response_class=HTMLResponse)
+def invest_page():
+    """Internal Diversification Radar — book sector concentration, ranked NEW
+    (non-held) candidates with multi-factor scores + suggested sizing, and swap
+    ideas when slots/cash are full. Read-only, advisory-only (never auto-trades).
+    NOT public: not in the auth public-prefix list, so the login wall gates it
+    (the dollar figures are account-identifying)."""
+    try:
+        import invest_view
+        return invest_view.render_invest_html(invest_view.load_invest_data())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/invest/data")
+def invest_data(what_if_cash: float | None = None):
+    """Read-only JSON snapshot powering the /invest 12s poll. Reads the radar the daily
+    10:30 pipeline persisted into engine_results.json. `what_if_cash` (the slider) re-sizes
+    the picks for a hypothetical deployable amount server-side. Same auth gate as /invest."""
+    try:
+        import invest_view
+        return JSONResponse(invest_view.load_invest_data(what_if_cash=what_if_cash))
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect width="32" height="32" rx="7" fill="#080d14"/>'
+    '<path d="M6 22 L13 14 L18 18 L26 8" fill="none" stroke="#00d4ff" '
+    'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Inline SVG favicon (cyan up-trend on the dark house background) — silences the
+    /favicon.ico 404. Already in auth_users.PUBLIC_PREFIXES, so it stays public."""
+    from fastapi.responses import Response
+    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
 
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
 # Reuses the engine_results.json file Gesh already maintains. POST run-handlers

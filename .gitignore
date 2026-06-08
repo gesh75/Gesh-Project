@@ -31,6 +31,9 @@ gesh_financial_learning_path.html
 .scratch/
 *.bak-*
 *.bak
+# merge / .recover leftovers and corrupt DB backups (see CLAUDE.md DB-recovery procedure)
+*.orig
+*.corrupt.*
 
 # Retired/experimental code, kept on disk but out of git (reversible)
 _archive/

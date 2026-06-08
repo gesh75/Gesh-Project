@@ -6,6 +6,13 @@ from typing import Any
 
 DEFAULT_WATCHLIST: list[str] = ["MSTR", "SPY", "QQQ"]
 
+
+class RobinhoodOfflineError(RuntimeError):
+    """Raised when the Robinhood session is missing/expired (every API call 401s,
+    so robin_stocks returns None). Lets callers degrade to a clean offline state
+    instead of dereferencing None. Recover by running reauth.py interactively."""
+
+
 def get_portfolio_holdings() -> pd.DataFrame:
     rows = []
 
@@ -83,6 +90,14 @@ def get_portfolio_holdings() -> pd.DataFrame:
 def get_total_equity() -> dict[str, float]:
     profile = rh.load_portfolio_profile()
     account = rh.load_account_profile()
+
+    # Unauthorized / expired session: robin_stocks returns None for both calls.
+    # Fail fast with a typed error so the API degrades to a clean offline 503
+    # instead of an AttributeError -> 500 on account.get(...) below.
+    if not profile or not account:
+        raise RobinhoodOfflineError(
+            "Robinhood session unauthorized or expired — run reauth.py to restore live data."
+        )
 
     # GOLD ACCOUNT WARNING:
     #   account["buying_power"] = Gold margin extended credit (~$17k) — NEVER use for cash display

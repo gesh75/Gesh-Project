@@ -3,6 +3,7 @@
 import json, math
 from pathlib import Path
 from datetime import datetime, timezone
+from html import escape as _esc   # the report body f-string is bound to `html`, so alias
 
 BASE = Path(__file__).parent
 with open(BASE / 'engine_results.json') as f:
@@ -259,6 +260,76 @@ for rec in recs:
       <td style="color:#e0e0e0">{act_text}</td>
       <td style="color:#888;font-size:11px">{rat}</td>
     </tr>'''
+
+# ─── Diversification radar section (advisory-only, new non-held names) ────────
+# Every string cell is HTML-escaped (company/sector come from yfinance, thesis/swap
+# rationale may originate downstream) — never trust free text in an f-string table.
+def _radar_section(radar: dict) -> str:
+    if not radar:
+        return ''
+    mode   = radar.get('mode', 'NO_ACTION')
+    weights = radar.get('existing_sector_weights') or {}
+    cands  = radar.get('candidates') or []
+    swaps  = radar.get('swap_suggestions') or []
+    mode_col = {'BUY': '#00e87a', 'SWAP_ONLY': '#f0b429', 'NO_ACTION': '#888'}.get(mode, '#888')
+    sw = sorted(weights.items(), key=lambda x: -x[1])[:4]
+    sw_txt = ' · '.join(f'{_esc(str(k))} {v*100:.0f}%' for k, v in sw) if sw else '—'
+    head = (
+        f'<div class="section-title">💎 Diversification Radar '
+        f'<span style="font-size:11px;color:{mode_col};border:1px solid {mode_col};'
+        f'border-radius:8px;padding:1px 7px;vertical-align:middle">{_esc(mode)}</span></div>'
+        f'<div style="color:#888;font-size:12px;margin:-6px 0 10px">New, non-held opportunities · '
+        f'deployable ${radar.get("deployable_cash", 0):,.0f} · {radar.get("open_slots", 0)} open slot(s) · '
+        f'book: {sw_txt}</div>'
+    )
+    body = ''
+    if cands:
+        rows = ''
+        for c in cands:
+            up = c.get('analyst_upside')
+            up_txt = f'{up:+.0f}%' if isinstance(up, (int, float)) else '—'
+            corr = c.get('max_corr_to_holdings')
+            corr_txt = f'{corr:.2f}' if isinstance(corr, (int, float)) else '—'
+            if c.get('actionable') is False:
+                suggest = '<span style="color:#f0b429">preview · fund via swap</span>'
+            else:
+                suggest = f'{c.get("recommended_shares", 0)} ≈${c.get("recommended_usd", 0):,.0f}'
+            rows += (
+                f'<tr><td><b style="color:#00d4ff">{_esc(str(c.get("symbol", "")))}</b></td>'
+                f'<td>{_esc(str(c.get("sector", "")))}</td>'
+                f'<td style="text-align:right">{c.get("composite_score", "—")}</td>'
+                f'<td>{_esc(str(c.get("consensus_verdict", "—")))}</td>'
+                f'<td style="text-align:right;color:#00e87a">{up_txt}</td>'
+                f'<td style="text-align:right">{corr_txt}</td>'
+                f'<td style="text-align:right">{suggest}</td>'
+                f'<td style="color:#888;font-size:11px">{_esc(str(c.get("rationale", "")))}</td></tr>'
+            )
+        body += (
+            '<div class="table-card" style="margin-bottom:12px"><table class="action-table">'
+            '<thead><tr><th>Symbol</th><th>Sector</th><th>Score</th><th>Consensus</th>'
+            '<th>Analyst</th><th>Corr→Book</th><th>Suggest</th><th>Thesis</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table></div>'
+        )
+    if swaps and mode != 'BUY':
+        srows = ''
+        for s in swaps:
+            srows += (
+                f'<tr><td style="color:#ff3c5a"><b>{_esc(str(s.get("trim_symbol", "")))}</b></td>'
+                f'<td style="color:#00e87a"><b>{_esc(str(s.get("fund_new_symbol", "")))}</b></td>'
+                f'<td style="color:#888;font-size:11px">{_esc(str(s.get("rationale", "")))}</td></tr>'
+            )
+        body += (
+            '<div class="table-card" style="margin-bottom:12px"><table class="action-table">'
+            '<thead><tr><th>Trim</th><th>Fund New</th><th>Why</th></tr></thead>'
+            f'<tbody>{srows}</tbody></table></div>'
+        )
+    if not cands and not swaps:
+        body += '<div style="color:#888;font-size:12px;margin-bottom:12px">No new-name candidates today.</div>'
+    disc = ('<div style="color:#666;font-size:10px;margin:-4px 0 16px">Advisory research only — NOT '
+            'financial advice. New-name suggestions are never auto-traded; PAPER_MODE unaffected.</div>')
+    return head + body + disc
+
+div_radar_html = _radar_section(eng.get('diversification_candidates') or {})
 
 # ─── MC histogram data ────────────────────────────────────────────────────────
 buckets = monte.get('buckets', [])
@@ -613,6 +684,9 @@ html = f'''<!DOCTYPE html>
       <tbody>{action_rows}</tbody>
     </table>
   </div>
+
+  <!-- Diversification Radar (advisory-only, new non-held names) -->
+  {div_radar_html}
 
   <!-- Portfolio Risks -->
   <div class="section-title">⚠️ Portfolio Risk Factors</div>

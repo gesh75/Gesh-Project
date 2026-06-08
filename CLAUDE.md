@@ -72,6 +72,7 @@ server.py (FastAPI · Port 9000)
 │   ├── regime.py            — Market regime detection (ADX + Bollinger + RSI + FRED macro)
 │   ├── monte_carlo.py       — Portfolio stress test (1000 GBM simulations)
 │   ├── kelly.py             — Kelly Criterion position sizer
+│   ├── invest_radar.py      — Diversification radar: advisory NEW-name screen (5-factor, cash-aware, read-only)
 │   ├── consensus.py         — 10-node consensus voting engine
 │   ├── ecg.py               — Equity Curve Gate (drawdown circuit breaker)
 │   ├── fft_cycles.py        — FFT dominant price cycle detection
@@ -534,6 +535,29 @@ DEFAULT_WATCHLIST = ["MSTR", "SPY", "QQQ"]
 this at import and falls back to `/tmp/gesh_trades.db` for trade_log / paper_trades tables
 if DDL fails. Analysis data always writes to the primary DB via db.py.
 
+### DB corruption recovery (2026-06-02)
+A daily-analysis write to `gesh_financial.db` failed with `database disk image is malformed`
+— this is **real corruption** (`PRAGMA integrity_check` showed a page cross-link "2nd
+reference to page 597" + broken indexes), NOT the VirtioFS DDL limitation above. Do not
+confuse the two: DDL-block falls back to `/tmp` and is harmless; "malformed" means the file
+needs rebuilding. Recovery procedure (run on the **host**, where the file is plain APFS):
+```bash
+cp -p gesh_financial.db gesh_financial.db.corrupt.bak
+sqlite3 gesh_financial.db '.recover' | sqlite3 gesh_financial_recovered.db
+sqlite3 gesh_financial_recovered.db 'PRAGMA integrity_check'   # must print: ok
+# verify rowcounts >= original, then swap:
+mv gesh_financial.db gesh_financial.db.corrupt.orig && mv gesh_financial_recovered.db gesh_financial.db
+```
+`.recover` walks raw pages and restores records the corrupt b-tree can't reach (this run:
+analysis_runs 39 → 119 rows recovered, equity_snapshots intact at 28,442). The DB is
+gitignored (`*.db`) so recovery never needs a commit.
+
+### Sandbox Yahoo 401 / Invalid Crumb
+yfinance 401s in the **sandbox** are burst rate-limiting from the shared egress IP, not a
+hard block — single calls succeed; the consensus engine's many parallel calls trip the
+limiter. The **host venv** has clean Yahoo access. For daily analysis, run the engine suite
+on the host (`./venv/bin/python3.14`) for complete data rather than degraded sandbox results.
+
 ---
 
 ## UI Changes — 2026-05-02
@@ -590,6 +614,22 @@ Live trading on Alpaca requires: ≥30 closed paper trades · win_rate ≥55% ·
 Current: 0 closed trades. ETA: Aug–Sep 2026.
 
 ---
+
+## Commercial Surface — 2026-06 ★ (proof page · auth wall · routes · /progress)
+
+New modules + routes on :9000 (full writeups: `../gesh-project-trading/docs/SYSTEM_OVERVIEW.md` + `RUNBOOK.md`):
+
+| Module | Route | Purpose |
+|---|---|---|
+| `proof_page.py` | `GET /track-record` (public) | Signal-accuracy proof page — the #1 sales asset; reads the -trading tracker DB read-only; honest "day X/180, N/30 closed" |
+| `legal_pages.py` | `GET /terms` `/disclaimer` (public) | Renders `TERMS_OF_SERVICE.md`; **strips the internal "Compliance notes" section** — never serve it |
+| `auth_users.py` | login wall (env-gated **OFF**) | Per-user credentials for the paid alpha; `GESH_AUTH_ENABLED=1` + `GESH_AUTH_SECRET` to enable; immediate revoke via `auth_users.py disable`. Stdlib-only (PBKDF2 + HMAC cookie), no new deps. `gesh_auth.db`. |
+| `progress_view.py` | `GET /progress` (internal, wall-gated) | Founder cockpit — weekly burndown to the Sep alpha; reads `weekly_snapshots` (written by the -trading Friday job) |
+| `invest_radar.py` + `invest_view.py` | `GET /invest` `/invest/data` (internal, wall-gated) | **Diversification Radar** — advisory-only daily scan of NEW (non-held) names with a 5-factor score + cash-aware sizing; surfaces book sector concentration + swap ideas. Computed in `run_ai2.py` (the 10:30 job), persisted to `engine_results.json`, rendered in the daily report + `/invest`. **Never auto-trades; read-only; no PII.** Full writeup: `docs/DIVERSIFICATION_RADAR.md` |
+| `db.py::_safe_json` | `/api/history/{id}` | Malformed `result_json` degrades to `parse_error` instead of HTTP 500 |
+
+Public routes are exempt from the login wall (`auth_users.PUBLIC_PREFIXES`); `/progress` is **not** (internal).
+The product is single-tenant (one Robinhood account); the alpha model is "10 users view the owner's research."
 
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.
