@@ -22,6 +22,7 @@ Design (mirrors watch_view.py / proof_page.py):
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -127,6 +128,15 @@ def load_invest_data(results_path: str | None = None,
         "what_if_cash": None,
     }
 
+    # Harden the slider input: reject non-finite / negative, clamp huge — a hostile or
+    # buggy ?what_if_cash=inf|nan|-1|1e308 must never reach sizing or emit Infinity/NaN JSON.
+    if what_if_cash is not None:
+        try:
+            wic = float(what_if_cash)
+            what_if_cash = min(wic, 1_000_000.0) if (math.isfinite(wic) and wic >= 0) else None
+        except (TypeError, ValueError):
+            what_if_cash = None
+
     # What-if cash slider — re-size server-side using the captured survivors (no network).
     state = radar.get("resize_state")
     if what_if_cash is not None and isinstance(state, dict) and state.get("survivors"):
@@ -192,6 +202,9 @@ def render_invest_html(data: dict[str, Any]) -> str:
      <span class="pill" id="mode-pill" style="background:{_YELLOW};color:#1a1200">{mode}</span></h1></div>
  <div class="sub">Internal · where should NEW cash go? · advisory-only · updates every 12s
    &nbsp;·&nbsp;<a href="/watch">📡 Live watch</a> · <a href="/progress">Progress</a> · <a href="/track-record">Track record</a></div>
+
+ <div id="advisory-banner" style="background:{_RED}22;border-left:3px solid {_RED};border-radius:7px;padding:10px 14px;margin:0 0 14px;font-size:12px;color:#e8eef6">
+   ⚠️ <b>Advisory research only — NOT FINANCIAL ADVICE.</b> These are diversification ideas for research; they are never auto-traded, and PAPER_MODE + the autonomy gate are unaffected.</div>
 
  <div class="strip" id="strip"></div>
 
@@ -286,6 +299,7 @@ wiSlider.addEventListener('input',()=>{{
   wiVal.textContent=v>0?('what-if $'+v.toLocaleString()):'live';
   wiVal.style.color=v>0?C.yellow:C.cyan;
   whatIf=v>0?v:null;
+  setStatus(v>0?('what-if $'+v.toLocaleString()+' · sizing…'):'live · …');   // immediate feedback
   clearTimeout(wiTimer); wiTimer=setTimeout(refresh,200);   // debounce drags
 }});
 document.getElementById('wi-reset').addEventListener('click',()=>{{

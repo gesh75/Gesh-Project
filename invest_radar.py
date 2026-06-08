@@ -43,10 +43,10 @@ WEIGHTS: dict[str, float] = {
     "momentum": 0.20, "quality": 0.30, "value": 0.20,
     "analyst_revisions": 0.15, "low_vol": 0.15,
 }
-CORR_THRESHOLD = 0.70        # >= this corr to any holding (or picked name) → drop
+CORR_THRESHOLD = 0.70        # >= this corr to any holding OR already-picked name → drop
 SECTOR_CAP = 0.30            # a single sector may not exceed 30% post-trade
-TOP3_SECTOR_CAP = 0.70       # top-3 sectors combined may not exceed 70%
 MAX_NEW_NAMES = 4            # never suggest more than this many new names at once
+WHAT_IF_MAX = 1_000_000.0   # hard ceiling for the what-if cash slider (input hardening)
 NEW_NAME_PCT_CAP = 0.07      # max 7% of portfolio into one brand-new name
 MIN_PRICE = 5.0             # liquidity / penny floor
 MIN_COVERAGE = 3            # a factor needs >=3 valid points to be trusted
@@ -173,15 +173,21 @@ def compute_factor_scores(candidates: list[dict], vols: dict[str, float | None])
 
     active = [f for f in WEIGHTS if coverage[f] >= MIN_COVERAGE]
     wsum = sum(WEIGHTS[f] for f in active) or 1.0
-    weights_used = {f: (WEIGHTS[f] / wsum if f in active else 0.0) for f in WEIGHTS}
+    # When at least one factor is trustworthy, renormalize over the active set; when EVERY
+    # factor is dark (degenerate cross-section), fall back to equal weight so weights_used
+    # still sums to 1.0 (never 0.0) — the composite is 0 either way but the contract holds.
+    weights_used = ({f: (WEIGHTS[f] / wsum if f in active else 0.0) for f in WEIGHTS}
+                    if active else {f: 1.0 / len(WEIGHTS) for f in WEIGHTS})
 
     out: list[dict] = []
     for i, c in enumerate(candidates):
         comp = sum(weights_used[f] * factor_z[f][i] for f in WEIGHTS)
         out.append({
             **c,
-            "factor_scores": {f: round(factor_z[f][i], 4) for f in WEIGHTS},
-            "composite_z": round(comp, 4),
+            # 2 dp: the cross-sectional z of a ~5-factor blend on ~40 names is noisy to
+            # ~±0.2; 4 dp would imply false precision (the 0-100 score is coarser still).
+            "factor_scores": {f: round(factor_z[f][i], 2) for f in WEIGHTS},
+            "composite_z": round(comp, 2),
             "weights_used": weights_used,
             "factor_coverage": coverage,
         })
@@ -436,6 +442,7 @@ def scan_candidates(
     sector_hot: set[str] | None = None,
     sector_of: Callable[[str], str | None] | None = None,
     corr: dict | None = None,
+    cand_corr: dict | None = None,
     price_frame: Any = None,
     config: dict | None = None,
     consensus_fn: Callable[..., dict] | None = None,
@@ -447,7 +454,7 @@ def scan_candidates(
         return _scan_impl(holdings, equity_summary, screened=screened,
                           regime_lookup=regime_lookup, fft_lookup=fft_lookup, vols=vols,
                           sector_hot=sector_hot, sector_of=sector_of, corr=corr,
-                          price_frame=price_frame, config=config,
+                          cand_corr=cand_corr, price_frame=price_frame, config=config,
                           consensus_fn=consensus_fn, now=now)
     except Exception as exc:   # ultimate fail-soft: never break the 10:30 pipeline
         return _empty("NO_ACTION", now=now,
@@ -456,7 +463,8 @@ def scan_candidates(
 
 
 def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup, vols,
-               sector_hot, sector_of, corr, price_frame, config, consensus_fn, now) -> dict:
+               sector_hot, sector_of, corr, cand_corr, price_frame, config,
+               consensus_fn, now) -> dict:
     cfg = {**_DEFAULT_CFG, **(config or _load_cfg())}
     sector_of = sector_of or _sector_of_live
     warnings: list[str] = []
@@ -493,6 +501,7 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
             continue
         sec = c.get("sector") or sector_of(sym)
         if not sec:
+            warnings.append(f"{sym} excluded: no sector data (cannot enforce sector cap)")
             continue
         candidates.append({**c, "symbol": sym, "sector": sec})
     after_excl = len(candidates)
@@ -553,6 +562,14 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
         warnings.append("correlation cull emptied set — relaxed to lowest-corr names")
     after_corr = len(survivors)
 
+    # Candidate-vs-candidate correlation — so _shortlist won't pick two new names that are
+    # ≥CORR_THRESHOLD correlated to each OTHER (adds dollars, not diversification). Reuses
+    # the same price_frame (zero extra network); injectable as cand_corr for tests.
+    surv_syms = [s["symbol"] for s in survivors]
+    among = cand_corr if cand_corr is not None else _corr_from_frame(price_frame, surv_syms, set(surv_syms))
+    for s in survivors:
+        s["_corr_among"] = (among or {}).get(s["symbol"], {})
+
     # rank survivors: best composite first, lower correlation breaks ties
     survivors.sort(key=lambda s: (-s["composite_z"], (s["max_corr_to_holdings"] or 0.0)))
 
@@ -601,7 +618,7 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
             "correlation_ok": s.get("correlation_ok"), "consensus_verdict": cv,
             "consensus_raw_score": crs, "analyst_upside": s.get("analyst_upside"),
             "num_analysts": s.get("num_analysts"), "ret_1w": s.get("ret_1w"),
-            "ret_1m": s.get("ret_1m"),
+            "ret_1m": s.get("ret_1m"), "_corr_among": s.get("_corr_among"),
         })
     resize_state = {
         "survivors": rs_survivors, "sector_value": sector_value, "total": total,
@@ -622,19 +639,43 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
     }
 
 
+def _no_action_whatif() -> dict:
+    return {"mode": "NO_ACTION", "deployable_cash": 0.0, "open_slots": 0,
+            "new_names_to_add": 0, "candidates": [], "what_if": True}
+
+
 def resize_for_cash(state: dict, what_if_cash: float, *, what_if_slots: int | None = None) -> dict:
     """Re-size the diversification picks for a HYPOTHETICAL deployable-cash amount using the
     survivors captured at scan time — pure, instant, NO network. Powers the /invest cash
-    slider. Returns only sized public candidates; never echoes portfolio total / sector $."""
-    survivors = state.get("survivors") or []
-    sector_value = state.get("sector_value") or {}
+    slider. Returns only sized public candidates; never echoes portfolio total / sector $.
+
+    Input-hardened: corrupt state or non-finite/negative/huge cash degrades to NO_ACTION /
+    a clamped value rather than emitting Infinity/NaN. The cash slider is treated as a pure
+    sizing preview — a positive amount assumes diversification room (up to MAX_NEW_NAMES),
+    so it stays useful even when the live account is at its position cap (`what_if_slots`
+    overrides explicitly)."""
+    if not isinstance(state, dict) or not isinstance(state.get("survivors"), list) or not state["survivors"]:
+        return _no_action_whatif()
+    survivors = state["survivors"]
+    sector_value = state.get("sector_value") if isinstance(state.get("sector_value"), dict) else {}
     total = float(state.get("total") or 1.0) or 1.0
     cfg = {"max_stock_per_trade": float(state.get("max_stock_per_trade", 5000.0)),
            "min_cash_buffer": 0.0, "max_open_positions": 0}
     vols = {s["symbol"]: s.get("vol") for s in survivors}
-    open_slots = int(what_if_slots) if what_if_slots is not None else int(state.get("open_slots", 0))
-    deployable = max(0.0, float(what_if_cash or 0.0))
+
+    wic = float(what_if_cash or 0.0)
+    if not math.isfinite(wic):
+        wic = 0.0
+    deployable = max(0.0, min(wic, WHAT_IF_MAX))
+
+    if what_if_slots is not None:
+        open_slots = max(0, int(what_if_slots))
+    elif deployable > 0:
+        open_slots = MAX_NEW_NAMES                 # pure sizing preview — assume room
+    else:
+        open_slots = int(state.get("open_slots", 0))
     new_names = min(open_slots, MAX_NEW_NAMES)
+
     picks, preview = [], False
     if new_names > 0 and deployable > 0:
         picks = _select(survivors, sector_value, total, new_names, deployable, vols, cfg)

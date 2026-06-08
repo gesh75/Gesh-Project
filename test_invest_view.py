@@ -138,3 +138,22 @@ def test_load_without_what_if_is_live(tmp_path):
 def test_render_includes_what_if_slider():
     html = iv.render_invest_html(iv.load_invest_data("/nonexistent/path.json"))
     assert 'id="wi-slider"' in html and "what_if_cash=" in html
+
+
+def test_what_if_cash_sanitizes_bad_input(tmp_path):
+    import json as _json
+    path = _write(tmp_path, {"diversification_candidates": _radar_with_resize_state()})
+    # inf / nan / negative must not produce a what-if result or invalid JSON.
+    for bad in (float("inf"), float("nan"), -100.0):
+        d = iv.load_invest_data(path, what_if_cash=bad)
+        blob = _json.dumps(d)            # must be valid JSON (no Infinity/NaN tokens)
+        assert "Infinity" not in blob and "NaN" not in blob
+        assert d["what_if_cash"] is None  # rejected → live view
+    # a sane value still works
+    assert iv.load_invest_data(path, what_if_cash=9000.0)["what_if_cash"] == 9000.0
+
+
+def test_render_has_prominent_disclaimer_banner():
+    html = iv.render_invest_html(iv.load_invest_data("/nonexistent/path.json"))
+    assert "NOT FINANCIAL ADVICE" in html
+    assert 'id="advisory-banner"' in html   # prominent top banner, not just the footer

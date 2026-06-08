@@ -386,6 +386,75 @@ def test_resize_for_cash_sizes_and_hides_pii():
     assert ir.resize_for_cash(st, 0.0)["mode"] in ("SWAP_ONLY", "NO_ACTION")   # no cash → no buys
 
 
+def test_candidate_decorrelation_fires():
+    # Two candidates 0.9-correlated to EACH OTHER (different sectors) must never both
+    # be picked — the candidate-vs-candidate de-correlation guard must actually fire.
+    holdings = [holding("NVDA"), holding("MSFT")]
+    screened = [mk("AAA", sector="Energy", price=50.0),
+                mk("BBB", sector="Healthcare", price=50.0),
+                mk("CCC", sector="Financial Services", price=50.0)]
+    inj = _inject(["AAA", "BBB", "CCC"],
+                  sector_map={"AAA": "Energy", "BBB": "Healthcare",
+                              "CCC": "Financial Services"})
+    cand_corr = {"AAA": {"BBB": 0.9, "CCC": 0.1}, "BBB": {"AAA": 0.9, "CCC": 0.1},
+                 "CCC": {"AAA": 0.1, "BBB": 0.1}}
+    out = ir.scan_candidates(holdings, EQUITY_CASHED, screened=screened,
+                             cand_corr=cand_corr, **inj)
+    syms = {c["symbol"] for c in out["candidates"]}
+    assert not ("AAA" in syms and "BBB" in syms)   # the 0.9-correlated pair never both picked
+
+
+def test_weights_used_sum_to_one_when_all_factors_dark():
+    # Degenerate cross-section (<3 valid points for every factor) must still leave
+    # weights_used summing to 1.0 (equal-weight fallback), never 0.0.
+    cands = [mk("X", ret_1w=None, ret_1m=None, revenue_growth=None, earnings_growth=None,
+                pe_ratio=None, pb_ratio=None, analyst_upside=None, num_analysts=0)]
+    scored = ir.compute_factor_scores(cands, vols={})
+    assert abs(sum(scored[0]["weights_used"].values()) - 1.0) < 1e-6
+
+
+def test_resize_for_cash_handles_corrupted_state():
+    for bad in (None, {}, {"survivors": None}, {"survivors": []}, {"survivors": "nope"}):
+        r = ir.resize_for_cash(bad, 9000.0)
+        assert r["mode"] == "NO_ACTION" and r["candidates"] == []
+
+
+def test_resize_for_cash_clamps_nonfinite_and_huge():
+    state = {"survivors": [{"symbol": "KO", "sector": "Consumer Defensive", "price": 60.0,
+                            "vol": 0.02, "composite_z": 0.5}],
+             "sector_value": {"Technology": 8000.0}, "total": 35000.0, "open_slots": 3,
+             "max_stock_per_trade": 5000.0}
+    assert ir.resize_for_cash(state, float("inf"))["deployable_cash"] <= 1_000_000.0
+    assert ir.resize_for_cash(state, float("nan"))["mode"] in ("SWAP_ONLY", "NO_ACTION")
+    assert ir.resize_for_cash(state, -500.0)["deployable_cash"] == 0.0
+
+
+def test_resize_for_cash_slider_assumes_room():
+    # The cash slider is a pure sizing preview: even if the persisted state had 0 open
+    # slots, a positive what-if cash should produce sized BUYs (assume diversification room).
+    state = {"survivors": [
+                {"symbol": "KO", "sector": "Consumer Defensive", "price": 60.0, "vol": 0.02, "composite_z": 0.6},
+                {"symbol": "XOM", "sector": "Energy", "price": 110.0, "vol": 0.025, "composite_z": 0.4}],
+             "sector_value": {"Technology": 8000.0}, "total": 35000.0, "open_slots": 0,
+             "max_stock_per_trade": 5000.0}
+    r = ir.resize_for_cash(state, 9000.0)
+    assert r["mode"] == "BUY" and len(r["candidates"]) >= 1
+
+
+def test_max_corr_to_edge_cases():
+    assert ir.max_corr_to("KO", {"NVDA"}, None) is None
+    assert ir.max_corr_to("KO", {"NVDA"}, {}) is None
+    assert ir.max_corr_to("KO", {"NVDA"}, {"KO": {}}) is None
+    assert ir.max_corr_to("KO", {"NVDA"}, {"KO": {"NVDA": float("nan")}}) is None
+    assert ir.max_corr_to("KO", {"NVDA", "MU"}, {"KO": {"NVDA": -0.8, "MU": 0.3}}) == 0.8
+
+
+def test_holdings_sector_value_unknown_fallback():
+    holdings = [holding("AAA", equity=5000.0), holding("BBB", equity=3000.0)]
+    sv = ir.holdings_sector_value(holdings, lambda s: None if s == "BBB" else "Tech")
+    assert sv["Tech"] == 5000.0 and sv["UNKNOWN"] == 3000.0
+
+
 def test_output_has_required_contract_keys():
     out = ir.scan_candidates([holding("NVDA")], EQUITY_CASHED, screened=[], **_inject([]))
     for key in ("as_of", "mode", "deployable_cash", "open_slots", "new_names_to_add",
