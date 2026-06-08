@@ -194,7 +194,9 @@ def _inject(syms, sector_map=None, corr_to_holdings=0.2):
     vols = {s: 0.02 for s in syms}
     return dict(regime_lookup=regime_lookup, fft_lookup=fft_lookup, vols=vols,
                 sector_hot=set(syms), sector_of=lambda s: sector_map.get(s, "Technology"),
-                corr=None, consensus_fn=lambda s, **k: {"verdict": "BUY", "raw_score": 0.4, "active_nodes": 6})
+                corr=None, consensus_fn=lambda s, **k: {"verdict": "BUY", "raw_score": 0.4, "active_nodes": 6},
+                # Pin config so tests never depend on the live gesh_config.json.
+                config={"max_open_positions": 5, "min_cash_buffer": 500.0, "max_stock_per_trade": 5000.0})
 
 def test_live_state_is_swap_only():
     holdings = [holding(s) for s in ["NVDA", "QQQ", "MU", "AMD", "IONQ", "EEM", "APP", "RKLB"]]
@@ -345,6 +347,43 @@ def test_summarize_for_prompt_is_compact_and_safe():
     assert "advisory" in txt.lower()
     assert "withdrawable" not in txt              # PII never reaches the prompt
     assert ir.summarize_for_prompt({}) == ""      # empty radar → empty string
+
+
+def test_scan_emits_resize_state_for_what_if():
+    holdings = [holding("NVDA"), holding("MSFT")]
+    screened = [mk("KO", sector="Consumer Defensive", price=60.0),
+                mk("XOM", sector="Energy", price=110.0),
+                mk("JPM", sector="Financial Services", price=200.0)]
+    inj = _inject(["KO", "XOM", "JPM"],
+                  sector_map={"KO": "Consumer Defensive", "XOM": "Energy",
+                              "JPM": "Financial Services"})
+    out = ir.scan_candidates(holdings, EQUITY_CASHED, screened=screened, **inj)
+    st = out.get("resize_state")
+    assert st and st["survivors"] and st["total"] > 0
+    for s in st["survivors"]:
+        assert {"symbol", "sector", "price", "vol"} <= set(s)
+
+
+def test_resize_for_cash_sizes_and_hides_pii():
+    holdings = [holding("NVDA"), holding("MSFT")]
+    screened = [mk("KO", sector="Consumer Defensive", price=60.0),
+                mk("XOM", sector="Energy", price=110.0),
+                mk("JPM", sector="Financial Services", price=200.0)]
+    inj = _inject(["KO", "XOM", "JPM"],
+                  sector_map={"KO": "Consumer Defensive", "XOM": "Energy",
+                              "JPM": "Financial Services"})
+    # Live state has $0 deployable → SWAP_ONLY, but resize_state lets us test BUY sizing.
+    out = ir.scan_candidates(holdings, EQUITY_LIVE, screened=screened, **inj)
+    st = out["resize_state"]
+    r = ir.resize_for_cash(st, 9000.0)
+    assert r["mode"] == "BUY" and r["what_if"] is True
+    assert r["deployable_cash"] == 9000.0
+    assert len(r["candidates"]) >= 1
+    assert all(c["actionable"] for c in r["candidates"])
+    assert sum(c["recommended_usd"] for c in r["candidates"]) <= 9000.0 + 1e-6
+    blob = json.dumps(r)
+    assert "resize_state" not in blob and "sector_value" not in blob and "withdrawable" not in blob
+    assert ir.resize_for_cash(st, 0.0)["mode"] in ("SWAP_ONLY", "NO_ACTION")   # no cash → no buys
 
 
 def test_output_has_required_contract_keys():

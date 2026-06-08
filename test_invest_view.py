@@ -90,3 +90,51 @@ def test_render_escapes_xss_and_breaks_script():
 def test_render_never_raises_on_minimal():
     html = iv.render_invest_html(iv.load_invest_data("/nonexistent/path.json"))
     assert "<!doctype html>" in html
+
+
+def _radar_with_resize_state():
+    return {
+        "as_of": "2026-06-07T12:00:00+00:00", "mode": "SWAP_ONLY", "deployable_cash": 0.0,
+        "open_slots": 3, "new_names_to_add": 0, "excluded_holdings": ["NVDA"],
+        "existing_sector_weights": {"Technology": 0.23}, "candidates": [],
+        "swap_suggestions": [], "diagnostics": {},
+        "resize_state": {
+            "survivors": [
+                {"symbol": "KO", "company_name": "KO", "sector": "Consumer Defensive",
+                 "price": 60.0, "vol": 0.02, "composite_z": 0.6, "factor_scores": {},
+                 "timing": {"confluence_fraction": 0.5}, "max_corr_to_holdings": 0.2,
+                 "correlation_ok": True, "consensus_verdict": "BUY", "analyst_upside": 15,
+                 "num_analysts": 20},
+                {"symbol": "XOM", "company_name": "XOM", "sector": "Energy",
+                 "price": 110.0, "vol": 0.025, "composite_z": 0.4, "factor_scores": {},
+                 "timing": {"confluence_fraction": 0.4}, "max_corr_to_holdings": 0.2,
+                 "correlation_ok": True, "consensus_verdict": "HOLD", "analyst_upside": 8,
+                 "num_analysts": 12},
+            ],
+            "sector_value": {"Technology": 8000.0}, "total": 35000.0,
+            "open_slots": 3, "max_stock_per_trade": 5000.0,
+        },
+    }
+
+
+def test_load_what_if_cash_sizes_and_keeps_state_server_side(tmp_path):
+    path = _write(tmp_path, {"diversification_candidates": _radar_with_resize_state()})
+    d = iv.load_invest_data(path, what_if_cash=9000.0)
+    assert d["mode"] == "BUY"
+    assert d["what_if_cash"] == 9000.0
+    assert len(d["candidates"]) >= 1 and all(c.get("actionable") for c in d["candidates"])
+    blob = json.dumps(d)
+    assert "resize_state" not in blob          # server-side sizing state never leaks
+    assert "sector_value" not in blob and "withdrawable_amount" not in blob
+
+
+def test_load_without_what_if_is_live(tmp_path):
+    path = _write(tmp_path, {"diversification_candidates": _radar_with_resize_state()})
+    d = iv.load_invest_data(path)
+    assert d["what_if_cash"] is None
+    assert d["mode"] == "SWAP_ONLY"
+
+
+def test_render_includes_what_if_slider():
+    html = iv.render_invest_html(iv.load_invest_data("/nonexistent/path.json"))
+    assert 'id="wi-slider"' in html and "what_if_cash=" in html

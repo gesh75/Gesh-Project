@@ -82,9 +82,18 @@ def _age_days(iso: str | None) -> float | None:
         return None
 
 
-def load_invest_data(results_path: str | None = None) -> dict[str, Any]:
+def _whitelist(cands: list) -> list:
+    return [{k: c.get(k) for k in _CARD_FIELDS if k in c} for c in (cands or [])]
+
+
+def load_invest_data(results_path: str | None = None,
+                     what_if_cash: float | None = None) -> dict[str, Any]:
     """Read the persisted radar from engine_results.json, read-only. Never raises —
-    returns an honest empty contract on any missing/unreadable/absent-radar case."""
+    returns an honest empty contract on any missing/unreadable/absent-radar case.
+
+    When `what_if_cash` is given, re-sizes the candidates for that HYPOTHETICAL deployable
+    amount server-side (pure, no network) — the portfolio total / sector $ used for sizing
+    stay server-side; only the sized public candidates reach the client."""
     path = results_path or DEFAULT_RESULTS
     try:
         with open(path) as f:
@@ -99,11 +108,7 @@ def load_invest_data(results_path: str | None = None) -> dict[str, Any]:
 
     generated_at = radar.get("as_of") or eng.get("ai_result_ran_at")
     age = _age_days(generated_at)
-    candidates = [
-        {k: c.get(k) for k in _CARD_FIELDS if k in c}
-        for c in (radar.get("candidates") or [])
-    ]
-    return {
+    payload = {
         "schema_version": SCHEMA_VERSION,
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "generated_at": generated_at,
@@ -114,12 +119,32 @@ def load_invest_data(results_path: str | None = None) -> dict[str, Any]:
         "new_names_to_add": radar.get("new_names_to_add", 0),
         "excluded_holdings": radar.get("excluded_holdings", []),
         "existing_sector_weights": radar.get("existing_sector_weights", {}),
-        "candidates": candidates,
+        "candidates": _whitelist(radar.get("candidates")),
         "swap_suggestions": radar.get("swap_suggestions", []),
         "diagnostics": radar.get("diagnostics", {}),
         "stale": (age is not None and age > 1.5),
         "age_days": round(age, 2) if age is not None else None,
+        "what_if_cash": None,
     }
+
+    # What-if cash slider — re-size server-side using the captured survivors (no network).
+    state = radar.get("resize_state")
+    if what_if_cash is not None and isinstance(state, dict) and state.get("survivors"):
+        try:
+            import invest_radar
+            wi = invest_radar.resize_for_cash(state, float(what_if_cash))
+            payload["mode"] = wi["mode"]
+            payload["deployable_cash"] = wi["deployable_cash"]
+            payload["open_slots"] = wi["open_slots"]
+            payload["new_names_to_add"] = wi["new_names_to_add"]
+            payload["candidates"] = _whitelist(wi["candidates"])
+            payload["swap_suggestions"] = []      # what-if focuses on the sized buys
+            payload["what_if_cash"] = round(float(what_if_cash), 2)
+            payload["note"] = (f"What-if: sized picks for ${float(what_if_cash):,.0f} deployable "
+                               f"(hypothetical — your real config and account are unchanged).")
+        except Exception:
+            pass   # fall back to the live payload on any what-if error
+    return payload
 
 
 # ── renderer (self-contained HTML + inline poll JS) ──────────────────────────
@@ -172,6 +197,15 @@ def render_invest_html(data: dict[str, Any]) -> str:
 
  <div class="card"><h2>Book concentration <span style="color:{_DIM};font-size:11px;font-weight:400">existing holdings by sector</span></h2>
    <div id="sectors"></div></div>
+
+ <div class="card">
+   <h2>What-if · cash to deploy
+     <span id="wi-val" class="num" style="color:{_CYAN};font-weight:400">live</span>
+     <button id="wi-reset" style="float:right;background:{_BORDER};color:#e8eef6;border:0;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer">reset to live</button></h2>
+   <input type="range" id="wi-slider" min="0" max="20000" step="250" value="0" style="width:100%;accent-color:{_CYAN};cursor:pointer">
+   <div style="display:flex;justify-content:space-between;color:{_DIM};font-size:10px"><span>$0</span><span>$5k</span><span>$10k</span><span>$15k</span><span>$20k</span></div>
+   <div style="color:{_DIM};font-size:11px;margin-top:5px">Drag to preview how the radar would size new-name buys at a hypothetical deployable cash — your real config and account stay unchanged.</div>
+ </div>
 
  <div class="card"><h2>New-name candidates <span class="chip" id="cand-note"></span></h2>
    <table><thead><tr><th>Symbol</th><th>Sector</th><th class="r">Score</th><th>Consensus</th>
@@ -235,11 +269,28 @@ function renderInvest(d){{
   }} else {{ sc.style.display="none"; }}
 }}
 function setStatus(t){{document.getElementById("status").textContent=t;}}
+let whatIf=null;   // null = live; a number = hypothetical deployable cash
 async function refresh(){{
-  try{{const r=await fetch('/invest/data',{{cache:'no-store'}});if(!r.ok){{setStatus('offline — last good view');return;}}
-    const d=await r.json();renderInvest(d);setStatus('live · '+(d.as_of||'').slice(11,19));}}
-  catch(_){{setStatus('offline — last good view');}}
+  try{{
+    const url=whatIf?('/invest/data?what_if_cash='+whatIf):'/invest/data';
+    const r=await fetch(url,{{cache:'no-store'}});if(!r.ok){{setStatus('offline — last good view');return;}}
+    const d=await r.json();renderInvest(d);
+    setStatus((d.what_if_cash?('what-if $'+d.what_if_cash.toLocaleString()+' · '):'live · ')+(d.as_of||'').slice(11,19));
+  }}catch(_){{setStatus('offline — last good view');}}
 }}
+const wiSlider=document.getElementById('wi-slider');
+const wiVal=document.getElementById('wi-val');
+let wiTimer=null;
+wiSlider.addEventListener('input',()=>{{
+  const v=+wiSlider.value;
+  wiVal.textContent=v>0?('what-if $'+v.toLocaleString()):'live';
+  wiVal.style.color=v>0?C.yellow:C.cyan;
+  whatIf=v>0?v:null;
+  clearTimeout(wiTimer); wiTimer=setTimeout(refresh,200);   // debounce drags
+}});
+document.getElementById('wi-reset').addEventListener('click',()=>{{
+  whatIf=null; wiSlider.value=0; wiVal.textContent='live'; wiVal.style.color=C.cyan; refresh();
+}});
 renderInvest({payload});
 refresh(); setInterval(refresh,12000);
 document.addEventListener('visibilitychange',()=>{{if(!document.hidden)refresh();}});

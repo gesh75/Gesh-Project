@@ -583,17 +583,68 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
     mode = "BUY" if (picks and not preview) else ("SWAP_ONLY" if survivors else "NO_ACTION")
     swaps = [] if mode == "BUY" else _build_swaps(holdings, sector_value, survivors, total, sector_of)
 
+    # What-if sizing state — server-side ONLY (never sent to the client; carries `total`
+    # + sector $-values). Captures the scored shortlist so the /invest cash slider can
+    # re-size instantly with NO network. Reuses any consensus already run on the picks
+    # (no extra calls). `total`/`sector_value` stay server-side; only sized public
+    # candidates ever reach the browser.
+    pick_cons = {p["symbol"]: (p.get("consensus_verdict"), p.get("consensus_raw_score")) for p in picks}
+    resize_shortlist = _shortlist(survivors, sector_value, total, max(MAX_NEW_NAMES, 6))
+    rs_survivors = []
+    for s in resize_shortlist:
+        cv, crs = pick_cons.get(s["symbol"], ("N/A", None))
+        rs_survivors.append({
+            "symbol": s["symbol"], "company_name": s.get("company_name"), "sector": s["sector"],
+            "price": s["price"], "vol": vols.get(s["symbol"]), "composite_z": s["composite_z"],
+            "factor_scores": s.get("factor_scores"), "timing": s.get("timing"),
+            "max_corr_to_holdings": s.get("max_corr_to_holdings"),
+            "correlation_ok": s.get("correlation_ok"), "consensus_verdict": cv,
+            "consensus_raw_score": crs, "analyst_upside": s.get("analyst_upside"),
+            "num_analysts": s.get("num_analysts"), "ret_1w": s.get("ret_1w"),
+            "ret_1m": s.get("ret_1m"),
+        })
+    resize_state = {
+        "survivors": rs_survivors, "sector_value": sector_value, "total": total,
+        "open_slots": open_slots, "max_stock_per_trade": float(cfg["max_stock_per_trade"]),
+    }
+
     return {
         "as_of": _now_iso(now), "mode": mode, "deployable_cash": round(deployable, 2),
         "open_slots": open_slots, "new_names_to_add": new_names,
         "excluded_holdings": excluded, "candidates": [_public(p) for p in picks],
         "swap_suggestions": swaps, "existing_sector_weights": existing_weights,
+        "resize_state": resize_state,
         "diagnostics": {
             "universe_size": universe_n, "after_exclusions": after_excl,
             "after_timing_gate": after_timing, "after_corr_filter": after_corr,
             "after_sector_cap": sized_n, "data_warnings": warnings,
         },
     }
+
+
+def resize_for_cash(state: dict, what_if_cash: float, *, what_if_slots: int | None = None) -> dict:
+    """Re-size the diversification picks for a HYPOTHETICAL deployable-cash amount using the
+    survivors captured at scan time — pure, instant, NO network. Powers the /invest cash
+    slider. Returns only sized public candidates; never echoes portfolio total / sector $."""
+    survivors = state.get("survivors") or []
+    sector_value = state.get("sector_value") or {}
+    total = float(state.get("total") or 1.0) or 1.0
+    cfg = {"max_stock_per_trade": float(state.get("max_stock_per_trade", 5000.0)),
+           "min_cash_buffer": 0.0, "max_open_positions": 0}
+    vols = {s["symbol"]: s.get("vol") for s in survivors}
+    open_slots = int(what_if_slots) if what_if_slots is not None else int(state.get("open_slots", 0))
+    deployable = max(0.0, float(what_if_cash or 0.0))
+    new_names = min(open_slots, MAX_NEW_NAMES)
+    picks, preview = [], False
+    if new_names > 0 and deployable > 0:
+        picks = _select(survivors, sector_value, total, new_names, deployable, vols, cfg)
+    if not picks and survivors:
+        picks = _shortlist(survivors, sector_value, total, MAX_NEW_NAMES)
+        preview = True
+    mode = "BUY" if (picks and not preview) else ("SWAP_ONLY" if survivors else "NO_ACTION")
+    return {"mode": mode, "deployable_cash": round(deployable, 2), "open_slots": open_slots,
+            "new_names_to_add": new_names, "candidates": [_public(p) for p in picks],
+            "what_if": True}
 
 
 def _shortlist(survivors, sector_value, total, n) -> list[dict]:

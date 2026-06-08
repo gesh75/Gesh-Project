@@ -348,12 +348,13 @@ def invest_page():
 
 
 @app.get("/invest/data")
-def invest_data():
-    """Read-only JSON snapshot powering the /invest 12s poll. Reads the radar the
-    daily 10:30 pipeline persisted into engine_results.json. Same auth gate as /invest."""
+def invest_data(what_if_cash: float | None = None):
+    """Read-only JSON snapshot powering the /invest 12s poll. Reads the radar the daily
+    10:30 pipeline persisted into engine_results.json. `what_if_cash` (the slider) re-sizes
+    the picks for a hypothetical deployable amount server-side. Same auth gate as /invest."""
     try:
         import invest_view
-        return JSONResponse(invest_view.load_invest_data())
+        return JSONResponse(invest_view.load_invest_data(what_if_cash=what_if_cash))
     except Exception as exc:
         raise _server_error(exc)
 
