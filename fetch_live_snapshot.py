@@ -76,12 +76,37 @@ def fetch():
     # Profile / cash
     profile = r.profiles.load_portfolio_profile()
     account = r.profiles.load_account_profile()
-    # ALWAYS use withdrawable_amount — account["cash"] is negative for Gold accounts.
-    # Gold/margin accounts return withdrawable_amount=0 even with settled cash, so fall
-    # back to account['portfolio_cash'] (settled free cash, matches the app's "Buying power").
-    cash = float(profile.get('withdrawable_amount') or 0)
-    if cash <= 0:
-        cash = float(account.get('portfolio_cash') or 0)
+    # ── Deployable cash — THREE distinct fields, verified against the RH MCP 2026-06-09 ──
+    # Confusing these three is the source of the $531/$1,718/$4,031 churn the radar saw:
+    #   • portfolio_cash         = settled, UNLEVERAGED cash. Matches the RH MCP's
+    #                              buying_power.buying_power (the broker's authoritative
+    #                              spendable). THIS is the figure to size against.
+    #   • uncleared_deposits     = pending instant-deposit credit (e.g. $3,500). The broker
+    #                              only *sometimes* extends it as buying power; it is
+    #                              revocable and NOT settled — never size against it as
+    #                              durable dry powder. Surfaced separately so reports can
+    #                              show "settled $X + $Y pending".
+    #   • account['buying_power'] = LEVERAGED Gold-margin buying power (observed $21,632
+    #                              while settled was only $1,718). NEVER use this for
+    #                              deployability — it would size real trades on margin.
+    #                              Kept as a reference field only.
+    # Do NOT use withdrawable_amount (reads $0 while a deposit clears) and NEVER
+    # account['cash'] (negative margin-accounting figure on Gold accounts — CLAUDE.md rule).
+    settled_cash       = float(account.get('portfolio_cash') or 0)
+    if settled_cash <= 0:
+        settled_cash   = float(profile.get('withdrawable_amount') or 0)
+    pending_deposits   = float(account.get('uncleared_deposits') or 0)
+    bp_leveraged       = float(account.get('buying_power') or 0)   # incl. Gold margin — reference ONLY
+    withdrawable       = float(profile.get('withdrawable_amount') or 0)
+    account_equity     = float(profile.get('equity') or 0)         # app headline total
+
+    # Deployable = settled cash, hard-capped so a leveraged buying_power can NEVER inflate
+    # it past actual cash. The cap only bites in the impossible margin<settled case; its
+    # real job is to make "size against account['buying_power']" structurally unreachable.
+    deployable = min(settled_cash, bp_leveraged) if bp_leveraged > 0 else settled_cash
+    cash       = deployable   # back-compat alias consumed by radar / gates / report
+    margin_buying_power = bp_leveraged  # legacy snapshot key (kept; reference only)
+    uncleared_deposits  = pending_deposits  # legacy snapshot key alias
 
     # Holdings
     positions = r.account.get_open_stock_positions()
@@ -119,10 +144,18 @@ def fetch():
         'source':        'robinhood_live',
         'holdings':      holdings,
         'equity_summary': {
-            'portfolio_equity':    round(total_equity, 2),
-            'cash':                round(cash, 2),
+            'portfolio_equity':    round(total_equity, 2),       # positions market value
+            'cash':                round(cash, 2),               # = deployable (back-compat alias)
+            'deployable':          round(deployable, 2),         # canonical sizing figure (settled, unleveraged)
+            'settled_cash':        round(settled_cash, 2),       # settled cash = broker unleveraged BP
+            'pending_deposits':    round(pending_deposits, 2),   # instant-deposit credit — revocable, not settled
+            'buying_power':        round(deployable, 2),         # = deployable (NEVER account['buying_power'])
+            'buying_power_leveraged': round(bp_leveraged, 2),    # Gold margin — reference ONLY, never size on this
+            'margin_buying_power': round(margin_buying_power, 2),  # legacy key (= buying_power_leveraged)
+            'withdrawable_amount': round(withdrawable, 2),       # reference only (reads $0 while deposits clear)
+            'uncleared_deposits':  round(uncleared_deposits, 2),  # legacy key (= pending_deposits)
             'total':               round(portfolio_total, 2),
-            'withdrawable_amount': round(cash, 2),
+            'account_equity':      round(account_equity, 2),     # app headline total
         },
     }
 

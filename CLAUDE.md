@@ -392,7 +392,13 @@ Every decision (approve or reject) is persisted to `risk_decisions` before retur
 - Skip Monte Carlo when declaring a portfolio "safe"
 - Use vague language — always cite specific dollar amounts, percentages, dates
 - Set `auto_trade=True` or `PAPER_MODE=false` without weeks of clean paper history
-- Use `account["cash"]` — always use `profile["withdrawable_amount"]`
+- Size against `account["buying_power"]` — on Gold accounts it is the **leveraged margin**
+  figure (observed $21,632 while settled cash was $1,718). The deployable figure is
+  `account["portfolio_cash"]` (settled, unleveraged — matches the RH MCP's
+  `buying_power.buying_power`). Never `account["cash"]` (negative margin-accounting figure).
+  `withdrawable_amount` reads $0 while a deposit clears, so it is not a deployability proxy.
+  `fetch_live_snapshot.py` emits the canonical `deployable` key (settled, leverage-capped)
+  plus `settled_cash` / `pending_deposits` for report decomposition — size against `deployable`.
 
 ### Output standards
 - Risk amounts always in dollars: "$4,200 at risk at 95% VaR"
