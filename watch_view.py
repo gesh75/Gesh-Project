@@ -394,7 +394,7 @@ def render_watch_html(data: dict[str, Any]) -> str:
 </div>
 <script>
 const C={{green:"{_GREEN}",red:"{_RED}",dim:"{_DIM}",yellow:"{_YELLOW}",orange:"{_ORANGE}",border:"{_BORDER}"}};
-const fmtUsd=v=>v==null?"—":(v>=0?"+":"")+"$"+Math.abs(v).toFixed(2);
+const fmtUsd=v=>v==null?"—":(v>=0?"+":"-")+"$"+Math.abs(v).toFixed(2);
 const fmtPct=v=>v==null?"—":(v>=0?"+":"")+(v*100).toFixed(1)+"%";
 const pnlColor=v=>v==null?C.dim:(v>=0?C.green:C.red);
 const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}}[c]));
