@@ -103,6 +103,9 @@ def load_track_record(
     wins = sum(1 for r in rows if r["outcome"] == "WIN")
     losses = sum(1 for r in rows if r["outcome"] == "LOSS")
     breakeven = sum(1 for r in rows if r["outcome"] == "BREAKEVEN")
+    # POLICY (decided 2026-06-08): CONSERVATIVE — BREAKEVEN COUNTS in the denominator
+    # (win_rate = wins / all-closed), so a breakeven drags win_rate down. Kept in sync
+    # with trading/tracker.py get_win_rate; a harder gate is the safer bias before live.
     win_rate = round(wins / closed, 4) if closed else 0.0
 
     pnls = [float(r["pnl_pct"] or 0) for r in rows]

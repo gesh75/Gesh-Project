@@ -1,0 +1,1070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GESH Financial — Daily Report 2026-06-09</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#080d14;color:#e0e0e0;font-family:'JetBrains Mono','Courier New',monospace;font-size:13px;min-height:100vh}
+  a{color:#00d4ff;text-decoration:none}
+
+  /* Layout */
+  .container{max-width:1400px;margin:0 auto;padding:16px}
+  .header{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1a2840;margin-bottom:16px}
+  .header h1{font-size:20px;color:#00d4ff;letter-spacing:2px}
+  .header .ts{color:#555;font-size:11px}
+
+  /* Ticker tape */
+  .tape{background:#0a1628;border:1px solid #1a2840;border-radius:6px;padding:10px 16px;margin-bottom:16px;overflow:hidden;white-space:nowrap;font-size:12px}
+  .tape-item{margin-right:4px}
+
+  /* Stats grid */
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+  .stat-card{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:14px;text-align:center}
+  .stat-card .sv{font-size:26px;font-weight:700;margin:4px 0}
+  .stat-card .sl{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px}
+
+  /* Verdict / AI card */
+  .ai-card{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:16px;margin-bottom:16px}
+  .ai-card h3{color:#00d4ff;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
+  .ai-text{color:#bbb;font-size:12px;line-height:1.7}
+
+  /* Override banner */
+  .override-banner{background:#ff3c5a15;border:1px solid #ff3c5a44;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#ff7c9a}
+
+  /* Holdings cards */
+  .section-title{font-size:12px;color:#555;text-transform:uppercase;letter-spacing:2px;margin:20px 0 10px}
+  .holding-card{background:#0d1520;border:1px solid #1a2840;border-radius:10px;padding:16px;margin-bottom:12px}
+  .hc-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .hc-sym{font-size:18px;font-weight:700;color:#fff;margin-right:10px}
+  .hc-price{font-size:15px;font-weight:600}
+  .hc-equity{font-size:11px;color:#555}
+  .hc-meta{font-size:11px;color:#666;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #1a2840}
+  .hc-body{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px}
+  @media(max-width:900px){.hc-body{grid-template-columns:1fr 1fr}}
+  .hc-section-title{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px}
+  .badge{font-size:9px;font-weight:700;padding:2px 7px;border-radius:3px;margin-left:4px;letter-spacing:1px}
+  .consensus-row{display:flex;align-items:center;gap:8px;margin:4px 0}
+  .cons-icon{font-size:16px}
+  .cons-verdict{font-size:13px;font-weight:700;color:#e0e0e0}
+  .cons-score{font-size:11px}
+  .kelly-row{display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px}
+  .bar-bg{background:#1a2840;border-radius:3px;height:4px;width:100%;margin-bottom:4px}
+  .bar-fill{height:4px;border-radius:3px;transition:width 0.3s}
+  .sf-row{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+  .sf-label{font-size:9px;color:#555;width:25px;flex-shrink:0;text-transform:uppercase}
+  .sf-bar-bg{flex:1;background:#1a2840;border-radius:2px;height:6px}
+  .sf-bar-fill{height:6px;border-radius:2px}
+  .sf-val{font-size:9px;color:#888;width:20px;text-align:right}
+  .explain-headline{font-size:10px;color:#555;font-style:italic;margin-top:4px}
+  .risk-list,.reward-list{list-style:none;padding:0}
+  .risk-item{font-size:10px;color:#ff7c9a;line-height:1.5;margin-bottom:3px;padding-left:10px;border-left:2px solid #ff3c5a33}
+  .risk-item.sev-high{color:#ff3c5a}
+  .reward-item{font-size:10px;color:#88d4a0;line-height:1.5;margin-bottom:3px;padding-left:10px;border-left:2px solid #00e87a33}
+  .pred-block{background:#0a1628;border-radius:4px;padding:6px 8px}
+  .pred-label{font-size:9px;color:#00d4ff;font-weight:700;margin-bottom:2px}
+  .pred-text{font-size:10px;color:#bbb;line-height:1.5}
+
+  /* Charts */
+  .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+  @media(max-width:700px){.charts-grid{grid-template-columns:1fr}}
+  .chart-card{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:16px}
+  .chart-title{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+
+  /* Regime grid */
+  .regime-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:16px}
+  .regime-card{background:#0d1520;border-radius:6px;padding:12px}
+  .rc-sym{font-size:15px;font-weight:700;color:#fff;margin-bottom:2px}
+  .rc-regime{font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:4px}
+  .rc-stats{font-size:10px;color:#555;margin-bottom:4px}
+  .rc-desc{font-size:10px;color:#888;line-height:1.4}
+
+  /* Action table */
+  .action-table{width:100%;border-collapse:collapse;margin-bottom:16px}
+  .action-table th{font-size:10px;color:#555;text-align:left;padding:6px 10px;border-bottom:1px solid #1a2840;text-transform:uppercase;letter-spacing:1px}
+  .action-table td{padding:8px 10px;border-bottom:1px solid #0d1f33;font-size:12px;vertical-align:top}
+  .action-table tr:hover td{background:#0a1628}
+
+  /* Vol + alpha tables */
+  .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+  @media(max-width:700px){.two-col{grid-template-columns:1fr}}
+  .table-card{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:14px}
+  .mini-table{width:100%;border-collapse:collapse}
+  .mini-table th{font-size:9px;color:#444;text-align:left;padding:4px 8px;border-bottom:1px solid #1a2840;text-transform:uppercase}
+  .mini-table td{padding:5px 8px;border-bottom:1px solid #0d1f33;font-size:11px}
+
+  /* Portfolio risks */
+  .port-risk{background:#0d1520;border:1px solid #1a2840;border-radius:6px;padding:10px 14px;margin-bottom:8px;font-size:12px;line-height:1.6}
+  .sev-pill{font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-right:8px}
+
+  /* Tax + Yield */
+  .tax-item{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1a2840;font-size:12px}
+  .yield-tier{margin-bottom:12px}
+  .yield-tier-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+  .yield-item{display:grid;grid-template-columns:1fr 100px 80px;gap:8px;padding:5px 0;border-bottom:1px solid #0d1f33;font-size:11px;align-items:center}
+  .yi-name{color:#e0e0e0}
+  .yi-apy{font-weight:700}
+  .yi-risk{color:#555;font-size:10px}
+
+  /* Footer */
+  .footer{text-align:center;color:#333;font-size:10px;padding:24px 0;border-top:1px solid #1a2840;margin-top:24px}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <h1>⚡ GESH FINANCIAL</h1>
+      <div style="font-size:11px;color:#00d4ff;margin-top:2px">AI-Powered Portfolio Observability &nbsp;|&nbsp; Aggressive Growth / Speculative Tech</div>
+    </div>
+    <div class="ts" style="text-align:right">
+      <div style="font-size:12px;color:#00e87a">+$766.13 (+2.21%) today</div>
+      <div>Generated 2026-06-09 01:38 UTC</div>
+      <div>Data: 2026-06-09 01:33:23 UTC</div>
+    </div>
+  </div>
+
+  <!-- Ticker tape -->
+  <div class="tape"><span class="tape-item"><b>NVDA</b> <span style="color:#00e87a">▲ $208.64 (+4.06%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>QQQ</b> <span style="color:#00e87a">▲ $716.02 (+13.77%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>MU</b> <span style="color:#00e87a">▲ $949.47 (+33.80%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>AMD</b> <span style="color:#00e87a">▲ $490.07 (+35.07%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>IONQ</b> <span style="color:#00e87a">▲ $62.81 (+9.74%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>EEM</b> <span style="color:#00e87a">▲ $65.74 (+2.91%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>APP</b> <span style="color:#00e87a">▲ $563.76 (+6.75%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>RKLB</b> <span style="color:#ff3c5a">▼ $113.67 (-15.39%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>NVDA</b> <span style="color:#00e87a">▲ $208.64 (+4.06%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>QQQ</b> <span style="color:#00e87a">▲ $716.02 (+13.77%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>MU</b> <span style="color:#00e87a">▲ $949.47 (+33.80%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>AMD</b> <span style="color:#00e87a">▲ $490.07 (+35.07%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>IONQ</b> <span style="color:#00e87a">▲ $62.81 (+9.74%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>EEM</b> <span style="color:#00e87a">▲ $65.74 (+2.91%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>APP</b> <span style="color:#00e87a">▲ $563.76 (+6.75%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>RKLB</b> <span style="color:#ff3c5a">▼ $113.67 (-15.39%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>NVDA</b> <span style="color:#00e87a">▲ $208.64 (+4.06%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>QQQ</b> <span style="color:#00e87a">▲ $716.02 (+13.77%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>MU</b> <span style="color:#00e87a">▲ $949.47 (+33.80%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>AMD</b> <span style="color:#00e87a">▲ $490.07 (+35.07%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>IONQ</b> <span style="color:#00e87a">▲ $62.81 (+9.74%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>EEM</b> <span style="color:#00e87a">▲ $65.74 (+2.91%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>APP</b> <span style="color:#00e87a">▲ $563.76 (+6.75%)</span></span> &nbsp;|&nbsp; <span class="tape-item"><b>RKLB</b> <span style="color:#ff3c5a">▼ $113.67 (-15.39%)</span></span></div>
+
+  <!-- Stats grid -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="sl">Portfolio Total</div>
+      <div class="sv" style="color:#00e87a">$34,220</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">AI Score</div>
+      <div class="sv" style="color:#f0b429">62/100</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">Risk Score</div>
+      <div class="sv" style="color:#ff3c5a">72/100</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">VaR 95% (21d)</div>
+      <div class="sv" style="color:#ff3c5a">26.1%</div>
+      <div style="font-size:9px;color:#ff3c5a">⚠️ RED >15%</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">CVaR 95%</div>
+      <div class="sv" style="color:#f0b429">33.3%</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">Prob Profit</div>
+      <div class="sv" style="color:#00d4ff">61%</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">MC Median (21d)</div>
+      <div class="sv" style="color:#00d4ff">$36,152</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">Cash / Buying Power</div>
+      <div class="sv" style="color:#00e87a">$531</div>
+      <div style="font-size:9px;color:#00e87a">✓ OK</div>
+    </div>
+    <div class="stat-card">
+      <div class="sl">Diversification</div>
+      <div class="sv" style="color:#ff3c5a">31/100</div>
+    </div>
+  </div>
+
+  <!-- Override banner -->
+  
+  
+
+  <!-- AI Verdict -->
+  <div class="ai-card">
+    <h3>📊 AI Portfolio Verdict</h3>
+    <div class="ai-text">A high-conviction, tech-heavy growth portfolio with strong embedded gains in MU and AMD, meaningful quantum/space speculative exposure, and a thin cash buffer. Concentration risk is the dominant structural concern — 72% Technology weighting leaves the book acutely vulnerable to sector rotation and macro rate shocks. Active trend signals on most names suggest near-term momentum support, but NVDA's ranging regime and RKLB's underwater position warrant attention.</div>
+  </div>
+
+  <!-- Market Context -->
+  <div class="ai-card">
+    <h3>🌍 Market Context</h3>
+    <div class="ai-text">As of June 8, 2026, markets are navigating a late-cycle environment where AI-infrastructure capex remains robust but consensus expectations are increasingly priced in. The Fed has held rates in restrictive territory longer than anticipated, compressing valuations on unprofitable growth names. Semiconductor stocks (MU, AMD, NVDA) are benefiting from a cyclical upcycle driven by HBM/AI accelerator demand, while quantum computing (IONQ) remains a pre-revenue thesis play. Emerging market ETFs (EEM) face headwinds from a resilient USD and China property sector drag. The ADX regime signals confirm broad trending conditions in most holdings, lending near-term technical support, though NVDA and EEM are in low-conviction ranging regimes.</div>
+  </div>
+
+  <!-- Holdings -->
+  <div class="section-title">📈 Holdings Analysis (8 positions)</div>
+  
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">NVDA</span>
+      <span class="badge" style="background:#aaa22;color:#aaa;border:1px solid #aaa44">RANGING</span>
+      <span class="hc-verdict-badge" style="color:#aaa;border:1px solid #aaa44;background:#aaa15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">HOLD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#00e87a">$208.64 (+4.06%)</div>
+      <div class="hc-equity">$5,842 &nbsp;|&nbsp; 17.1% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    28.000 sh &nbsp;·&nbsp; avg $200.49 &nbsp;·&nbsp; gain +4.1%
+    &nbsp;·&nbsp; RSI 44 &nbsp;·&nbsp; ADX 16
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(8 nodes, conf 89%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🟡</span>
+        <span class="cons-verdict">HOLD</span>
+        <span class="cons-score" style="color:#f0b429">score +0.18</span>
+      </div>
+      <div class="explain-headline">NVDA — Hold 🟡 (score=+0.18, 8 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 17.1%</span>
+        <span style="color:#00d4ff">→ Optimal 25.0%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:57%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:28%;background:#00d4ff"></div></div>
+    <span class="sf-val">28</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:95%;background:#00d4ff"></div></div>
+    <span class="sf-val">95</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:82%;background:#00d4ff"></div></div>
+    <span class="sf-val">82</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:42%;background:#00d4ff"></div></div>
+    <span class="sf-val">42</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:5%;background:#00d4ff"></div></div>
+    <span class="sf-val">5</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#ff3c5a">Overvalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $175 (-16.2%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-high">Trading at ~28x forward sales — any guidance miss or capex pullback from hyperscalers (MSFT, META, GOOGL) could trigger a 20-30% de-rating. H100/B200 demand visibility beyond 2026 remains uncertain.</li><li class="risk-item sev-high">Export control escalation: BIS restrictions on A100/H20 chip sales to China cost NVDA ~$5B+ in annual revenue. Further tightening is a binary risk event.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">Blackwell GPU ramp is tracking ahead of schedule; data center revenue run-rate exceeded $40B/quarter in early 2026, with NIM software margins expanding gross margins toward 78%.</li><li class="reward-item">CUDA ecosystem moat remains nearly unassailable — 90%+ AI training workloads run on NVDA silicon, creating durable switching costs for the next 3-5 year capex cycle.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Neutral/Cautious — ranging regime with %B below zero suggests consolidation between $185–$225. Await catalyst (Computex follow-through or Q2 earnings beat) before adding.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Moderately Bullish — $230–$260 base case if Blackwell supply ramp and sovereign AI demand (Middle East, Europe) materialize. Bull case $290+ if NIM platform revenues accelerate.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">HOLD — Strong business, stretched valuation, consolidating technically. Your 4.06% unrealized gain is modest relative to the position size; avoid adding until a decisive trend resumption (ADX >25) is confirmed.</div>
+    </div>
+  </div>
+</div>
+
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">QQQ</span>
+      <span class="badge" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44">TRENDING</span>
+      <span class="hc-verdict-badge" style="color:#00e87a;border:1px solid #00e87a44;background:#00e87a15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">ADD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#00e87a">$716.02 (+13.77%)</div>
+      <div class="hc-equity">$1,489 &nbsp;|&nbsp; 4.3% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    2.079 sh &nbsp;·&nbsp; avg $629.38 &nbsp;·&nbsp; gain +13.8%
+    &nbsp;·&nbsp; RSI 48 &nbsp;·&nbsp; ADX 36
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(7 nodes, conf 78%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🟡</span>
+        <span class="cons-verdict">HOLD</span>
+        <span class="cons-score" style="color:#f0b429">score +0.11</span>
+      </div>
+      <div class="explain-headline">QQQ — Hold 🟡 (score=+0.11, 7 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 4.3%</span>
+        <span style="color:#00d4ff">→ Optimal 25.0%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:14%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:35%;background:#00d4ff"></div></div>
+    <span class="sf-val">35</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:62%;background:#00d4ff"></div></div>
+    <span class="sf-val">62</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:75%;background:#00d4ff"></div></div>
+    <span class="sf-val">75</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:58%;background:#00d4ff"></div></div>
+    <span class="sf-val">58</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:8%;background:#00d4ff"></div></div>
+    <span class="sf-val">8</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#ff3c5a">Slightly Overvalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $680 (-5.0%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-medium">Top-10 holdings (AAPL, MSFT, NVDA, META, AMZN) represent ~55% of QQQ — this portfolio already owns NVDA directly, creating double-concentration in the largest QQQ constituent.</li><li class="risk-item sev-medium">Rate sensitivity: Nasdaq-100 carries a high duration profile. Any Fed hawkish pivot or 10Y yield spike above 4.8% would compress multiples across the index.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">Trending regime (ADX=35.6) with RSI at neutral 48.3 suggests room to run — not overbought, with strong directional conviction in the trend.</li><li class="reward-item">13.77% unrealized gain provides a solid cushion; ETF structure eliminates single-stock blowup risk across the Nasdaq-100 universe.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Bullish — Trending regime intact, %B=21% indicates price in lower half of BB with room to expand. $740–$760 near-term target.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Moderately Bullish — $780–$820 base case driven by continued AI-infrastructure earnings beats across mega-cap holdings. Risk: macro shock or earnings deceleration.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">HOLD / ACCUMULATE on dips — The cleanest risk-adjusted holding in the book. Consider sizing up modestly if trimming speculative names.</div>
+    </div>
+  </div>
+</div>
+
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">MU</span>
+      <span class="badge" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44">TRENDING</span>
+      <span class="hc-verdict-badge" style="color:#aaa;border:1px solid #aaa44;background:#aaa15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">HOLD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#00e87a">$949.47 (+33.80%)</div>
+      <div class="hc-equity">$6,172 &nbsp;|&nbsp; 18.0% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    6.500 sh &nbsp;·&nbsp; avg $709.60 &nbsp;·&nbsp; gain +33.8%
+    &nbsp;·&nbsp; RSI 55 &nbsp;·&nbsp; ADX 36
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(8 nodes, conf 89%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🚀</span>
+        <span class="cons-verdict">STRONG BUY</span>
+        <span class="cons-score" style="color:#00e87a">score +0.66</span>
+      </div>
+      <div class="explain-headline">MU — Strong Buy 🚀 (score=+0.66, 8 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 18.0%</span>
+        <span style="color:#00d4ff">→ Optimal 25.0%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:60%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:62%;background:#00d4ff"></div></div>
+    <span class="sf-val">62</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:88%;background:#00d4ff"></div></div>
+    <span class="sf-val">88</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:70%;background:#00d4ff"></div></div>
+    <span class="sf-val">70</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:72%;background:#00d4ff"></div></div>
+    <span class="sf-val">72</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:10%;background:#00d4ff"></div></div>
+    <span class="sf-val">10</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#00e87a">Undervalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $1,050 (+10.6%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-high">Memory is a notoriously cyclical industry — DRAM spot prices could reverse sharply if PC/smartphone demand weakens or Samsung/SK Hynix ramp capacity aggressively in H2 2026.</li><li class="risk-item sev-medium">HBM3E supply concentration: MU derives an increasing share of gross margin from HBM for AI. Any demand slowdown from NVDA/AMD GPU shipments directly impacts MU's premium revenue stream.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">HBM3E is structurally under-supplied through at least mid-2027. MU is NVDA's second-largest HBM supplier — a direct AI infrastructure beneficiary with $5–$7B HBM revenue potential in FY2026.</li><li class="reward-item">Memory upcycle is mid-cycle, not late-cycle: DRAM ASPs continue to rise as AI server builds dominate incremental demand, compressing the typical boom-bust amplitude of prior cycles.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Bullish — ADX=36.4 trend confirmed, %B=53% centered in BB. RSI=55.2 not stretched. $980–$1,020 near-term target.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Strongly Bullish — $1,100–$1,250 base case if HBM ramp meets expectations. FY2027 EPS estimates of $30+ imply ~35x P/E at current prices — reasonable for a memory upcycle peak.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">STRONG HOLD / ADD ON DIPS — Your best position. 33.8% gain with further upside. Do not trim prematurely; the HBM cycle has 12–18 months of runway.</div>
+    </div>
+  </div>
+</div>
+
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">AMD</span>
+      <span class="badge" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44">TRENDING</span>
+      <span class="hc-verdict-badge" style="color:#aaa;border:1px solid #aaa44;background:#aaa15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">HOLD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#00e87a">$490.07 (+35.07%)</div>
+      <div class="hc-equity">$5,881 &nbsp;|&nbsp; 17.2% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    12.000 sh &nbsp;·&nbsp; avg $362.82 &nbsp;·&nbsp; gain +35.1%
+    &nbsp;·&nbsp; RSI 54 &nbsp;·&nbsp; ADX 38
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(8 nodes, conf 89%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🚀</span>
+        <span class="cons-verdict">STRONG BUY</span>
+        <span class="cons-score" style="color:#00e87a">score +0.71</span>
+      </div>
+      <div class="explain-headline">AMD — Strong Buy 🚀 (score=+0.71, 8 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 17.2%</span>
+        <span style="color:#00d4ff">→ Optimal 25.0%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:57%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:45%;background:#00d4ff"></div></div>
+    <span class="sf-val">45</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:78%;background:#00d4ff"></div></div>
+    <span class="sf-val">78</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:68%;background:#00d4ff"></div></div>
+    <span class="sf-val">68</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:68%;background:#00d4ff"></div></div>
+    <span class="sf-val">68</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:0%;background:#00d4ff"></div></div>
+    <span class="sf-val">0</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#00e87a">Slightly Undervalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $520 (+6.1%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-high">NVDA's CUDA ecosystem dominance makes displacing AI training workloads extremely difficult. AMD's MI300X gains are primarily in inference — a lower-ASP, more competitive market segment.</li><li class="risk-item sev-medium">PC/console CPU market (Client segment) faces cyclical softness in H2 2026 as consumer spending normalizes. This ~30% of revenue could drag blended growth rates.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">MI300X cumulative shipments accelerating — hyperscaler diversification away from single-vendor NVDA dependency creates a structural tailwind for AMD's data center GPU revenue, targeting $10B+ in 2026.</li><li class="reward-item">ROCm software ecosystem is maturing rapidly, closing the CUDA gap for inference workloads. AMD's price-performance ratio makes it the preferred choice for cost-conscious hyperscalers.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Bullish — Confirmed trend with ADX=37.9, %B=45% centered and healthy. $510–$535 near-term target. Watch for MI350X launch catalyst.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Bullish — $560–$620 base case. Data center GPU revenue acceleration + CPU market stabilization supports 25-30% EPS growth in FY2027.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">HOLD / STRONG HOLD — 35% gain in a trending stock with further upside. Position sizing (17.4% of portfolio) is appropriate for the risk/reward profile.</div>
+    </div>
+  </div>
+</div>
+
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">IONQ</span>
+      <span class="badge" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44">TRENDING</span>
+      <span class="hc-verdict-badge" style="color:#aaa;border:1px solid #aaa44;background:#aaa15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">HOLD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#00e87a">$62.81 (+9.74%)</div>
+      <div class="hc-equity">$6,662 &nbsp;|&nbsp; 19.5% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    106.063 sh &nbsp;·&nbsp; avg $57.24 &nbsp;·&nbsp; gain +9.7%
+    &nbsp;·&nbsp; RSI 49 &nbsp;·&nbsp; ADX 40
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(8 nodes, conf 89%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🚀</span>
+        <span class="cons-verdict">STRONG BUY</span>
+        <span class="cons-score" style="color:#00e87a">score +0.68</span>
+      </div>
+      <div class="explain-headline">IONQ — Strong Buy 🚀 (score=+0.68, 8 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 19.5%</span>
+        <span style="color:#00d4ff">→ Optimal 25.0%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:65%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:12%;background:#00d4ff"></div></div>
+    <span class="sf-val">12</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:55%;background:#00d4ff"></div></div>
+    <span class="sf-val">55</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:52%;background:#00d4ff"></div></div>
+    <span class="sf-val">52</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:55%;background:#00d4ff"></div></div>
+    <span class="sf-val">55</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:0%;background:#00d4ff"></div></div>
+    <span class="sf-val">0</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#ff3c5a">Significantly Overvalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $35 (-44.3%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-high">Revenue is immaterial relative to market cap — IONQ trades at 80-100x forward revenue. Any quantum computing timeline delay (error correction milestones, decoherence challenges) could compress the valuation by 50%+ overnight.</li><li class="risk-item sev-high">Cash burn rate (~$120-150M annually) against a ~$500M cash position gives roughly 3-4 year runway. Dilutive capital raises are likely before profitability is achieved.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">IONQ's trapped-ion qubits achieve the highest algorithmic qubit (AQ) scores among publicly traded quantum companies — a genuine technical differentiator if the architecture scales.</li><li class="reward-item">Government and defense contracts (DoD, AFRL) provide non-dilutive revenue and validate the technology for high-security applications — a durable moat if quantum advantage is demonstrated.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Neutral/Cautious — Despite strongest ADX in book (39.9), %B=39% and RSI=48.9 show fading momentum. Risk of mean reversion to $48–$55 range if no near-term catalyst.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Highly Speculative — Binary outcomes: $90–$120 if quantum advantage milestone announced; $25–$35 if sector sentiment rotates or capital raise disappoints.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">TRIM / REDUCE — At 19.8% of portfolio in a pre-revenue quantum play trading at 80-100x revenue, the position sizing is inconsistent with prudent risk management. Recommend reducing to 8-10% weighting.</div>
+    </div>
+  </div>
+</div>
+
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">EEM</span>
+      <span class="badge" style="background:#aaa22;color:#aaa;border:1px solid #aaa44">RANGING</span>
+      <span class="hc-verdict-badge" style="color:#00e87a;border:1px solid #00e87a44;background:#00e87a15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">ADD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#00e87a">$65.74 (+2.91%)</div>
+      <div class="hc-equity">$4,930 &nbsp;|&nbsp; 14.4% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    74.989 sh &nbsp;·&nbsp; avg $63.88 &nbsp;·&nbsp; gain +2.9%
+    &nbsp;·&nbsp; RSI 43 &nbsp;·&nbsp; ADX 15
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(7 nodes, conf 78%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🟢</span>
+        <span class="cons-verdict">BUY</span>
+        <span class="cons-score" style="color:#f0b429">score +0.31</span>
+      </div>
+      <div class="explain-headline">EEM — Buy 🟢 (score=+0.31, 7 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 14.4%</span>
+        <span style="color:#00d4ff">→ Optimal 25.0%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:48%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:65%;background:#00d4ff"></div></div>
+    <span class="sf-val">65</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:45%;background:#00d4ff"></div></div>
+    <span class="sf-val">45</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:70%;background:#00d4ff"></div></div>
+    <span class="sf-val">70</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:32%;background:#00d4ff"></div></div>
+    <span class="sf-val">32</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:48%;background:#00d4ff"></div></div>
+    <span class="sf-val">48</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#00e87a">Undervalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $72 (+9.5%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-high">USD strength is the structural headwind for EEM — if the Fed holds rates restrictively and the DXY remains elevated above 104, EM currency depreciation erodes USD-denominated returns.</li><li class="risk-item sev-high">China overweight (~25-30% of EEM) exposes the ETF to property sector contagion, regulatory crackdowns, and geopolitical premium compression if Taiwan Strait tensions escalate.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">EEM trades at ~12x forward P/E vs. ~22x for S&P 500 — a historically wide valuation discount that mean-reverts over 3-5 year horizons, offering asymmetric upside in a USD weakening scenario.</li><li class="reward-item">India, Taiwan, and South Korea exposures provide genuine AI supply chain exposure (TSMC, Samsung) at a valuation discount to their US-listed peers.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Bearish/Neutral — Ranging regime, weak %B=14%, RSI declining. No near-term catalyst visible. Range-bound $63–$68.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Mildly Bullish — $70–$75 if USD softens on Fed rate cuts in H2 2026. China stimulus surprise is a wildcard upside catalyst.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">HOLD with LOW CONVICTION — Serves as the only non-tech diversifier in the book. Do not add in the current ranging regime. Reassess if ADX rises above 20 with positive directional bias.</div>
+    </div>
+  </div>
+</div>
+
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">APP</span>
+      <span class="badge" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44">TRENDING</span>
+      <span class="hc-verdict-badge" style="color:#aaa;border:1px solid #aaa44;background:#aaa15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">HOLD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#00e87a">$563.76 (+6.75%)</div>
+      <div class="hc-equity">$1,691 &nbsp;|&nbsp; 4.9% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    3.000 sh &nbsp;·&nbsp; avg $528.10 &nbsp;·&nbsp; gain +6.8%
+    &nbsp;·&nbsp; RSI 58 &nbsp;·&nbsp; ADX 34
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(7 nodes, conf 78%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🚀</span>
+        <span class="cons-verdict">STRONG BUY</span>
+        <span class="cons-score" style="color:#00e87a">score +0.75</span>
+      </div>
+      <div class="explain-headline">APP — Strong Buy 🚀 (score=+0.75, 7 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 4.9%</span>
+        <span style="color:#00d4ff">→ Optimal 6.2%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:16%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:30%;background:#00d4ff"></div></div>
+    <span class="sf-val">30</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:82%;background:#00d4ff"></div></div>
+    <span class="sf-val">82</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:60%;background:#00d4ff"></div></div>
+    <span class="sf-val">60</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:72%;background:#00d4ff"></div></div>
+    <span class="sf-val">72</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:0%;background:#00d4ff"></div></div>
+    <span class="sf-val">0</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#ff3c5a">Overvalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $480 (-14.8%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-high">APP trades at ~50x forward earnings — premium valuation requires sustained 40%+ revenue growth. Any deceleration in mobile gaming ad spend or AXON performance degradation would be severely punished.</li><li class="risk-item sev-medium">Apple ATT (App Tracking Transparency) and potential Android privacy changes remain existential regulatory risks to the mobile ad targeting ecosystem that underpins APP's core business.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">AXON 2.0 AI engine is demonstrably best-in-class for mobile performance advertising — advertisers report 20-40% ROI improvements, driving net revenue retention above 130% and rapid share gains from Meta/Google in mobile gaming vertical.</li><li class="reward-item">E-commerce advertising expansion (launched 2025) opens a TAM 5-10x larger than mobile gaming — early traction is promising and could double the addressable revenue opportunity by 2028.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Bullish — %B=65% with ADX=34.2 shows strong trending with room before overbought. $590–$620 near-term target. Watch Q2 earnings for AXON e-commerce metrics.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Bullish — $650–$750 if e-commerce ad expansion delivers. Would become a top-3 position if sizing were increased.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">HOLD / CONSIDER ADDING — Strong trending regime, exceptional fundamentals, but rich valuation limits conviction on aggressive adds. Current 5% weight is arguably too small for the quality level.</div>
+    </div>
+  </div>
+</div>
+
+<div class="holding-card">
+  <div class="hc-header">
+    <div>
+      <span class="hc-sym">RKLB</span>
+      <span class="badge" style="background:#00d4ff22;color:#00d4ff;border:1px solid #00d4ff44">TRENDING</span>
+      <span class="hc-verdict-badge" style="color:#00e87a;border:1px solid #00e87a44;background:#00e87a15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">ADD</span>
+    </div>
+    <div style="text-align:right">
+      <div class="hc-price" style="color:#ff3c5a">$113.67 (-15.39%)</div>
+      <div class="hc-equity">$1,023 &nbsp;|&nbsp; 3.0% of portfolio</div>
+    </div>
+  </div>
+  <div class="hc-meta">
+    9.000 sh &nbsp;·&nbsp; avg $134.35 &nbsp;·&nbsp; gain -15.4%
+    &nbsp;·&nbsp; RSI 47 &nbsp;·&nbsp; ADX 40
+    
+  </div>
+  <div class="hc-body">
+    <div class="hc-col">
+      <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">(7 nodes, conf 78%)</span></div>
+      <div class="consensus-row">
+        <span class="cons-icon">🟡</span>
+        <span class="cons-verdict">HOLD</span>
+        <span class="cons-score" style="color:#ff3c5a">score -0.06</span>
+      </div>
+      <div class="explain-headline">RKLB — Hold 🟡 (score=-0.06, 7 nodes active)</div>
+      <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
+      <div class="kelly-row">
+        <span>Now 3.0%</span>
+        <span style="color:#00d4ff">→ Optimal 25.0%</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill" style="width:10%;background:#00e87a"></div></div>
+      <div class="hc-section-title" style="margin-top:10px">Volatility</div>
+      <div style="font-size:11px;color:#aaa">GARCH 0.0% &nbsp;|&nbsp; EWMA 0.0% annualised</div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Snowflake Scores</div>
+      <div class="sf-row"><span class="sf-label">VAL</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:18%;background:#00d4ff"></div></div>
+    <span class="sf-val">18</span></div><div class="sf-row"><span class="sf-label">GRO</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:68%;background:#00d4ff"></div></div>
+    <span class="sf-val">68</span></div><div class="sf-row"><span class="sf-label">HLT</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:45%;background:#00d4ff"></div></div>
+    <span class="sf-val">45</span></div><div class="sf-row"><span class="sf-label">MOM</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:38%;background:#00d4ff"></div></div>
+    <span class="sf-val">38</span></div><div class="sf-row"><span class="sf-label">DIV</span>
+    <div class="sf-bar-bg"><div class="sf-bar-fill" style="width:0%;background:#00d4ff"></div></div>
+    <span class="sf-val">0</span></div>
+      <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
+      <div>
+        <span style="font-size:13px;color:#ff3c5a">Overvalued</span>
+        <span style="font-size:11px;color:#888;margin-left:6px">est $95 (-16.5%)</span>
+      </div>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Risks</div>
+      <ul class="risk-list"><li class="risk-item sev-high">RKLB is -15.39% below your average cost ($134.35 vs. $113.67) — underwater position in a stock trading near the lower Bollinger Band. Momentum is deteriorating (ADX=39.5 trending but %B=14% near lower band).</li><li class="risk-item sev-high">Neutron medium-lift rocket development requires $500M+ in capital expenditure with a first launch timeline of 2026-2027. Delays are common in launch vehicle development and could necessitate dilutive equity raises.</li></ul>
+      <div class="hc-section-title" style="margin-top:8px">Rewards</div>
+      <ul class="reward-list"><li class="reward-item">Space Systems (satellite bus, components) segment is growing faster than launch — revenue diversification into satellite manufacturing reduces pure launch dependency and provides more predictable revenue streams.</li><li class="reward-item">National security launch contracts (DoD, NRO) provide backlog visibility and credibility as the US government's redundant launch provider to SpaceX — a structural moat in the growing sovereign space economy.</li></ul>
+    </div>
+    <div class="hc-col">
+      <div class="hc-section-title">Predictions</div>
+      <div class="pred-block">
+        <div class="pred-label">3M</div>
+        <div class="pred-text">Bearish — %B=14% near lower BB, -15% underwater. High probability of continued weakness to $95–$105 range unless a Neutron milestone or major contract announcement catalyzes a reversal.</div>
+      </div>
+      <div class="pred-block" style="margin-top:8px">
+        <div class="pred-label">12M</div>
+        <div class="pred-text">Speculative — $130–$160 bull case on Neutron progress; $70–$85 bear case on further delays and dilutive capital raise.</div>
+      </div>
+      <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">HOLD WITH CAUTION / CONSIDER CUTTING — At only 3% portfolio weight, the position is small enough that the damage is limited, but the -15% loss and poor technicals argue for either cutting at this level or setting a hard stop at $100.</div>
+    </div>
+  </div>
+</div>
+
+  <!-- Charts -->
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-title">Monte Carlo Distribution — 21-Day Portfolio Value (1,000 paths)</div>
+      <canvas id="mcChart" height="180"></canvas>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Kelly Sizing — Current vs Optimal Allocation %</div>
+      <canvas id="kellyChart" height="180"></canvas>
+    </div>
+  </div>
+
+  <!-- Regime -->
+  <div class="section-title">🌡️ Market Regime</div>
+  <div class="regime-grid"><div class="regime-card" style="border-left:3px solid #aaa">
+  <div class="rc-sym">NVDA</div>
+  <div class="rc-regime" style="color:#aaa">RANGING</div>
+  <div class="rc-stats">ADX 16 &nbsp;|&nbsp; RSI 44 &nbsp;|&nbsp; BB-W 12% &nbsp;|&nbsp; %B -4%</div>
+  <div class="rc-desc">Low-volatility sideways price action. Mean-reversion plays.</div>
+</div><div class="regime-card" style="border-left:3px solid #00d4ff">
+  <div class="rc-sym">QQQ</div>
+  <div class="rc-regime" style="color:#00d4ff">TRENDING</div>
+  <div class="rc-stats">ADX 36 &nbsp;|&nbsp; RSI 48 &nbsp;|&nbsp; BB-W 8% &nbsp;|&nbsp; %B 21%</div>
+  <div class="rc-desc">Strong directional trend. Momentum strategies favoured.</div>
+</div><div class="regime-card" style="border-left:3px solid #00d4ff">
+  <div class="rc-sym">MU</div>
+  <div class="rc-regime" style="color:#00d4ff">TRENDING</div>
+  <div class="rc-stats">ADX 36 &nbsp;|&nbsp; RSI 55 &nbsp;|&nbsp; BB-W 59% &nbsp;|&nbsp; %B 53%</div>
+  <div class="rc-desc">Strong directional trend. Momentum strategies favoured.</div>
+</div><div class="regime-card" style="border-left:3px solid #00d4ff">
+  <div class="rc-sym">AMD</div>
+  <div class="rc-regime" style="color:#00d4ff">TRENDING</div>
+  <div class="rc-stats">ADX 38 &nbsp;|&nbsp; RSI 54 &nbsp;|&nbsp; BB-W 32% &nbsp;|&nbsp; %B 45%</div>
+  <div class="rc-desc">Strong directional trend. Momentum strategies favoured.</div>
+</div><div class="regime-card" style="border-left:3px solid #00d4ff">
+  <div class="rc-sym">IONQ</div>
+  <div class="rc-regime" style="color:#00d4ff">TRENDING</div>
+  <div class="rc-stats">ADX 40 &nbsp;|&nbsp; RSI 49 &nbsp;|&nbsp; BB-W 51% &nbsp;|&nbsp; %B 39%</div>
+  <div class="rc-desc">Strong directional trend. Momentum strategies favoured.</div>
+</div><div class="regime-card" style="border-left:3px solid #aaa">
+  <div class="rc-sym">EEM</div>
+  <div class="rc-regime" style="color:#aaa">RANGING</div>
+  <div class="rc-stats">ADX 15 &nbsp;|&nbsp; RSI 43 &nbsp;|&nbsp; BB-W 11% &nbsp;|&nbsp; %B 14%</div>
+  <div class="rc-desc">Low-volatility sideways price action. Mean-reversion plays.</div>
+</div><div class="regime-card" style="border-left:3px solid #00d4ff">
+  <div class="rc-sym">APP</div>
+  <div class="rc-regime" style="color:#00d4ff">TRENDING</div>
+  <div class="rc-stats">ADX 34 &nbsp;|&nbsp; RSI 58 &nbsp;|&nbsp; BB-W 40% &nbsp;|&nbsp; %B 65%</div>
+  <div class="rc-desc">Strong directional trend. Momentum strategies favoured.</div>
+</div><div class="regime-card" style="border-left:3px solid #00d4ff">
+  <div class="rc-sym">RKLB</div>
+  <div class="rc-regime" style="color:#00d4ff">TRENDING</div>
+  <div class="rc-stats">ADX 40 &nbsp;|&nbsp; RSI 47 &nbsp;|&nbsp; BB-W 38% &nbsp;|&nbsp; %B 14%</div>
+  <div class="rc-desc">Strong directional trend. Momentum strategies favoured.</div>
+</div></div>
+
+  <!-- Action Table -->
+  <div class="section-title">⚡ Prioritised Action Plan</div>
+  <div class="table-card" style="margin-bottom:16px">
+    <table class="action-table">
+      <thead><tr><th>Priority</th><th>Action</th><th>Rationale</th></tr></thead>
+      <tbody><tr>
+      <td><span style="color:#888;font-weight:700;font-size:11px">HIGH</span></td>
+      <td style="color:#e0e0e0">TRIM IONQ: Reduce from 106 shares (~19.8% weight) to approximately 50-55 shares (~9-10% weight). Lock in partial gains on 9.74% profit.</td>
+      <td style="color:#888;font-size:11px">IONQ is the portfolio's largest position and most speculative holding — a structurally inconsistent combination. Pre-revenue quantum computing at 80-100x forward revenue with $6,661 deployed represents irresponsible concentration in a binary-outcome asset. The diversification radar explicitly flags IONQ as the trim candidate. Proceeds (~$3,300) should be redeployed into DELL (AI server infrastructure, profitable, growing) per the swap radar — improving quality while maintaining AI thematic exposure.</td>
+    </tr><tr>
+      <td><span style="color:#888;font-weight:700;font-size:11px">HIGH</span></td>
+      <td style="color:#e0e0e0">SET HARD STOPS: RKLB at $100 (current -12%), NVDA at $185 (current -11%)</td>
+      <td style="color:#888;font-size:11px">RKLB is -15.4% underwater with deteriorating technicals (%B=14%, near lower BB). NVDA is barely 4% above cost in a ranging regime with export control overhang. Hard stops prevent small losses from becoming large ones. Capital preservation on these two positions protects ~$6,800 in combined equity from further drawdown.</td>
+    </tr><tr>
+      <td><span style="color:#888;font-weight:700;font-size:11px">HIGH</span></td>
+      <td style="color:#e0e0e0">HOLD MU and AMD as core positions — do not trim prematurely</td>
+      <td style="color:#888;font-size:11px">MU (+33.8%) and AMD (+35.1%) are confirmed trending with ADX >36, healthy RSIs (55-55), and fundamental cycles that have 12-18 months of runway remaining. Both are your highest-quality risk/reward positions. Implement trailing stops (MU: $870, AMD: $450) to protect gains without capping upside.</td>
+    </tr><tr>
+      <td><span style="color:#888;font-weight:700;font-size:11px">MEDIUM</span></td>
+      <td style="color:#e0e0e0">CONSIDER SIZING UP QQQ and APP on next pullback using IONQ trim proceeds</td>
+      <td style="color:#888;font-size:11px">QQQ (4.4% weight) is paradoxically undersized as the portfolio's safest tech vehicle. APP (5% weight) is arguably the highest-quality growth name in the book by unit economics (50%+ EBITDA margins, 130%+ NRR) but undersized. Both are in confirmed trending regimes. Rebalancing from speculative IONQ into quality names improves the portfolio's Sharpe ratio materially.</td>
+    </tr><tr>
+      <td><span style="color:#888;font-weight:700;font-size:11px">MEDIUM</span></td>
+      <td style="color:#e0e0e0">[ADVISORY] SWAP IDEA: Trim IONQ → initiate DELL (Dell Technologies)</td>
+      <td style="color:#888;font-size:11px">Per the diversification radar's SWAP_ONLY recommendation: Dell is a direct AI infrastructure beneficiary (PowerEdge AI server backlog >$10B), trades at <15x forward earnings (vs. IONQ at 80-100x revenue), is profitable and growing 15-20% in AI-driven infrastructure. This swap improves portfolio quality, reduces speculative risk, and maintains AI thematic exposure at a dramatically better valuation entry point. Advisory only — not auto-traded.</td>
+    </tr><tr>
+      <td><span style="color:#888;font-weight:700;font-size:11px">LOW</span></td>
+      <td style="color:#e0e0e0">[ADVISORY] SWAP IDEA: Partial EEM trim → LLY (Eli Lilly, Healthcare)</td>
+      <td style="color:#888;font-size:11px">Per the diversification radar: LLY scores 61 with the lowest portfolio correlation (0.154), offering genuine non-correlated exposure that EEM partially provides but with stronger fundamentals. LLY's GLP-1 franchise (Mounjaro/Zepbound) represents a once-in-a-generation pharmaceutical growth cycle with $50B+ revenue potential by 2030. Swapping a portion of EEM (ranging, weak momentum) into LLY would dramatically improve diversification quality while reducing EM macro risk. Advisory only — not auto-traded.</td>
+    </tr></tbody>
+    </table>
+  </div>
+
+  <!-- Diversification Radar (advisory-only, new non-held names) -->
+  <div class="section-title">💎 Diversification Radar <span style="font-size:11px;color:#f0b429;border:1px solid #f0b429;border-radius:8px;padding:1px 7px;vertical-align:middle">SWAP_ONLY</span></div><div style="color:#888;font-size:12px;margin:-6px 0 10px">New, non-held opportunities · deployable $31 · 0 open slot(s) · book: Technology 72% · UNKNOWN 19% · Communication Services 5% · Industrials 3%</div><div class="table-card" style="margin-bottom:12px"><table class="action-table"><thead><tr><th>Symbol</th><th>Sector</th><th>Score</th><th>Consensus</th><th>Analyst</th><th>Corr→Book</th><th>Suggest</th><th>Thesis</th></tr></thead><tbody><tr><td><b style="color:#00d4ff">LLY</b></td><td>Healthcare</td><td style="text-align:right">61</td><td>STRONG BUY</td><td style="text-align:right;color:#00e87a">+6%</td><td style="text-align:right">0.15</td><td style="text-align:right"><span style="color:#f0b429">preview · fund via swap</span></td><td style="color:#888;font-size:11px">Healthcare diversifier · composite z=0.65 · confluence 0% · corr-to-book 0.154</td></tr><tr><td><b style="color:#00d4ff">BRK-B</b></td><td>Financial Services</td><td style="text-align:right">60</td><td>BUY</td><td style="text-align:right;color:#00e87a">+7%</td><td style="text-align:right">0.25</td><td style="text-align:right"><span style="color:#f0b429">preview · fund via swap</span></td><td style="color:#888;font-size:11px">Financial Services diversifier · composite z=0.6 · confluence 0% · corr-to-book 0.253</td></tr><tr><td><b style="color:#00d4ff">MAR</b></td><td>Consumer Cyclical</td><td style="text-align:right">57</td><td>STRONG BUY</td><td style="text-align:right;color:#00e87a">-4%</td><td style="text-align:right">0.29</td><td style="text-align:right"><span style="color:#f0b429">preview · fund via swap</span></td><td style="color:#888;font-size:11px">Consumer Cyclical diversifier · composite z=0.39 · confluence 0% · corr-to-book 0.289</td></tr><tr><td><b style="color:#00d4ff">GE</b></td><td>Industrials</td><td style="text-align:right">53</td><td>BUY</td><td style="text-align:right;color:#00e87a">+9%</td><td style="text-align:right">0.41</td><td style="text-align:right"><span style="color:#f0b429">preview · fund via swap</span></td><td style="color:#888;font-size:11px">Industrials diversifier · composite z=0.2 · confluence 0% · corr-to-book 0.409</td></tr></tbody></table></div><div class="table-card" style="margin-bottom:12px"><table class="action-table"><thead><tr><th>Trim</th><th>Fund New</th><th>Why</th></tr></thead><tbody><tr><td style="color:#ff3c5a"><b>IONQ</b></td><td style="color:#00e87a"><b>DELL</b></td><td style="color:#888;font-size:11px">Technology is the most concentrated sector (72% of book). Trimming IONQ would fund DELL (Technology), a lower-correlation diversifier — or raise max_open_positions toward 12–15.</td></tr></tbody></table></div><div style="color:#666;font-size:10px;margin:-4px 0 16px">Advisory research only — NOT financial advice. New-name suggestions are never auto-traded; PAPER_MODE unaffected.</div>
+
+  <!-- Portfolio Risks -->
+  <div class="section-title">⚠️ Portfolio Risk Factors</div>
+  <div class="port-risk"><span class="sev-pill" style="background:#ff3c5a22;color:#ff3c5a">High</span> Extreme sector concentration: 72% Technology weighting means a single sector rotation event (e.g., AI bubble deflation, semiconductor inventory correction) could drawdown the entire portfolio simultaneously — diversification across the book provides minimal protection when correlations spike to 1.0 in risk-off events.</div>
+<div class="port-risk"><span class="sev-pill" style="background:#ff3c5a22;color:#ff3c5a">High</span> Speculative position oversizing: IONQ is simultaneously the largest position (19.8% weight) and the most speculative holding (pre-significant-revenue, 80-100x revenue multiple). This violates basic position-sizing discipline for asymmetric-risk assets.</div>
+<div class="port-risk"><span class="sev-pill" style="background:#f0b42922;color:#f0b429">Medium</span> Near-zero cash buffer: $531 cash (1.6% of portfolio) provides virtually no dry powder to deploy into dislocations or cover margin requirements. Any forced selling would occur at potentially unfavorable prices.</div>
+<div class="port-risk"><span class="sev-pill" style="background:#f0b42922;color:#f0b429">Medium</span> Two underwater/low-conviction positions (RKLB -15.4%, NVDA ranging near cost) consuming ~21% of capital that could be redeployed into higher-conviction trending positions.</div>
+<div class="port-risk"><span class="sev-pill" style="background:#f0b42922;color:#f0b429">Medium</span> Dual AI semiconductor concentration: NVDA + AMD = ~35% of portfolio. While both are quality names, they share the same demand driver (hyperscaler AI capex) and would de-rate simultaneously in a capex slowdown scenario.</div>
+
+
+  <!-- Vol + Alpha tables -->
+  <div class="two-col">
+    <div class="table-card">
+      <div class="chart-title">Volatility Models (GARCH vs EWMA — annualised)</div>
+      <table class="mini-table">
+        <thead><tr><th>Symbol</th><th>GARCH</th><th>EWMA</th><th>Diff</th></tr></thead>
+        <tbody><tr>
+      <td>NVDA</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr><tr>
+      <td>QQQ</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr><tr>
+      <td>MU</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr><tr>
+      <td>AMD</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr><tr>
+      <td>IONQ</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr><tr>
+      <td>EEM</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr><tr>
+      <td>APP</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr><tr>
+      <td>RKLB</td>
+      <td style="color:#00d4ff">0.0%</td>
+      <td style="color:#f0b429">0.0%</td>
+      <td style="color:#888;font-size:11px"></td>
+    </tr></tbody>
+      </table>
+    </div>
+    <div class="table-card">
+      <div class="chart-title">Alpha vs Benchmarks (1M)</div>
+      <table class="mini-table">
+        <thead><tr><th>Symbol</th><th>vs SPY</th><th>vs Sector</th><th>Return</th></tr></thead>
+        <tbody><tr>
+      <td>MU</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr><tr>
+      <td>APP</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr><tr>
+      <td>IONQ</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr><tr>
+      <td>AMD</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr><tr>
+      <td>QQQ</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr><tr>
+      <td>EEM</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr><tr>
+      <td>RKLB</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr><tr>
+      <td>NVDA</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#00e87a">+0.0%</td>
+      <td style="color:#aaa">+0.0%</td>
+    </tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Tax + Yield -->
+  <div class="two-col">
+    <div class="table-card">
+      <div class="chart-title">Tax-Loss Harvest Scan</div>
+      <div style="color:#666;font-style:italic">No harvest candidates — all positions profitable.</div>
+    </div>
+    <div class="table-card">
+      <div class="chart-title">Cash Yield Landscape ($531 available)</div>
+      <div class="yield-tier"><div class="yield-tier-label" style="color:#00e87a">Conservative (< 6% APY)</div><div class="yield-item"><span class="yi-name">3-Month T-Bill (^IRX)</span><span class="yi-apy" style="color:#00e87a">3.6% APY</span><span class="yi-risk">Very Low — FDIC/Gov backed</span></div><div class="yield-item"><span class="yi-name">HYSA (est.)</span><span class="yi-apy" style="color:#00e87a">3.4% APY</span><span class="yi-risk">Very Low — FDIC/Gov backed</span></div><div class="yield-item"><span class="yi-name">Money Market (est.)</span><span class="yi-apy" style="color:#00e87a">3.6% APY</span><span class="yi-risk">Very Low — FDIC/Gov backed</span></div></div><div class="yield-tier"><div class="yield-tier-label" style="color:#f0b429">Moderate (6–15% APY)</div><div class="yield-item"><span class="yi-name">SGOV (0-3mo T-Bill ETF)</span><span class="yi-apy" style="color:#f0b429">3.9% APY</span><span class="yi-risk">Low — ETF, tradable</span></div><div class="yield-item"><span class="yi-name">BIL  (0-3mo T-Bill ETF)</span><span class="yi-apy" style="color:#f0b429">3.9% APY</span><span class="yi-risk">Low — ETF, tradable</span></div><div class="yield-item"><span class="yi-name">SHY  (1-3yr Tsy ETF)</span><span class="yi-apy" style="color:#f0b429">3.7% APY</span><span class="yi-risk">Low — ETF, tradable</span></div></div><div class="yield-tier"><div class="yield-tier-label" style="color:#ff7c3a">Aggressive (> 15% APY)</div><div class="yield-item"><span class="yi-name">USDC_AAVE_V3</span><span class="yi-apy" style="color:#ff7c3a">0.0% APY</span><span class="yi-risk">Medium — Smart contract risk (informational only)</span></div><div class="yield-item"><span class="yi-name">USDT_AAVE_V3</span><span class="yi-apy" style="color:#ff7c3a">0.0% APY</span><span class="yi-risk">Medium — Smart contract risk (informational only)</span></div><div class="yield-item"><span class="yi-name">USDC_COMPOUND</span><span class="yi-apy" style="color:#ff7c3a">0.0% APY</span><span class="yi-risk">Medium — Smart contract risk (informational only)</span></div></div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY<br>
+    GESH Financial Observability v2.1 &nbsp;|&nbsp; Generated 2026-06-09 01:38 UTC &nbsp;|&nbsp; Data via Robinhood API + yfinance + Claude AI<br>
+    PAPER_MODE=true by default &nbsp;|&nbsp; All trading decisions remain the user's responsibility
+  </div>
+
+</div><!-- /container -->
+
+<script>
+// Monte Carlo chart
+new Chart(document.getElementById('mcChart').getContext('2d'), {
+  type: 'bar',
+  data: {
+    labels: ["$21,011\u2013$24,991", "$24,991\u2013$28,972", "$28,972\u2013$32,952", "$32,952\u2013$36,933", "$36,933\u2013$40,913", "$40,913\u2013$44,894", "$44,894\u2013$48,874", "$48,874\u2013$52,855", "$52,855\u2013$56,835", "$56,835\u2013$60,816"],
+    datasets: [{
+      label: '% of simulations',
+      data: [4.4, 13.3, 17.4, 19.4, 16.7, 11.8, 7.9, 4.9, 2.4, 1.7],
+      backgroundColor: ['#ff3c5a','#f0b429','#f0b429','#00d4ff','#00d4ff','#00d4ff','#00d4ff','#00d4ff','#00d4ff','#00d4ff'],
+      borderRadius: 3,
+    }]
+  },
+  options: {
+    responsive:true, maintainAspectRatio:true,
+    plugins:{ legend:{ display:false }, tooltip:{ callbacks:{
+      title: ctx => ctx[0].label,
+      label: ctx => ctx.raw.toFixed(1) + '% of paths'
+    }} },
+    scales:{
+      x:{ ticks:{ color:'#444', font:{size:9}, maxRotation:45 }, grid:{ color:'#111' } },
+      y:{ ticks:{ color:'#444', font:{size:9} }, grid:{ color:'#1a2840' } }
+    }
+  }
+});
+
+// Kelly chart
+new Chart(document.getElementById('kellyChart').getContext('2d'), {
+  type: 'bar',
+  data: {
+    labels: ["NVDA", "QQQ", "MU", "AMD", "IONQ", "EEM", "APP", "RKLB"],
+    datasets: [
+      { label:'Current %', data:[17.1, 4.3, 18.0, 17.2, 19.5, 14.4, 4.9, 3.0], backgroundColor:'#00d4ff55', borderColor:'#00d4ff', borderWidth:1, borderRadius:3 },
+      { label:'Kelly Optimal %', data:[25.0, 25.0, 25.0, 25.0, 25.0, 25.0, 6.2, 25.0], backgroundColor:'#f0b42955', borderColor:'#f0b429', borderWidth:1, borderRadius:3 }
+    ]
+  },
+  options:{
+    responsive:true, maintainAspectRatio:true,
+    plugins:{ legend:{ labels:{ color:'#888', font:{size:10} } } },
+    scales:{
+      x:{ ticks:{ color:'#666', font:{size:10} }, grid:{ color:'#111' } },
+      y:{ ticks:{ color:'#666', font:{size:9}, callback: v => v+'%' }, grid:{ color:'#1a2840' } }
+    }
+  }
+});
+</script>
+</body>
+</html>
