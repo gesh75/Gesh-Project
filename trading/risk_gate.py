@@ -24,7 +24,12 @@ from zoneinfo import ZoneInfo
 
 from .config import RiskConfig, load_risk_config
 from .contract import TradeIntent
-from .state import count_orders_today, log_decision, log_intent
+from .state import (
+    count_orders_today,
+    log_decision,
+    log_intent,
+    paper_realized_pnl_usd_today,
+)
 
 
 # ─── Verdict shape ────────────────────────────────────────────────────────────
@@ -75,17 +80,45 @@ def _quote_age_seconds(portfolio: dict[str, Any]) -> float | None:
         return None
 
 
-def _post_trade_cash_estimate(portfolio: dict[str, Any], intent: TradeIntent) -> float:
-    """Crude estimate: cash − (target_pct × equity) for BUY; +equity for SELL."""
+def _post_trade_cash_estimate(
+    portfolio: dict[str, Any], intent: TradeIntent, cfg: RiskConfig
+) -> float:
+    """Crude estimate: cash − (target_pct × equity) for BUY; cash for SELL/other.
+
+    In PAPER mode the available cash is the simulated cfg.paper_cash_usd, NOT the
+    real account balance — otherwise paper BUYs are blocked by the real (often
+    near-empty, fully-invested) Robinhood cash and no positions ever open. In LIVE
+    mode the real account cash is used so the gate protects actual capital.
+    (Ported from gesh-project-trading, rule #32.)
+    """
     eq_summary = portfolio.get("equity_summary", {})
-    cash = float(eq_summary.get("cash", 0) or 0)
+    cash = cfg.paper_cash_usd if cfg.paper_mode else float(eq_summary.get("cash", 0) or 0)
     equity = float(eq_summary.get("portfolio_equity", 0) or 0)
     if intent.action == "BUY" and intent.target_position_pct:
         return cash - (intent.target_position_pct * equity)
     return cash
 
 
-def _daily_pnl_pct(portfolio: dict[str, Any]) -> float:
+def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
+    """Daily P&L as a fraction of account base, for the daily-loss circuit breaker.
+
+    In PAPER mode this is the paper book's OWN realized P&L today over the
+    simulated base (cfg.paper_cash_usd) — NOT the real Robinhood account.
+    Gating paper entries on the real account's intraday swing both starves the
+    funnel and biases the paper track record toward real up-days. In LIVE mode
+    the real account's intraday equity change is used so the breaker protects
+    actual capital. (Ported from gesh-project-trading, rule #36.)
+
+    LIVE-mode note: portfolio_equity and adjusted_equity_previous_close must be
+    on the SAME basis (full account equity) — callers feeding snapshot data
+    must remap (see run_paper_gate2.py), since the snapshot's portfolio_equity
+    is positions-only.
+    """
+    if cfg.paper_mode:
+        base = cfg.paper_cash_usd or 0.0
+        if base <= 0:
+            return 0.0
+        return paper_realized_pnl_usd_today() / base
     eq_summary = portfolio.get("equity_summary", {})
     prev = float(eq_summary.get("adjusted_equity_previous_close", 0) or 0)
     curr = float(eq_summary.get("portfolio_equity", 0) or 0)
@@ -176,7 +209,7 @@ def evaluate(
 
     # 6. Cash floor (only meaningful for BUY)
     if rejection_reason is None:
-        post_cash = _post_trade_cash_estimate(portfolio_snapshot, intent)
+        post_cash = _post_trade_cash_estimate(portfolio_snapshot, intent, cfg)
         gates["CASH_FLOOR"] = post_cash >= cfg.min_cash_buffer_usd
         if not gates["CASH_FLOOR"]:
             rejection_reason = (
@@ -187,7 +220,7 @@ def evaluate(
 
     # 7. Daily loss
     if rejection_reason is None:
-        pnl = _daily_pnl_pct(portfolio_snapshot)
+        pnl = _daily_pnl_pct(portfolio_snapshot, cfg)
         gates["DAILY_LOSS"] = pnl >= -cfg.max_daily_loss_pct
         if not gates["DAILY_LOSS"]:
             rejection_reason = (

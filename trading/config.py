@@ -45,6 +45,11 @@ class RiskConfig:
     paper_mode: bool = True
     require_approval: bool = True       # every intent waits for explicit approval before live
     kill_switch_path: str = str(Path.home() / ".gesh" / "KILL")
+    # Simulated cash balance used by the CASH_FLOOR and DAILY_LOSS gates in
+    # PAPER mode only, so paper entries are never starved by the real (often
+    # fully-invested) account. Mirrors gesh-project-trading rules #32/#36.
+    # ($100k Alpaca paper convention.)
+    paper_cash_usd: float = 100_000.0
 
     # --- caps ---
     max_position_pct: float = 0.02      # 2% of equity per symbol
@@ -66,6 +71,7 @@ def load_risk_config() -> RiskConfig:
         paper_mode=_env_bool("PAPER_MODE", True),
         require_approval=_env_bool("REQUIRE_APPROVAL", True),
         kill_switch_path=os.getenv("KILL_SWITCH_PATH", str(Path.home() / ".gesh" / "KILL")),
+        paper_cash_usd=_env_float("PAPER_CASH_USD", 100_000.0),
         max_position_pct=_env_float("MAX_POSITION_PCT", 0.02),
         max_daily_loss_pct=_env_float("MAX_DAILY_LOSS_PCT", 0.01),
         max_orders_per_day=_env_int("MAX_ORDERS_PER_DAY", 3),

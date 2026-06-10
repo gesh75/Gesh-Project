@@ -221,6 +221,39 @@ def count_orders_today(mode: str | None = None) -> int:
         return int(con.execute(sql, params).fetchone()["n"])
 
 
+def paper_realized_pnl_usd_today() -> float:
+    """Sum of realized P&L from the paper book closed since 00:00 UTC today.
+
+    Drives the PAPER-mode daily-loss circuit breaker (gesh-project-trading rule
+    #36 ported): the paper book's OWN realized loss today, NOT the real
+    Robinhood account's intraday swing. Checks both possible paper books in
+    this DB — paper_outcomes (tracker convention) and trade_log's paper_trades
+    (this repo's daily-analysis paper sessions) — and fails safe to 0.0 on any
+    missing table, so a flat paper day never blocks entries.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    total = 0.0
+    with _conn() as con:
+        try:
+            row = con.execute(
+                "SELECT COALESCE(SUM(pnl_usd), 0.0) AS s FROM paper_outcomes WHERE exit_at >= ?",
+                [today + "T00:00:00+00:00"],
+            ).fetchone()
+            total += float(row["s"] or 0.0)
+        except sqlite3.OperationalError:
+            pass
+        try:
+            row = con.execute(
+                "SELECT COALESCE(SUM(realized_pnl), 0.0) AS s FROM paper_trades "
+                "WHERE exit_time IS NOT NULL AND substr(exit_time, 1, 10) = ?",
+                [today],
+            ).fetchone()
+            total += float(row["s"] or 0.0)
+        except sqlite3.OperationalError:
+            pass
+    return total
+
+
 def recent_orders(limit: int = 25) -> list[dict]:
     with _conn() as con:
         rows = con.execute(

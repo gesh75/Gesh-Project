@@ -131,11 +131,13 @@ try:
 
     # The DATA_FRESH gate (#8) fails closed without a quote timestamp — inject
     # the snapshot's fetch time as 'as_of' (snapshot exposes 'fetched_at').
-    # The DAILY_LOSS gate compares equity_summary['portfolio_equity'] against
-    # 'adjusted_equity_previous_close' — both must be on the SAME basis (full
-    # account equity). The snapshot's portfolio_equity is positions-only, which
-    # biases the gate by the cash fraction (~-5pp) and would reject every BUY
-    # even on flat days; remap to the account-headline figure for the gate copy.
+    # Baseline remap: in LIVE mode the DAILY_LOSS gate compares
+    # equity_summary['portfolio_equity'] against 'adjusted_equity_previous_close'
+    # — both must be on the SAME basis (full account equity); the snapshot's
+    # portfolio_equity is positions-only (≈ -5pp cash-fraction bias). In PAPER
+    # mode (the default) the gate now reads the paper book's own P&L instead
+    # (rules #32/#36 ported into trading/risk_gate.py), but the remap stays so
+    # live mode is correct too.
     gate_eqs = dict(equity_sum)
     _full_eq = gate_eqs.get('account_equity') or gate_eqs.get('total')
     if _full_eq:
