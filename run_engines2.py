@@ -62,13 +62,34 @@ try:
     except Exception:
         pass
     regime_summary_lines = []
-    for sym, rd in regime_data.items():
-        r_str = rd.get('regime', 'UNKNOWN') if isinstance(rd, dict) else str(rd)
-        adx = rd.get('adx', 0) if isinstance(rd, dict) else 0
-        rsi = rd.get('rsi', 0) if isinstance(rd, dict) else 0
-        regime_summary_lines.append(f"  {sym}: {r_str}  ADX={adx:.1f}  RSI={rsi:.1f}")
+    # detect_regimes returns {'regimes': [...], ...} — iterate the list, not
+    # the dict keys (the old .items() loop printed/stored garbage).
+    for rd in (regime_data.get('regimes') or []):
+        if not isinstance(rd, dict):
+            continue
+        regime_summary_lines.append(
+            f"  {rd.get('symbol','?')}: {rd.get('regime','UNKNOWN')}  "
+            f"ADX={rd.get('adx',0):.1f}  RSI={rd.get('rsi',0):.1f}")
     regime_summary = "MARKET REGIME CONTEXT:\n" + "\n".join(regime_summary_lines)
     print(regime_summary)
+    # FRED macro layer lives only in gesh-project/regime.py (the trading copy
+    # shadows it on sys.path and has no macro code) — load it path-pinned so
+    # run_ai2's macro_summary read stops falling back to "FRED macro: unavailable".
+    try:
+        import importlib.util
+        _mspec = importlib.util.spec_from_file_location('gesh_regime_macro', str(BASE / 'regime.py'))
+        _gregime = importlib.util.module_from_spec(_mspec)
+        _mspec.loader.exec_module(_gregime)
+        _macro = _gregime.get_macro_context()
+        if isinstance(regime_data, dict) and _macro.get('macro_summary'):
+            regime_data['macro_summary'] = _macro['macro_summary']
+            results['macro'] = {k: _macro.get(k) for k in
+                                ('fed_funds_rate', 'fed_funds_direction',
+                                 'yield_curve_spread', 'yield_curve_state',
+                                 'cpi_yoy_pct', 'inflation_trend', 'available')}
+            print(f"  MACRO: {_macro['macro_summary'][:100]}")
+    except Exception as e:
+        print(f"  macro skipped (non-fatal): {e}")
 except Exception as e:
     print(f"  ERROR: {e}")
     traceback.print_exc()

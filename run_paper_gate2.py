@@ -93,7 +93,9 @@ for h in holdings:
     elif k_act == 'TRIM':
         usd    = max(0.0, equity - opt / 100 * total_eq)
         shares = math.ceil(usd / price)
-        shares = min(shares, math.floor(float(h.get('quantity') or 0)))
+        # Clamp to the actual (possibly fractional) position — a whole-share
+        # floor would silently drop TRIM signals on fractional holdings.
+        shares = min(float(shares), round(float(h.get('quantity') or 0), 4))
         if shares > 0:
             action_plan.append({'symbol': sym, 'action': 'TRIM', 'shares': shares,
                                 'current_price': price,
@@ -129,9 +131,18 @@ try:
 
     # The DATA_FRESH gate (#8) fails closed without a quote timestamp — inject
     # the snapshot's fetch time as 'as_of' (snapshot exposes 'fetched_at').
+    # The DAILY_LOSS gate compares equity_summary['portfolio_equity'] against
+    # 'adjusted_equity_previous_close' — both must be on the SAME basis (full
+    # account equity). The snapshot's portfolio_equity is positions-only, which
+    # biases the gate by the cash fraction (~-5pp) and would reject every BUY
+    # even on flat days; remap to the account-headline figure for the gate copy.
+    gate_eqs = dict(equity_sum)
+    _full_eq = gate_eqs.get('account_equity') or gate_eqs.get('total')
+    if _full_eq:
+        gate_eqs['portfolio_equity'] = _full_eq
     gate_payload = {
         'holdings':       holdings,
-        'equity_summary': equity_sum,
+        'equity_summary': gate_eqs,
         'as_of':          snap.get('fetched_at') or eng.get('fetched_at'),
     }
     for a in executable:

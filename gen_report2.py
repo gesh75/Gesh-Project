@@ -56,7 +56,11 @@ def final_action(sym):
 snap = eng.get('snapshot', {})
 _eqs_hdr  = eng.get('equity_summary', {}) or snap.get('equity_summary', {}) or {}
 _prev_eq  = float(_eqs_hdr.get('adjusted_equity_previous_close') or 0)
-_cur_eq   = float(_eqs_hdr.get('total') or _eqs_hdr.get('portfolio_equity') or 0)
+# account_equity is the app-headline figure — the SAME basis as the prev-close
+# baseline. 'total' (positions + settled cash) excludes pending deposits and
+# would bias the day-change on deposit days.
+_cur_eq   = float(_eqs_hdr.get('account_equity') or _eqs_hdr.get('total')
+                  or _eqs_hdr.get('portfolio_equity') or 0)
 if _prev_eq > 0 and _cur_eq > 0:
     day_gain_usd = _cur_eq - _prev_eq
     day_gain_pct = day_gain_usd / _prev_eq * 100
@@ -272,6 +276,52 @@ for rec in recs:
       <td style="color:#e0e0e0">{act_text}</td>
       <td style="color:#888;font-size:11px">{rat}</td>
     </tr>'''
+
+# ─── Paper & risk-gate audit section (from run_paper_gate2, step 4/5) ─────────
+def _gate_audit_section(eng: dict) -> str:
+    gates = eng.get('gate_results') or []
+    plan  = eng.get('action_plan') or []
+    paper = eng.get('paper_session') or {}
+    stats = eng.get('trade_stats') or {}
+    if not plan:
+        return ''
+    gate_by_sym = {(g.get('symbol'), g.get('action')): g for g in gates}
+    rows = ''
+    for a in plan:
+        g = gate_by_sym.get((a.get('symbol'), a.get('action')))
+        if g is not None:
+            verdict = '✅ APPROVED' if g.get('approved') else f"⛔ {_esc(str(g.get('reason') or 'rejected'))}"
+            v_col   = '#00e87a' if g.get('approved') else '#ff3c5a'
+        elif a.get('action') == 'HOLD':
+            verdict, v_col = '— override', '#888'
+        else:
+            verdict, v_col = '—', '#888'
+        rows += f'''<tr>
+      <td>{_esc(str(a.get('symbol','?')))}</td>
+      <td>{_esc(str(a.get('action','')))}</td>
+      <td style="text-align:right">{a.get('shares',0)}</td>
+      <td style="color:#888;font-size:11px">{_esc(str(a.get('signal_reason','')))}</td>
+      <td style="color:{v_col};font-size:11px">{verdict}</td>
+    </tr>'''
+    closed_n  = len(paper.get('closed') or [])
+    created_n = len(paper.get('created') or [])
+    stat_bits = [f"{created_n} paper record(s) today", f"{closed_n} auto-closed"]
+    _pw = (stats.get('paper') or {}).get('win_rate_pct')
+    _rw = (stats.get('real') or {}).get('win_rate_pct')
+    if _pw is not None: stat_bits.append(f"paper win-rate 7d: {_pw}%")
+    if _rw is not None: stat_bits.append(f"real win-rate 7d: {_rw}%")
+    return f'''
+  <!-- Paper & Gate Audit -->
+  <div class="section-title">🛡️ Paper &amp; Risk-Gate Audit</div>
+  <div class="table-card" style="margin-bottom:16px">
+    <table class="action-table">
+      <thead><tr><th>Symbol</th><th>Action</th><th>Shares</th><th>Signal</th><th>8-Gate Verdict</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <div style="color:#888;font-size:11px;padding:8px 4px 2px">{' · '.join(stat_bits)}</div>
+  </div>'''
+
+gate_audit_html = _gate_audit_section(eng)
 
 # ─── Diversification radar section (advisory-only, new non-held names) ────────
 # Every string cell is HTML-escaped (company/sector come from yfinance, thesis/swap
@@ -697,6 +747,8 @@ html = f'''<!DOCTYPE html>
       <tbody>{action_rows}</tbody>
     </table>
   </div>
+
+  {gate_audit_html}
 
   <!-- Diversification Radar (advisory-only, new non-held names) -->
   {div_radar_html}

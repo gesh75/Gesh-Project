@@ -11,6 +11,11 @@
 #
 # Logs to /tmp/gesh_fullchain.log. Exit 0 = clean run, 1 = a fatal step failed.
 # Safe to re-run any time (lock prevents overlap; later steps just regenerate).
+#
+# Sleep/wake note: launchd coalesces a 10:30 StartCalendarInterval missed during
+# sleep and fires it once at wake — a late-day wake therefore runs the chain
+# with off-hours prices and the MARKET_HOURS gate rejecting paper orders. That
+# is the intended recovery path; the report timestamp shows the actual run time.
 
 set -u
 GP=/Users/georgigaydarov/Projects/gesh-project
@@ -19,23 +24,33 @@ PY="$GP/venv/bin/python3.14"
 LOG=/tmp/gesh_fullchain.log
 LOCK=/tmp/gesh_daily_chain.lock
 
+# Cap the append-forever log at ~5MB (keep the most recent ~1MB).
+if [ -f "$LOG" ] && [ "$(stat -f%z "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+    tail -c 1048576 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+fi
+
 exec >>"$LOG" 2>&1
 
 # Stale-lock recovery: a kill -9 / power loss skips the EXIT trap, and a
-# permanently-held lock would silently skip every future run. A real chain run
-# finishes in ~4 min, so any lock older than 30 min is garbage — reclaim it.
+# permanently-held lock would silently skip every future run. Reclaim only when
+# the recorded owner process is dead (or no PID was recorded) AND the lock is
+# older than 30 min — a legitimately slow run keeps its lock.
 if [ -d "$LOCK" ]; then
     LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || echo 0) ))
-    if [ "$LOCK_AGE" -gt 1800 ]; then
-        echo "### STALE LOCK reclaimed (age ${LOCK_AGE}s) — $(date '+%Y-%m-%d %H:%M:%S %Z')"
-        rmdir "$LOCK" 2>/dev/null
+    LOCK_PID=$(cat "$LOCK/pid" 2>/dev/null || echo "")
+    if [ -n "$LOCK_PID" ] && kill -0 "$LOCK_PID" 2>/dev/null; then
+        : # owner alive — leave the lock alone regardless of age
+    elif [ "$LOCK_AGE" -gt 1800 ]; then
+        echo "### STALE LOCK reclaimed (age ${LOCK_AGE}s, owner pid='${LOCK_PID}' gone) — $(date '+%Y-%m-%d %H:%M:%S %Z')"
+        rm -rf "$LOCK"
     fi
 fi
 if ! mkdir "$LOCK" 2>/dev/null; then
     echo "### CHAIN SKIPPED (lock held) — $(date '+%Y-%m-%d %H:%M:%S %Z')"
     exit 0
 fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+echo $$ > "$LOCK/pid"
+trap 'rm -rf "$LOCK" 2>/dev/null' EXIT
 
 cd "$GP" || exit 1
 T0=$(date +%s)
@@ -61,9 +76,11 @@ PYEOF
 step "2/5 run_engines2"
 "$PY" run_engines2.py || { echo "FATAL: engines failed"; exit 1; }
 
-# ── 3/5 AI analysis + DB save (fatal — the report needs ai_result)
+# ── 3/5 AI analysis + DB save (fatal — the report needs ai_result; stopping
+# here keeps yesterday's good gesh_report.html in place instead of overwriting
+# it with empty AI sections)
 step "3/5 run_ai2"
-"$PY" run_ai2.py || FAIL=1
+"$PY" run_ai2.py || { echo "FATAL: run_ai2 failed — keeping previous report"; exit 1; }
 
 # ── 4/5 paper session + risk-gate audit chain (non-fatal by design)
 step "4/5 run_paper_gate2"
@@ -91,8 +108,13 @@ print(f"assert ok: {n} analysis_runs row(s) for {today}" if n else "no row today
 sys.exit(0 if n > 0 else 1)
 PYEOF
 
-# ── Publish report copy for the trading repo (skill contract)
-cp -f gesh_report.html "$GPT/gesh_report.html" 2>/dev/null || true
+# ── Publish report copy for the trading repo (skill contract) — only on clean
+# runs, so a failed/degraded run never overwrites the last good published copy.
+if [ "$FAIL" -eq 0 ]; then
+    cp -f gesh_report.html "$GPT/gesh_report.html" 2>/dev/null || true
+else
+    echo "publish skipped (fail=$FAIL) — keeping previous report copy in $GPT"
+fi
 
 echo ""
 echo "### CHAIN DONE — $(date '+%Y-%m-%d %H:%M:%S %Z') (total $(($(date +%s)-T0))s, fail=$FAIL)"
