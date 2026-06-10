@@ -99,6 +99,7 @@ def fetch():
     bp_leveraged       = float(account.get('buying_power') or 0)   # incl. Gold margin — reference ONLY
     withdrawable       = float(profile.get('withdrawable_amount') or 0)
     account_equity     = float(profile.get('equity') or 0)         # app headline total
+    prev_close_equity  = float(profile.get('adjusted_equity_previous_close') or 0)  # for day-change
 
     # Deployable = settled cash, hard-capped so a leveraged buying_power can NEVER inflate
     # it past actual cash. The cap only bites in the impossible margin<settled case; its
@@ -156,6 +157,7 @@ def fetch():
             'uncleared_deposits':  round(uncleared_deposits, 2),  # legacy key (= pending_deposits)
             'total':               round(portfolio_total, 2),
             'account_equity':      round(account_equity, 2),     # app headline total
+            'adjusted_equity_previous_close': round(prev_close_equity, 2),  # day-change baseline
         },
     }
 

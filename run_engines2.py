@@ -3,8 +3,14 @@
 run_engines2.py — Re-run all GESH analysis engines on fresh live snapshot.
 Writes output to engine_results.json.
 """
-import os, sys, json, traceback
+import os, sys, json, time, traceback
 from pathlib import Path
+
+T0 = time.time()
+
+def _t() -> str:
+    """Elapsed-seconds tag for step timing attribution in logs."""
+    return f"[t+{time.time() - T0:5.1f}s]"
 
 BASE = Path(__file__).parent
 TRADING = Path('/Users/georgigaydarov/Projects/gesh-project-trading')
@@ -39,12 +45,22 @@ results = {
 }
 
 # ── 1. Regime ────────────────────────────────────────────────────────────────
-print("\n[1/8] Running regime detection...")
+print(f"\n{_t()} [1/8] Running regime detection...")
 try:
     sys.path.insert(0, str(TRADING))
     from regime import detect_regimes
     regime_data = detect_regimes(symbols)
     results['regime'] = regime_data
+    # Seed consensus's per-symbol regime cache from this batch result so
+    # _regime_weights() doesn't re-run detect_regimes([sym]) once per holding
+    # (8 redundant single-symbol downloads per run).
+    try:
+        import consensus as _consensus_mod
+        for _rd in (regime_data.get('regimes') or []):
+            if isinstance(_rd, dict) and _rd.get('symbol'):
+                _consensus_mod._regime_cache_put(_rd['symbol'], _rd.get('regime', ''))
+    except Exception:
+        pass
     regime_summary_lines = []
     for sym, rd in regime_data.items():
         r_str = rd.get('regime', 'UNKNOWN') if isinstance(rd, dict) else str(rd)
@@ -60,7 +76,7 @@ except Exception as e:
     regime_summary = "MARKET REGIME CONTEXT: unavailable"
 
 # ── 2. Consensus (per holding) ────────────────────────────────────────────────
-print("\n[2/8] Running 11-node consensus engine...")
+print(f"\n{_t()} [2/8] Running 11-node consensus engine...")
 try:
     from consensus import run_consensus_holding
     consensus_results = {}
@@ -91,7 +107,7 @@ except Exception as e:
     results['consensus'] = {}
 
 # ── 3. Kelly ─────────────────────────────────────────────────────────────────
-print("\n[3/8] Running Kelly criterion...")
+print(f"\n{_t()} [3/8] Running Kelly criterion...")
 try:
     from kelly import kelly_size_holding
     kelly_results = {}
@@ -119,7 +135,7 @@ except Exception as e:
     results['kelly'] = {}
 
 # ── 4. Monte Carlo ────────────────────────────────────────────────────────────
-print("\n[4/8] Running Monte Carlo simulation...")
+print(f"\n{_t()} [4/8] Running Monte Carlo simulation...")
 try:
     from monte_carlo import run_monte_carlo
     mc = run_monte_carlo(holdings, equity_summary=equity_sum)
@@ -132,15 +148,28 @@ except Exception as e:
     results['monte_carlo'] = {}
 
 # ── 5. Volatility models ──────────────────────────────────────────────────────
-print("\n[5/8] Running volatility models...")
+print(f"\n{_t()} [5/8] Running volatility models...")
 try:
     from volatility_models import compare_vol_models
+    import yfinance as yf
+    import numpy as np
+    import pandas as pd
     vol_results = {}
+    # compare_vol_models expects a RETURNS SERIES, not a ticker string — the old
+    # per-ticker call silently hit the short-series guard and emitted constant
+    # fake vols for every symbol. One batched 1y download covers all holdings.
+    closes = yf.download(symbols, period='1y', interval='1d', auto_adjust=True,
+                         progress=False, threads=False)['Close']
+    if isinstance(closes, pd.Series):
+        closes = closes.to_frame(name=symbols[0])
     for sym in symbols:
         try:
-            vr = compare_vol_models(sym)
+            col = closes[sym].dropna()
+            rets = np.log(col / col.shift(1)).dropna()
+            vr = compare_vol_models(rets, sym)
             vol_results[sym] = vr
-            print(f"  {sym}: GARCH={vr.get('garch_vol',0):.1%}  EWMA={vr.get('ewma_vol',0):.1%}")
+            print(f"  {sym}: GARCH={vr.get('garch_annual_pct',0):.1f}%  "
+                  f"EWMA={vr.get('ewma_annual_pct',0):.1f}%  preferred={vr.get('preferred','?')}")
         except Exception as e2:
             print(f"  {sym} vol ERROR: {e2}")
             vol_results[sym] = {}
@@ -151,21 +180,21 @@ except Exception as e:
     results['vol_models'] = {}
 
 # ── 6. Alpha benchmarks ───────────────────────────────────────────────────────
-print("\n[6/8] Running alpha benchmarks...")
+print(f"\n{_t()} [6/8] Running alpha benchmarks...")
 try:
     from benchmarks import batch_alpha
     # batch_alpha takes list of ticker strings
     alpha_table = batch_alpha(symbols)
     results['alpha_table'] = alpha_table
     for a in (alpha_table or [])[:3]:
-        print(f"  {a.get('symbol') or a.get('ticker')}: alpha_1m={a.get('vs_market',a.get('alpha_1m',0)):.1f}%")
+        print(f"  {a.get('symbol') or a.get('ticker')}: vs_market_1m={a.get('vs_market_pct',0):+.1f}%")
 except Exception as e:
     print(f"  ERROR: {e}")
     traceback.print_exc()
     results['alpha_table'] = []
 
 # ── 7. Tax-loss harvesting ────────────────────────────────────────────────────
-print("\n[7/8] Running tax harvester...")
+print(f"\n{_t()} [7/8] Running tax harvester...")
 try:
     from tax_harvester import get_harvest_summary
     # Expects dict keyed by symbol
@@ -179,7 +208,7 @@ except Exception as e:
     results['tax_report'] = {'candidates': [], 'total_harvestable': 0}
 
 # ── 8. Explainability ─────────────────────────────────────────────────────────
-print("\n[8/8] Running AI explainability...")
+print(f"\n{_t()} [8/8] Running AI explainability...")
 try:
     from explainability import explain_consensus
     explanations = {}
@@ -200,7 +229,7 @@ except Exception as e:
     results['explanations'] = {}
 
 # ── Cash yield (optional) ─────────────────────────────────────────────────────
-print("\n[bonus] Cash yield landscape...")
+print(f"\n{_t()} [bonus] Cash yield landscape...")
 try:
     from defi_yield import get_yield_landscape
     yield_data = get_yield_landscape()
@@ -210,6 +239,17 @@ except Exception as e:
     print(f"  yield ERROR: {e}")
     results['yield_data'] = {}
 
+# ── Crypto-equity correlation (was an ad-hoc agent "enrich" snippet) ──────────
+print(f"\n{_t()} [bonus] Crypto correlation risk...")
+try:
+    from crypto_correlation import crypto_risk_summary
+    crypto_risk = crypto_risk_summary(holdings)
+    results['crypto_risk'] = crypto_risk
+    print(f"  avg_btc={crypto_risk.get('avg_btc_corr')}  risk={crypto_risk.get('risk_label','?')}")
+except Exception as e:
+    print(f"  crypto ERROR: {e}")
+    results['crypto_risk'] = {}
+
 # ── Store regime_summary for AI step ─────────────────────────────────────────
 results['regime_summary'] = regime_summary
 
@@ -218,5 +258,5 @@ out = BASE / 'engine_results.json'
 with open(out, 'w') as f:
     json.dump(results, f, indent=2, default=str)
 
-print(f"\n[engines] Done — saved to {out}")
+print(f"\n{_t()} [engines] Done — saved to {out}")
 print(f"[engines] Keys: {list(results.keys())}")

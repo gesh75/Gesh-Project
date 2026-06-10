@@ -194,10 +194,12 @@ def deep_analyze_portfolio(
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise EnvironmentError("ANTHROPIC_API_KEY must be set in your .env file.")
-    client = anthropic.Anthropic(api_key=api_key)
+    # Bounded client: SDK defaults (600s timeout x retries) allow a ~30-min
+    # silent stall. 240s covers a slow ~7-10K-token generation.
+    client = anthropic.Anthropic(api_key=api_key, timeout=240.0, max_retries=2)
 
     today = __import__('datetime').date.today().isoformat()
-    regime_block = f"\\n\\n{regime_context}" if regime_context else ""
+    regime_block = f"\n\n{regime_context}" if regime_context else ""
 
     import copy
     sanitized = copy.deepcopy(payload)
@@ -222,7 +224,7 @@ def deep_analyze_portfolio(
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=8000,
+        max_tokens=10000,
         system=[{"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[{
             "name": "return_portfolio_analysis",
@@ -233,11 +235,16 @@ def deep_analyze_portfolio(
         messages=[{
             "role": "user",
             "content": (
-                f"Perform a deep financial analysis of this portfolio. Today is {today}.{regime_block}\\n\\n"
-                f"```json\\n{json.dumps(sanitized, indent=2)}\\n```"
+                f"Perform a deep financial analysis of this portfolio. Today is {today}.{regime_block}\n\n"
+                f"```json\n{json.dumps(sanitized, separators=(',', ':'))}\n```"
             )
         }]
     )
+    if message.stop_reason == "max_tokens":
+        raise RuntimeError(
+            "deep_analyze_portfolio: tool output truncated at max_tokens — "
+            "the JSON is unusable; tighten DEEP_ANALYSIS_SCHEMA or raise max_tokens."
+        )
     return message.content[0].input
 
 

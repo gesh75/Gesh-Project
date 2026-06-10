@@ -3,8 +3,14 @@
 run_ai2.py — Call Claude deep_analyze_portfolio on fresh engine results.
 Appends ai_result back to engine_results.json.
 """
-import os, sys, json, traceback
+import os, sys, json, time, traceback
 from pathlib import Path
+
+T0 = time.time()
+
+def _t() -> str:
+    """Elapsed-seconds tag for step timing attribution in logs."""
+    return f"[t+{time.time() - T0:5.1f}s]"
 
 BASE    = Path(__file__).parent
 TRADING = Path('/Users/georgigaydarov/Projects/gesh-project-trading')
@@ -95,6 +101,7 @@ payload = {
 # deep-analysis pipeline. Reuses the holdings regime to avoid a second fetch.
 diversification_context = ""
 try:
+    print(f"{_t()} [ai] Diversification radar scan starting...")
     import invest_radar
     radar_regime = {rd.get('symbol'): rd for rd in regimes_list if rd.get('symbol')}
     radar = invest_radar.scan_candidates(holdings, equity_sum, regime_lookup=radar_regime)
@@ -114,7 +121,7 @@ try:
 except Exception as e:
     print(f"[ai] Radar skipped (non-fatal): {e}")
 
-print(f"\n[ai] Calling deep_analyze_portfolio ...")
+print(f"\n{_t()} [ai] Calling deep_analyze_portfolio ...")
 print(f"[ai] Portfolio: ${total:,.2f}  Cash: ${cash:.2f}  Holdings: {len(holdings)}")
 
 # ── Call AI ───────────────────────────────────────────────────────────────────
@@ -124,8 +131,8 @@ try:
         payload,
         regime_context=regime_summary + override_context + diversification_context,
     )
-    print(f"[ai] Done. Score={ai_result.get('portfolio_score',0)}  Risk={ai_result.get('risk_score',0)}")
-    print(f"[ai] Verdict: {ai_result.get('overall_verdict','?')}")
+    print(f"{_t()} [ai] Done. Score={ai_result.get('portfolio_score',0)}  Risk={ai_result.get('risk_score',0)}")
+    print(f"[ai] Verdict: {ai_result.get('portfolio_verdict','?')}")
 
     # Save back to engine_results.json
     eng['ai_result'] = ai_result
@@ -141,6 +148,33 @@ try:
 
     print("[ai] Saved → engine_results.json + /tmp/ai_result2.json")
     print(f"[ai] Top keys: {list(ai_result.keys())}")
+
+    # ── Persist to the dashboard DB (analysis_runs + equity_snapshots) ───────
+    # This was SKILL.md "Step 6": a hand-typed sqlite INSERT every day (which has
+    # historically corrupted rows — ticker symbols in the model column). Pinned
+    # to BASE/db.py via importlib because a plain `import db` resolves to the
+    # gesh-project-trading copy (sys.path shadowing) and would write to the
+    # WRONG gesh_financial.db — the :9000 dashboard reads this repo's DB.
+    try:
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location('gesh_dashboard_db', str(BASE / 'db.py'))
+        _gdb = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_gdb)
+        try:
+            from ai_analyzer import MODEL as _MODEL
+        except Exception:
+            _MODEL = 'claude-sonnet-4-6'
+        _run_id = _gdb.log_analysis(f"{_MODEL} (chain)", payload, ai_result)
+        _snap_holdings = [
+            {**h,
+             'current_price': h.get('current_price', h.get('price', 0)),
+             'percent_change': h.get('percent_change', h.get('pct_change', 0))}
+            for h in holdings
+        ]
+        _gdb.log_equity_snapshot(_snap_holdings)
+        print(f"{_t()} [ai] DB: analysis_runs id={_run_id} + equity snapshot ({len(_snap_holdings)} rows)")
+    except Exception as e:
+        print(f"[ai] DB save failed (non-fatal): {e}")
 
 except Exception as e:
     print(f"[ai] ERROR: {e}")

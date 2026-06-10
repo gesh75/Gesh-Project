@@ -50,10 +50,20 @@ def final_action(sym):
         return 'HOLD', f'RSI={rsi:.0f}≥70 (Rule 5)'
     return k_act, ''
 
-# Day change — derive from portfolio_live.json prices vs avg_cost
+# Day change — computed from the snapshot's previous-close equity (mirrors
+# server.py's /api/portfolio calculation). Falls back to 0 when the snapshot
+# predates the adjusted_equity_previous_close export.
 snap = eng.get('snapshot', {})
-day_gain_pct = 2.21   # from screenshot
-day_gain_usd = 766.13 # from screenshot
+_eqs_hdr  = eng.get('equity_summary', {}) or snap.get('equity_summary', {}) or {}
+_prev_eq  = float(_eqs_hdr.get('adjusted_equity_previous_close') or 0)
+_cur_eq   = float(_eqs_hdr.get('total') or _eqs_hdr.get('portfolio_equity') or 0)
+if _prev_eq > 0 and _cur_eq > 0:
+    day_gain_usd = _cur_eq - _prev_eq
+    day_gain_pct = day_gain_usd / _prev_eq * 100
+else:
+    day_gain_usd = 0.0
+    day_gain_pct = 0.0
+day_gain_col = '#00e87a' if day_gain_usd >= 0 else '#ff3c5a'
 
 # Score colour helpers
 def score_col(s):
@@ -171,8 +181,10 @@ def holding_card(h):
     verdict_ai = ai_h.get('verdict','—')
 
     vol_sym = vol_models.get(sym, {})
-    garch_v = vol_sym.get('garch_vol', 0)
-    ewma_v  = vol_sym.get('ewma_vol', 0)
+    # compare_vol_models emits *_annual_pct (already in percent units) — convert
+    # to fractions so the existing :.1% format renders correctly.
+    garch_v = (vol_sym.get('garch_annual_pct', 0) or 0) / 100
+    ewma_v  = (vol_sym.get('ewma_annual_pct', 0) or 0) / 100
 
     exp_sym = explanations.get(sym, {})
     headline= exp_sym.get('headline', '') if isinstance(exp_sym, dict) else ''
@@ -388,8 +400,9 @@ for rd in regimes_list:
 vol_rows = ''
 for sym in kelly_syms:
     vd = vol_models.get(sym,{})
-    gv = vd.get('garch_vol',0)
-    ev = vd.get('ewma_vol',0)
+    # *_annual_pct keys are percent units; convert to fractions for :.1% format
+    gv = (vd.get('garch_annual_pct',0) or 0) / 100
+    ev = (vd.get('ewma_annual_pct',0) or 0) / 100
     diff_str = ''
     if gv and ev:
         diff = (gv - ev) / ev * 100 if ev else 0
@@ -405,9 +418,9 @@ for sym in kelly_syms:
 alpha_rows = ''
 for a in (alpha_table or []):
     sym     = a.get('symbol') or a.get('ticker','?')
-    vs_mkt  = a.get('vs_market', a.get('alpha_1m', 0)) or 0
-    vs_sec  = a.get('vs_sector', 0) or 0
-    ret_1m  = a.get('return_1m', 0) or 0
+    vs_mkt  = a.get('vs_market_pct', 0) or 0
+    vs_sec  = a.get('vs_sector_pct', 0) or 0
+    ret_1m  = a.get('stock_return_pct', 0) or 0
     col_mkt = '#00e87a' if vs_mkt >= 0 else '#ff3c5a'
     col_sec = '#00e87a' if vs_sec >= 0 else '#ff3c5a'
     alpha_rows += f'''<tr>
@@ -589,7 +602,7 @@ html = f'''<!DOCTYPE html>
       <div style="font-size:11px;color:#00d4ff;margin-top:2px">AI-Powered Portfolio Observability &nbsp;|&nbsp; {port_type}</div>
     </div>
     <div class="ts" style="text-align:right">
-      <div style="font-size:12px;color:#00e87a">+${day_gain_usd:,.2f} (+{day_gain_pct:.2f}%) today</div>
+      <div style="font-size:12px;color:{day_gain_col}">${day_gain_usd:+,.2f} ({day_gain_pct:+.2f}%) today</div>
       <div>Generated {now_str}</div>
       <div>Data: {fetch_at} UTC</div>
     </div>
