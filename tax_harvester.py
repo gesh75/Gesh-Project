@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import date, datetime, timedelta
+import os
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,9 @@ MIN_LOSS_USD: float = 500.0   # minimum unrealised loss to flag
 WASH_SALE_DAYS: int = 30      # IRS wash-sale window
 
 # DB path — same resolution logic as db.py (VirtioFS fallback)
-_PRIMARY_DB = Path("/Users/georgigaydarov/Projects/gesh-project-trading/gesh_financial.db")
+_PRIMARY_DB = Path(os.environ.get(
+    "GESH_TRACKER_DB",
+    str(Path(__file__).parent.parent / "gesh-project-trading" / "gesh_financial.db")))
 _FALLBACK_DB = Path("/tmp/gesh_trades.db")
 
 

@@ -13,7 +13,8 @@ def _t() -> str:
     return f"[t+{time.time() - T0:5.1f}s]"
 
 BASE = Path(__file__).parent
-TRADING = Path('/Users/georgigaydarov/Projects/gesh-project-trading')
+TRADING = Path(os.environ.get('GESH_TRADING_HOME',
+                               str(Path(__file__).parent.parent / 'gesh-project-trading')))
 sys.path.insert(0, str(BASE))
 sys.path.insert(0, str(TRADING))
 os.chdir(BASE)
@@ -66,6 +67,7 @@ try:
     from regime import detect_regimes
     regime_data = detect_regimes(symbols)
     results['regime'] = regime_data
+    results['regime_ran_at'] = _utcnow()
     # Seed consensus's per-symbol regime cache from this batch result so
     # _regime_weights() doesn't re-run detect_regimes([sym]) once per holding
     # (8 redundant single-symbol downloads per run).

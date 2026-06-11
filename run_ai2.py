@@ -13,7 +13,8 @@ def _t() -> str:
     return f"[t+{time.time() - T0:5.1f}s]"
 
 BASE    = Path(__file__).parent
-TRADING = Path('/Users/georgigaydarov/Projects/gesh-project-trading')
+TRADING = Path(os.environ.get('GESH_TRADING_HOME',
+                               str(Path(__file__).parent.parent / 'gesh-project-trading')))
 sys.path.insert(0, str(BASE))
 sys.path.insert(0, str(TRADING))
 os.chdir(BASE)

@@ -18,8 +18,10 @@
 # is the intended recovery path; the report timestamp shows the actual run time.
 
 set -u
-GP=/Users/georgigaydarov/Projects/gesh-project
-GPT=/Users/georgigaydarov/Projects/gesh-project-trading
+# Repo roots derived from this script's location; GESH_TRADING_HOME overrides
+# the sibling-directory convention for non-standard layouts.
+GP="$(cd "$(dirname "$0")" && pwd)"
+GPT="${GESH_TRADING_HOME:-$(dirname "$GP")/gesh-project-trading}"
 PY="$GP/venv/bin/python3.14"
 LOG=/tmp/gesh_fullchain.log
 LOCK=/tmp/gesh_daily_chain.lock

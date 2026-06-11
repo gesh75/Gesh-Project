@@ -1436,7 +1436,7 @@ function piCard(a){
     <div class="ch">
       <div style="display:flex;align-items:center;gap:10px"><span class="ct">Portfolio Intelligence</span><span class="badge b-muted">${a.portfolio_type||'Mixed'}</span></div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span style="font-size:13px;color:var(--muted)">Risk:</span><span style="font-weight:700;color:${riskC}">${a.risk_score||'—'}<span style="font-size:12px;color:var(--muted)">/10</span></span>
+        <span style="font-size:13px;color:var(--muted)">Risk:</span><span style="font-weight:700;color:${riskC}">${a.risk_score||'—'}<span style="font-size:12px;color:var(--muted)">/100</span></span>
         <span style="font-size:13px;color:var(--muted);margin-left:6px">Diversification:</span><span style="font-weight:700;color:var(--accent)">${a.diversification_score||0}<span style="font-size:12px;color:var(--muted)">/100</span></span>
       </div>
     </div>
@@ -1926,7 +1926,10 @@ function renderIntelligence(sec, news, fund){
     </div>`;
   }).join('') || '<div class="empty" style="padding:20px">No scan data yet</div>';
 
-  const fundMacro=fund?`<div class="mood-banner" style="font-size:15px;color:var(--muted2)">${fund.market_summary||''}</div>`:'';
+  // Label cached narratives with the SCAN date — 'Updated <load time>' made a
+  // two-month-old market summary read as current.
+  const fundAge=fund&&fund.cached_at?`<div style="font-size:11px;color:var(--yellow);margin-bottom:6px">📅 Scan from ${new Date(fund.cached_at+'Z').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} — narrative reflects that date, not today</div>`:'';
+  const fundMacro=fund?`${fundAge}<div class="mood-banner" style="font-size:15px;color:var(--muted2)">${fund.market_summary||''}</div>`:'';
 
   $('intel-container').innerHTML=`
     <div class="agents-grid">

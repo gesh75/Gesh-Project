@@ -604,7 +604,25 @@ def equity_curve_gate():
 # ─── Step 4 — Regime detection standalone ────────────────────────────────────
 
 @app.get("/api/regime")
-def regime_endpoint():
+def regime_endpoint(force_live: bool = False):
+    """Market regime per holding. Serves the daily chain's cached regime when
+    fresh (<4h) — the live path re-downloads 8 symbols of OHLCV + FRED on every
+    dashboard load for data the 10:30 chain already computed. ?force_live=true
+    bypasses the cache."""
+    if not force_live:
+        try:
+            eng = _load_engine_results()
+            cached = eng.get("regime")
+            ran = eng.get("regime_ran_at")
+            if cached and cached.get("regimes") and ran:
+                from datetime import datetime as _rdt, timezone as _rtz
+                age_s = (_rdt.now(_rtz.utc)
+                         - _rdt.fromisoformat(str(ran))).total_seconds()
+                if age_s < 4 * 3600:
+                    return {"status": "ok", "data": cached,
+                            "cached": True, "ran_at": ran}
+        except Exception:
+            pass  # any cache problem → fall through to live
     try:
         payload  = build_data_payload(DEFAULT_WATCHLIST)
         symbols  = [h["symbol"] for h in payload["holdings"]]

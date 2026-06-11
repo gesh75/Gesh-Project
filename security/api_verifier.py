@@ -37,6 +37,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,9 @@ RATE_LIMITS: dict[str, int] = {
     "default":    30,
 }
 
-DB_PATH = Path("/Users/georgigaydarov/Projects/gesh-project-trading/gesh_financial.db")
+DB_PATH = Path(os.environ.get(
+    "GESH_TRACKER_DB",
+    str(Path(__file__).parent.parent.parent / "gesh-project-trading" / "gesh_financial.db")))
 _FALLBACK_DB = Path("/tmp/gesh_security.db")
 
 
