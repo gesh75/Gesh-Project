@@ -200,7 +200,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
 </head>
 <body>
 <h1>GESH Financial</h1>
-<p class="subtitle"><span class="live-pulse"></span>Architecture &amp; Commercial Map — Updated 2026-05-23</p>
+<p class="subtitle"><span class="live-pulse"></span>Architecture &amp; Commercial Map — Updated 2026-06-10</p>
 
 <div class="diagram">
 
@@ -232,7 +232,8 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
     <div class="com-card-port">Port 9003/trading · gesh-project-trading</div>
     <div class="com-card-desc">Never sold directly. Runs silently to generate the signal accuracy proof that makes the product credible. Customers don't need it — they see the results.</div>
     <div class="com-card-items">
-      <span>APScheduler autopilot (4 daily jobs)</span>
+      <span>APScheduler autopilot (12 scheduled jobs)</span>
+      <span>Deterministic 10:30 daily chain (launchd, ~4 min)</span>
       <span>Paper trade execution (Alpaca MCP)</span>
       <span>Signal Accuracy Tracker (tracker.py)</span>
       <span>Autonomy gate: 30 trades / 55% win rate</span>
@@ -283,12 +284,12 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
     <div class="box c-accent w2">
       <div class="box-title">Phase 2 Additions</div>
       <div class="box-body">
-        <span class="tag t-green">Auth0 JWT</span>
+        <span class="tag t-green">Login wall ✓</span>
         <span class="tag t-accent">Stripe</span>
         <span class="tag t-yellow">Rate limiting</span>
         <span class="tag t-purple">API keys</span>
         <span class="tag t-muted">DigitalOcean</span><br><br>
-        Auth0 free tier → JWT per request.<br>
+        Login wall SHIPPED (auth_users.py, stdlib PBKDF2 + HMAC cookie, env-gated off until alpha).<br>
         Stripe webhooks → subscription table.<br>
         DigitalOcean Droplet $24/mo.
       </div>
@@ -297,9 +298,18 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
       <div class="box-title">Proof Page</div>
       <div class="box-body">
         <span class="tag t-lime">Public</span><br><br>
-        gesh_proof_page.html — shows live win rate, Sharpe, per-source signal accuracy from tracker.py.<br><br>
+        GET /track-record (proof_page.py) — live win rate, Sharpe, drawdown and honest "Day X/180" framing from tracker.py. Public, login-wall exempt.<br><br>
         <em style="color:var(--lime)">The entire sales pitch.</em><br>
-        <span style="color:var(--muted);font-size:9px">📋 June 2026</span>
+        <span class="tag t-green">SHIPPED ✓ 2026-06</span>
+      </div>
+    </div>
+    <div class="box c-accent w2">
+      <div class="box-title">Daily Chain + Commercial Surface (2026-06)</div>
+      <div class="box-body">
+        <span class="tag t-green">launchd 10:30 ET</span>
+        <span class="tag t-accent">~4 min</span><br><br>
+        <code>run_daily_analysis.sh</code>: live snapshot → engines → Claude deep analysis + DB save → paper/risk-gate audit (<code>run_paper_gate2.py</code>) → HTML report (served at <code>/report</code>). Replaced a 40-min agent run; self-asserting + lock-protected.<br><br>
+        Shipped routes: <code>/track-record</code> · <code>/watch</code> cockpit · <code>/invest</code> radar · <code>/progress</code> burndown · <code>/report</code> · <code>/terms</code> + <code>/disclaimer</code> · login wall (env-gated).
       </div>
     </div>
   </div>
@@ -435,10 +445,10 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
         <span class="tag t-orange">paper_outcomes</span>
         <span class="tag t-orange">signal_overrides</span><br><br>
         <strong style="color:var(--orange)">Autonomy Gate:</strong> ≥30 closed trades · win_rate ≥55% · Sharpe ≥0.50 · drawdown ≤10%<br>
-        <strong>Status:</strong> 0/30 trades · ETA Aug–Sep 2026
+        <strong>Status (2026-06-10):</strong> 6/30 closed · win rate 17% / Sharpe -8.02 / DD 21% — gate FAILING; live source: /track-record
         <div class="gate-bar-wrap">
-          <div class="gate-bar-label"><span>Closed trades</span><span>0 / 30</span></div>
-          <div class="gate-bar-track"><div class="gate-bar-fill red" style="width:7%"></div></div>
+          <div class="gate-bar-label"><span>Closed trades</span><span>6 / 30</span></div>
+          <div class="gate-bar-track"><div class="gate-bar-fill red" style="width:20%"></div></div>
         </div>
         <div class="gate-bar-wrap">
           <div class="gate-bar-label"><span>Win rate target</span><span>≥55%</span></div>
@@ -449,18 +459,18 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
     <div class="box c-dark w1">
       <div class="box-title">Weekly Review</div>
       <div class="box-body">
-        Auto-scheduled every Friday 9am.<br>Pulls gate metrics, compares to phase milestones, appends to <code>tracker_weekly_log.md</code>.<br><br>
+        Auto-scheduled every Friday 9am (tracker_weekly.py).<br>Writes <code>weekly_snapshots</code> + <code>PROGRESS_LOG.md</code>, sends Telegram, feeds the :9000 <code>/progress</code> burndown.<br><br>
         <span class="tag t-green">LIVE ✓</span>
       </div>
     </div>
   </div>
   <div class="exec-grid">
-    <div class="exec-box"><div class="exec-name">autopilot.py</div><div class="exec-desc">APScheduler — 8 jobs daily. pre_market, open_window, midday, EOD. Tracker-hooked on all fills.</div></div>
+    <div class="exec-box"><div class="exec-name">autopilot.py</div><div class="exec-desc">APScheduler — 12 scheduled jobs incl. tracker_close_scan (the exit mechanism), catch_up_on_wake, 4× market scans, weekly reviews. Tracker-hooked on all fills.</div></div>
     <div class="exec-box"><div class="exec-name">risk_gate.py</div><div class="exec-desc">8-gate protection: kill-switch → hours → confidence → position cap → rate → cash → P&L → freshness.</div></div>
     <div class="exec-box"><div class="exec-name">execution.py</div><div class="exec-desc">Paper mode (default). 0.10% slippage model. SHA1 idempotency. NotImplementedError for live until gate passes.</div></div>
     <div class="exec-box"><div class="exec-name">market_scanner.py</div><div class="exec-desc">25 stocks × 3 workers. 4× daily. STRONG BUY auto-injected into autopilot queue. Telegram cards.</div></div>
     <div class="exec-box"><div class="exec-name">tracker.py</div><div class="exec-desc">record_entry / record_exit wired into all 3 autopilot close paths. Source of truth for autonomy gate.</div></div>
-    <div class="exec-box"><div class="exec-name">state.py</div><div class="exec-desc">trade_intents · risk_decisions · orders tables. 707+ rows. orders WHERE status=SIMULATED = paper fills.</div></div>
+    <div class="exec-box"><div class="exec-name">state.py</div><div class="exec-desc">trade_intents · risk_decisions · orders tables. 1,267+ rows. orders WHERE status=SIMULATED = paper fills.</div></div>
     <div class="exec-box"><div class="exec-name">alerts.py</div><div class="exec-desc">Telegram @gesh755bot. Fill alerts, rejection alerts, daily P&L, scan summaries.</div></div>
   </div>
 </div>
@@ -511,7 +521,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
       <div class="phase-date">May – July 2026</div>
       <div class="phase-item">30 closed paper trades</div>
       <div class="phase-item">Win rate ≥55%, Sharpe ≥0.5</div>
-      <div class="phase-item">Public proof page (June)</div>
+      <div class="phase-item">Public proof page ✓ (/track-record)</div>
       <div class="phase-item">Discord + Substack (June)</div>
       <div class="phase-item">Weekly Friday auto-review ✓</div>
       <div class="phase-mrr">Gate: autonomy pass</div>
@@ -520,7 +530,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
       <div class="phase-status status-next">NEXT</div>
       <div class="phase-title">Phase 2 — SaaS</div>
       <div class="phase-date">Aug – Oct 2026</div>
-      <div class="phase-item">Auth0 JWT multi-user</div>
+      <div class="phase-item">Login wall ✓ (enable + Stripe)</div>
       <div class="phase-item">Stripe subscriptions</div>
       <div class="phase-item">Per-user Alpaca keys</div>
       <div class="phase-item">DigitalOcean deploy</div>

@@ -156,6 +156,24 @@ server.py (FastAPI · Port 9000)
 
 ---
 
+## Daily Analysis Chain (the system's heartbeat)
+
+Every weekday at **10:30 ET**, launchd (`com.gesh.daily-analysis`) runs the
+deterministic orchestrator `run_daily_analysis.sh` (~4 minutes end-to-end):
+
+| Step | Script | Output |
+|---|---|---|
+| 1/5 | `fetch_live_snapshot.py` | live Robinhood holdings → `live_portfolio_snapshot.json` |
+| 2/5 | `run_engines2.py` | regime + macro, 11-node consensus, Kelly, Monte Carlo, vol models, alpha, tax, explainability, yield, crypto → `engine_results.json` |
+| 3/5 | `run_ai2.py` | diversification radar + Claude deep analysis, saved to `analysis_runs` + `equity_snapshots` |
+| 4/5 | `run_paper_gate2.py` | paper session + 8-gate risk audit (`action_plan` / `gate_results` / `paper_session`) |
+| 5/5 | `gen_report2.py` | `gesh_report.html` (~75KB) — served at `GET /report`, copied to gesh-project-trading |
+
+The chain is self-asserting (snapshot ≤30 min old, report ≥60KB, DB row
+written), lock-protected against double runs, and logs per-step timing to
+`/tmp/gesh_fullchain.log`. It replaced a 30–60 min agent-driven workflow
+(2026-06-10). Manual run: `bash run_daily_analysis.sh`.
+
 ## Quick Start
 
 ### Prerequisites

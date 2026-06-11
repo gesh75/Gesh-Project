@@ -2160,7 +2160,23 @@ function switchTab(name, btn){
   if(name==='radar'){ if(typeof loadCachedScreener==='function') loadCachedScreener(); }
   if(name==='scanner' && typeof loadScannerConfig==='function'){ loadScannerConfig(); }
   if(name==='trading' && typeof loadTradeStats==='function'){ loadTradeStats(); }
-  if(name==='daily' && typeof daLoadHistory==='function'){ daLoadHistory(); }
+  if(name==='daily' && typeof daAutoLoadLatest==='function'){ daAutoLoadLatest(); }
+}
+
+// Auto-render the most recent analysis run (e.g. the 10:30 chain's result) the
+// first time the Daily Analysis tab opens — never force a duplicate paid run
+// just to see today's numbers. The Run button still triggers a fresh analysis.
+let _daAutoLoaded=false;
+async function daAutoLoadLatest(){
+  if(typeof daLoadHistory!=='function') return;
+  await daLoadHistory();
+  if(_daAutoLoaded) return;
+  const sel=$('da-hist-sel');
+  if(sel&&sel.options.length>1&&!sel.value){
+    sel.value=sel.options[1].value;   // newest run (options[0] is the placeholder)
+    _daAutoLoaded=true;
+    if(typeof daLoadRun==='function') daLoadRun();
+  }
 }
 
 // Try to load the most recent cached deep analysis from /api/history
@@ -2173,12 +2189,15 @@ async function tryLoadCachedAnalysis(){
     const r=await fetch('/api/history?limit=1');
     if(!r.ok) return;
     const j=await r.json();
-    const runs=(j.data&&j.data.runs)||[];
+    // /api/history returns {status, data: [rows]} — data is the list itself
+    const runs=Array.isArray(j.data)?j.data:((j.data&&j.data.runs)||[]);
     const run=runs[0];
-    if(run&&run.result_json){
+    let rj=run&&run.result_json;
+    if(typeof rj==='string'){ try{ rj=JSON.parse(rj); }catch(_e){ rj=null; } }
+    if(rj){
       // result_json stores the full analysis response — render it
-      const a=run.result_json.analysis||run.result_json;
-      const mkt=run.result_json.market||null;
+      const a=rj.analysis||rj;
+      const mkt=rj.market||null;
       renderDeepAnalysis(a, mkt, true);
       _cachedAnalysisLoaded=true;
       $('deep-ts').textContent='Cached '+(run.created_at?new Date(run.created_at).toLocaleTimeString():'');
@@ -2518,7 +2537,9 @@ async function loadScannerConfig(){
     const r=await fetch('/api/config');
     if(!r.ok) return;
     const d=await r.json();
-    const tf=d.scanner_timeframe||'daily';
+    // /api/config returns {status, data: cfg}
+    const cfg=(d&&d.data)||d||{};
+    const tf=cfg.scanner_timeframe||'daily';
     $('scanner-tf').value=tf;
     $('scanner-mode-badge').textContent=tf.toUpperCase();
     $('scanner-cfg-ts').textContent='Config loaded '+new Date().toLocaleTimeString();
@@ -2665,8 +2686,10 @@ async function loadTradeStats(){
       fetch('/api/trades?paper=true&limit=20').then(r=>r.json())
     ]);
 
-    // Stats row
-    const s=stats||{};
+    // Stats row — endpoints return {status, data} envelopes; this tab shows the
+    // PAPER book, so stats come from data.paper (data.real lives beside it).
+    const statsD=(stats&&stats.data)||{};
+    const s=statsD.paper||{};
     const wr=(s.win_rate_pct||0).toFixed(0);
     const totalTrades=s.total_trades||0;
     // Only color-code win rate if there are actual trades
@@ -2675,28 +2698,29 @@ async function loadTradeStats(){
     $('pt-winrate').style.color=wrColor;
     $('pt-wl').textContent=`${s.wins||0}W / ${s.losses||0}L`;
 
-    const pnl=s.total_pnl||0;
+    const pnl=s.total_realized_pnl||0;
     $('pt-pnl').textContent=fmt(pnl);
     $('pt-pnl').className='sval '+(pnl>=0?'pos':'neg');
 
-    const edge=(summary.paper_edge||0).toFixed(1);
+    const summaryD=(summary&&summary.data)||{};
+    const edge=(summaryD.paper_edge||0).toFixed(1);
     $('pt-edge').textContent=(edge>0?'+':'')+edge+'%';
     $('pt-edge').className='sval '+(parseFloat(edge)>=0?'pos':'neg');
-    $('pt-edge-sub').textContent=summary.verdict||'vs live performance';
+    $('pt-edge-sub').textContent=summaryD.verdict||'vs live performance';
 
-    $('pt-open').textContent=s.open_positions||'0';
-    $('pt-open-sub').textContent=`${s.total_trades||0} total paper trades`;
+    $('pt-open').textContent=String(s.open_trades||0);
+    $('pt-open-sub').textContent=`${totalTrades} closed paper trades`;
 
     // Best scanner badge
-    const scanPerf=s.scanner_performance||[];
+    const scanPerf=statsD.scanner_performance||[];
     if(scanPerf.length){
       const best=scanPerf[0];
       $('pt-scanner-best').textContent=`🏆 Best: ${best.scanner_source} (${(best.win_rate||0).toFixed(0)}%)`;
       $('pt-scanner-best').className='badge b-green';
     }
 
-    // Trade history
-    renderTradeHistory(trades);
+    // Trade history — unwrap the {status, data} envelope
+    renderTradeHistory((trades&&trades.data)||[]);
     $('pt-ts').textContent='Updated '+new Date().toLocaleTimeString();
   }catch(e){
     console.error('trade stats',e);
@@ -2791,14 +2815,15 @@ function renderPaperSessionResults(results){
   let html=`<div style="padding:12px 16px">`;
   results.forEach(r=>{
     if(r.error){ errors++; return; }
-    const approved_flag=r.gate?.approved||r.approved||false;
+    // /api/trading/consensus-order returns the gate verdict under r.verdict
+    const approved_flag=r.verdict?.approved||r.gate?.approved||r.approved||false;
     const status=r.order?.status||r.status||'—';
     if(approved_flag) approved++; else rejected++;
     const color=approved_flag?'var(--green)':'var(--red)';
     html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
       <span style="color:var(--accent);font-weight:700;min-width:60px">${r.symbol}</span>
       <span class="badge ${approved_flag?'b-green':'b-red'}" style="font-size:11px">${approved_flag?'APPROVED':'REJECTED'}</span>
-      <span style="color:var(--muted);font-size:13px">${r.gate?.reason||r.reason||status}</span>
+      <span style="color:var(--muted);font-size:13px">${r.verdict?.reason||r.gate?.reason||r.reason||status}</span>
       ${r.order?.fill_qty?`<span style="color:${color};font-size:13px">${r.order.fill_qty} shares @ $${(r.order.fill_price||0).toFixed(2)}</span>`:''}
     </div>`;
   });
@@ -2832,7 +2857,9 @@ async function runDryRun(){
   btn.disabled=false; btn.textContent='▶ Gate Check';
 }
 
-function renderGateVerdict(d, sym, action){
+function renderGateVerdict(resp, sym, action){
+  // /api/trading/dry-run returns {status, data: {approved, reason, gates, ...}}
+  const d=(resp&&resp.data)||resp||{};
   const verdict=d.verdict||d.approved;
   const approved=verdict==='APPROVED'||verdict===true;
   const gates=d.gates||{};

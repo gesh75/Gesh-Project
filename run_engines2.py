@@ -38,11 +38,26 @@ symbols     = [h['symbol'] for h in holdings]
 print(f"[engines] {len(holdings)} holdings  total=${total_port:,.2f}  cash=${cash:.2f}")
 print(f"[engines] symbols: {symbols}")
 
-results = {
+def _utcnow() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+# MERGE over the existing file instead of clobbering it: a full rewrite wipes
+# the *_ran_at freshness stamps and the dashboard's POST-run caches (screener
+# etc.) every morning, leaving every sidebar badge stale and the Radar tab
+# empty. Keys this run produces are overwritten below; everything else survives.
+results = {}
+try:
+    with open(BASE / 'engine_results.json') as _f:
+        results = json.load(_f)
+except Exception:
+    results = {}
+
+results.update({
     'snapshot': snap,
     'holdings': holdings,
     'equity_summary': equity_sum,
-}
+})
 
 # ── 1. Regime ────────────────────────────────────────────────────────────────
 print(f"\n{_t()} [1/8] Running regime detection...")
@@ -122,6 +137,7 @@ try:
             consensus_results[sym] = {'verdict': 'INSUFFICIENT DATA', 'raw_score': 0,
                                        'active_nodes': 0, 'error': str(e2)}
     results['consensus'] = consensus_results
+    results['consensus_ran_at'] = _utcnow()
 except Exception as e:
     print(f"  FATAL: {e}")
     traceback.print_exc()
@@ -150,6 +166,7 @@ try:
             print(f"  {sym} Kelly ERROR: {e2}")
             kelly_results[sym] = {'action': 'HOLD', 'optimal_pct': 0, 'error': str(e2)}
     results['kelly'] = kelly_results
+    results['kelly_ran_at'] = _utcnow()
 except Exception as e:
     print(f"  FATAL: {e}")
     traceback.print_exc()
@@ -161,6 +178,7 @@ try:
     from monte_carlo import run_monte_carlo
     mc = run_monte_carlo(holdings, equity_summary=equity_sum)
     results['monte_carlo'] = mc
+    results['monte_carlo_ran_at'] = _utcnow()
     var95 = mc.get('var_95_pct', mc.get('var_95', 0))
     print(f"  VaR95={var95:.1f}%  paths={mc.get('n_sims', mc.get('num_paths',1000))}")
 except Exception as e:

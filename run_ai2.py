@@ -136,6 +136,8 @@ try:
 
     # Save back to engine_results.json
     eng['ai_result'] = ai_result
+    eng['ai_result_ran_at'] = __import__('datetime').datetime.now(
+        __import__('datetime').timezone.utc).isoformat()
     eng['regime_summary'] = regime_summary
     eng['override_context'] = override_context
 
