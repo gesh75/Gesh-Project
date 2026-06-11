@@ -1813,7 +1813,7 @@ function renderMonteCarlo(mc, cachedMeta){
       <div class="mc-body">
         <div class="mc-stats">
           <div style="font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:8px">21-Day Forecast (${mc.n_sims} simulations)</div>
-          <div class="mc-stat-row"><span class="mc-stat-label">Current Equity</span><span class="mc-stat-val">${fmt(curr)}</span></div>
+          <div class="mc-stat-row"><span class="mc-stat-label">Positions Value <span style="color:var(--muted);font-weight:400">(excl. cash — header total includes cash)</span></span><span class="mc-stat-val">${fmt(curr)}</span></div>
           <div class="mc-stat-row"><span class="mc-stat-label">Median Outcome</span><span class="mc-stat-val">${fmt(mc.median)}</span></div>
           <div class="mc-stat-row"><span class="mc-stat-label">Best Case (95th)</span><span class="mc-stat-val pos">${fmt(mc.p95)}</span></div>
           <div class="mc-stat-row"><span class="mc-stat-label">Worst Case (5th)</span><span class="mc-stat-val neg">${fmt(mc.p5)}</span></div>
