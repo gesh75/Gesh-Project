@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Gesh Financial</string>
-    <string name="nav_portfolio">Portfolio</string>
-    <string name="nav_analysis">Analysis</string>
-    <string name="nav_settings">Settings</string>
-</resources>

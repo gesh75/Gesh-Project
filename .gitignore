@@ -40,3 +40,10 @@ _archive/
 
 # career-ops is an independent repo (own remote) — not tracked inside gesh-project
 career-ops/
+
+# Android build artifacts (never commit compiled outputs)
+android*/**/build/
+android*/**/.gradle/
+*.apk
+*.dex
+GeshFinancial-Android.zip
