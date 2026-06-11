@@ -216,6 +216,7 @@ GEMINI_API_KEY=           # Optional — enables gemini_agent.py (Georgi has sub
 # Trading execution layer
 PAPER_MODE=true           # true = paper mode (default, NEVER change without weeks of paper testing)
 REQUIRE_APPROVAL=true     # true = every intent queued for manual confirm before live
+PAPER_CASH_USD=100000     # simulated cash for paper-mode CASH_FLOOR/DAILY_LOSS gates (rules #32/#36)
 KILL_SWITCH_PATH=~/.gesh/KILL  # create this file to block all orders immediately
 MAX_POSITION_PCT=0.02     # max 2% of equity per symbol
 MAX_DAILY_LOSS_PCT=0.01   # max 1% daily loss before gate blocks all orders
@@ -636,6 +637,63 @@ New modules + routes on :9000 (full writeups: `../gesh-project-trading/docs/SYST
 
 Public routes are exempt from the login wall (`auth_users.PUBLIC_PREFIXES`); `/progress` is **not** (internal).
 The product is single-tenant (one Robinhood account); the alpha model is "10 users view the owner's research."
+
+## Daily Analysis Chain — 2026-06-10 ★★★ (the system's heartbeat)
+
+The daily portfolio analysis is fully deterministic — a scheduled Claude agent's only
+role is verify + narrate (see `.claude/skills/daily-portfolio-analysis/SKILL.md`).
+NEVER hand-run engines, hand-edit gesh_report.html, or hand-write SQL.
+
+**Orchestrator:** `run_daily_analysis.sh` — launchd `com.gesh.daily-analysis`, 10:30 ET
+Mon–Fri, ~4–6 min, logs to `/tmp/gesh_fullchain.log`, PID-liveness lock, self-asserting
+(snapshot ≤30 min, report ≥60KB, DB row), publishes to the trading repo only on clean runs.
+Missed-during-sleep runs fire once at wake (off-hours prices + MARKET_HOURS rejections = normal).
+
+| Step | Script | Output |
+|---|---|---|
+| 1/5 | fetch_live_snapshot.py | live_portfolio_snapshot.json (+ adjusted_equity_previous_close) |
+| 2/5 | run_engines2.py | engine_results.json — regime+FRED macro, 11-node consensus, Kelly, MC, vols, alpha, tax, explainability, yield, crypto. MERGE-writes (never clobber) + stamps `*_ran_at` (consensus/kelly/monte_carlo/regime/ai_result) for the sidebar freshness badges |
+| 3/5 | run_ai2.py | radar + one Claude deep-analysis call (bounded client: 240s timeout, max_tokens 10000 + truncation guard) + db.log_analysis/log_equity_snapshot (path-pinned to THIS repo's db.py — plain `import db` resolves to the trading copy) |
+| 4/5 | run_paper_gate2.py | auto-close check → action plan from Kelly+overrides → paper session → 8-gate audit (`action_plan`/`gate_results`/`paper_session` in engine_results.json) → Telegram signal alert (@gesh755bot) |
+| 5/5 | gen_report2.py | gesh_report.html (~73KB, incl. Paper & Risk-Gate Audit section) — served at `GET /report` |
+
+**sys.path shadowing (critical):** run_engines2/run_ai2 put gesh-project-trading at
+`sys.path[0]` — ALL engine modules + ai_analyzer + db resolve to the TRADING copies.
+Edit those copies for engine behavior; pin to this repo's files via importlib when needed.
+
+**Paper-mode risk gates (rules #32/#36 ported 2026-06-10, commit 27721a0):** this repo's
+`trading/risk_gate.py` now mirrors the trading repo — PAPER mode gates CASH_FLOOR on
+`cfg.paper_cash_usd` ($100k, env `PAPER_CASH_USD`) and DAILY_LOSS on the paper book's own
+realized P&L (`state.paper_realized_pnl_usd_today`); LIVE mode unchanged. Keep both copies
+in sync (same hazard class as trading rule #37). Guard tests: `test_risk_gate_paper_mode.py`
+— never call `evaluate()` from tests without sandboxing `trading.state.DB_PATH`.
+First production approval: 2026-06-11 (3/3 BUYs, all 9 gates).
+
+**Two paper books (deliberate):** trade_log's `paper_trades` (this repo's DB) = the daily
+chain + manual sims; the trading repo's tracker (`paper_positions`/`paper_outcomes`) = the
+autopilot's consensus signals and the ONLY autonomy-gate counter, powering /watch +
+/track-record. Do not merge them — mixing strategies muddies the gate proof. The book was
+reset 2026-06-11 to production entries only (test rows backed up in `_archive/`); only the
+chain should call run_paper_gate2.py.
+
+**Path conventions (2026-06-10):** zero hardcoded /Users paths in tracked code. Shell
+scripts derive roots from `$(dirname $0)`; Python uses the sibling-dir convention with env
+overrides `GESH_TRADING_HOME` (trading repo root) and `GESH_TRACKER_DB` (tracker DB path).
+launchd plists stay absolute by design (machine templates).
+
+**Caching:** `/api/regime` serves the chain's cached regime when <4h fresh
+(`?force_live=true` bypasses). `/api/consensus/cached` + `/api/kelly/cached` normalize the
+chain's per-symbol dicts to `{holdings:[...]}`. Dashboard endpoints return `{status,data}`
+envelopes — frontend readers must unwrap (a whole class of "renders zeros" bugs, fixed
+2026-06-10).
+
+**Proof page (/track-record):** upgraded to the signal-verification standard — timestamped
+ledger (entry_at/exit_at), all losses visible, avg win/loss + profit factor, SPY
+same-period benchmark (1h cache, fail-soft), per-source labeling, forward-out-of-sample
+methodology block. Never paywall it or signal explainability.
+
+**ECG:** loss streaks derive from consecutive negative equity CHANGES — never feed it
+`percent_change` (a vs-cost level), which falsely SUSPENDs every underwater holding.
 
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.
