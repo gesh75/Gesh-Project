@@ -95,17 +95,33 @@ def compute_ecg(holdings: list[dict], history_fn) -> dict[str, Any]:
             continue
 
         # Oldest → newest for correct running-peak computation
-        eq_list  = [r["equity"]         for r in reversed(history)]
-        pct_list = [r["percent_change"] for r in reversed(history)]
+        eq_list  = [r["equity"] for r in reversed(history)]
+        # Per-snapshot equity CHANGES, derived from the equity series itself.
+        # NOT percent_change: that column stores the position's gain/loss vs
+        # average cost (a level), so any underwater holding read as a full-
+        # window "loss streak" and auto-SUSPENDED with a nonsense message
+        # ("severe drawdown -0.2%") — a Risk-tab trust-killer.
+        chg_list = [
+            (eq_list[i] / eq_list[i - 1] - 1.0) * 100 if eq_list[i - 1] else 0.0
+            for i in range(1, len(eq_list))
+        ]
 
         drawdown   = _compute_drawdown_from_peak(eq_list)
-        streak     = _loss_streak(pct_list)
+        streak     = _loss_streak(chg_list)
         state      = _classify(drawdown, streak)
 
+        # Name the condition that actually fired — "drawdown X% or N-streak"
+        # reads as broken when X is tiny.
+        _dd_susp   = drawdown <= SUSPENDED_DRAWDOWN_PCT
+        _dd_cool   = drawdown <= COOLING_DRAWDOWN_PCT
+        susp_why   = (f"severe drawdown {drawdown:.1f}% from peak" if _dd_susp
+                      else f"{streak} consecutive losing snapshots")
+        cool_why   = (f"drawdown {drawdown:.1f}% from peak" if _dd_cool
+                      else f"{streak} consecutive losing snapshots")
         msg_map = {
             "HEALTHY":   f"Equity curve healthy. Drawdown from peak: {drawdown:.1f}%",
-            "COOLING":   f"⚠ Cooling — drawdown {drawdown:.1f}%, {streak}-session loss streak. Consider reducing size.",
-            "SUSPENDED": f"🔴 Suspended — severe drawdown {drawdown:.1f}% or {streak}-session streak. Consider exiting.",
+            "COOLING":   f"⚠ Cooling — {cool_why}. Consider reducing size.",
+            "SUSPENDED": f"🔴 Suspended — {susp_why}. Consider exiting.",
         }
 
         states.append({

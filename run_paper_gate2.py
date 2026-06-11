@@ -170,6 +170,38 @@ except Exception as e:
     print(f"{_t()} [gate] risk gate failed (non-fatal): {e}")
     traceback.print_exc()
 
+# ── Real-time signal notification (Telegram @gesh755bot) ──────────────────────
+# Two jobs: (a) the daily-touch alert every comparable product ships, and
+# (b) a timestamped off-machine record of each signal at decision time — the
+# cheap "forward out-of-sample" proof the track-record page references.
+try:
+    if action_plan:
+        try:
+            from dotenv import load_dotenv as _ld
+            # TELEGRAM_* live in the trading repo's .env; override=False keeps
+            # any locally-set values.
+            _ld(Path.home() / 'Projects' / 'gesh-project-trading' / '.env')
+        except Exception:
+            pass
+        from trading.alerts import _send
+        from datetime import datetime, timezone
+        _lines = [f"🛡️ GESH daily signals — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"]
+        for a in action_plan:
+            g = next((x for x in gate_results
+                      if x['symbol'] == a['symbol'] and x['action'] == a['action']), None)
+            if g is not None:
+                mark = '✅' if g['approved'] else '⛔'
+                _lines.append(f"{mark} {a['action']} {a['shares']}× {a['symbol']} @ ${a['current_price']:.2f} — "
+                              f"{'approved' if g['approved'] else g['reason']}")
+            else:
+                _lines.append(f"⏸ {a['symbol']} HOLD — {a['signal_reason']}")
+        _approved_n = sum(1 for x in gate_results if x['approved'])
+        _lines.append(f"Gate: {_approved_n}/{len(gate_results)} approved · paper book · not financial advice")
+        _send("\n".join(_lines), silent=False)
+        print(f"{_t()} [gate] Telegram signal alert sent ({len(_lines)-2} signals)")
+except Exception as e:
+    print(f"{_t()} [gate] Telegram alert failed (non-fatal): {e}")
+
 # ── 7-day paper vs real stats for the report ──────────────────────────────────
 trade_stats: dict = {}
 try:

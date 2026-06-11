@@ -834,6 +834,15 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
   <!-- ═══ TAB: PAPER TRADES ═══ -->
   <div class="tab-pane" id="tab-trading">
 
+    <!-- Book disclosure: two separate paper books exist by design -->
+    <div style="background:var(--hover);border:1px solid var(--border);border-radius:8px;
+      padding:8px 14px;margin-bottom:14px;font-size:12px;color:var(--muted)">
+      📒 This book: <b style="color:var(--text)">daily-analysis chain + manual simulations</b>
+      (trade_log paper book). The autopilot's consensus-signal book is separate — it powers
+      <a href="/watch">/watch</a> and the public <a href="/track-record">/track-record</a>
+      and is the only book counted toward the 30-trade autonomy gate.
+    </div>
+
     <!-- Performance Summary -->
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px">
       <div class="scard">
