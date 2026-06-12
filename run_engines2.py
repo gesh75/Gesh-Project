@@ -8,6 +8,16 @@ from pathlib import Path
 
 T0 = time.time()
 
+# FD safety net: yfinance/OpenBB/Reddit retry storms under Yahoo throttling can
+# exhaust the 256-FD default of launchd-spawned processes ([Errno 24],
+# 2026-06-12). Mirror server.py's in-process bump.
+try:
+    import resource
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (max(_soft, 10240), max(_hard, 10240)))
+except Exception:
+    pass
+
 def _t() -> str:
     """Elapsed-seconds tag for step timing attribution in logs."""
     return f"[t+{time.time() - T0:5.1f}s]"

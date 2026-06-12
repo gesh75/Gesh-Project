@@ -18,6 +18,10 @@
 # is the intended recovery path; the report timestamp shows the actual run time.
 
 set -u
+# launchd spawns children with a 256 soft FD limit; a Yahoo throttle-retry
+# morning exhausts it mid-engines ([Errno 24], seen 2026-06-12). Raise to 10240
+# (hard limit is unlimited) — same defense server.py applies in-process.
+ulimit -n 10240 2>/dev/null || true
 # Repo roots derived from this script's location; GESH_TRADING_HOME overrides
 # the sibling-directory convention for non-standard layouts.
 GP="$(cd "$(dirname "$0")" && pwd)"
