@@ -1,6 +1,6 @@
 """
 Multi-Node Consensus Engine
-10 independent signal nodes, each using a DIFFERENT data source.
+11 independent signal nodes, each using a DIFFERENT data source.
 A stock only gets a strong signal when 5+ nodes agree.
 
 Nodes (intentionally uncorrelated):
@@ -14,6 +14,7 @@ Nodes (intentionally uncorrelated):
   8.  ECG           — Equity Curve Gate health (HEALTHY/SUSPENDED)
   9.  VOLUME        — Volume trend + liquidity (not wash-trade noise)
   10. FFT_CYCLE     — Dominant price cycle phase (trough vs peak)
+  11. MACRO         — FRED/yfinance macro regime (FFR, yield curve, HY OAS, VIX)
 
 Voting: BULLISH=+1, NEUTRAL=0, BEARISH=-1, ABSTAIN=None
 Final: score = sum(votes) / len(voting nodes)
@@ -357,6 +358,13 @@ def run_consensus_holding(
     except Exception as _fft_err:
         nodes["FFT_Cycle"] = (None, f"FFT unavailable: {_fft_err}")
 
+    # Node 11: Macro regime (FRED/yfinance — FFR, yield curve, HY OAS, VIX)
+    try:
+        from macro_connector import node_macro
+        nodes["Macro"] = node_macro()
+    except Exception as _macro_err:
+        nodes["Macro"] = (None, f"Macro unavailable: {_macro_err}")
+
     votes   = {k: v[0] for k, v in nodes.items()}
     details = {k: v[1] for k, v in nodes.items()}
 
@@ -370,6 +378,7 @@ def run_consensus_holding(
         "ECG":           0.5,
         "Analyst":       0.5,
         "News":          0.25,
+        "Macro":         0.75,
         # Kelly: sizing output, not in directional vote
         # FFT_Cycle: removed from vote — spurious in non-stationary series
     }
