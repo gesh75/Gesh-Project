@@ -62,6 +62,28 @@ print(f"{_t()} [gate] holdings={len(holdings)}  total=${total_eq:,.2f}  cash=${c
 cash_blocked = cash < 500.0
 action_plan: list[dict] = []
 
+# ── Auto-close FIRST, then build the set of still-open paper positions ────────
+# Running the close before the plan means a symbol that stops out today is no
+# longer "open" and can be legitimately re-entered if Kelly still says ADD.
+# The skip-if-open guard (below) then prevents the daily chain from stacking a
+# fresh duplicate entry on top of a position it already holds every weekday.
+paper_block: dict = {'closed': [], 'created': [], 'error': None}
+open_paper_symbols: set[str] = set()
+try:
+    from paper_trading import check_and_close_paper_positions
+    from trade_log import get_trade_history
+    paper_block['closed'] = check_and_close_paper_positions()
+    print(f"{_t()} [gate] paper auto-close: {len(paper_block['closed'])} position(s) hit stop/target")
+    open_paper_symbols = {
+        (t.get('symbol') or '').upper()
+        for t in get_trade_history(open_only=True, is_paper=True)
+        if (t.get('scanner_source') or '') == 'daily-analysis'
+    }
+    if open_paper_symbols:
+        print(f"{_t()} [gate] already-open (skip re-entry): {sorted(open_paper_symbols)}")
+except Exception as e:
+    print(f"{_t()} [gate] auto-close / open-set failed (non-fatal): {e}")
+
 for h in holdings:
     sym    = h.get('symbol')
     price  = float(h.get('price') or h.get('current_price') or 0)
@@ -73,6 +95,11 @@ for h in holdings:
         continue
 
     if k_act in ('ADD', 'BUY'):
+        if sym.upper() in open_paper_symbols:
+            action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
+                                'current_price': price,
+                                'signal_reason': 'Skip: already holding an open daily-analysis paper position'})
+            continue
         if cash_blocked:
             action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
                                 'current_price': price,
@@ -106,14 +133,10 @@ print(f"{_t()} [gate] action plan: {len(action_plan)} entries, {len(executable)}
 for a in action_plan:
     print(f"  {a['symbol']:6s} {a['action']:5s} {a['shares']:>4} sh @ ${a['current_price']:.2f}  — {a['signal_reason']}")
 
-# ── Paper session: auto-close hits, then simulate today's plan ────────────────
-paper_block: dict = {'closed': [], 'created': [], 'error': None}
+# ── Paper session: simulate today's executable plan (auto-close already ran) ──
 try:
-    from paper_trading import run_paper_session, check_and_close_paper_positions
-    closed = check_and_close_paper_positions()
-    paper_block['closed'] = closed
-    print(f"{_t()} [gate] paper auto-close: {len(closed)} position(s) hit stop/target")
     if executable:
+        from paper_trading import run_paper_session
         created = run_paper_session(executable, holdings, total_eq,
                                     scanner_source='daily-analysis')
         paper_block['created'] = created
