@@ -1,7 +1,7 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
-import math, time, threading, uvicorn, os, hmac
+import asyncio, math, time, threading, uvicorn, os, hmac
 from fastapi import FastAPI, HTTPException, Request, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -153,7 +153,12 @@ async def lifespan(app):
     init_db()
     init_trading_tables()
     print("✓ SQLite DB initialised (core + trading tables)")
-    try:
+
+    # Bound Robinhood login + startup cache write so a stale token / MFA prompt
+    # can never block uvicorn startup indefinitely. Run off the event loop with a
+    # hard timeout; on failure the app still starts and serves cached-snapshot
+    # data (CLAUDE.md #5). Mirrors the gesh-project-trading server fix.
+    def _startup_auth() -> None:
         login()
         print("✓ Robinhood session established")
         # Write live cache immediately on startup so the daily-analysis
@@ -163,8 +168,13 @@ async def lifespan(app):
             fetch_and_cache(logout_after=False)  # keep session alive for server
         except Exception as _ce:
             print(f"⚠  Startup cache write failed: {_ce}")
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_startup_auth), timeout=60)
+    except asyncio.TimeoutError:
+        print("⚠  Robinhood auth/cache timed out (60s) — serving cached snapshot data")
     except Exception as e:
-        print(f"⚠  Auth failed: {e}")
+        print(f"⚠  Auth failed: {e} — serving cached snapshot data")
     yield
     try:
         logout()
