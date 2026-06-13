@@ -25,7 +25,7 @@ import re
 import sqlite3
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import anthropic
@@ -109,7 +109,7 @@ def _fetch_finnhub_news(symbol: str, days_back: int = 7) -> list[dict]:
     """Finnhub company news — free tier, no key needed for basic use."""
     try:
         api_key = os.getenv("FINNHUB_API_KEY", "")
-        end_dt   = datetime.utcnow()
+        end_dt   = datetime.now(timezone.utc).replace(tzinfo=None)
         start_dt = end_dt - timedelta(days=days_back)
         params = {
             "symbol": symbol,
@@ -254,7 +254,7 @@ def _get_sentiment_history(symbols: list[str], days: int = 7) -> list[dict]:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)).isoformat()
         placeholders = ",".join("?" * len(symbols))
         rows = conn.execute(
             f"SELECT symbol, overall_sentiment, sentiment_score, impact_level, analysis_json, created_at FROM news_sentiment WHERE symbol IN ({placeholders}) AND created_at >= ? ORDER BY created_at DESC",
@@ -286,7 +286,7 @@ def _compute_rolling_score(symbol: str, days: int = 7) -> float | None:
         return None
     conn = sqlite3.connect(db_path)
     try:
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)).isoformat()
         rows = conn.execute(
             "SELECT sentiment_score FROM news_sentiment WHERE symbol=? AND created_at>=?",
             (symbol, cutoff)
@@ -366,7 +366,7 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
         "news_mood":      mood,
         "avg_score":      round(avg, 1),
         "fred_signal":    fred_signal,
-        "as_of":          datetime.utcnow().isoformat() + "Z",
+        "as_of":          datetime.now(timezone.utc).isoformat() + "Z",
     }
 
 

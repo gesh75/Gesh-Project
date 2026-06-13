@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -191,7 +191,7 @@ def detect_fft_cycles(symbol: str, lookback_days: int = LOOKBACK_DAYS, prices: n
             "phase_label":     phase_label,
             "detail":          detail,
             "n_candles":       n,
-            "as_of":           datetime.utcnow().isoformat() + "Z",
+            "as_of":           datetime.now(timezone.utc).isoformat() + "Z",
         }
 
     except Exception as e:
@@ -247,6 +247,6 @@ def batch_fft_cycles(symbols: list[str]) -> dict[str, Any]:
         cycles[sym] = detect_fft_cycles(sym)
     return {
         "cycles":  cycles,
-        "as_of":   datetime.utcnow().isoformat() + "Z",
+        "as_of":   datetime.now(timezone.utc).isoformat() + "Z",
         "symbols": symbols,
     }

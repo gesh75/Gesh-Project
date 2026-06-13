@@ -34,7 +34,7 @@ Usage
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -230,7 +230,7 @@ def detect_consolidation(
         "rr_ratio":       rr_ratio,
         "zone_candles":   current_zone["candles"],
         "interval":       interval,
-        "fetched_at":     datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "fetched_at":     datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "prompt_context": prompt_ctx,
     }
 

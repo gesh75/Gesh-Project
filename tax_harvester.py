@@ -27,7 +27,7 @@ DB table (auto-created in gesh_financial.db)
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import os
 from pathlib import Path
 from typing import Any
@@ -208,7 +208,7 @@ def get_harvest_summary(
         "in_wash_window_count":      len(in_window),
         "eligible":                  eligible,
         "in_wash_window":            in_window,
-        "generated_at":              datetime.utcnow().isoformat(),
+        "generated_at":              datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "summary": (
             f"Tax harvest: ${total_harvestable:,.0f} eligible across "
             f"{len(eligible)} position(s). "

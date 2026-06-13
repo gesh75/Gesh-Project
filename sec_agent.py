@@ -18,7 +18,7 @@ import os
 import re
 import sqlite3
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import anthropic
@@ -96,7 +96,7 @@ def _fetch_recent_filings(cik: str, form_type: str, days_back: int = 7) -> list[
 
         root = ET.fromstring(r.text)
         ns = {"atom": "http://www.w3.org/2005/Atom"}
-        cutoff = datetime.utcnow() - timedelta(days=days_back)
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days_back)
         filings = []
 
         for entry in root.findall("atom:entry", ns):
@@ -225,7 +225,7 @@ def _get_recent_from_db(symbols: list[str], days: int = 30) -> list[dict]:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)).isoformat()
         placeholders = ",".join("?" * len(symbols))
         rows = conn.execute(
             f"SELECT symbol, form_type, filing_date, filing_url, analysis_json, action_signal, urgency, created_at FROM sec_filings WHERE symbol IN ({placeholders}) AND created_at >= ? ORDER BY created_at DESC LIMIT 50",
@@ -287,7 +287,7 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
     return {
         "new_filings": new_count,
         "results": results,
-        "as_of": datetime.utcnow().isoformat() + "Z",
+        "as_of": datetime.now(timezone.utc).isoformat() + "Z",
     }
 
 

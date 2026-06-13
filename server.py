@@ -751,7 +751,7 @@ def run_screener():
         if not candidates:
             raise HTTPException(status_code=503, detail="No screener data returned — market may be closed")
         result = analyze_screener(candidates)
-        resp = {"status": "ok", "data": result, "candidates_screened": len(candidates), "as_of": __import__('datetime').datetime.utcnow().isoformat() + "Z"}
+        resp = {"status": "ok", "data": result, "candidates_screened": len(candidates), "as_of": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat() + "Z"}
         _save_engine_result("screener", resp)
         return resp
     except HTTPException:

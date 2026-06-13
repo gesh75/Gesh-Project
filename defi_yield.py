@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import yfinance as yf
@@ -210,7 +210,7 @@ def get_yield_landscape(cash_usd: float = 0.0) -> dict[str, Any]:
         "tiers":            {"tier1": tier1, "tier2": tier2, "tier3": tier3},
         "recommendation":   recommendation,
         "monthly_projection":projection,
-        "generated_at":     datetime.utcnow().isoformat(),
+        "generated_at":     datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "disclaimer":       (
             "DeFi yields (Tier 3) are INFORMATIONAL ONLY. "
             "GESH Financial does not execute DeFi transactions. "

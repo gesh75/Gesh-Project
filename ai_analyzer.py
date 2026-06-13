@@ -11,6 +11,29 @@ MODELS = {
 }
 MODEL = MODELS.get(os.getenv("CLAUDE_MODEL", "sonnet").lower(), MODELS["sonnet"])
 
+
+def _extract_tool_input(message: Any, fn_name: str) -> dict[str, Any]:
+    """Return the input dict of the tool_use block in a Claude response.
+
+    The SDK does not guarantee content[0] is the tool_use block: a refusal,
+    a max_tokens cutoff, or a leading text block all break blind indexing
+    (AttributeError → HTTP 500). Iterate the content blocks instead and fail
+    with a clear, structured error if no tool_use block is present.
+    """
+    for block in message.content:
+        if getattr(block, "type", None) == "tool_use":
+            return block.input
+    # No tool_use block — surface why (truncation / refusal) instead of 500.
+    text = next(
+        (getattr(b, "text", "") for b in message.content if getattr(b, "type", None) == "text"),
+        "",
+    )
+    raise ValueError(
+        f"{fn_name}: no tool_use block in response "
+        f"(stop_reason={getattr(message, 'stop_reason', None)!r}). "
+        f"Model returned text instead of calling the tool: {text[:300]!r}"
+    )
+
 # ─── Quick Risk Analysis (plain text) ────────────────────────────────────────
 SYSTEM_PROMPT = """You are an elite quantitative risk manager. Analyze the portfolio and produce exactly these sections:
 1. PORTFOLIO OVERVIEW - equity, cash, buying power, position count
@@ -245,7 +268,7 @@ def deep_analyze_portfolio(
             "deep_analyze_portfolio: tool output truncated at max_tokens — "
             "the JSON is unusable; tighten DEEP_ANALYSIS_SCHEMA or raise max_tokens."
         )
-    return message.content[0].input
+    return _extract_tool_input(message, "deep_analyze_portfolio")
 
 
 
@@ -294,9 +317,14 @@ def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
             "role": "user",
             "content": (
                 f"Today is {today}. Analyze these {len(candidates)} stock candidates "
-                f"and select the best 6 investment opportunities this week.\\n\\n"
-                f"```json\\n{json.dumps(candidates, indent=2)}\\n```"
+                f"and select the best 6 investment opportunities this week.\n\n"
+                f"```json\n{json.dumps(candidates, indent=2)}\n```"
             )
         }]
     )
-    return message.content[0].input
+    if message.stop_reason == "max_tokens":
+        raise RuntimeError(
+            "analyze_screener: tool output truncated at max_tokens — "
+            "the JSON is unusable; tighten SCREENER_SCHEMA or raise max_tokens."
+        )
+    return _extract_tool_input(message, "analyze_screener")

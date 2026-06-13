@@ -38,7 +38,7 @@ Usage
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -219,7 +219,7 @@ def is_sector_hot(
         "today_volume":   today_vol,
         "avg_volume":     avg_vol,
         "threshold":      threshold,
-        "fetched_at":     datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "fetched_at":     datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "prompt_context": prompt_ctx,
     }
 
@@ -272,7 +272,7 @@ def batch_sector_check(
             "today_volume":   today_vol,
             "avg_volume":     avg_vol,
             "threshold":      threshold,
-            "fetched_at":     datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "fetched_at":     datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "prompt_context": prompt_ctx,
         }
 
@@ -303,7 +303,7 @@ if __name__ == "__main__":
     import sys
     symbols = sys.argv[1:] if len(sys.argv) > 1 else ["NVDA", "AAPL", "JPM", "XOM"]
 
-    print(f"\nSector Volume Pre-Filter — {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    print(f"\nSector Volume Pre-Filter — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     print("=" * 60)
 
     report = batch_sector_check(symbols)

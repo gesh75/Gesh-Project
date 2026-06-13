@@ -22,7 +22,7 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import anthropic
@@ -311,7 +311,7 @@ def run_fundamental_scan(universe: list[str] | None = None, top_n_for_ai: int = 
         return {"error": "No ANTHROPIC_API_KEY"}
 
     client = anthropic.Anthropic(api_key=api_key)
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
         msg = client.messages.create(
@@ -340,9 +340,9 @@ def run_fundamental_scan(universe: list[str] | None = None, top_n_for_ai: int = 
             result = json.loads(fixed)
 
         result["stocks_analyzed"] = len(valid)
-        result["as_of"] = datetime.utcnow().isoformat() + "Z"
+        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
         _save_fundamental_scan(result)
         return result
 
     except Exception as e:
-        return {"error": str(e), "stocks_analyzed": len(valid), "as_of": datetime.utcnow().isoformat() + "Z"}
+        return {"error": str(e), "stocks_analyzed": len(valid), "as_of": datetime.now(timezone.utc).isoformat() + "Z"}

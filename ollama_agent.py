@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ def get_ollama_status() -> dict[str, Any]:
                 "default_model": DEFAULT_MODEL,
                 "fast_model":    FAST_MODEL,
                 "ready_for_gesh": ready,
-                "as_of":         datetime.utcnow().isoformat() + "Z",
+                "as_of":         datetime.now(timezone.utc).isoformat() + "Z",
             }
     except Exception:
         return {
@@ -187,7 +187,7 @@ def ollama_quick_analysis(portfolio_summary: str) -> dict[str, Any]:
             "model":     DEFAULT_MODEL,
             "analysis":  response,
             "type":      "quick_commentary",
-            "as_of":     datetime.utcnow().isoformat() + "Z",
+            "as_of":     datetime.now(timezone.utc).isoformat() + "Z",
         }
     except Exception as exc:
         return {"available": False, "error": str(exc)}
@@ -241,7 +241,7 @@ def ollama_news_sentiment(
                 "signal":    str(parsed.get("signal", "NEUTRAL")).upper(),
                 "reason":    str(parsed.get("reason", "")),
                 "headlines_scored": len(headlines),
-                "as_of":     datetime.utcnow().isoformat() + "Z",
+                "as_of":     datetime.now(timezone.utc).isoformat() + "Z",
             }
         # Fallback if JSON parse fails
         return {
@@ -294,7 +294,7 @@ def ollama_second_opinion(
             "symbol":         symbol,
             "second_opinion": response,
             "type":           "contrarian_review",
-            "as_of":          datetime.utcnow().isoformat() + "Z",
+            "as_of":          datetime.now(timezone.utc).isoformat() + "Z",
         }
     except Exception as exc:
         return {"available": False, "error": str(exc)}

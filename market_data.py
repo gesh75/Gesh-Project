@@ -10,7 +10,7 @@ Pulls the following per-symbol from yfinance (no extra API keys needed):
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Any
 
 import numpy as np
@@ -270,7 +270,7 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
         "performance":     performance,
         "insider_trades":  insider_trades,
         "ownership":       ownership,
-        "as_of":           datetime.utcnow().isoformat() + "Z",
+        "as_of":           datetime.now(timezone.utc).isoformat() + "Z",
     }
 
 
