@@ -198,7 +198,11 @@ except Exception as e:
 # (b) a timestamped off-machine record of each signal at decision time — the
 # cheap "forward out-of-sample" proof the track-record page references.
 try:
-    if action_plan:
+    _closed = paper_block.get('closed') or []
+    # Send when there's anything worth a phone ping: a position closed (stop/
+    # target hit) OR there's an action plan. A pure stop-out day with no new
+    # signals must still alert — that's the day the user most wants to know.
+    if _closed or action_plan:
         try:
             from dotenv import load_dotenv as _ld
             # TELEGRAM_* live in the trading repo's .env; override=False keeps
@@ -209,6 +213,16 @@ try:
         from trading.alerts import _send
         from datetime import datetime, timezone
         _lines = [f"🛡️ GESH daily signals — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"]
+        # Lead with auto-closes — the stop/target events are the headline.
+        for c in _closed:
+            oc = (c.get('outcome') or '').upper()
+            ico = '🟢' if oc == 'WIN' else ('🔴' if oc == 'LOSS' else '⚪')
+            _lines.append(
+                f"{ico} CLOSED {c.get('symbol')} {oc} — exit ${float(c.get('exit_price') or 0):.2f} "
+                f"({float(c.get('pnl_pct') or 0):+.1f}%, ${float(c.get('realized_pnl') or 0):+.2f})"
+            )
+        if _closed:
+            _lines.append("— signals —")
         for a in action_plan:
             g = next((x for x in gate_results
                       if x['symbol'] == a['symbol'] and x['action'] == a['action']), None)
@@ -219,9 +233,10 @@ try:
             else:
                 _lines.append(f"⏸ {a['symbol']} HOLD — {a['signal_reason']}")
         _approved_n = sum(1 for x in gate_results if x['approved'])
-        _lines.append(f"Gate: {_approved_n}/{len(gate_results)} approved · paper book · not financial advice")
+        _lines.append(f"Gate: {_approved_n}/{len(gate_results)} approved · "
+                      f"{len(_closed)} closed · paper book · not financial advice")
         _send("\n".join(_lines), silent=False)
-        print(f"{_t()} [gate] Telegram signal alert sent ({len(_lines)-2} signals)")
+        print(f"{_t()} [gate] Telegram alert sent ({len(_closed)} closes, {len(action_plan)} signals)")
 except Exception as e:
     print(f"{_t()} [gate] Telegram alert failed (non-fatal): {e}")
 
