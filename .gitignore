@@ -47,3 +47,4 @@ android*/**/.gradle/
 *.apk
 *.dex
 GeshFinancial-Android.zip
+*.zip
