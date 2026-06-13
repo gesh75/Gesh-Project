@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GESH Financial — AI Trading Intelligence for Robinhood Portfolios</title>
-<meta name="description" content="GESH Financial is a single-node Python platform that turns a live Robinhood portfolio into AI-driven trading intelligence — a 10-node consensus engine, multi-model AI routing, 8-gate risk gate, and an auditable paper-trading pipeline served by a FastAPI dashboard.">
+<meta name="description" content="GESH Financial is a single-node Python platform that turns a live Robinhood portfolio into AI-driven trading intelligence — a 11-node consensus engine, multi-model AI routing, 8-gate risk gate, and an auditable paper-trading pipeline served by a FastAPI dashboard.">
 <style>
   :root{
     --bg-0:#0b1020; --bg-1:#131a2e; --bg-2:#0E141C;
@@ -404,7 +404,7 @@
           </g>
           <g class="node pulse" style="animation-delay:.7s" filter="url(#soft)">
             <rect x="965" y="158" width="150" height="36" rx="9" fill="#8B5CF6" opacity="0.92"/>
-            <text x="1040" y="181" text-anchor="middle" fill="#fff">10-node consensus</text>
+            <text x="1040" y="181" text-anchor="middle" fill="#fff">11-node consensus</text>
           </g>
           <g class="node pulse" style="animation-delay:1.4s" filter="url(#soft)">
             <rect x="965" y="220" width="150" height="36" rx="9" fill="#10B981" opacity="0.95"/>
@@ -835,7 +835,7 @@ bash run_daily_analysis.sh
   ];
   const COMPONENTS = [
     ["server.py","FastAPI application on port 9000 — exposes ~60 API routes, serves the Chart.js dashboard, owns request caches and orchestrates every analysis/trading flow.","FastAPI + uvicorn · threading · hmac X-API-Key"],
-    ["consensus.py","10-node uncorrelated consensus voting engine (momentum, trend, relative strength, fundamentals, analyst, news, Kelly, ECG, volume, FFT) that normalizes votes into STRONG/BUY/SELL/HOLD verdicts.","numpy · pandas"],
+    ["consensus.py","11-node uncorrelated consensus voting engine (momentum, trend, relative strength, fundamentals, analyst, news, Kelly, ECG, volume, FFT, macro) that normalizes votes into STRONG/BUY/SELL/HOLD verdicts.","numpy · pandas"],
     ["ai_analyzer.py","Claude routing layer with forced tool-use JSON schemas (3 analyzers) for deep portfolio analysis, screening, SEC and fundamentals.","Anthropic Claude Sonnet/Haiku · forced tool-use · prompt caching"],
     ["data_fetcher.py / auth.py","Robinhood ingestion — MFA-aware login plus live holdings, equity and watchlist quotes written to an atomic JSON snapshot cache.","robin_stocks · pyotp"],
     ["regime.py","Market regime detection (ADX + Bollinger + RSI) with a live FRED macro layer (Fed funds, 10Y-2Y yield curve, CPI) injected into Claude prompts.","pandas · FRED CSV API (fredapi)"],

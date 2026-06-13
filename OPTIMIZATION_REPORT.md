@@ -19,7 +19,7 @@
 | Feature | Why |
 |---|---|
 | Deep AI Analysis (Claude Sonnet) | Core value — snowflake scores, fair value, predictions |
-| 10-node Consensus | Best reasoning tool in the stack |
+| 11-node Consensus | Best reasoning tool in the stack |
 | Monte Carlo (Risk tab) | Good stress test, but needs wiring into decisions |
 | Kelly Criterion | Good for position sizing — misused as a vote (see Trading section) |
 | SEC filings watcher | High-value — 8-K alerts are genuinely useful |

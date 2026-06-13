@@ -73,7 +73,7 @@ server.py (FastAPI · Port 9000)
 │   ├── monte_carlo.py       — Portfolio stress test (1000 GBM simulations)
 │   ├── kelly.py             — Kelly Criterion position sizer
 │   ├── invest_radar.py      — Diversification radar: advisory NEW-name screen (5-factor, cash-aware, read-only)
-│   ├── consensus.py         — 10-node consensus voting engine
+│   ├── consensus.py         — 11-node consensus voting engine
 │   ├── ecg.py               — Equity Curve Gate (drawdown circuit breaker)
 │   ├── fft_cycles.py        — FFT dominant price cycle detection
 │   ├── ollama_agent.py      — Local LLM second opinion (Ollama / llama3.2:3b)
@@ -265,7 +265,7 @@ Before performing any trading analysis task, read the matching skill file:
 | `/api/regime` | GET | Market regime detection (ADX/BB/RSI) |
 | `/api/kelly` | POST | Kelly position sizing |
 | `/api/monte-carlo` | POST | Portfolio stress test |
-| `/api/consensus` | POST | 10-node consensus engine |
+| `/api/consensus` | POST | 11-node consensus engine |
 | `/api/ecg` | GET | Equity Curve Gate status |
 | `/api/fft-cycles` | GET | FFT cycle detection (all holdings) |
 | `/api/fft-cycles/{symbol}` | GET | FFT for single symbol |
@@ -337,7 +337,7 @@ Before performing any trading analysis task, read the matching skill file:
 
 ---
 
-## Consensus engine (consensus.py) — 10 nodes
+## Consensus engine (consensus.py) — 11 nodes
 
 | Node | Signal source | Method |
 |------|--------------|--------|

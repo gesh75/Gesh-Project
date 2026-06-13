@@ -24,7 +24,7 @@ GESH combines live Robinhood portfolio data with Claude AI analysis engines to p
 
 ## 🏛️ Architecture
 
-GESH ingests a live Robinhood portfolio, runs it through quantitative engines and a 10-node consensus voting engine, routes structured prompts to Claude/Gemini/Ollama, then passes every signal through an 8-gate risk gate before a paper-mode execution layer simulates orders. The diagram below is the system-context view — **[see `docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** for the full set of container, sequence, data-flow, consensus, autopilot, and persistence diagrams.
+GESH ingests a live Robinhood portfolio, runs it through quantitative engines and a 11-node consensus voting engine, routes structured prompts to Claude/Gemini/Ollama, then passes every signal through an 8-gate risk gate before a paper-mode execution layer simulates orders. The diagram below is the system-context view — **[see `docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** for the full set of container, sequence, data-flow, consensus, autopilot, and persistence diagrams.
 
 ```mermaid
 flowchart TB
@@ -84,7 +84,7 @@ flowchart TB
 | **Portfolio Analysis** | Live holdings, equity snapshots, P&L tracking via Robinhood |
 | **AI Engines** | Claude Sonnet (deep analysis), Gemini 2.5 Flash/Pro (batch sentiment + second opinion), Llama 3.2 (local fallback) |
 | **Market Regime** | ADX + Bollinger + RSI + FRED macro layer (Fed funds, yield curve, CPI) |
-| **Consensus Engine** | 10-node voting system (momentum, trend, fundamentals, analyst, news, Kelly, ECG, volume, FFT) |
+| **Consensus Engine** | 11-node voting system (momentum, trend, fundamentals, analyst, news, Kelly, ECG, volume, FFT, macro) |
 | **Risk Management** | 8-gate risk gate, Kelly Criterion sizing, Monte Carlo stress tests (1000 GBM simulations) |
 | **Volatility Models** ✨ | **EWMA** (RiskMetrics λ≈0.94) + **GARCH(1,1)** — recent shock weighting, volatility clustering detection |
 | **Tax-Loss Harvesting** ✨ | IRS wash-sale window tracking (30 days), min $500 threshold, eligible loss scanner |
@@ -120,7 +120,7 @@ server.py (FastAPI · Port 9000)
 │   ├── regime.py            — Market regime + FRED macro (Fed rate, yield curve, CPI)
 │   ├── monte_carlo.py       — EWMA vol + regime-conditional drift, 1000 GBM paths ✨
 │   ├── kelly.py             — Kelly Criterion position sizer
-│   ├── consensus.py         — 10-node consensus voting engine
+│   ├── consensus.py         — 11-node consensus voting engine
 │   ├── ecg.py               — Equity Curve Gate (drawdown circuit breaker)
 │   ├── fft_cycles.py        — FFT dominant price cycle detection
 │   ├── ollama_agent.py      — Local LLM second opinion (Ollama / llama3.2:3b)
@@ -253,7 +253,7 @@ Open **http://localhost:9000** for the dashboard.
 
 ---
 
-## Consensus Engine — 10 Nodes
+## Consensus Engine — 11 Nodes
 
 | Node | Signal Source |
 |---|---|
@@ -358,7 +358,7 @@ zone_symbols = [r["symbol"] for r in cz_report["found"]]
 | `/api/regime` | GET | Market regime detection (ADX/BB/RSI + FRED macro) |
 | `/api/kelly` | POST | Kelly position sizing |
 | `/api/monte-carlo` | POST | Portfolio stress test |
-| `/api/consensus` | POST | 10-node consensus engine |
+| `/api/consensus` | POST | 11-node consensus engine |
 | `/api/ecg` | GET | Equity Curve Gate status |
 | `/api/fft-cycles` | GET | FFT cycle detection (all holdings) |
 | `/api/fft-cycles/{symbol}` | GET | FFT for single symbol |

@@ -4,7 +4,7 @@
 
 # 🏛️ GESH Financial — Architecture
 
-GESH Financial is a single-node Python platform that turns a **live Robinhood portfolio** into AI-driven trading intelligence. A FastAPI server (port `9000`) ingests holdings via `robin_stocks`, runs a stack of quantitative engines (ADX/Bollinger/RSI **regime** with a live FRED macro layer, **Monte Carlo**, **Kelly** sizing, **FFT cycles**, EWMA/GARCH volatility) and a **10-node consensus** voting engine, then routes structured prompts to Claude (Sonnet/Haiku), Gemini, and a local Ollama model for deep analysis and contrarian second opinions. Every signal is funneled through a typed **`TradeIntent`** contract and an **8-gate risk gate** before a paper-mode execution layer simulates orders — with the whole `signal → gate → execute` chain audited to SQLite and scheduled by an APScheduler autopilot. The Chart.js dashboard is the customer-facing product; the trading engine runs silently to accumulate paper win-rate proof.
+GESH Financial is a single-node Python platform that turns a **live Robinhood portfolio** into AI-driven trading intelligence. A FastAPI server (port `9000`) ingests holdings via `robin_stocks`, runs a stack of quantitative engines (ADX/Bollinger/RSI **regime** with a live FRED macro layer, **Monte Carlo**, **Kelly** sizing, **FFT cycles**, EWMA/GARCH volatility) and a **11-node consensus** voting engine, then routes structured prompts to Claude (Sonnet/Haiku), Gemini, and a local Ollama model for deep analysis and contrarian second opinions. Every signal is funneled through a typed **`TradeIntent`** contract and an **8-gate risk gate** before a paper-mode execution layer simulates orders — with the whole `signal → gate → execute` chain audited to SQLite and scheduled by an APScheduler autopilot. The Chart.js dashboard is the customer-facing product; the trading engine runs silently to accumulate paper win-rate proof.
 
 ---
 
@@ -15,7 +15,7 @@ GESH Financial is a single-node Python platform that turns a **live Robinhood po
 3. [Primary Flow — Deep Analysis (sequence)](#3-primary-flow--deep-analysis-sequence)
 4. [Signal → Gate → Execute Pipeline (sequence)](#4-signal--gate--execute-pipeline-sequence)
 5. [Data Flow](#5-data-flow)
-6. [10-Node Consensus Engine (flow)](#6-10-node-consensus-engine-flow)
+6. [11-Node Consensus Engine (flow)](#6-11-node-consensus-engine-flow)
 7. [Autopilot Trading Day (state)](#7-autopilot-trading-day-state)
 8. [Persistence Model (ER)](#8-persistence-model-er)
 9. [Tech Stack](#9-tech-stack)
@@ -96,7 +96,7 @@ flowchart TB
     end
 
     subgraph BRAIN["Consensus and AI Routing"]
-        cons["consensus.py - 10 nodes"]:::data
+        cons["consensus.py - 11 nodes"]:::data
         ai["ai_analyzer.py - Claude routing and schemas"]:::ai
     end
 
@@ -212,7 +212,7 @@ flowchart LR
     fred["FRED macro"]:::ext --> eng
     cache --> eng
     news["news, SEC, fundamentals"]:::ai --> gdb[("gesh.db - sentiment")]:::store
-    gdb --> cons["consensus - 10 nodes to verdict"]:::data
+    gdb --> cons["consensus - 11 nodes to verdict"]:::data
     eng --> cons
     cons --> claude["Claude forced-JSON - deep analysis"]:::ai
     claude --> persist[("gesh_financial.db - analysis, orders")]:::store
@@ -230,7 +230,7 @@ flowchart LR
 
 ---
 
-## 6. 10-Node Consensus Engine (flow)
+## 6. 11-Node Consensus Engine (flow)
 
 Ten intentionally-uncorrelated signal nodes each vote BULLISH/NEUTRAL/BEARISH/ABSTAIN; the normalized score is thresholded into STRONG/BUY/SELL or HOLD verdicts.
 
