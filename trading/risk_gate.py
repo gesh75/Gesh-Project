@@ -52,6 +52,43 @@ def _kill_switch_present(path: str) -> bool:
     return Path(path).expanduser().exists()
 
 
+# Market-regime AVOID gate (synced with gesh-project-trading, rule #40):
+# block new longs when SPY is below its trailing 200d MA. In-process 6h cache.
+_SPY_TREND_CACHE: dict[str, Any] = {}
+_SPY_TREND_TTL_S = 6 * 3600
+
+
+def _spy_above_ma(ma_days: int = 200) -> bool | None:
+    """True if SPY ≥ trailing ma_days SMA, False if below, None if data unknown
+    (→ fail-open). Cached 6h so the gate never hammers Yahoo per intent."""
+    import time as _t
+    hit = _SPY_TREND_CACHE.get("v")
+    if hit is not None and (_t.time() - hit[0]) <= _SPY_TREND_TTL_S:
+        return hit[1]
+    val: bool | None = None
+    try:
+        import yfinance as _yf, numpy as _np
+        raw = _yf.download("SPY", period="2y", interval="1d",
+                           auto_adjust=True, progress=False)
+        closes = raw["Close"].squeeze().dropna().values.astype(float)
+        if len(closes) >= max(50, ma_days // 4):
+            val = bool(closes[-1] >= float(_np.mean(closes[-ma_days:])))
+    except Exception:
+        val = None
+    _SPY_TREND_CACHE["v"] = (_t.time(), val)
+    return val
+
+
+def _market_regime_blocks_buy(intent: TradeIntent, cfg: RiskConfig) -> tuple[bool, str]:
+    """AVOID gate — blocks BUY/ADD only, when enabled and SPY is in a downtrend.
+    Fail-OPEN: unknown SPY data does NOT block (the other gates still apply)."""
+    if not getattr(cfg, "market_regime_gate", False) or intent.action != "BUY":
+        return False, ""
+    if _spy_above_ma(getattr(cfg, "market_regime_ma_days", 200)) is False:
+        return True, "Market regime AVOID: SPY below its 200d MA (downtrend) — no new longs"
+    return False, ""
+
+
 def _within_market_hours(cfg: RiskConfig) -> bool:
     try:
         tz = ZoneInfo(cfg.market_timezone)
@@ -174,6 +211,16 @@ def evaluate(
             rejection_reason = "Outside market hours"
     else:
         gates["MARKET_HOURS"] = False
+
+    # 2b. Market-regime AVOID gate (SPY<200dMA → no new longs). BUY-only,
+    # fail-open. Backtest-validated (docs/SIGNAL_PROFITABILITY_2026-06.md).
+    if rejection_reason is None:
+        _blk, _why = _market_regime_blocks_buy(intent, cfg)
+        gates["MARKET_REGIME"] = not _blk
+        if _blk:
+            rejection_reason = _why
+    else:
+        gates["MARKET_REGIME"] = False
 
     # 3. Confidence floor
     if rejection_reason is None:

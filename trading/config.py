@@ -63,6 +63,10 @@ class RiskConfig:
     market_open_hhmm: str = "09:30"
     market_close_hhmm: str = "16:00"
     market_timezone: str = "America/New_York"
+    # Market-regime AVOID gate — sync with gesh-project-trading (rule #40).
+    # Block new longs when SPY < trailing 200d MA. Backtest-validated 2026-06-14.
+    market_regime_gate: bool = True
+    market_regime_ma_days: int = 200
 
 
 def load_risk_config() -> RiskConfig:
@@ -81,4 +85,6 @@ def load_risk_config() -> RiskConfig:
         market_open_hhmm=os.getenv("MARKET_OPEN_HHMM", "09:30"),
         market_close_hhmm=os.getenv("MARKET_CLOSE_HHMM", "16:00"),
         market_timezone=os.getenv("MARKET_TIMEZONE", "America/New_York"),
+        market_regime_gate=_env_bool("MARKET_REGIME_GATE", True),
+        market_regime_ma_days=_env_int("MARKET_REGIME_MA_DAYS", 200),
     )
