@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -81,7 +82,7 @@ def _fetch_data(symbols: list[str]) -> tuple[dict[str, float], dict[str, float],
     hist_drifts: dict[str, float] = {}
     log_returns = pd.DataFrame()
     try:
-        data = yf.download(
+        data = price_source.yf_download(
             symbols,
             start=start.strftime("%Y-%m-%d"),
             end=end.strftime("%Y-%m-%d"),

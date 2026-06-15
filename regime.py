@@ -29,11 +29,12 @@ from __future__ import annotations
 import json
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
 import yfinance as yf
+import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -234,7 +235,7 @@ def get_macro_context() -> dict[str, Any]:
         "cpi_yoy_pct": None,
         "inflation_trend": "UNKNOWN",
         "macro_summary": "",
-        "as_of": datetime.utcnow().isoformat() + "Z",
+        "as_of": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "available": False,
     }
 
@@ -323,7 +324,7 @@ def detect_regimes(symbols: list[str]) -> dict[str, Any]:
     start = end - timedelta(days=LOOKBACK_DAYS + 30)
 
     try:
-        raw = yf.download(
+        raw = price_source.yf_download(
             symbols,
             start=start.strftime("%Y-%m-%d"),
             end=end.strftime("%Y-%m-%d"),

@@ -9,6 +9,7 @@ Inputs per holding: price history (90d), analyst upside, current allocation
 """
 
 import yfinance as yf
+import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 import numpy as np
 from datetime import datetime
 
@@ -18,7 +19,7 @@ MIN_HISTORY_DAYS  = 30    # minimum trading days needed
 
 def _fetch_returns(symbol: str, days: int = 90) -> np.ndarray | None:
     try:
-        raw = yf.download(symbol, period=f"{days}d", auto_adjust=True, progress=False)
+        raw = price_source.yf_download(symbol, period=f"{days}d", auto_adjust=True, progress=False)
         if raw.empty or len(raw) < MIN_HISTORY_DAYS:
             return None
         closes = raw["Close"]

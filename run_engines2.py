@@ -209,8 +209,10 @@ try:
     # compare_vol_models expects a RETURNS SERIES, not a ticker string — the old
     # per-ticker call silently hit the short-series guard and emitted constant
     # fake vols for every symbol. One batched 1y download covers all holdings.
-    closes = yf.download(symbols, period='1y', interval='1d', auto_adjust=True,
-                         progress=False, threads=False)['Close']
+    import price_source  # Yahoo primary, Robinhood fallback on 401/crumb storm
+    _vraw = price_source.yf_download(symbols, period='1y', interval='1d',
+                                     auto_adjust=True, progress=False, threads=False)
+    closes = _vraw['Close']
     if isinstance(closes, pd.Series):
         closes = closes.to_frame(name=symbols[0])
     for sym in symbols:

@@ -22,9 +22,10 @@ Final: score = sum(votes) / len(voting nodes)
 
 from __future__ import annotations
 import sqlite3, json, numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import yfinance as yf
+import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 
 DB_PATH = Path(__file__).parent / "gesh.db"
 VOTE_BULLISH  =  1
@@ -59,7 +60,7 @@ def node_momentum(symbol: str, close: np.ndarray | None = None) -> tuple[int | N
     """RSI + 20/50 MA crossover on 90d daily data."""
     try:
         if close is None:
-            raw = yf.download(symbol, period="90d", auto_adjust=True, progress=False)
+            raw = price_source.yf_download(symbol, period="90d", auto_adjust=True, progress=False)
             if raw is None or len(raw) < 20:
                 return ABSTAIN, "Insufficient data"
             c = raw["Close"].squeeze().dropna().values.astype(float)
@@ -97,7 +98,7 @@ def node_trend(symbol: str, close: np.ndarray | None = None, high: np.ndarray | 
     try:
         from regime import _rsi, _adx, _bollinger_width as _bollinger
         if close is None or high is None or low is None:
-            raw = yf.download(symbol, period="60d", auto_adjust=True, progress=False)
+            raw = price_source.yf_download(symbol, period="60d", auto_adjust=True, progress=False)
             if raw is None or len(raw) < 20:
                 return ABSTAIN, "Insufficient data"
             c = raw["Close"].squeeze().dropna().values.astype(float)
@@ -122,7 +123,7 @@ def node_trend(symbol: str, close: np.ndarray | None = None, high: np.ndarray | 
 def node_relative_strength(symbol: str, benchmark: str = "SPY") -> tuple[int | None, str]:
     """1-month performance vs SPY."""
     try:
-        raw = yf.download([symbol, benchmark], period="35d", auto_adjust=True, progress=False)
+        raw = price_source.yf_download([symbol, benchmark], period="35d", auto_adjust=True, progress=False)
         if raw is None or raw.empty:
             return ABSTAIN, "No data"
         closes = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
@@ -227,7 +228,7 @@ def node_analyst(symbol: str) -> tuple[int | None, str]:
 def node_news(symbol: str) -> tuple[int | None, str]:
     """Cached news sentiment from DB (populated by news_agent)."""
     try:
-        cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)).isoformat()
         with sqlite3.connect(DB_PATH) as conn:
             row = conn.execute(
                 "SELECT sentiment_score, overall_sentiment FROM news_sentiment "
@@ -287,7 +288,7 @@ def node_volume(symbol: str, close: np.ndarray | None = None, volume: np.ndarray
     """Volume trend: 10d avg vs 30d avg. Rising volume = conviction."""
     try:
         if close is None or volume is None:
-            raw = yf.download(symbol, period="45d", auto_adjust=True, progress=False)
+            raw = price_source.yf_download(symbol, period="45d", auto_adjust=True, progress=False)
             if raw is None or len(raw) < 15:
                 return ABSTAIN, "Insufficient data"
             vol = raw["Volume"].squeeze().dropna().values.astype(float)
@@ -325,7 +326,7 @@ def run_consensus_holding(
     nodes = {}
 
     try:
-        raw_252 = yf.download(symbol, period="252d", auto_adjust=True, progress=False)
+        raw_252 = price_source.yf_download(symbol, period="252d", auto_adjust=True, progress=False)
         cache = {
             "close": raw_252["Close"].squeeze().dropna().values.astype(float) if "Close" in raw_252 else np.array([]),
             "high":  raw_252["High"].squeeze().dropna().values.astype(float) if "High" in raw_252 else np.array([]),
@@ -446,7 +447,7 @@ def run_consensus_holding(
         "details":       details,  # {node: reasoning string}
         "kelly_vote":    kelly_vote,
         "kelly_detail":  kelly_detail,
-        "as_of":         datetime.utcnow().isoformat() + "Z",
+        "as_of":         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     }
 
 
@@ -482,5 +483,5 @@ def run_consensus_portfolio(holdings: list[dict], total_portfolio: float) -> dic
         "sells":         sells,
         "avg_confidence": avg_conf,
         "total_analyzed": len(results),
-        "as_of":         datetime.utcnow().isoformat() + "Z",
+        "as_of":         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     }
