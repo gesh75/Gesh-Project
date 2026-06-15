@@ -4,7 +4,7 @@
   "options_allocation_pct": 30.0,
   "max_stock_per_trade": 5000.0,
   "max_options_per_trade": 2000.0,
-  "max_open_positions": 5,
+  "max_open_positions": 12,
   "max_open_contracts": 3,
   "min_cash_buffer": 500.0,
   "scanner_price_min": 0.1,
@@ -15,6 +15,6 @@
   "extended_hours": true,
   "paper_mode": false,
   "screener_universe": "default",
-  "last_updated": "2026-04-28T15:09:58.174286+00:00",
+  "last_updated": "2026-06-07T21:36:26.000407+00:00",
   "version": "1.1"
 }
