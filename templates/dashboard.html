@@ -1459,12 +1459,14 @@ function piCard(a){
 }
 
 // Shared deep-analysis renderer (used by live run + cached loaders)
-function renderDeepAnalysis(a, mkt, cached){
+function renderDeepAnalysis(a, mkt, cached, cachedAt){
   const cont=$('deep-container'); if(!cont||!a) return;
   const cards=(a.holdings_analysis||[]).map((h,i)=>stockCard(h,i,mkt)).join('');
   const n=(a.holdings_analysis||[]).length;
+  const when=cachedAt?(' · '+(typeof relTime==='function'?relTime(cachedAt):cachedAt)):'';
   const head=cached
-    ? `📦 Cached — ${n} Holdings <span style="margin-left:8px;padding:2px 7px;border-radius:3px;background:rgba(0,212,255,.08);color:var(--accent);font-size:11px">CACHED RESULT</span>`
+    ? `📦 Cached — ${n} Holdings <span style="margin-left:8px;padding:2px 7px;border-radius:3px;background:rgba(0,212,255,.08);color:var(--accent);font-size:11px">CACHED RESULT${when}</span>
+       <span style="display:block;margin-top:6px;font-size:11px;color:var(--yellow);text-transform:none;letter-spacing:0">⚠ This is a stored snapshot — no live Claude call. Sign in and click ▶ Run Deep Analysis to refresh.</span>`
     : `${n} Holdings — Snowflake Analysis`;
   cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}</style>
     ${piCard(a)}
@@ -1485,6 +1487,9 @@ async function runDeepAnalysis(){
   cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running AI deep analysis…<br><span style="font-size:13px">Generating snowflake scores, fair values, predictions</span></div></div>`;
   try{
     const r=await fetch('/api/deep-analysis',{method:'POST'});
+    if(r.status===401){
+      const err=new Error('auth'); err.authRequired=true; throw err;
+    }
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
     const a=j.analysis;
@@ -1494,8 +1499,13 @@ async function runDeepAnalysis(){
     $('deep-ts').textContent=j.model+' · '+new Date().toLocaleTimeString();
     toast('Deep analysis complete','success'); refreshSectionBadges();
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${e.message}</div></div>`;
-    toast('Deep analysis failed','error');
+    if(e&&e.authRequired){
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
+      toast('Sign in to run a live Claude analysis','error',6000);
+    }else{
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${e.message}</div></div>`;
+      toast('Deep analysis failed','error');
+    }
     console.error(e);
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-analyze';}
 }
@@ -1574,6 +1584,7 @@ async function runConsensus(){
   cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running 9 independent signal nodes per holding…<br><span style="font-size:13px">Momentum · Trend · Rel.Strength · Fundamentals · Analyst · News · Kelly · ECG · Volume</span></div></div>`;
   try{
     const r=await fetch('/api/consensus',{method:'POST'});
+    check401(r);
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
     renderConsensus(j.data);
@@ -1581,14 +1592,13 @@ async function runConsensus(){
     $('cons-ts').textContent='Updated '+new Date().toLocaleTimeString();
     toast('Consensus vote complete','success'); refreshSectionBadges();
   }catch(e){
-    cont.innerHTML=`<div style="color:var(--red);padding:16px">Consensus failed: ${e.message}</div>`;
-    toast('Consensus failed','error');
+    runErr(e, 'cons-container', 'Consensus');
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-Vote';}
 }
 async function loadCachedConsensus(){
   const cont=$('cons-container'); if(!cont||cont.dataset.loaded) return;
   try{ const r=await fetch('/api/consensus/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); prependStaleBadge('cons-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
 }
 
 const NODE_ICONS={
@@ -1686,6 +1696,7 @@ async function runKelly(){
   cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Fetching 90-day price history · computing Kelly fractions…</div></div>`;
   try{
     const r=await fetch('/api/kelly',{method:'POST'});
+    check401(r);
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
     renderKelly(j.data, j.total_equity);
@@ -1693,14 +1704,13 @@ async function runKelly(){
     $('kelly-ts').textContent='Updated '+new Date().toLocaleTimeString();
     toast('Kelly position sizing complete','success'); refreshSectionBadges();
   }catch(e){
-    cont.innerHTML=`<div style="color:var(--red);padding:16px">Kelly failed: ${e.message}</div>`;
-    toast('Kelly sizing failed','error');
+    runErr(e, 'kelly-container', 'Kelly sizing');
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-Size';}
 }
 async function loadCachedKelly(){
   const cont=$('kelly-container'); if(!cont||cont.dataset.loaded) return;
   try{ const r=await fetch('/api/kelly/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderKelly(j.data, j.total_equity); cont.dataset.loaded='1'; const ts=$('kelly-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderKelly(j.data, j.total_equity); prependStaleBadge('kelly-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('kelly-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
 }
 
 function kellyBar(currentPct, optimalPct){
@@ -1795,12 +1805,13 @@ async function runMonteCarlo(){
   cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running 1 000 Monte Carlo simulations…</div></div>`;
   try{
     const r=await fetch('/api/monte-carlo',{method:'POST'});
+    check401(r);
     if(!r.ok) throw new Error(await r.text());
     const mc=(await r.json()).data;
     renderMonteCarlo(mc);
     toast('Monte Carlo stress test complete','success'); refreshSectionBadges();
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Stress test failed: ${e.message}</div></div>`;
+    runErr(e, 'mc-container', 'Stress test');
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-run';}
 }
 
@@ -1844,7 +1855,7 @@ async function loadCachedMonteCarlo(){
   const cont=$('mc-container'); if(!cont||cont.dataset.loaded) return;
   try{
     const r=await fetch('/api/monte-carlo/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data){ renderMonteCarlo(j.data, j.ran_at); cont.dataset.loaded='1'; }
+    if(j&&j.cached&&j.data){ renderMonteCarlo(j.data, j.ran_at); prependStaleBadge('mc-container', j.ran_at); cont.dataset.loaded='1'; }
   }catch(e){/* keep placeholder */}
 }
 
@@ -2031,13 +2042,13 @@ async function runScreener(){
   cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Screening 100+ stocks · fetching fundamentals · running AI scoring…<br><span style="font-size:15px">This takes ~30-45 seconds — batch downloading price data + analyst targets</span></div></div>`;
   try{
     const r=await fetch('/api/screener',{method:'POST'});
+    check401(r);
     if(!r.ok) throw new Error(await r.text());
     const j=await r.json();
     renderScreener(j);
     toast('Market scan complete · '+((j.data&&j.data.picks||[]).length)+' picks','success'); refreshSectionBadges();
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Screener failed: ${e.message}</div></div>`;
-    console.error(e);
+    runErr(e, 'radar-container', 'Screener');
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-scan';}
 }
 
@@ -2065,7 +2076,7 @@ function renderScreener(j, cachedMeta){
 async function loadCachedScreener(){
   const cont=$('radar-container'); if(!cont||cont.dataset.loaded) return;
   try{ const r=await fetch('/api/screener/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data){ renderScreener(j, j.ran_at); cont.dataset.loaded='1'; } }catch(e){}
+    if(j&&j.cached&&j.data){ renderScreener(j, j.ran_at); prependStaleBadge('radar-container', j.ran_at); cont.dataset.loaded='1'; } }catch(e){}
 }
 
 // ── Ollama removed — stubs kept to avoid JS errors if any old bookmark triggers them ──
@@ -2210,7 +2221,7 @@ async function tryLoadCachedAnalysis(){
       // result_json stores the full analysis response — render it
       const a=rj.analysis||rj;
       const mkt=rj.market||null;
-      renderDeepAnalysis(a, mkt, true);
+      renderDeepAnalysis(a, mkt, true, run.created_at||null);
       _cachedAnalysisLoaded=true;
       $('deep-ts').textContent='Cached '+(run.created_at?new Date(run.created_at).toLocaleTimeString():'');
       return;
@@ -2219,7 +2230,7 @@ async function tryLoadCachedAnalysis(){
     const cr=await fetch('/api/deep-analysis/cached'); const cj=await cr.json();
     const a=cj&&cj.cached?(cj.analysis||cj.data):null;
     if(a&&a.holdings_analysis){
-      renderDeepAnalysis(a, (cj.market||null), true);
+      renderDeepAnalysis(a, (cj.market||null), true, cj.ran_at||null);
       _cachedAnalysisLoaded=true;
       $('deep-ts').textContent='Cached '+relTime(cj.ran_at);
     }else{
@@ -2490,6 +2501,7 @@ async function daRunAnalysis(){
       fetch('/api/portfolio'),
     ]);
     clearInterval(t);
+    if(deepRes.status===401){ const err=new Error('auth'); err.authRequired=true; throw err; }
     if(!deepRes.ok) throw new Error(await deepRes.text());
     const deep   = await deepRes.json();
     const kelly  = kellyRes.ok  ? await kellyRes.json()  : null;
@@ -2501,7 +2513,12 @@ async function daRunAnalysis(){
   }catch(e){
     clearInterval(t);
     $('da-placeholder').style.display='flex';
-    $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(String(e))}</div>`;
+    if(e&&e.authRequired){
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">🔒</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Daily Analysis again.</div>`;
+      if(typeof toast==='function') toast('Sign in to run a live Claude analysis','error',6000);
+    }else{
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(String(e))}</div>`;
+    }
   }finally{
     $('da-loading').style.display='none';
     btn.disabled=false; btn.innerHTML='↻ Re-analyse';
@@ -2996,6 +3013,32 @@ function toast(msg, type='info', ms=4200){
   el.querySelector('.toast-x').onclick=()=>el.remove();
   wrap.appendChild(el);
   setTimeout(()=>{el.style.opacity='0';el.style.transform='translateX(20px)';setTimeout(()=>el.remove(),250);}, ms);
+}
+
+// ── Shared cache/auth helpers (function declarations → hoisted, usable above) ──
+// Throw a tagged error when a live endpoint requires a signed-in session (401).
+function check401(r){ if(r&&r.status===401){ const e=new Error('auth'); e.authRequired=true; throw e; } }
+// Centralised run-button error handling: clear sign-in message vs generic failure.
+function runErr(e, contId, label){
+  const c=document.getElementById(contId);
+  if(e&&e.authRequired){
+    if(c) c.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>${label} runs only for a signed-in session. Sign in, then click the run button again.</div></div>`;
+    toast('Sign in to run '+label,'error',6000);
+  }else{
+    if(c) c.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${label} failed: ${e&&e.message?e.message:e}</div></div>`;
+    toast(label+' failed','error');
+  }
+  console.error(e);
+}
+// Yellow "stored snapshot" banner prepended to any cached tab.
+function staleCacheBadge(ranAt){
+  const age=ranAt?(typeof relTime==='function'?relTime(ranAt):ranAt):'';
+  return `<div class="stale-cache-badge" style="margin:0 0 10px;padding:7px 10px;border-radius:5px;background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);color:var(--yellow);font-size:11.5px;line-height:1.5">⚠ Cached snapshot${age?(' · '+age):''} — no live call. Sign in &amp; click the run button to refresh.</div>`;
+}
+function prependStaleBadge(contId, ranAt){
+  const c=document.getElementById(contId);
+  if(!c||c.querySelector('.stale-cache-badge')) return;
+  c.insertAdjacentHTML('afterbegin', staleCacheBadge(ranAt));
 }
 
 // Tiny canvas sparkline — graceful no-op when no data (spec risk #1 fallback)
