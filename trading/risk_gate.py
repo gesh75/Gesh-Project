@@ -279,14 +279,19 @@ def evaluate(
     # 8. Data freshness (only enforce if we actually have a timestamp)
     if rejection_reason is None:
         age = _quote_age_seconds(portfolio_snapshot)
+        # Mode-aware: LIVE keeps the tight 300s; PAPER tolerates the daily chain's
+        # own multi-minute pipeline (still rejects a genuinely stale prior-day
+        # snapshot). Missing timestamp still fails closed in both modes.
+        max_age = (cfg.max_price_age_seconds_paper if cfg.paper_mode
+                   else cfg.max_price_age_seconds)
         if age is None:
             gates["DATA_FRESH"] = False      # fail closed: no timestamp → cannot prove freshness
             rejection_reason = "Quote age unknown — snapshot missing 'as_of' timestamp"
         else:
-            gates["DATA_FRESH"] = age <= cfg.max_price_age_seconds
+            gates["DATA_FRESH"] = age <= max_age
             if not gates["DATA_FRESH"]:
                 rejection_reason = (
-                    f"Quote age {age:.0f}s exceeds max {cfg.max_price_age_seconds}s"
+                    f"Quote age {age:.0f}s exceeds max {max_age}s"
                 )
     else:
         gates["DATA_FRESH"] = False

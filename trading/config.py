@@ -59,7 +59,12 @@ class RiskConfig:
     min_confidence: float = 0.75
 
     # --- data freshness / hours ---
-    max_price_age_seconds: int = 300    # reject if last quote > 5 min old
+    max_price_age_seconds: int = 300    # LIVE: reject if last quote > 5 min old
+    # PAPER: the daily chain's gate runs minutes after the snapshot fetch
+    # (engines + Claude call), so a 300s limit rejected chain trades on pipeline
+    # latency, not stale data. 30 min still catches a prior-day snapshot. Synced
+    # with gesh-project-trading (rule #40); LIVE keeps the tight 300s.
+    max_price_age_seconds_paper: int = 1800
     market_open_hhmm: str = "09:30"
     market_close_hhmm: str = "16:00"
     market_timezone: str = "America/New_York"
@@ -82,6 +87,7 @@ def load_risk_config() -> RiskConfig:
         min_cash_buffer_usd=_env_float("MIN_CASH_BUFFER_USD", 500.0),
         min_confidence=_env_float("MIN_CONFIDENCE", 0.75),
         max_price_age_seconds=_env_int("MAX_PRICE_AGE_SECONDS", 300),
+        max_price_age_seconds_paper=_env_int("MAX_PRICE_AGE_SECONDS_PAPER", 1800),
         market_open_hhmm=os.getenv("MARKET_OPEN_HHMM", "09:30"),
         market_close_hhmm=os.getenv("MARKET_CLOSE_HHMM", "16:00"),
         market_timezone=os.getenv("MARKET_TIMEZONE", "America/New_York"),
