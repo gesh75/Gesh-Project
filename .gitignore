@@ -48,3 +48,9 @@ android*/**/.gradle/
 *.dex
 GeshFinancial-Android.zip
 *.zip
+
+# Stray/scratch Android project copies (e.g. "android 2/", "android 3/")
+android */
+
+# Runtime macro regime cache (regenerated each run)
+.macro_cache.json
