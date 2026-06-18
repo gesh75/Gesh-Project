@@ -43,7 +43,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
     # Scanner filters
     "scanner_price_min":        0.10,      # min stock price for scanner
-    "scanner_price_max":        10.00,     # max stock price for scanner (penny mode)
+    "scanner_price_max":        10.00,     # max price ceiling — enforced ONLY in PRICE_CAPPED_MODES (penny universe)
     "scanner_volume_min":       200_000,   # min daily volume
     "scanner_timeframe":        "daily",   # daily | 1HR | 5MIN | premarket | forex-1HR | forex-4HR
 
@@ -59,6 +59,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "last_updated":             None,
     "version":                  "1.1",
 }
+
+# Scanner modes where the scanner_price_max ceiling is meaningful (penny-stock
+# universe). Intraday/forex modes intentionally have NO upper price cap.
+PRICE_CAPPED_MODES = {"stock"}
 
 # ─── Load / Save ──────────────────────────────────────────────────────────────
 
@@ -172,10 +176,18 @@ def validate_action(
                 f"{symbol} price ${current_price:.2f} below scanner minimum "
                 f"${cfg['scanner_price_min']:.2f}"
             )
-        if current_price > cfg["scanner_price_max"] and cfg["scanner_price_max"] < 50:
+        # Upper price ceiling is intended only for the penny-stock universe.
+        # Enforce it for price-capped modes (mode-aware, not a hardcoded $50
+        # magic number); a non-positive max disables the ceiling entirely.
+        price_max = cfg.get("scanner_price_max") or 0
+        if (
+            price_max > 0
+            and cfg["scanner_timeframe"] in PRICE_CAPPED_MODES
+            and current_price > price_max
+        ):
             return False, (
                 f"{symbol} price ${current_price:.2f} above scanner maximum "
-                f"${cfg['scanner_price_max']:.2f}"
+                f"${price_max:.2f}"
             )
 
     return True, "OK"

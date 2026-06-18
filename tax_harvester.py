@@ -158,17 +158,26 @@ def scan_tax_loss_candidates(
         if price <= 0 or shares <= 0:
             continue
 
-        # Cost basis: from map → from position dict → fallback to price (no loss).
-        # When no real basis exists, the price fallback silently makes the
-        # position look break-even and suppresses genuine loss detection — make
-        # that data gap visible rather than hiding it.
+        # Cost basis: from map → from position dict. NEVER fall back to the
+        # current price — that fabricates a break-even and silently hides a real
+        # loss (best practice: a position with unknown basis is a red flag that
+        # must be surfaced and excluded from harvest, not zeroed out).
         _cb = cbm.get(ticker) or pos.get("average_buy_price")
         if not _cb:
-            import logging
-            logging.getLogger(__name__).warning(
-                "tax_harvester: no cost basis for %s — using current price (loss detection suppressed)", ticker,
-            )
-        cb = float(_cb or price)
+            candidates.append({
+                "ticker":              ticker,
+                "current_price":       round(price, 4),
+                "cost_basis":          None,
+                "shares":              round(shares, 4),
+                "unrealised_loss_usd": None,
+                "unrealised_loss_pct": None,
+                "in_wash_window":      False,
+                "wash_safe_date":      None,
+                "days_until_safe":     None,
+                "status":              "NO_COST_BASIS",
+            })
+            continue
+        cb = float(_cb)
         unrealised = (price - cb) * shares
         unrealised_pct = ((price - cb) / cb * 100) if cb > 0 else 0.0
 
@@ -199,7 +208,8 @@ def scan_tax_loss_candidates(
 
         candidates.append(record)
 
-    return sorted(candidates, key=lambda x: x["unrealised_loss_usd"])
+    # Sort by loss (biggest first); NO_COST_BASIS rows (None) sort last.
+    return sorted(candidates, key=lambda x: (x["unrealised_loss_usd"] is None, x["unrealised_loss_usd"] or 0.0))
 
 
 def get_harvest_summary(
@@ -210,13 +220,16 @@ def get_harvest_summary(
     candidates = scan_tax_loss_candidates(positions, cost_basis_map)
     eligible   = [c for c in candidates if c["status"] == "ELIGIBLE"]
     in_window  = [c for c in candidates if c["status"] == "IN_WASH_WINDOW"]
+    no_basis   = [c for c in candidates if c["status"] == "NO_COST_BASIS"]
     total_harvestable = sum(abs(c["unrealised_loss_usd"]) for c in eligible)
     return {
         "total_harvestable_loss_usd": round(total_harvestable, 2),
         "eligible_count":            len(eligible),
         "in_wash_window_count":      len(in_window),
+        "no_cost_basis_count":       len(no_basis),
         "eligible":                  eligible,
         "in_wash_window":            in_window,
+        "no_cost_basis":             no_basis,
         "generated_at":              datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "summary": (
             f"Tax harvest: ${total_harvestable:,.0f} eligible across "
