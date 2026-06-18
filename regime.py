@@ -127,8 +127,11 @@ def _bollinger_width(close: np.ndarray, period: int = BB_PERIOD) -> tuple[float,
 
 def _classify_regime(adx: float, bb_width: float, rsi: float, bb_width_history: list[float]) -> str:
     """Convert indicator values into a regime label."""
-    # Detect compression: current width is lower than recent average
-    avg_width = float(np.mean(bb_width_history[-20:])) if len(bb_width_history) >= 5 else bb_width
+    # Detect compression: current width is lower than recent average.
+    # Use whatever history is available rather than defaulting to the current
+    # width — defaulting to bb_width makes `bb_width < avg_width*0.75` always
+    # False on short history, silently disabling BREAKOUT-READY detection.
+    avg_width = float(np.mean(bb_width_history[-20:])) if bb_width_history else bb_width
     compressed = bb_width < avg_width * 0.75 and bb_width < 4.0
 
     if adx >= 30:

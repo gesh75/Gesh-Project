@@ -75,7 +75,11 @@ def _spy_above_ma(ma_days: int = 200) -> bool | None:
             val = bool(closes[-1] >= float(_np.mean(closes[-ma_days:])))
     except Exception:
         val = None
-    _SPY_TREND_CACHE["v"] = (_t.time(), val)
+    # Only cache successful results — caching a failed (None) fetch would pin the
+    # gate blind for the full TTL after a transient Yahoo throttle. On failure,
+    # fall through so the next call retries instead of serving stale None.
+    if val is not None:
+        _SPY_TREND_CACHE["v"] = (_t.time(), val)
     return val
 
 

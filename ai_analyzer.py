@@ -54,6 +54,10 @@ def analyze_portfolio(payload: dict[str, Any]) -> str:
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": f"Analyze this portfolio:\n\n```json\n{json.dumps(payload, indent=2)}\n```"}]
     )
+    if getattr(message, "stop_reason", None) == "max_tokens":
+        raise RuntimeError("analyze_portfolio: response truncated at max_tokens (2048) — output incomplete")
+    if not message.content:
+        raise ValueError("analyze_portfolio: empty response from Claude")
     return message.content[0].text
 
 
@@ -263,7 +267,7 @@ def deep_analyze_portfolio(
             )
         }]
     )
-    if message.stop_reason == "max_tokens":
+    if getattr(message, "stop_reason", None) == "max_tokens":
         raise RuntimeError(
             "deep_analyze_portfolio: tool output truncated at max_tokens — "
             "the JSON is unusable; tighten DEEP_ANALYSIS_SCHEMA or raise max_tokens."
@@ -322,7 +326,7 @@ def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
             )
         }]
     )
-    if message.stop_reason == "max_tokens":
+    if getattr(message, "stop_reason", None) == "max_tokens":
         raise RuntimeError(
             "analyze_screener: tool output truncated at max_tokens — "
             "the JSON is unusable; tighten SCREENER_SCHEMA or raise max_tokens."
