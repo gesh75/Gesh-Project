@@ -734,7 +734,9 @@ def _select(survivors, sector_value, total, n, deployable, vols, cfg) -> list[di
     weights normalize over the shortlist so the slice targets a fair share of deployable
     cash (not 1/len(all survivors), which systematically under-deploys)."""
     shortlist = _shortlist(survivors, sector_value, total, n)
-    inv = {s["symbol"]: (1.0 / (vols.get(s["symbol"]) or 0.02)) for s in shortlist}
+    # Clamp the denominator: a genuine but tiny positive vol (e.g. 0.001) would
+    # yield inv=1000 and grossly over-weight one name. Floor at 0.01.
+    inv = {s["symbol"]: (1.0 / max(vols.get(s["symbol"]) or 0.02, 0.01)) for s in shortlist}
     inv_sum = sum(inv.values()) or 1.0
     sv = dict(sector_value)
     picks: list[dict] = []

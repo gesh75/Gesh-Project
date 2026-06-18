@@ -44,7 +44,10 @@ def ewma_vol(returns: pd.Series, span: int = 30) -> float:
         return 0.018
     ewma_var = float(returns.ewm(span=span).var().iloc[-1])
     if ewma_var <= 0 or np.isnan(ewma_var):
-        return float(returns.std()) or 0.018
+        # NaN-safe fallback: returns.std() can itself be NaN, and `nan or 0.018`
+        # returns nan (nan is truthy), leaking NaN into downstream risk math.
+        fallback = float(returns.std())
+        return fallback if (fallback > 0 and not np.isnan(fallback)) else 0.018
     return float(np.sqrt(ewma_var))
 
 

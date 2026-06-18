@@ -227,12 +227,19 @@ def load_watch_data(
     have_unreal = False
     total_at_risk = 0.0
     have_at_risk = False
+    total_breached = 0.0   # loss already past stop on breached positions
     for r in open_rows:
         m = compute_position_metrics(r, prices.get(r["symbol"]))
         if m["unrealized_pnl_usd"] is not None:
             total_unreal += m["unrealized_pnl_usd"]; have_unreal = True
         if m["distance_to_stop_usd"] is not None:
-            total_at_risk += max(m["distance_to_stop_usd"], 0.0); have_at_risk = True
+            # total_at_risk = capital still protected by an UNBREACHED stop.
+            # A negative distance means the stop is already breached; surface
+            # that separately instead of silently zeroing it (hidden risk).
+            d = m["distance_to_stop_usd"]
+            total_at_risk += max(d, 0.0); have_at_risk = True
+            if d < 0:
+                total_breached += -d
         open_positions.append({
             "symbol": r["symbol"], "action": r.get("action"), "qty": r.get("qty"),
             "entry_price": r.get("entry_price"), "stop_loss": r.get("stop_loss"),
@@ -296,6 +303,7 @@ def load_watch_data(
             "open_count": len(open_positions),
             "total_unrealized_pnl_usd": round(total_unreal, 2) if have_unreal else None,
             "total_at_risk_usd": round(total_at_risk, 2) if have_at_risk else None,
+            "total_breached_usd": round(total_breached, 2) if total_breached > 0 else None,
             "closed_count_total": closed_n,
             "closed_today": closed_today,
             "realized_pnl_7d_usd": realized_7d,

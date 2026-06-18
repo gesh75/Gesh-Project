@@ -73,9 +73,16 @@ def _secret() -> bytes:
         p.write_bytes(gen)
         os.chmod(p, 0o600)
         return gen
-    except Exception:
-        # Last resort: ephemeral (tokens won't survive restart) — never crash.
-        return b"gesh-insecure-fallback-set-GESH_AUTH_SECRET"
+    except Exception as e:
+        # When the login wall is ON, a predictable hardcoded key would let anyone
+        # forge session cookies — fail closed instead. Only fall back to a random
+        # ephemeral key when auth is disabled (dev convenience).
+        if auth_enabled():
+            raise RuntimeError(
+                "GESH_AUTH_SECRET unset and .secret file unavailable while auth is "
+                f"enabled — refusing insecure fallback key: {e}"
+            )
+        return secrets.token_bytes(32)
 
 
 # ── password hashing (PBKDF2-HMAC-SHA256, stdlib) ───────────────────────────────

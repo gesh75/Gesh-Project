@@ -58,7 +58,14 @@ def analyze_portfolio(payload: dict[str, Any]) -> str:
         raise RuntimeError("analyze_portfolio: response truncated at max_tokens (2048) — output incomplete")
     if not message.content:
         raise ValueError("analyze_portfolio: empty response from Claude")
-    return message.content[0].text
+    # content[0] is not guaranteed to be a text block (refusal / leading non-text
+    # block); select the first block exposing .text rather than blindly indexing
+    # [0]. Keying on the .text attribute works for both the SDK's TextBlock and a
+    # tool_use/refusal block (which lacks it).
+    text = next((b.text for b in message.content if getattr(b, "text", None) is not None), None)
+    if text is None:
+        raise ValueError("analyze_portfolio: no text block in response")
+    return text
 
 
 # ─── Deep Structured Analysis (JSON) ─────────────────────────────────────────

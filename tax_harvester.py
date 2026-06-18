@@ -158,8 +158,17 @@ def scan_tax_loss_candidates(
         if price <= 0 or shares <= 0:
             continue
 
-        # Cost basis: from map → from position dict → fallback to price (no loss)
-        cb = float(cbm.get(ticker) or pos.get("average_buy_price") or price)
+        # Cost basis: from map → from position dict → fallback to price (no loss).
+        # When no real basis exists, the price fallback silently makes the
+        # position look break-even and suppresses genuine loss detection — make
+        # that data gap visible rather than hiding it.
+        _cb = cbm.get(ticker) or pos.get("average_buy_price")
+        if not _cb:
+            import logging
+            logging.getLogger(__name__).warning(
+                "tax_harvester: no cost basis for %s — using current price (loss detection suppressed)", ticker,
+            )
+        cb = float(_cb or price)
         unrealised = (price - cb) * shares
         unrealised_pct = ((price - cb) / cb * 100) if cb > 0 else 0.0
 

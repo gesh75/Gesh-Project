@@ -188,6 +188,13 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        # A parse failure must not masquerade as a real NEUTRAL/LOW signal —
+        # mark it explicitly so it isn't mistaken for a clean read.
+        if analysis.get("error"):
+            action_signal, urgency = "PARSE_ERROR", "UNKNOWN"
+        else:
+            action_signal = analysis.get("action_signal", "NEUTRAL")
+            urgency = analysis.get("urgency", "LOW")
         conn.execute(
             "INSERT INTO sec_filings (symbol, form_type, filing_date, filing_url, analysis_json, action_signal, urgency) VALUES (?,?,?,?,?,?,?)",
             (
@@ -196,8 +203,8 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
                 filing.get("date", ""),
                 filing.get("url", ""),
                 json.dumps(analysis),
-                analysis.get("action_signal", "NEUTRAL"),
-                analysis.get("urgency", "LOW"),
+                action_signal,
+                urgency,
             )
         )
         conn.commit()

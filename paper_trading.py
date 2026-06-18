@@ -21,10 +21,13 @@ Usage:
 
 from __future__ import annotations
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 from trade_log import log_trade, close_trade, get_trade_history, get_win_rate
 from allocation_config import load_config, validate_action
@@ -197,10 +200,15 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, float]:
                     close = tickers[sym]["Close"].dropna()
                 if not close.empty:
                     prices[sym] = float(close.iloc[-1])
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                # Visibility: a symbol whose price we couldn't fetch has its
+                # stop/target check silently skipped this cycle — log it.
+                logger.warning("paper_trading: price fetch failed for %s: %s", sym, e)
+    except Exception as e:
+        logger.warning("paper_trading: batch price fetch failed for %s: %s", symbols, e)
+    missing = [s for s in symbols if s not in prices]
+    if missing:
+        logger.warning("paper_trading: no price (stop/target NOT checked) for: %s", missing)
     return prices
 
 

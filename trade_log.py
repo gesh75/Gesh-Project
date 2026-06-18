@@ -192,13 +192,15 @@ def close_trade(
         shares = row["shares"]
         action = row["action"]
 
-        # P&L direction: BUY/ADD = long, TRIM/SELL = short exit
+        # P&L direction: BUY/ADD = long, TRIM/SELL = short exit.
+        # Guard pnl_pct against a corrupt entry_price=0 row (ZeroDivisionError);
+        # the dollar pnl is still meaningful, so only the percentage degrades.
         if action in ("BUY", "ADD"):
             pnl = (exit_price - entry_price) * shares
-            pnl_pct = (exit_price - entry_price) / entry_price * 100
+            pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price else 0.0
         else:
             pnl = (entry_price - exit_price) * shares
-            pnl_pct = (entry_price - exit_price) / entry_price * 100
+            pnl_pct = ((entry_price - exit_price) / entry_price * 100) if entry_price else 0.0
 
         if pnl > 0.01:
             outcome = "WIN"

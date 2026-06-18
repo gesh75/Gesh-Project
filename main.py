@@ -1,5 +1,5 @@
 from __future__ import annotations
-import sys, textwrap
+import sys, textwrap, traceback
 from datetime import datetime
 from auth import login, logout
 from data_fetcher import build_data_payload, DEFAULT_WATCHLIST
@@ -19,17 +19,17 @@ def main():
     try:
         login(); print(f"{GREEN}      ✓ Session established.{RESET}")
     except Exception as e:
-        print(f"{RED}      ✗ {e}{RESET}", file=sys.stderr); sys.exit(1)
+        traceback.print_exc(); print(f"{RED}      ✗ {e}{RESET}", file=sys.stderr); sys.exit(1)
     print(f"\n{YELLOW}[2/3] Fetching live portfolio data...{RESET}")
     try:
         payload = build_data_payload(DEFAULT_WATCHLIST); print(f"{GREEN}      ✓ Data fetched.{RESET}")
     except Exception as e:
-        print(f"{RED}      ✗ {e}{RESET}", file=sys.stderr); logout(); sys.exit(1)
+        traceback.print_exc(); print(f"{RED}      ✗ {e}{RESET}", file=sys.stderr); logout(); sys.exit(1)
     print(f"\n{YELLOW}[3/3] Running AI risk analysis...{RESET}")
     try:
         analysis = analyze_portfolio(payload); print(f"{GREEN}      ✓ Analysis complete.{RESET}")
     except Exception as e:
-        print(f"{RED}      ✗ {e}{RESET}", file=sys.stderr); logout(); sys.exit(1)
+        traceback.print_exc(); print(f"{RED}      ✗ {e}{RESET}", file=sys.stderr); logout(); sys.exit(1)
 
     eq = payload["equity_summary"]
     _section("ACCOUNT SNAPSHOT")

@@ -1,7 +1,19 @@
 import re
+import shutil
 
 with open("ai_analyzer.py", "r") as f:
     code = f.read()
+
+# Back up before any in-place rewrite so a bad/partial patch is recoverable.
+shutil.copy2("ai_analyzer.py", "ai_analyzer.py.bak")
+
+
+def _sub_checked(pattern, repl, text, label, flags=0):
+    """re.sub that fails loudly if the pattern did not match — prevents silently
+    writing an unchanged file when the source has drifted from the patterns."""
+    new, n = re.subn(pattern, repl, text, flags=flags)
+    assert n > 0, f"patch_ai: pattern did not match — {label}"
+    return new
 
 # 1. Deflate DEEP_SYSTEM_PROMPT
 old_deep_prompt_start = r'DEEP_SYSTEM_PROMPT = """You are an elite quantitative financial analyst combining the depth of Simply Wall St, Bloomberg, and Goldman Sachs research.\n\nAnalyze the portfolio and return ONLY valid JSON — no markdown, no code blocks, no explanation. Start the response with \{ directly.\n\nCRITICAL JSON RULES.*?'
@@ -18,7 +30,7 @@ SCORING GUIDE (be realistic — avoid clustering all at 50):
 
 Provide 2-4 risks per stock and 1-3 rewards. Be specific — reference actual business metrics."""'''
 
-code = re.sub(old_deep_prompt_start + r'.*?' + old_deep_prompt_end, new_deep_prompt, code, flags=re.DOTALL)
+code = _sub_checked(old_deep_prompt_start + r'.*?' + old_deep_prompt_end, new_deep_prompt, code, "deep_prompt", flags=re.DOTALL)
 
 
 # 2. Deflate SCREENER_SYSTEM_PROMPT
@@ -44,7 +56,7 @@ Rules:
 
 Order picks by composite_score descending."""'''
 
-code = re.sub(old_screener_prompt_start + r'.*?' + old_screener_prompt_end, new_screener_prompt, code, flags=re.DOTALL)
+code = _sub_checked(old_screener_prompt_start + r'.*?' + old_screener_prompt_end, new_screener_prompt, code, "screener_prompt", flags=re.DOTALL)
 
 
 # Delete JSON helpers
