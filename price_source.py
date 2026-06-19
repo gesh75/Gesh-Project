@@ -33,9 +33,19 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
+
+# In-process TTL cache for historical-bar downloads. The daily chain fetches the
+# same symbol+window from multiple engines (consensus, kelly, monte_carlo, regime);
+# caching the period-based historical frame cuts redundant Yahoo hits and 401/crumb
+# rate-limit risk. Only period-based (start/end is None) frames are cached — those
+# are stable intraday; live/ranged queries are never cached. Returns a copy so
+# callers can't mutate the shared frame.
+_YF_CACHE: dict[tuple, tuple[float, "pd.DataFrame"]] = {}
+_YF_CACHE_TTL_S = float(os.getenv("YF_CACHE_TTL_S", "600"))
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +247,41 @@ def rh_fallback(
 # ─── Universal entry point ────────────────────────────────────────────────────
 
 def yf_download(
+    symbols: str | list[str],
+    *,
+    period: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    interval: str = "1d",
+    auto_adjust: bool = True,
+    progress: bool = False,
+    **kwargs: object,
+) -> pd.DataFrame | None:
+    """Cached drop-in for ``yfinance.download`` (Yahoo primary, RH fallback).
+
+    Period-based historical frames are memoized for ``_YF_CACHE_TTL_S`` to cut
+    redundant Yahoo hits across engines in a single daily-chain run. Ranged
+    (start/end) queries bypass the cache.
+    """
+    cacheable = start is None and end is None
+    key = None
+    if cacheable:
+        sym_key = tuple(symbols) if isinstance(symbols, (list, tuple)) else symbols
+        key = (sym_key, period, interval, auto_adjust)
+        hit = _YF_CACHE.get(key)
+        if hit is not None and (time.time() - hit[0]) <= _YF_CACHE_TTL_S:
+            return hit[1].copy()
+
+    raw = _yf_download_uncached(
+        symbols, period=period, start=start, end=end, interval=interval,
+        auto_adjust=auto_adjust, progress=progress, **kwargs,
+    )
+    if cacheable and key is not None and raw is not None and len(raw) > 0:
+        _YF_CACHE[key] = (time.time(), raw.copy())
+    return raw
+
+
+def _yf_download_uncached(
     symbols: str | list[str],
     *,
     period: str | None = None,
