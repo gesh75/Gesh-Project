@@ -24,10 +24,15 @@ MIN_SNAPSHOTS          = 2       # min data points needed for meaningful ECG
 
 
 def _compute_drawdown_from_peak(equities: list[float]) -> float:
-    """Max drawdown from running peak, as a percentage."""
+    """Drawdown of the latest equity from the window's running peak, as a percentage.
+
+    Uses the MAX of the window as the peak (not the first point) — otherwise a
+    position that rises then falls ($100 -> $200 -> $150) reads as +50% and the
+    COOLING/SUSPENDED circuit breakers never fire on a peak-then-crash.
+    """
     if not equities or len(equities) < 2:
         return 0.0
-    peak = equities[0]
+    peak = max(equities)
     current = equities[-1]
     if peak <= 0:
         return 0.0
