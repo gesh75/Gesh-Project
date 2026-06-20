@@ -31,25 +31,25 @@ from .state import (
     paper_realized_pnl_usd_today,
 )
 
+# Shared seam-free risk-gate primitives — single source of truth in gesh-core
+# (Phase 3.5). GateVerdict (the verdict type execution.py also imports),
+# the kill-switch check, and the CASH_FLOOR math (rule #32). The time- and
+# PnL-entangled helpers (_within_market_hours, _quote_age_seconds,
+# _daily_pnl_pct) stay local because tests monkeypatch this module's datetime/
+# paper-realized seams. This repo keeps its own evaluate() gate composition.
+from gesh_core.trading.risk_gate_core import (  # noqa: F401
+    GateVerdict,
+    _kill_switch_present,
+    _post_trade_cash_estimate,
+)
+
 
 # ─── Verdict shape ────────────────────────────────────────────────────────────
 
-@dataclass
-class GateVerdict:
-    approved: bool
-    reason: str | None
-    gates: dict[str, bool]                # gate_name → True (passed) | False (failed)
-    intent_id: int                        # row id in trade_intents
-    decision_id: int                      # row id in risk_decisions
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 # ─── Helper checks ────────────────────────────────────────────────────────────
 
-def _kill_switch_present(path: str) -> bool:
-    return Path(path).expanduser().exists()
 
 
 # Market-regime AVOID gate (synced with gesh-project-trading, rule #40):
@@ -121,23 +121,6 @@ def _quote_age_seconds(portfolio: dict[str, Any]) -> float | None:
         return None
 
 
-def _post_trade_cash_estimate(
-    portfolio: dict[str, Any], intent: TradeIntent, cfg: RiskConfig
-) -> float:
-    """Crude estimate: cash − (target_pct × equity) for BUY; cash for SELL/other.
-
-    In PAPER mode the available cash is the simulated cfg.paper_cash_usd, NOT the
-    real account balance — otherwise paper BUYs are blocked by the real (often
-    near-empty, fully-invested) Robinhood cash and no positions ever open. In LIVE
-    mode the real account cash is used so the gate protects actual capital.
-    (Ported from gesh-project-trading, rule #32.)
-    """
-    eq_summary = portfolio.get("equity_summary", {})
-    cash = cfg.paper_cash_usd if cfg.paper_mode else float(eq_summary.get("cash", 0) or 0)
-    equity = float(eq_summary.get("portfolio_equity", 0) or 0)
-    if intent.action == "BUY" and intent.target_position_pct:
-        return cash - (intent.target_position_pct * equity)
-    return cash
 
 
 def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
