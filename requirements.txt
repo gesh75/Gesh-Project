@@ -34,3 +34,7 @@ APScheduler==3.11.2
 # Utilities
 httpx==0.28.1
 tenacity==9.1.4
+
+# Shared core package (Phase 3 de-duplication). Clone gesh-core side-by-side
+# under ~/Projects/ and install editable:  pip install -e ../gesh-core
+-e ../gesh-core
