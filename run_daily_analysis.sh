@@ -26,6 +26,10 @@ ulimit -n 10240 2>/dev/null || true
 # the sibling-directory convention for non-standard layouts.
 GP="$(cd "$(dirname "$0")" && pwd)"
 GPT="${GESH_TRADING_HOME:-$(dirname "$GP")/gesh-project-trading}"
+# gesh_core.tax_harvester resolves its DB via GESH_TRACKER_DB; the chain runs with
+# cwd=product root, so point it at the engine repo's gesh_financial.db (the tracker
+# DB) to preserve the pre-extraction sibling-path default.
+export GESH_TRACKER_DB="${GESH_TRACKER_DB:-$GPT/gesh_financial.db}"
 PY="$GP/venv/bin/python3.14"
 LOG=/tmp/gesh_fullchain.log
 LOCK=/tmp/gesh_daily_chain.lock
