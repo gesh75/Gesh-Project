@@ -313,7 +313,24 @@ def node_analyst(symbol: str) -> tuple[int | None, str]:
 
 
 def node_news(symbol: str) -> tuple[int | None, str]:
-    """Cached news sentiment from DB (populated by news_agent)."""
+    """News sentiment — live Reddit (Phase 5) with cached-DB fallback.
+
+    Converges toward the engine's Node 6: try live crowd sentiment via
+    sentiment_connector.node_sentiment (praw → Reddit JSON API → keyword scoring,
+    90-min cached). If it ABSTAINs (Reddit unavailable / no creds) or the import
+    fails, fall back to the cached DB news_sentiment row (the prior behavior), then
+    ABSTAIN. Graceful end-to-end — never raises out of the node.
+    """
+    # 1. Live Reddit sentiment (preferred)
+    try:
+        from sentiment_connector import node_sentiment
+        vote, detail = node_sentiment(symbol)
+        if vote is not None:
+            return vote, detail   # live signal available
+    except Exception:
+        pass  # connector missing / network error → fall through to cached DB
+
+    # 2. Cached DB fallback (news_agent-populated)
     try:
         cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)).isoformat()
         with sqlite3.connect(DB_PATH) as conn:
@@ -323,9 +340,9 @@ def node_news(symbol: str) -> tuple[int | None, str]:
                 (symbol, cutoff)
             ).fetchone()
         if not row:
-            return ABSTAIN, "No cached news (run News agent first)"
+            return ABSTAIN, "No live Reddit + no cached news"
         score, sentiment = row
-        detail = f"Sentiment={sentiment} Score={score}"
+        detail = f"Cached: Sentiment={sentiment} Score={score}"
         if score >= 30:  return VOTE_BULLISH, detail
         if score <= -30: return VOTE_BEARISH, detail
         return VOTE_NEUTRAL, detail
