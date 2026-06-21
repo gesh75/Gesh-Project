@@ -44,7 +44,13 @@ class _FrozenDateTime(_dt.datetime):
 
 
 def _base_config(**overrides) -> RiskConfig:
-    """All-pass-friendly config; override one field to trip a specific gate."""
+    """All-pass-friendly config; override one field to trip a specific gate.
+
+    paper_mode is pinned False so CASH_FLOOR / DAILY_LOSS evaluate against the
+    snapshot (live-account behavior these tests document). In PAPER mode those
+    two gates read cfg.paper_cash_usd / the paper book's realized P&L (rules
+    #32/#36), which is covered separately by test_risk_gate_paper_mode.py.
+    """
     defaults = dict(
         kill_switch_path="/tmp/__gesh_kill_does_not_exist__",
         market_open_hhmm="09:30",
@@ -56,6 +62,7 @@ def _base_config(**overrides) -> RiskConfig:
         min_cash_buffer_usd=100.0,
         max_daily_loss_pct=0.05,
         max_price_age_seconds=600,
+        paper_mode=False,
     )
     defaults.update(overrides)
     return RiskConfig(**defaults)

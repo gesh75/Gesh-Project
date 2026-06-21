@@ -54,3 +54,6 @@ android */
 
 # Runtime macro regime cache (regenerated each run)
 .macro_cache.json
+
+# sentiment_connector cwd-relative cache (Phase 5)
+.sentiment_cache.json

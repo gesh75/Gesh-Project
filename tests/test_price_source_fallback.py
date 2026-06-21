@@ -18,6 +18,16 @@ import pytest
 import price_source
 
 
+@pytest.fixture(autouse=True)
+def _clear_yf_cache():
+    """price_source carries an in-process TTL cache for period-based frames
+    (rule #42). Clear it around every test so a frame cached by one test never
+    bleeds into another's monkeypatched yfinance.download result."""
+    price_source._YF_CACHE.clear()
+    yield
+    price_source._YF_CACHE.clear()
+
+
 # ─── Fake robin_stocks.robinhood with deterministic historicals ───────────────
 
 def _fake_rows(symbol: str, n: int = 60) -> list[dict]:

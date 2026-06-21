@@ -38,6 +38,7 @@ class _ToolBlock:
     """Mimics a tool_use content block (carries parsed `.input`)."""
 
     def __init__(self, payload: dict[str, Any]) -> None:
+        self.type = "tool_use"  # _extract_tool_input() now iterates for type=="tool_use"
         self.input = payload
 
 
