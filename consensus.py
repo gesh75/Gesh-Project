@@ -120,22 +120,40 @@ def node_trend(symbol: str, close: np.ndarray | None = None, high: np.ndarray | 
         return ABSTAIN, str(e)
 
 
-def node_relative_strength(symbol: str, benchmark: str = "SPY") -> tuple[int | None, str]:
-    """1-month performance vs SPY."""
+def node_relative_strength(symbol: str, benchmark: str = "SPY",
+                           sym_close: np.ndarray | None = None,
+                           spy_close: np.ndarray | None = None) -> tuple[int | None, str]:
+    """1-month performance vs SPY.
+
+    Phase 2 (consensus convergence): accepts optional pre-fetched close arrays so a
+    fetch-once run_consensus_holding can drop the separate [symbol, SPY] 35d batch
+    (the last OHLCV node that still self-fetched). When arrays are NOT supplied it
+    self-fetches exactly as before — the default call path is unchanged, so verdicts
+    are identical until Phase 3 wires the arrays in. The array path mirrors the
+    engine's logic (last min(n,22) bars) for parity once enabled.
+    """
     try:
-        raw = price_source.yf_download([symbol, benchmark], period="35d", auto_adjust=True, progress=False)
-        if raw is None or raw.empty:
-            return ABSTAIN, "No data"
-        closes = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
-        if hasattr(closes.columns, "__iter__") and symbol in closes.columns and benchmark in closes.columns:
-            s = closes[symbol].dropna()
-            b = closes[benchmark].dropna()
+        if sym_close is not None and spy_close is not None:
+            if len(sym_close) < 5 or len(spy_close) < 5:
+                return ABSTAIN, "Too few rows"
+            n = min(len(sym_close), len(spy_close), 22)
+            s_arr, b_arr = sym_close[-n:], spy_close[-n:]
+            s_ret = (s_arr[-1] / s_arr[0] - 1) * 100
+            b_ret = (b_arr[-1] / b_arr[0] - 1) * 100
         else:
-            return ABSTAIN, "Column mismatch"
-        if len(s) < 5 or len(b) < 5:
-            return ABSTAIN, "Too few rows"
-        s_ret = (s.iloc[-1] / s.iloc[0] - 1) * 100
-        b_ret = (b.iloc[-1] / b.iloc[0] - 1) * 100
+            raw = price_source.yf_download([symbol, benchmark], period="35d", auto_adjust=True, progress=False)
+            if raw is None or raw.empty:
+                return ABSTAIN, "No data"
+            closes = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
+            if hasattr(closes.columns, "__iter__") and symbol in closes.columns and benchmark in closes.columns:
+                s = closes[symbol].dropna()
+                b = closes[benchmark].dropna()
+            else:
+                return ABSTAIN, "Column mismatch"
+            if len(s) < 5 or len(b) < 5:
+                return ABSTAIN, "Too few rows"
+            s_ret = (s.iloc[-1] / s.iloc[0] - 1) * 100
+            b_ret = (b.iloc[-1] / b.iloc[0] - 1) * 100
         rs = float(s_ret) - float(b_ret)
         detail = f"1M: {float(s_ret):.1f}% vs SPY {float(b_ret):.1f}% → RS={rs:+.1f}%"
         if rs > 3: return VOTE_BULLISH, detail
