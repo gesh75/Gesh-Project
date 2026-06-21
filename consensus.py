@@ -491,6 +491,7 @@ def run_consensus_holding(
     # Trend/Momentum/Fundamentals are re-weighted per the symbol's detected regime;
     # falls back to balanced base weights on any detection failure.
     NODE_WEIGHTS = _regime_weights(symbol)
+    regime_label = _regime_cache_get(symbol) or "DEFAULT"   # Phase 7: surface for the dashboard
 
     # Extract Kelly separately for sizing display
     kelly_vote   = votes.get("Kelly")
@@ -553,6 +554,8 @@ def run_consensus_holding(
         "active_nodes":  n,
         "votes":         votes,    # {node: +1/0/-1/None}
         "details":       details,  # {node: reasoning string}
+        "regime":        regime_label,        # Phase 7: detected regime driving the weights
+        "node_weights":  NODE_WEIGHTS,        # Phase 7: regime-adjusted weights per node
         "kelly_vote":    kelly_vote,
         "kelly_detail":  kelly_detail,
         "as_of":         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
