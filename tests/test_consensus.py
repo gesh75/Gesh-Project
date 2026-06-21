@@ -82,6 +82,13 @@ def _offline_consensus(monkeypatch):
     # ABSTAIN so the deterministic 8-node model (sum 9.0) the tests assert holds.
     import macro_connector
     monkeypatch.setattr(macro_connector, "node_macro", lambda *a, **k: (consensus.ABSTAIN, "macro-stub"))
+    # Phase 4: NODE_WEIGHTS is now regime-conditional (calls detect_regimes). Pin
+    # it to "no regime" so these tally tests use the balanced BASE weights (sum 9.0)
+    # deterministically, and clear the 30-min regime cache between tests.
+    import regime
+    monkeypatch.setattr(regime, "detect_regimes", lambda syms: {"regimes": []})
+    consensus._REGIME_LABEL_CACHE.clear()
+    consensus._REGIME_CACHE_STAMP.clear()
 
 
 def _set_votes(monkeypatch, votes: dict):
