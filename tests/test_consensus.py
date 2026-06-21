@@ -117,9 +117,10 @@ def test_strong_buy_all_bullish(monkeypatch):
     assert res["raw_score"] == pytest.approx(1.0)
     assert res["verdict"] == "STRONG BUY"
     assert res["verdict_color"] == "green"
-    assert res["active_nodes"] == 8     # all 8 weighted nodes voted
-    # confidence = active / len(NODE_WEIGHTS=8) * 100 = 100.0
-    assert res["confidence"] == pytest.approx(100.0)
+    assert res["active_nodes"] == 8     # the 8 controlled nodes voted (Macro pinned ABSTAIN)
+    # confidence = round(active / len(NODE_WEIGHTS) * 100, 0). NODE_WEIGHTS has 9
+    # entries (the 8 controlled nodes + Macro), so round(8/9*100) = 89.0.
+    assert res["confidence"] == pytest.approx(89.0)
 
 
 def test_buy_band(monkeypatch):
@@ -188,12 +189,12 @@ def test_vote_tally_counts(monkeypatch):
     assert res["bullish"] == 2
     assert res["bearish"] == 1
     assert res["neutral"] == 3          # Momentum, Fundamentals, ECG
-    assert res["abstains"] == 2         # Analyst, News
-    assert res["active_nodes"] == 6     # 8 weighted nodes - 2 abstains
+    assert res["abstains"] == 3         # Analyst, News + Macro (pinned ABSTAIN)
+    assert res["active_nodes"] == 6     # 8 controlled nodes - 2 abstains (Macro excluded)
     # Kelly + FFT are reported but excluded from the directional tally.
     assert "Kelly" in res["votes"]
     assert "FFT_Cycle" in res["votes"]
-    assert res["total_nodes"] == 10
+    assert res["total_nodes"] == 11     # 8 directional + Kelly + FFT + Macro
 
 
 def test_kelly_and_fft_excluded_from_score(monkeypatch):
