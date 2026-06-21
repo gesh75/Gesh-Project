@@ -54,6 +54,75 @@ def _get_ticker_info(symbol: str) -> dict:
     return info
 
 
+# ─── Regime-conditional NODE_WEIGHTS (Phase 4 — ported from the engine) ───────
+# Backtest-validated across 6 assets / 24 months: the ADX/Trend filter is the edge
+# in breakouts (HOOD pattern), RSI/Momentum dominates fast trends (NVDA pattern),
+# and Fundamentals matter more in ranging markets. Cached 30 min per symbol so
+# detect_regimes() isn't re-run on every consensus call.
+_REGIME_LABEL_CACHE: dict[str, str] = {}
+_REGIME_CACHE_STAMP: dict[str, float] = {}
+_REGIME_CACHE_TTL_S = 30 * 60
+
+_BASE_WEIGHTS = {
+    "Rel.Strength":  2.0,
+    "Trend":         2.0,
+    "Volume":        1.5,
+    "Momentum":      1.5,
+    "Fundamentals":  0.75,
+    "Macro":         0.75,
+    "ECG":           0.5,
+    "Analyst":       0.5,
+    "News":          0.25,
+    # Kelly: sizing output, not in directional vote
+    # FFT_Cycle: removed from vote — spurious in non-stationary series
+}
+
+
+def _regime_cache_get(sym: str) -> str | None:
+    stamp = _REGIME_CACHE_STAMP.get(sym)
+    if stamp is None or (_time.time() - stamp) > _REGIME_CACHE_TTL_S:
+        return None
+    return _REGIME_LABEL_CACHE.get(sym)
+
+
+def _regime_cache_put(sym: str, label: str) -> None:
+    _REGIME_LABEL_CACHE[sym] = label
+    _REGIME_CACHE_STAMP[sym] = _time.time()
+
+
+def _regime_weights(sym: str) -> dict:
+    """Return regime-adjusted NODE_WEIGHTS for sym.
+
+    Calls detect_regimes() (single-symbol), cached 30 min. On ANY failure or when
+    no regime is detected, falls back to the default balanced weights so consensus
+    never crashes. Mirrors the engine's validated profiles exactly.
+    """
+    base = dict(_BASE_WEIGHTS)
+    try:
+        regime_label = _regime_cache_get(sym)
+        if regime_label is None:
+            from regime import detect_regimes
+            result = detect_regimes([sym])
+            regimes = result.get("regimes", [])
+            if not regimes:
+                return base
+            regime_label = regimes[0].get("regime", "")
+            _regime_cache_put(sym, regime_label)
+
+        if regime_label == "BREAKOUT-READY":
+            base["Trend"] = 2.5      # trend filter is the primary edge
+            base["Momentum"] = 1.0   # RSI exits too early in breakouts
+        elif regime_label in ("TRENDING", "MOMENTUM-HIGH"):
+            base["Trend"] = 1.0      # ADX filter adds noise on fast trends
+            base["Momentum"] = 2.5   # RSI dip entries are the real edge
+        elif regime_label in ("MOMENTUM-LOW", "RANGING"):
+            base["Momentum"] = 1.0
+            base["Fundamentals"] = 1.25  # quality matters more when ranging
+    except Exception:
+        pass  # import/detection failure → balanced base
+    return base
+
+
 # ─── Node implementations ─────────────────────────────────────────────────────
 
 def node_momentum(symbol: str, close: np.ndarray | None = None) -> tuple[int | None, str]:
@@ -401,20 +470,10 @@ def run_consensus_holding(
     votes   = {k: v[0] for k, v in nodes.items()}
     details = {k: v[1] for k, v in nodes.items()}
 
-    # Weighted tally — same weights as trading engine for consistency
-    NODE_WEIGHTS = {
-        "Rel.Strength":  2.0,
-        "Trend":         2.0,
-        "Volume":        1.5,
-        "Momentum":      1.5,
-        "Fundamentals":  0.75,
-        "ECG":           0.5,
-        "Analyst":       0.5,
-        "News":          0.25,
-        "Macro":         0.75,
-        # Kelly: sizing output, not in directional vote
-        # FFT_Cycle: removed from vote — spurious in non-stationary series
-    }
+    # Weighted tally — regime-conditional NODE_WEIGHTS (Phase 4, engine parity).
+    # Trend/Momentum/Fundamentals are re-weighted per the symbol's detected regime;
+    # falls back to balanced base weights on any detection failure.
+    NODE_WEIGHTS = _regime_weights(symbol)
 
     # Extract Kelly separately for sizing display
     kelly_vote   = votes.get("Kelly")
