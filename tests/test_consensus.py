@@ -67,11 +67,21 @@ def _offline_consensus(monkeypatch):
     def _no_download(*_a, **_k):
         raise RuntimeError("offline: yf.download blocked in tests")
 
+    # Block BOTH fetch paths: the cache build uses price_source.yf_download, and
+    # leaving it live would also trip the Phase-3 SPY prefetch. Empty cache → the
+    # documented graceful-degradation path (c=None, returns=None).
+    monkeypatch.setattr(consensus.price_source, "yf_download", _no_download)
     monkeypatch.setattr(consensus.yf, "download", _no_download)
     # Kelly + FFT are excluded from the vote, but keep them harmless + offline.
     monkeypatch.setattr(consensus, "node_kelly", lambda *a, **k: (consensus.VOTE_NEUTRAL, "kelly"))
     import fft_cycles
     monkeypatch.setattr(fft_cycles, "node_fft_cycle", lambda *a, **k: (0, "fft"))
+    # Macro is the 9th weighted node (0.75) but it self-fetches FRED/yfinance —
+    # leaving it live makes these tally tests network-dependent and flaky (it was
+    # the cause of the long-standing strong_buy/vote_tally failures). Pin it to
+    # ABSTAIN so the deterministic 8-node model (sum 9.0) the tests assert holds.
+    import macro_connector
+    monkeypatch.setattr(macro_connector, "node_macro", lambda *a, **k: (consensus.ABSTAIN, "macro-stub"))
 
 
 def _set_votes(monkeypatch, votes: dict):

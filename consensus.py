@@ -363,7 +363,21 @@ def run_consensus_holding(
 
     nodes["Momentum"]       = node_momentum(symbol, close=c[-90:] if c is not None and len(c) > 0 else None)
     nodes["Trend"]          = node_trend(symbol, close=c[-60:] if c is not None and len(c) > 0 else None, high=h[-60:] if h is not None and len(h) > 0 else None, low=l[-60:] if l is not None and len(l) > 0 else None)
-    nodes["Rel.Strength"]   = node_relative_strength(symbol)
+    # Phase 3 wiring: feed Rel.Strength the already-fetched sym close + a
+    # once-per-process SPY close (gesh_core.market_fetch caches SPY 30min) so it
+    # stops self-fetching its own [symbol, SPY] batch — the last redundant fetch.
+    # Aligns to the engine's validated 22-bar RS window. Falls back to self-fetch
+    # if the prefetch is empty or SPY is unavailable.
+    try:
+        from gesh_core.market_fetch import fetch_spy_close as _fetch_spy_close
+        _spy_close = _fetch_spy_close() if c is not None and len(c) > 0 else None
+    except Exception:
+        _spy_close = None
+    nodes["Rel.Strength"]   = node_relative_strength(
+        symbol,
+        sym_close=c if c is not None and len(c) > 0 else None,
+        spy_close=_spy_close,
+    )
     nodes["Fundamentals"]   = node_fundamentals(symbol)
     nodes["Analyst"]        = node_analyst(symbol)
     nodes["News"]           = node_news(symbol)
