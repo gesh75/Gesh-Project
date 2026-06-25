@@ -162,7 +162,14 @@ try:
         import importlib.util
         _spec = importlib.util.spec_from_file_location('gesh_dashboard_db', str(BASE / 'db.py'))
         _gdb = importlib.util.module_from_spec(_spec)
+        sys.modules['gesh_dashboard_db'] = _gdb
         _spec.loader.exec_module(_gdb)
+        # db.py is a self-replacing shim (gesh-core Phase 3.6): on exec it runs
+        # `sys.modules[__name__] = gesh_core.db`, so the real implementation
+        # (with log_analysis / log_equity_snapshot) is whatever is now
+        # registered under this name. The local _gdb still points at the empty
+        # pre-swap shim object, so re-fetch it from sys.modules.
+        _gdb = sys.modules['gesh_dashboard_db']
         try:
             from ai_analyzer import MODEL as _MODEL
         except Exception:
