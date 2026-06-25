@@ -71,8 +71,16 @@ echo ""
 echo "### FULL 10:30 CHAIN — $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
 # ── 1/5 live snapshot (fatal on failure or staleness — never analyze stale data)
-step "1/5 fetch_live_snapshot"
-"$PY" fetch_live_snapshot.py || { echo "FATAL: snapshot fetch failed"; exit 1; }
+# MCP-first: the robin_stocks pickle login dies on every RH password change, so the
+# primary path is now the robinhood-trading MCP (fetch_snapshot_mcp.sh). The legacy
+# pickle fetch remains as fallback. Either way the staleness gate below validates it.
+step "1/5 fetch snapshot (MCP-first)"
+if GESH_PY="$PY" /bin/bash "$GP/fetch_snapshot_mcp.sh"; then
+    echo "snapshot source: robinhood_mcp"
+else
+    echo "MCP snapshot path failed — falling back to legacy robin_stocks pickle fetch"
+    "$PY" fetch_live_snapshot.py || { echo "FATAL: snapshot fetch failed (MCP + legacy both failed)"; exit 1; }
+fi
 "$PY" - <<'PYEOF' || { echo "FATAL: snapshot stale (>30 min) — aborting"; exit 1; }
 import json, sys
 from datetime import datetime, timezone

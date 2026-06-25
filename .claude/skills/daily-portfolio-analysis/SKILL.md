@@ -36,7 +36,7 @@ What each step produces:
 
 | Step | Script | Output |
 |---|---|---|
-| 1/5 | fetch_live_snapshot.py | `live_portfolio_snapshot.json` (live Robinhood) |
+| 1/5 | **fetch_snapshot_mcp.sh** → build_snapshot_from_mcp.py | `live_portfolio_snapshot.json` (live Robinhood **via MCP** — canonical since 2026-06-25). Legacy `fetch_live_snapshot.py` (robin_stocks pickle) is the fallback only. |
 | 2/5 | run_engines2.py | `engine_results.json` — regime, consensus, Kelly, MC, vols, alpha, tax, explainability, yield, crypto |
 | 3/5 | run_ai2.py | `ai_result` + radar into engine_results.json, `analysis_runs` + `equity_snapshots` DB rows |
 | 4/5 | run_paper_gate2.py | `action_plan`, `gate_results`, `paper_session`, `trade_stats` |
@@ -74,6 +74,12 @@ INFORMATIONAL PURPOSES ONLY".
 - Cash = `equity_summary.deployable` (settled, leverage-capped). NEVER
   `account["cash"]` or leveraged `buying_power`.
 - ECG node ABSTAIN (import error) and QQQ/EEM analyst ABSTAIN (ETFs) — expected.
-- Robinhood fetch fails → chain aborts at 1/5 by design; check
-  `/tmp/fetch_live_snapshot.log`, report, stop.
+- Snapshot is **MCP-sourced** (canonical since 2026-06-25): step 1/5 runs
+  `fetch_snapshot_mcp.sh` (a `claude -p` that fetches RH acct 557370533 via the
+  `robinhood-trading` MCP → `/tmp/gesh_mcp_raw.json`) then `build_snapshot_from_mcp.py`
+  (deterministic money-math). The old `fetch_live_snapshot.py` (robin_stocks pickle login)
+  is **fallback only** — it dies on every RH password change. If step 1 fails, check
+  `/tmp/gesh_mcp_fetch.log` first; the MCP is OAuth, so a recent password change means the
+  token expired → re-auth via `/mcp` → robinhood-trading. Both paths failing → chain aborts
+  at 1/5 by design; report, stop.
 - Kelly keys: `optimal_pct`, `delta_usd`.
