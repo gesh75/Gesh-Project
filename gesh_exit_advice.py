@@ -37,10 +37,13 @@ def exit_advice(
 ) -> list[dict[str, object]]:
     """Per-holding advisory exit bands. Names without a Kelly tier fall back to
     MEDIUM (the base bands), so every holding is covered."""
+    # Normalize Kelly keys once so lookup and the tracked-flag agree even if the
+    # engine emits a lower-case symbol key.
+    kelly_by_symbol = {str(k).upper(): v for k, v in kelly.items()}
     out: list[dict[str, object]] = []
     for sym in holdings:
         sym = str(sym).upper()
-        row = kelly.get(sym, {}) or {}
+        row = kelly_by_symbol.get(sym, {}) or {}
         tier = str(row.get("volatility_tier", "MEDIUM")).upper()
         bands = exit_bands(tier, base_tp=base_tp, base_sl=base_sl)
         trail_pct = _clamp(round(base_trail * TRAIL_MULT.get(tier, 1.0), 2), TRAIL_MIN, TRAIL_MAX)
@@ -50,7 +53,7 @@ def exit_advice(
             "take_profit_pct": bands["take_profit_pct"],
             "stop_loss_pct": bands["stop_loss_pct"],
             "trailing_pct": trail_pct,
-            "tracked_by_kelly": sym in {k.upper() for k in kelly},
+            "tracked_by_kelly": sym in kelly_by_symbol,
         })
     return out
 

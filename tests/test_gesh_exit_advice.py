@@ -32,6 +32,15 @@ def test_every_holding_covered():
     assert {r["symbol"] for r in table} == set(holdings)
 
 
+def test_lowercase_kelly_key_still_tracked_with_real_bands():
+    # A lower-case engine key must not show tracked=True while falling back to MEDIUM.
+    kelly = {"mu": {"volatility_tier": "HIGH"}}
+    row = exit_advice(["MU"], kelly)[0]
+    assert row["tracked_by_kelly"] is True
+    assert row["volatility_tier"] == "HIGH"
+    assert row["take_profit_pct"] == 12.0
+
+
 def test_symbols_uppercased():
     table = exit_advice(["nvda"], KELLY)
     assert table[0]["symbol"] == "NVDA"

@@ -77,6 +77,13 @@ def test_trailing_floored_at_fixed_stop_never_loosens():
     assert r["stop_price"] >= 92.5
 
 
+def test_trailing_activates_at_exact_tp_boundary():
+    # entry=100, HIGH TP=12% -> trigger = 100*1.12 = 112.00000000000001 (float wart).
+    # A peak exactly at the band must ARM, not stay inactive.
+    r = trailing_stop(entry=100.0, peak=112.0, volatility_tier="HIGH")
+    assert r["active"] is True
+
+
 def test_trailing_high_tier_wider_trail_than_low():
     hi = trailing_stop(entry=100.0, peak=200.0, volatility_tier="HIGH")
     lo = trailing_stop(entry=100.0, peak=200.0, volatility_tier="LOW")

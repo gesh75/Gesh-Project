@@ -107,7 +107,9 @@ def trailing_stop(
     tp_trigger_price = entry_f * (1 + tp_pct / 100)
     fixed_stop_price = round(entry_f * (1 - fixed_stop_pct / 100), 4)
 
-    if peak_f < tp_trigger_price:
+    # Compare rounded money values so a float-representation wart (e.g.
+    # 100*1.12 = 112.00000000000001) can't keep an at-the-band peak inactive.
+    if round(peak_f, 6) < round(tp_trigger_price, 6):
         return {
             "active": False,
             "stop_price": fixed_stop_price,
