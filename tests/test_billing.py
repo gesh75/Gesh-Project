@@ -76,6 +76,20 @@ def test_missing_signature_or_secret_fails(monkeypatch):
     assert billing.verify_signature(b'{}', _sign(b'{}')) is False
 
 
+def test_malformed_signature_fails_closed_not_500():
+    """Non-hex / non-ASCII / wrong-length signatures must fail CLOSED (False → 401), not
+    raise TypeError out of compare_digest (which would become a 500)."""
+    raw = b'{"a":1}'
+    assert billing.verify_signature(raw, "é") is False                 # non-ASCII
+    assert billing.verify_signature(raw, "zz" * 32) is False            # 64 chars, non-hex
+    assert billing.verify_signature(raw, "abc123") is False             # too short
+    assert billing.verify_signature(raw, "a" * 65) is False             # too long
+    # and the full webhook turns it into a 401-class PermissionError, never a 500
+    payload = _payload("subscription_created")
+    with pytest.raises(PermissionError):
+        billing.handle_webhook(json.dumps(payload).encode(), "é", payload)
+
+
 # ── event parsing + tier mapping ──────────────────────────────────────────────
 
 def test_parse_event_extracts_fields_and_tier_by_name():
@@ -457,3 +471,29 @@ def test_sweep_skips_inactive_and_untiered_users():
     au.create_user("pwuser@example.com", "pw")                      # no tier → not a subscriber
     owed = {u["email"] for u in au.list_owed_onboarding()}
     assert owed == {"active@example.com"}
+
+
+# ── multi-worker safety: one account per subscription id ──────────────────────
+
+def test_billing_sub_id_is_unique_across_accounts():
+    """The DB itself must reject two accounts sharing one subscription id (the race that
+    produced duplicate active accounts under concurrent created/updated events)."""
+    import sqlite3
+    au.create_magic_link_user("a@example.com", tier="trader")
+    au.set_billing("a@example.com", sub_id="sub_dup")
+    au.create_magic_link_user("b@example.com", tier="trader")
+    with pytest.raises(sqlite3.IntegrityError):
+        au.set_billing("b@example.com", sub_id="sub_dup")     # second row, same sub → rejected
+    # NULL billing_sub_id is exempt (partial index) — many pre-payment users can coexist
+    au.create_magic_link_user("c@example.com")               # no tier, no sub_id
+    au.create_magic_link_user("d@example.com")
+    assert au.get_user("c@example.com") and au.get_user("d@example.com")
+
+
+# ── at-rest hardening: gesh_auth.db is owner-only ─────────────────────────────
+
+def test_auth_db_is_chmod_600():
+    import stat
+    au.init_auth_db()
+    mode = stat.S_IMODE(au.AUTH_DB_PATH.stat().st_mode)
+    assert mode == 0o600, f"expected 0600, got {oct(mode)}"

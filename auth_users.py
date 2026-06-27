@@ -27,6 +27,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -195,10 +196,34 @@ def _migrate(con) -> None:
     for col, decl in _BILLING_COLUMNS.items():
         if col not in have:
             con.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
+    # One account per subscription (multi-worker safety): a partial UNIQUE index makes the DB
+    # itself reject a second row for the same billing_sub_id, so a race between
+    # subscription_created / subscription_updated can't create two accounts on one sub.
+    # Best-effort: if a legacy DB already holds duplicate sub ids the index won't build —
+    # log and continue rather than break every connect.
+    try:
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_users_billing_sub_id "
+            "ON users(billing_sub_id) WHERE billing_sub_id IS NOT NULL"
+        )
+    except sqlite3.IntegrityError as e:
+        logging.getLogger(__name__).warning(
+            "auth_users: could not build unique billing_sub_id index (dupes exist): %s", e)
     # Prune spent magic tokens older than a day — they are dead long before that (15-min
     # TTL), so this just stops the table growing unbounded (M3).
     cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     con.execute("DELETE FROM used_magic_tokens WHERE used_at < ?", (cutoff,))
+
+
+def _harden_db_perms() -> None:
+    """Restrict gesh_auth.db to owner-only (0600). It holds emails, password hashes, and
+    billing identifiers — world/group-readable (0644) is needless exposure. Best-effort:
+    a managed/FUSE mount may reject chmod, which is non-fatal."""
+    try:
+        if AUTH_DB_PATH.exists():
+            os.chmod(AUTH_DB_PATH, 0o600)
+    except OSError:
+        pass
 
 
 @contextmanager
@@ -208,6 +233,7 @@ def _conn():
     try:
         con.executescript(_DDL)
         _migrate(con)
+        _harden_db_perms()
         yield con
         con.commit()
     finally:

@@ -235,3 +235,28 @@ billing.py` clean; module import smoke clean; LaunchAgent `com.gesh.onboarding-s
 - L3: invoice-payload `user_email` presence is already guarded in `handle_webhook`.
 - Dead-letter alert can fire up to ~4× per stuck user (once per failed LS retry) plus the
   sweep — intentionally chatty in exchange for never silently losing a paying user.
+
+---
+
+## 10. Round-6 hardening (applied 2026-06-27 — re-verify)
+
+From Codex's APPROVE-WITH-COMMENTS pass. Two MEDIUM + one LOW fixed; one LOW accepted.
+
+| # | Finding | Resolution | Test |
+|---|---------|-----------|------|
+| R6-1 MED | Malformed signature → `compare_digest` TypeError → HTTP 500 | `verify_signature` validates exactly 64 lowercase-hex chars BEFORE `compare_digest`; malformed (non-ASCII / non-hex / wrong length) fails closed → 401, never 500. | `test_malformed_signature_fails_closed_not_500` |
+| R6-2 MED | `billing_sub_id` had no unique constraint → concurrent created/updated could make two accounts on one sub | Partial UNIQUE index `ux_users_billing_sub_id ON users(billing_sub_id) WHERE billing_sub_id IS NOT NULL` — the DB rejects a duplicate; the race-loser gets a retry and resolves idempotently via the sub-id lookup. | `test_billing_sub_id_is_unique_across_accounts` |
+| R6-4 LOW | `gesh_auth.db` was mode 0644 (emails, password hashes, billing ids) | `_harden_db_perms()` chmods the DB to **0600** on connect (best-effort; managed/FUSE mounts may reject, non-fatal). | `test_auth_db_is_chmod_600` |
+
+**Accepted (R6-3 LOW):** the onboarding sweep is at-least-once — two *concurrent* sweeps could
+double-send. A single `com.gesh.onboarding-sweep` LaunchAgent (15-min, serial) is the only
+runner, so exposure is nil today. A true fix (atomic send-claim) trades away the
+"stamp-only-on-success" idempotency and is deferred with the multi-worker upgrade.
+
+**Note on R6-2 + multi-worker:** the unique index is the DB-level guard. A fully transactional
+subscription upsert (single statement) is the clean follow-up before any multi-worker deploy;
+today's single-process server doesn't need it.
+
+**Verification after round-6:** `pytest -q` → **233 passed** (230 + 3 new); `ruff check
+billing.py` clean (two pre-existing E501s remain in `auth_users.py` — `hash_password`,
+`set_active`); `py_compile` ok.

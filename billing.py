@@ -76,10 +76,16 @@ def verify_signature(raw_body: bytes, signature: str | None) -> bool:
     secret = _webhook_secret()
     if not secret or not signature:
         return False
-    expected = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
     # Normalize to lowercase hex: LS sends lowercase today, but case-folding removes a latent
-    # silent-outage risk if that ever changes (still constant-time-compared on the digest).
-    return hmac.compare_digest(expected, signature.strip().lower())
+    # silent-outage risk if that ever changes.
+    sig = signature.strip().lower()
+    # Validate shape BEFORE compare_digest: it raises TypeError on non-ASCII input, which
+    # would surface as HTTP 500 instead of a clean 401 reject. A valid HMAC-SHA256 hex digest
+    # is exactly 64 hex chars — anything else is malformed → fail closed.
+    if len(sig) != 64 or any(c not in "0123456789abcdef" for c in sig):
+        return False
+    expected = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
 
 
 # ── tier mapping ─────────────────────────────────────────────────────────────────
