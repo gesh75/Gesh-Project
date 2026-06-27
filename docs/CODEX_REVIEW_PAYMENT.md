@@ -208,3 +208,30 @@ billing.py` clean; `py_compile` ok.
 LS-retry + lease-reclaim, now correct end-to-end (503 keeps LS retrying until completion or
 lease lapse). A multi-worker deployment is safe via the owner-fenced CAS; a true distributed
 queue remains the eventual production upgrade.
+
+---
+
+## 9. Round-5 reliability (applied 2026-06-26 — re-verify)
+
+Not Codex findings — proactive reliability hardening from an EXA best-practice pass
+(LS/Stripe webhook patterns). All MEDIUM/LOW; no security change.
+
+| # | Gap | Resolution | Test |
+|---|-----|-----------|------|
+| M1 | Onboarding delivery depended solely on LS's ~4 webhook retries; a paid user whose inline send kept failing could end up permanently stuck | `billing.resend_owed_onboarding()` async safety net + `auth_users.list_owed_onboarding()` (active + tiered + `welcome_emailed_at IS NULL`); idempotent re-send, stamps only on success. Scheduled every 15 min via `sweep_onboarding.sh` → `com.gesh.onboarding-sweep` LaunchAgent. | `test_resend_owed_onboarding_recovers_stuck_user`, `test_sweep_skips_inactive_and_untiered_users` |
+| M2 | A stuck (paid-but-un-onboarded) user was silent — no operator signal | `billing._alert_dead_letter()` (best-effort Telegram via existing channel, never raises) wired into the failed-onboarding webhook path and the sweep. | `test_failed_email_triggers_dead_letter_alert`, `test_alert_dead_letter_never_raises` |
+| L2 | Signature hex-case fragility (silent-outage risk if LS ever sends uppercase) | `verify_signature` case-folds the header before the constant-time digest compare. | `test_signature_accepts_uppercase_hex` |
+
+**CLI:** `python3 billing.py sweep-onboarding` (also runnable ad-hoc).
+**Schema:** none (reuses `welcome_emailed_at`).
+
+**Verification after round-5:** `pytest -q` → **230 passed** (225 + 5 net new); `ruff check
+billing.py` clean; module import smoke clean; LaunchAgent `com.gesh.onboarding-sweep` loaded
+(`StartInterval 900`).
+
+**Accepted residuals (verify-later, not blocking — single-tenant alpha):**
+- L1: no signed-timestamp replay window — LS sends no signed timestamp; mitigated by HTTPS +
+  raw-body HMAC + outbox idempotency.
+- L3: invoice-payload `user_email` presence is already guarded in `handle_webhook`.
+- Dead-letter alert can fire up to ~4× per stuck user (once per failed LS retry) plus the
+  sweep — intentionally chatty in exchange for never silently losing a paying user.
