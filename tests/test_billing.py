@@ -137,9 +137,37 @@ def test_cancelled_keeps_access_until_expiry():
 def test_magic_token_is_single_use():
     """A magic-link token works exactly once; replay (leaked URL) is rejected."""
     au.create_magic_link_user("buyer@example.com", tier="trader")
-    token = au.issue_token("buyer@example.com", ttl=900)
+    token = au.issue_token("buyer@example.com", ttl=900, typ="magic")
     assert au.consume_magic_token(token) == "buyer@example.com"   # first use
     assert au.consume_magic_token(token) is None                  # replay rejected
+
+
+# ── H1: magic and session tokens are NOT interchangeable ──────────────────────
+
+def test_magic_token_rejected_as_session():
+    """A leaked magic URL token must NOT authenticate as a session cookie (H1)."""
+    au.create_magic_link_user("buyer@example.com", tier="trader")
+    magic = au.issue_token("buyer@example.com", ttl=900, typ="magic")
+    assert au.authenticate_session(magic) is None        # wrong purpose → rejected
+    assert au.verify_token(magic, expected_typ="session") is None
+
+
+def test_session_token_rejected_as_magic():
+    """A session cookie can't be spent as a one-time magic token (H1)."""
+    au.create_magic_link_user("buyer@example.com", tier="trader")
+    session = au.issue_token("buyer@example.com", typ="session")
+    assert au.consume_magic_token(session) is None
+
+
+def test_legacy_typeless_token_treated_as_session():
+    """Back-compat: cookies issued before the typ claim (no typ) still authenticate."""
+    import json as _json, time as _time, hashlib as _h, hmac as _hm
+    payload = au._b64u(_json.dumps(
+        {"sub": "buyer@example.com", "exp": int(_time.time()) + 900}).encode())
+    sig = au._b64u(_hm.new(au._secret(), payload.encode(), _h.sha256).digest())
+    legacy = f"{payload}.{sig}"
+    au.create_magic_link_user("buyer@example.com", tier="trader")
+    assert au.authenticate_session(legacy) == "buyer@example.com"
 
 
 def test_consume_rejects_invalid_token():
@@ -159,3 +187,80 @@ def test_missing_email_raises_value_error():
     raw = json.dumps(payload).encode()
     with pytest.raises(ValueError):
         billing.handle_webhook(raw, _sign(raw), payload)
+
+
+# ── H4: a failed payment must NOT revoke during dunning ───────────────────────
+
+def test_payment_failed_keeps_access_marks_past_due():
+    _post("subscription_created")
+    res = _post("subscription_payment_failed", status="past_due", sub_id="sub_1")
+    assert res["action"] == "mark" and res["status"] == "past_due"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1                      # still active while LS retries
+    assert u["billing_status"] == "past_due"
+
+
+def test_updated_cancelled_keeps_access():
+    _post("subscription_created")
+    res = _post("subscription_updated", status="cancelled")
+    assert res["action"] == "mark"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
+# ── H3: unknown / un-allowlisted product never grants access ──────────────────
+
+def test_unknown_variant_is_not_provisioned():
+    res = _post("order_created", variant_name="Sticker pack", status="paid")
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    assert au.get_user("buyer@example.com") is None
+
+
+# ── H2: subscription identity integrity + stale-sub revoke guard ──────────────
+
+def test_payment_event_does_not_corrupt_sub_id():
+    """An invoice/payment event carries data.id=invoice; the real sub id is in
+    attributes.subscription_id — billing_sub_id must track THAT, not the invoice id."""
+    _post("subscription_created", sub_id="sub_1")           # establishes sub_1
+    payload = {
+        "meta": {"event_name": "subscription_payment_success"},
+        "data": {"id": "invoice-8", "type": "subscription-invoices",
+                 "attributes": {"user_email": "buyer@example.com", "status": "paid",
+                                "subscription_id": "sub_1", "variant_name": "Trader plan",
+                                "product_name": "GESH"}},
+    }
+    raw = json.dumps(payload).encode()
+    billing.handle_webhook(raw, _sign(raw), payload)
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_1"   # not invoice-8
+
+
+def test_stale_subscription_expiry_does_not_disable_newer_sub():
+    """An old subscription's expired event must not revoke a newer active subscription."""
+    _post("subscription_created", sub_id="sub_OLD")
+    _post("subscription_created", sub_id="sub_NEW")          # user now on sub_NEW
+    res = _post("subscription_expired", status="expired", sub_id="sub_OLD")
+    assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
+# ── H5: onboarding email is reliably retryable ────────────────────────────────
+
+def test_failed_onboarding_email_is_not_deduped(monkeypatch):
+    """If the welcome email can't be sent, the delivery must NOT be acked as done — the
+    LS retry has to be able to reprocess and re-send (H5)."""
+    monkeypatch.setattr("billing.email_sender.send_magic_link",
+                        lambda *a, **k: False)               # email outage
+    first = _post("subscription_created")
+    assert first["emailed"] is False
+    # retry (identical body) is NOT swallowed as duplicate — it reprocesses
+    second = _post("subscription_created")
+    assert second["action"] == "provision"
+
+
+def test_request_link_only_emails_active_user(monkeypatch):
+    sent: list = []
+    monkeypatch.setattr("auth_users.issue_magic_token", au.issue_magic_token)
+    au.create_magic_link_user("buyer@example.com", tier="trader")
+    assert au.issue_magic_token("buyer@example.com") is not None
+    au.set_active("buyer@example.com", False)
+    assert au.issue_magic_token("buyer@example.com") is None      # inactive → no link
+    assert au.issue_magic_token("nobody@example.com") is None     # unknown → no link

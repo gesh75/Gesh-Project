@@ -33,7 +33,7 @@ import sqlite3
 import sys
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +44,7 @@ _PBKDF2_ROUNDS = 200_000
 
 # Paths reachable without a session (login flow, public proof/legal pages, health).
 PUBLIC_PREFIXES = (
-    "/login", "/auth/login", "/auth/logout", "/auth/magic", "/static/",
+    "/login", "/auth/login", "/auth/logout", "/auth/magic", "/auth/request-link", "/static/",
     "/track-record", "/terms", "/disclaimer", "/healthz", "/favicon.ico",
     # Payment surface: pricing page + provider webhook + post-checkout landing must be
     # reachable WITHOUT a session (the webhook is signature-gated, not cookie-gated).
@@ -119,15 +119,26 @@ def _b64u_dec(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def issue_token(email: str, ttl: int | None = None) -> str:
+def issue_token(email: str, ttl: int | None = None, typ: str = "session") -> str:
+    """Mint an HMAC-signed token. `typ` ('session' | 'magic') is BOUND into the signed
+    payload so the two purposes are NOT interchangeable: a short-TTL magic-link token can
+    never be replayed as a long-lived session cookie (H1). A random `jti` makes each token
+    unique so it can be individually tracked/spent."""
     exp = int(time.time()) + (TOKEN_TTL_SECONDS if ttl is None else ttl)
-    payload = _b64u(json.dumps({"sub": email, "exp": exp}, separators=(",", ":")).encode())
+    payload = _b64u(json.dumps(
+        {"sub": email, "exp": exp, "typ": typ, "jti": secrets.token_urlsafe(8)},
+        separators=(",", ":"),
+    ).encode())
     sig = _b64u(hmac.new(_secret(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
 
 
-def verify_token(token: str | None) -> str | None:
-    """Return the subject (email) for a valid, unexpired token; else None."""
+def verify_token(token: str | None, expected_typ: str | None = "session") -> str | None:
+    """Return the subject (email) for a valid, unexpired token; else None.
+
+    `expected_typ` enforces the token's purpose claim. Tokens minted before the `typ`
+    claim existed have no `typ` and are treated as 'session' (back-compat grace for
+    cookies issued before this change). Pass expected_typ=None to skip the check."""
     if not token:
         return None
     try:
@@ -138,6 +149,8 @@ def verify_token(token: str | None) -> str | None:
         data = json.loads(_b64u_dec(payload_b64))
         if int(data.get("exp", 0)) < int(time.time()):
             return None
+        if expected_typ is not None and data.get("typ", "session") != expected_typ:
+            return None        # wrong purpose (e.g. a magic token presented as a session)
         return data.get("sub")
     except Exception:
         return None
@@ -169,6 +182,8 @@ _BILLING_COLUMNS = {
     "billing_customer_id": "TEXT",   # provider customer id (Lemon Squeezy)
     "billing_sub_id":      "TEXT",   # provider subscription id
     "billing_status":      "TEXT",   # 'active' | 'past_due' | 'cancelled'
+    "welcome_emailed_at":  "TEXT",   # set when the magic-link onboarding email is delivered;
+                                     # NULL = still owed a link (drives reliable retry, H5)
 }
 
 
@@ -178,6 +193,10 @@ def _migrate(con) -> None:
     for col, decl in _BILLING_COLUMNS.items():
         if col not in have:
             con.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
+    # Prune spent magic tokens older than a day — they are dead long before that (15-min
+    # TTL), so this just stops the table growing unbounded (M3).
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    con.execute("DELETE FROM used_magic_tokens WHERE used_at < ?", (cutoff,))
 
 
 @contextmanager
@@ -279,6 +298,25 @@ def create_magic_link_user(email: str, tier: str | None = None) -> bool:
     return True
 
 
+def set_welcome_emailed(email: str, ts: str | None) -> None:
+    """Stamp (or clear with None) when the onboarding magic-link email was delivered."""
+    with _conn() as con:
+        con.execute("UPDATE users SET welcome_emailed_at=? WHERE email=?", (ts, _norm(email)))
+
+
+def issue_magic_token(email: str, ttl: int = 900) -> str | None:
+    """Mint a fresh single-use magic token for an ACTIVE user, else None.
+
+    Recovery path (H5): lets a passwordless subscriber re-request a sign-in link if the
+    onboarding email never arrived or the link expired. Returns None (don't reveal whether
+    the address exists) for unknown/inactive users — the caller emails only on a token."""
+    em = _norm(email)
+    u = get_user(em)
+    if not u or not u["is_active"]:
+        return None
+    return issue_token(em, ttl=ttl, typ="magic")
+
+
 def list_users() -> list[dict[str, Any]]:
     with _conn() as con:
         rows = con.execute(
@@ -299,9 +337,10 @@ def consume_magic_token(token: str | None) -> str | None:
     expired token) returns None. This prevents a leaked link (browser history, Referer,
     proxy logs) from being replayed: it works exactly once, then is dead.
 
-    Note: the magic token is NOT the session cookie — the caller mints a fresh session
-    token after consuming this one, so URL exposure never yields a reusable session."""
-    sub = verify_token(token)
+    Note: the magic token is NOT the session cookie — it is typ='magic' and is rejected by
+    authenticate_session, and the caller mints a fresh typ='session' token after consuming
+    this one, so URL exposure never yields a reusable session."""
+    sub = verify_token(token, expected_typ="magic")
     if not sub:
         return None
     th = hashlib.sha256(token.encode()).hexdigest()
@@ -325,8 +364,11 @@ def authenticate_session(token: str | None) -> str | None:
     deletion take effect on the very next request, instead of leaving a signed
     cookie valid until it expires. (verify_token alone only proves the token was
     issued by us and hasn't expired — it cannot know the user was since revoked.)
+
+    Only typ='session' tokens are accepted — a leaked typ='magic' URL token cannot be
+    replayed here as a session cookie (H1).
     """
-    sub = verify_token(token)
+    sub = verify_token(token, expected_typ="session")
     if not sub:
         return None
     u = get_user(sub)

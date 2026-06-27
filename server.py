@@ -112,6 +112,22 @@ def _rate_ok(ip: str, heavy: bool) -> bool:
         return True
 
 
+def _bucket_ok(ip: str, bucket: str, limit: int, window: int) -> bool:
+    """Generic sliding-window limiter for a named bucket (e.g. magic-link re-sends).
+    Tighter than the global /api/ limiter so an outbound-email endpoint can't be abused
+    to spam known-subscriber inboxes."""
+    now = time.time()
+    key = (ip, bucket)
+    with _RATE_LOCK:
+        hits = _RATE_HITS[key]
+        while hits and hits[0] <= now - window:
+            hits.popleft()
+        if len(hits) >= limit:
+            return False
+        hits.append(now)
+        return True
+
+
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, analyze_screener
 from auth import login, logout
 from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError
@@ -145,6 +161,7 @@ from trading.risk_gate import evaluate as risk_gate_evaluate
 from trading.execution import place as execution_place
 import auth_users   # multi-user login wall (OFF unless GESH_AUTH_ENABLED is set)
 import billing      # Lemon Squeezy payment webhook → provision/revoke auth_users
+import email_sender # transactional email (magic-link recovery via /auth/request-link)
 
 
 # ─── Startup / Shutdown ───────────────────────────────────────────────────────
@@ -254,6 +271,14 @@ def healthz():
     return {"status": "ok", "auth": auth_users.auth_enabled()}
 
 
+def _cookie_secure() -> bool:
+    """Whether to set the Secure flag on the session cookie. Defaults to True (production
+    is HTTPS); set GESH_COOKIE_SECURE=0 ONLY for local plain-HTTP dev. This prevents the
+    session cookie shipping over plaintext on a TLS deploy because someone forgot to flip a
+    hardcoded False (M2)."""
+    return os.getenv("GESH_COOKIE_SECURE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
     return _LOGIN_PAGE
@@ -276,7 +301,7 @@ async def auth_login(request: Request):
     resp.set_cookie(
         auth_users.COOKIE_NAME, auth_users.issue_token(email),
         httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
-        secure=False,   # set True once :9000 is served over TLS
+        secure=_cookie_secure(),
     )
     return resp
 
@@ -307,50 +332,72 @@ def auth_magic(token: str = ""):
     resp = RedirectResponse(url="/", status_code=303)   # 303 See Other after consuming the token
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.set_cookie(
-        auth_users.COOKIE_NAME, auth_users.issue_token(email),   # fresh session token
+        auth_users.COOKIE_NAME,
+        auth_users.issue_token(email, typ="session"),   # fresh SESSION token (not the magic one)
         httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
-        secure=False,   # set True once :9000 is served over TLS
+        secure=_cookie_secure(),
     )
     return resp
+
+
+@app.post("/auth/request-link")
+async def auth_request_link(request: Request):
+    """Recovery path (H5): re-send a sign-in link to an active subscriber whose onboarding
+    email never arrived or whose link expired. Always returns ok=True (never reveals whether
+    an address exists); only actually emails when the address maps to an active user.
+    Rate-limited per IP (5 / 10 min) so it can't be abused to spam subscriber inboxes."""
+    ip = request.client.host if request.client else "unknown"
+    if not _bucket_ok(ip, "request-link", limit=5, window=600):
+        return JSONResponse(status_code=429, content={"ok": False, "detail": "Too many requests"})
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    email = (body.get("email") or "").strip()
+    token = auth_users.issue_magic_token(email) if email else None
+    if token:
+        import os as _os
+        base = _os.getenv("APP_BASE_URL", "").rstrip("/")
+        tier = (auth_users.get_user(email) or {}).get("tier")
+        email_sender.send_magic_link(email, f"{base}/auth/magic?token={token}", tier=tier)
+    return JSONResponse(content={"ok": True})
 
 
 # ─── Payment: pricing + Lemon Squeezy webhook (provision/revoke) ──────────────
 @app.get("/pricing", response_class=HTMLResponse)
 def pricing_page():
-    """Public pricing page — three tiers linking to Lemon Squeezy hosted checkout
-    (URLs from env; no card data ever touches this server)."""
+    """Public pricing page — ONE plan during the alpha. All features are currently
+    identical across access (only is_active is enforced), so selling a single honest tier
+    avoids charging Trader/Desk prices for the same product. Re-introduce tiers once
+    per-tier entitlement gating exists (Phase 2). Checkout URL + price from env; no card
+    data ever touches this server."""
     import os as _os
-    tiers = [
-        ("Observer", "49", _os.getenv("LS_CHECKOUT_OBSERVER", "#"),
-         ["Signal-accuracy proof", "Daily report", "Watch dashboard"]),
-        ("Trader", "149", _os.getenv("LS_CHECKOUT_TRADER", "#"),
-         ["Everything in Observer", "Diversification radar", "Deep bull/bear debate"]),
-        ("Desk", "399", _os.getenv("LS_CHECKOUT_DESK", "#"),
-         ["Everything in Trader", "Crypto on-chain signals", "BTC/ETH options flow"]),
-    ]
-    cards = ""
-    for name, price, url, feats in tiers:
-        items = "".join(f"<li>{f}</li>" for f in feats)
-        cards += (
-            "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:24px;"
-            "background:#0d1520;flex:1;min-width:220px\">"
-            f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
-            f"<p style=\"font-size:32px;margin:8px 0\"><strong>${price}</strong>"
-            "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
-            f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
-            f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
-            "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
-            "font-weight:600;margin-top:12px\">Subscribe</a></div>"
-        )
+    name = _os.getenv("LS_PLAN_NAME", "GESH Access")
+    price = _os.getenv("LS_PLAN_PRICE", "49")
+    url = _os.getenv("LS_CHECKOUT_PRIMARY", _os.getenv("LS_CHECKOUT_OBSERVER", "#"))
+    feats = ["Signal-accuracy proof (live track record)", "Daily AI portfolio report",
+             "Watch dashboard", "Diversification radar"]
+    items = "".join(f"<li>{f}</li>" for f in feats)
+    card = (
+        "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:28px;"
+        "background:#0d1520;max-width:360px\">"
+        f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
+        f"<p style=\"font-size:34px;margin:8px 0\"><strong>${price}</strong>"
+        "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
+        f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
+        f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
+        "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
+        "font-weight:600;margin-top:12px\">Subscribe</a></div>"
+    )
     return (
         "<!doctype html><html><head><meta charset=utf-8><title>GESH — Pricing</title>"
         "<meta name=viewport content=\"width=device-width,initial-scale=1\"></head>"
         "<body style=\"font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;"
         "max-width:900px;margin:auto;padding:32px\">"
-        "<h1 style=\"color:#00d4ff\">GESH Financial — Plans</h1>"
+        "<h1 style=\"color:#00d4ff\">GESH Financial — Access</h1>"
         "<p style=\"color:#aeb9c7\">AI signal intelligence for your portfolio. "
         "See the <a href=\"/track-record\" style=\"color:#00e87a\">live track record</a> first.</p>"
-        f"<div style=\"display:flex;gap:16px;flex-wrap:wrap;margin:24px 0\">{cards}</div>"
+        f"<div style=\"margin:24px 0\">{card}</div>"
         "<p style=\"color:#667;font-size:12px\">By subscribing you agree to the "
         "<a href=\"/terms\" style=\"color:#889\">Terms</a> &amp; "
         "<a href=\"/disclaimer\" style=\"color:#889\">Disclaimer</a>. "
