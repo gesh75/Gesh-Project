@@ -79,4 +79,6 @@ schema migration are already shipped + tested. To activate:
 - Hosted checkout only — **no card data touches :9000** (PCI SAQ-A).
 - Webhook is **signature-verified + idempotent**; unsigned calls are rejected (401).
 - Secrets live in `.env` only — never commit them.
-- Magic-link tokens are short-TTL (15 min). A single-use nonce is a Phase-2 hardening.
+- Magic-link tokens are short-TTL (15 min) **and single-use** (consumed atomically on
+  first use; the cookie gets a separate fresh session token, never the URL token), with
+  `Referrer-Policy: no-referrer` on the landing — a leaked link can't be replayed.

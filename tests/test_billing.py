@@ -134,6 +134,19 @@ def test_cancelled_keeps_access_until_expiry():
     assert u["billing_status"] == "cancelled"
 
 
+def test_magic_token_is_single_use():
+    """A magic-link token works exactly once; replay (leaked URL) is rejected."""
+    au.create_magic_link_user("buyer@example.com", tier="trader")
+    token = au.issue_token("buyer@example.com", ttl=900)
+    assert au.consume_magic_token(token) == "buyer@example.com"   # first use
+    assert au.consume_magic_token(token) is None                  # replay rejected
+
+
+def test_consume_rejects_invalid_token():
+    assert au.consume_magic_token("not-a-real-token") is None
+    assert au.consume_magic_token(None) is None
+
+
 def test_bad_signature_raises_permission_error():
     payload = _payload("subscription_created")
     raw = json.dumps(payload).encode()

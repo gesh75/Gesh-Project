@@ -154,6 +154,10 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TEXT    NOT NULL DEFAULT '',
     last_login_at TEXT
 );
+CREATE TABLE IF NOT EXISTS used_magic_tokens (
+    token_hash TEXT PRIMARY KEY,
+    used_at    TEXT NOT NULL
+);
 """
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
@@ -287,6 +291,29 @@ def list_users() -> list[dict[str, Any]]:
 
 def is_public_path(path: str) -> bool:
     return any(path == p or path.startswith(p) for p in PUBLIC_PREFIXES)
+
+
+def consume_magic_token(token: str | None) -> str | None:
+    """Single-use validation for a magic-link token. Returns the subject email on the
+    FIRST valid use and atomically marks the token spent; any later use (or an invalid/
+    expired token) returns None. This prevents a leaked link (browser history, Referer,
+    proxy logs) from being replayed: it works exactly once, then is dead.
+
+    Note: the magic token is NOT the session cookie — the caller mints a fresh session
+    token after consuming this one, so URL exposure never yields a reusable session."""
+    sub = verify_token(token)
+    if not sub:
+        return None
+    th = hashlib.sha256(token.encode()).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT OR IGNORE INTO used_magic_tokens (token_hash, used_at) VALUES (?,?)",
+            (th, now),
+        )
+        if cur.rowcount == 0:        # already present → token was already consumed
+            return None
+    return sub
 
 
 def authenticate_session(token: str | None) -> str | None:

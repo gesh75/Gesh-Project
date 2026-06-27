@@ -290,15 +290,24 @@ def auth_logout():
 
 @app.get("/auth/magic")
 def auth_magic(token: str = ""):
-    """Passwordless login from the onboarding email's magic link. The token IS a
-    short-TTL session token issued by billing.provision; validate it and set the cookie."""
-    email = auth_users.verify_token(token)
-    if not email or not auth_users.get_user(email):
+    """Passwordless login from the onboarding email's magic link.
+
+    The URL token is SINGLE-USE: consume_magic_token validates + atomically spends it, so
+    a leaked link (history/Referer/logs) can't be replayed. We then mint a SEPARATE fresh
+    session token for the cookie — the short-TTL URL token is never reused as the session.
+    Redirect drops the token from the URL and sets Referrer-Policy: no-referrer so the
+    landing nav can't leak it onward."""
+    email = auth_users.consume_magic_token(token)
+    if not email:
+        return RedirectResponse(url="/login?e=expired", status_code=302)
+    u = auth_users.get_user(email)
+    if not u or not u["is_active"]:
         return RedirectResponse(url="/login?e=expired", status_code=302)
     auth_users.touch_last_login(email)
     resp = RedirectResponse(url="/", status_code=302)
+    resp.headers["Referrer-Policy"] = "no-referrer"
     resp.set_cookie(
-        auth_users.COOKIE_NAME, token,
+        auth_users.COOKIE_NAME, auth_users.issue_token(email),   # fresh session token
         httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
         secure=False,   # set True once :9000 is served over TLS
     )
