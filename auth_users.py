@@ -184,6 +184,8 @@ _BILLING_COLUMNS = {
     "billing_status":      "TEXT",   # 'active' | 'past_due' | 'cancelled'
     "welcome_emailed_at":  "TEXT",   # set when the magic-link onboarding email is delivered;
                                      # NULL = still owed a link (drives reliable retry, H5)
+    "billing_event_at":    "TEXT",   # subscription updated_at of the last applied billing
+                                     # event — drives monotonic ordering (drops stale events)
 }
 
 
@@ -244,6 +246,31 @@ def get_user(email: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def get_user_by_sub_id(sub_id: str) -> dict[str, Any] | None:
+    """Look a user up by their provider subscription id — the authoritative key for a
+    subscription's lifecycle (email is mutable, so it can't be the only key, #5)."""
+    if not sub_id:
+        return None
+    with _conn() as con:
+        row = con.execute("SELECT * FROM users WHERE billing_sub_id=?", (sub_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def rename_user_email(old_email: str, new_email: str) -> bool:
+    """Move a subscription's account to a new email (LS lets a customer change their email).
+    Returns True on success, False if the target email is already taken by a DIFFERENT row
+    (caller then falls back rather than clobbering)."""
+    old, new = _norm(old_email), _norm(new_email)
+    if not new or old == new:
+        return False
+    with _conn() as con:
+        clash = con.execute("SELECT 1 FROM users WHERE email=?", (new,)).fetchone()
+        if clash:
+            return False
+        con.execute("UPDATE users SET email=? WHERE email=?", (new, old))
+    return True
+
+
 def verify_credentials(email: str, password: str) -> bool:
     """True only when the user exists, is active, and the password matches."""
     u = get_user(email)
@@ -264,11 +291,13 @@ def set_active(email: str, active: bool) -> None:
 
 
 def set_billing(email: str, *, tier: str | None = None, customer_id: str | None = None,
-                sub_id: str | None = None, status: str | None = None) -> None:
+                sub_id: str | None = None, status: str | None = None,
+                event_at: str | None = None) -> None:
     """Update only the billing fields that are provided (None = leave unchanged)."""
     sets, params = [], []
     for col, val in (("tier", tier), ("billing_customer_id", customer_id),
-                     ("billing_sub_id", sub_id), ("billing_status", status)):
+                     ("billing_sub_id", sub_id), ("billing_status", status),
+                     ("billing_event_at", event_at)):
         if val is not None:
             sets.append(f"{col}=?")
             params.append(val)

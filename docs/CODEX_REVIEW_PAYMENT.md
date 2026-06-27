@@ -24,8 +24,9 @@ auth_users: create passwordless user + email magic link
 GET /auth/magic?token=… ──► consume single-use token → set fresh session cookie → /
 ```
 
-Revoke path: `subscription_expired`/`payment_failed` → `set_active(False)` → blocked on the
-user's very next request.
+Revoke path: `subscription_expired` (only) → `set_active(False)` → blocked on the user's
+very next request. `payment_failed`/`cancelled` keep access (dunning / runs-to-period-end)
+and only record `billing_status` — see §6/§7.
 
 ### Files in scope
 | File | What to scrutinize |
@@ -150,5 +151,37 @@ in `auth_users.py` (lines 96, 263) — untouched by this change.
 
 **Open follow-ups (not blocking, your call on severity):**
 - ~~Rate-limit `/auth/request-link`~~ **DONE** — per-IP 5/10min via `_bucket_ok`, returns 429.
-- `_tier_for` still has a substring fallback — prefer variant-ID-only mapping in prod.
+- ~~`_tier_for` substring fallback~~ **DONE in round-3** — strict allowlist once any id is set.
 - Confirm LS guarantees `user_email` is verified before webhook fires (M3 in review).
+
+---
+
+## 7. Round-3 resolutions (applied 2026-06-26 — re-verify)
+
+Second Codex pass found deeper webhook-lifecycle issues. All addressed.
+
+| # | Finding | Resolution | Test |
+|---|---------|-----------|------|
+| R3-1 HIGH | Email failure still HTTP 200 → LS never retries | `handle_webhook` raises `billing.RetryableError` on the owed-but-unsent path; `server.py` maps it → **503**. | `test_failed_onboarding_email_raises_retryable_and_is_not_deduped` |
+| R3-2 HIGH | Stale guard only on revoke, not activation | Monotonic ordering: `parse_event` reads `attributes.updated_at` → stored `billing_event_at`; `_is_stale` drops any state-changing event older than the last applied one (activation included). | `test_delayed_activation_for_old_sub_is_ignored` |
+| R3-3 HIGH | `LS_VARIANT_*` not strict (name fallback fired) | `_tier_for` disables the name-substring fallback whenever ANY `LS_VARIANT_*` id is configured — unknown id ⇒ refused. | `test_strict_allowlist_rejects_name_match_when_ids_configured` |
+| R3-4 HIGH | Claim swallows event if crash after `_claim` | Dedup is now an outbox state machine: `pending` on claim, `completed` only on success; a `pending` row past a 300s lease is reclaimed by a later retry. | `test_crash_after_claim_is_reclaimed_after_lease` |
+| R3-5 MED | Lifecycle keyed by mutable email → 2 accounts | `billing_sub_id` is authoritative: `_resolve_account` finds the account by sub id and **renames** it on an email change (one account), not a duplicate. | `test_email_change_keeps_single_account` |
+| R3-6 MED | `/auth/request-link` no real coverage + no UI | TestClient exercises the route (200, no enumeration, 429 after 5/IP); login page now has an "Email me a sign-in link" action. | `test_request_link_endpoint_and_rate_limit` |
+| R3-7 LOW | Doc inconsistency (`payment_failed` revokes) | Fixed §2 flow + this section. | — |
+
+**New env knobs (round-3):** `LS_VARIANT_OBSERVER/TRADER/DESK` now act as a **strict allowlist**.
+New columns: `users.billing_event_at`; `processed_webhook_events` gains `status/claimed_at/completed_at`
+(idempotent ALTER migrations).
+
+**Residual / explicitly deferred (single-tenant alpha):**
+- No background outbox flusher — retries are LS-driven + lease-reclaimed, which is sufficient
+  without a worker process. A true transactional outbox is the production upgrade.
+- One active subscription per user is assumed (LS permits multiple). The foreign-sub case is
+  handled by `updated_at` ordering, not a per-subscription state table.
+- Email-change merge falls back (logs a conflict) if the target email is already a different
+  account — it never clobbers.
+
+**Verification after round-3:** `pytest -q` → **223 passed** (218 + 5 new); `ruff check
+billing.py` clean; `py_compile` ok. Two pre-existing E501s remain in `auth_users.py`
+(`hash_password`, `set_active`) — untouched.

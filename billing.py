@@ -32,6 +32,13 @@ import email_sender
 logger = logging.getLogger(__name__)
 
 MAGIC_LINK_TTL_SECONDS = 15 * 60   # short-lived onboarding link
+_CLAIM_LEASE_SECONDS = 300         # pending claim older than this is presumed crashed (reclaimable)
+
+
+class RetryableError(Exception):
+    """A processing failure that should make the webhook return a non-2xx so Lemon Squeezy
+    RETRIES the delivery (LS only retries non-2xx). Used for an onboarding email we could
+    not send — releasing the dedup claim is pointless if the HTTP response is still 200."""
 
 # Lemon Squeezy event → semantic action.
 _ACTIVATE_EVENTS = {
@@ -73,17 +80,23 @@ def verify_signature(raw_body: bytes, signature: str | None) -> bool:
 # ── tier mapping ─────────────────────────────────────────────────────────────────
 
 def _tier_for(variant_id: Any, variant_name: str, product_name: str) -> str | None:
-    """Map a Lemon Squeezy variant to an internal tier. Prefers explicit variant-id env
-    config; falls back to name matching so it still works before ids are wired."""
+    """Map a Lemon Squeezy variant to an internal tier.
+
+    STRICT ALLOWLIST when any LS_VARIANT_* id is configured: only an exact id match grants a
+    tier, and an unconfigured/unknown id returns None (→ refused, H3). The name-substring
+    fallback is used ONLY in the un-configured bootstrap state (no ids set at all) — never
+    alongside ids, so a product merely *named* "Trader" can't escalate past the id gate."""
     env_map = {
         os.getenv("LS_VARIANT_OBSERVER", "").strip(): "observer",
         os.getenv("LS_VARIANT_TRADER", "").strip():   "trader",
         os.getenv("LS_VARIANT_DESK", "").strip():     "desk",
     }
     env_map.pop("", None)
-    if variant_id is not None and str(variant_id) in env_map:
-        return env_map[str(variant_id)]
-    blob = f"{variant_name} {product_name}".lower()
+    if env_map:                                   # ids configured → allowlist, no fallback
+        if variant_id is not None and str(variant_id) in env_map:
+            return env_map[str(variant_id)]
+        return None
+    blob = f"{variant_name} {product_name}".lower()   # bootstrap only (no ids configured yet)
     for key, tier in (("desk", "desk"), ("trader", "trader"), ("observer", "observer")):
         if key in blob:
             return tier
@@ -121,6 +134,9 @@ def parse_event(payload: dict) -> dict[str, Any]:
         "status":      attrs.get("status", ""),
         "customer_id": str(cust) if cust is not None else None,
         "sub_id":      _subscription_id(meta.get("event_name", ""), data, attrs),
+        # Subscription's own last-modified time — drives monotonic ordering so an
+        # out-of-order (delayed) delivery for an OLD state can't overwrite a newer one (H2).
+        "event_at":    (attrs.get("updated_at") or "").strip(),
         "tier":        _tier_for(attrs.get("variant_id"),
                                  attrs.get("variant_name", ""),
                                  attrs.get("product_name", "")),
@@ -129,12 +145,22 @@ def parse_event(payload: dict) -> dict[str, Any]:
 
 # ── idempotency (dedup replayed deliveries) ──────────────────────────────────────
 
+# An outbox-style state machine, NOT a fire-and-forget marker. A delivery is `pending` while
+# being processed and only `completed` on success. A `pending` row older than the lease is
+# presumed crashed (process died after claiming, before dispatching) and is RECLAIMABLE — so
+# a crash can no longer permanently swallow an event by leaving it deduped for 30 days (#4).
 _DEDUP_DDL = """
 CREATE TABLE IF NOT EXISTS processed_webhook_events (
-    dedup_key TEXT PRIMARY KEY,
-    seen_at   TEXT NOT NULL
+    dedup_key    TEXT PRIMARY KEY,
+    status       TEXT NOT NULL DEFAULT 'completed',
+    claimed_at   TEXT,
+    completed_at TEXT,
+    seen_at      TEXT NOT NULL
 );
 """
+# Migrate the original (dedup_key, seen_at) table to add the state columns.
+_DEDUP_COLUMNS = {"status": "TEXT NOT NULL DEFAULT 'completed'",
+                  "claimed_at": "TEXT", "completed_at": "TEXT"}
 
 
 @contextmanager
@@ -144,6 +170,11 @@ def _conn():
     con.row_factory = sqlite3.Row
     try:
         con.executescript(_DEDUP_DDL)
+        have = {r["name"] for r in con.execute(
+            "PRAGMA table_info(processed_webhook_events)").fetchall()}
+        for col, decl in _DEDUP_COLUMNS.items():
+            if col not in have:
+                con.execute(f"ALTER TABLE processed_webhook_events ADD COLUMN {col} {decl}")
         yield con
         con.commit()
     finally:
@@ -156,25 +187,55 @@ def _dedup_key(raw_body: bytes) -> str:
     return hashlib.sha256(raw_body).hexdigest()
 
 
-def _claim(key: str) -> bool:
-    """Atomically claim a dedup key BEFORE dispatching. Returns True if this caller won the
-    claim (first to see it), False if it was already claimed. The INSERT OR IGNORE rowcount
-    is the gate — closing the check-then-act TOCTOU window where two concurrent identical
-    deliveries both passed a separate SELECT and both provisioned (M1). Also prunes old
-    keys so the table can't grow unbounded (M3)."""
+def _claim(key: str) -> str:
+    """Atomically claim a dedup key as `pending` before dispatching. Returns:
+        "claimed"     — fresh claim; this caller should process.
+        "reclaimed"   — a stale `pending` (crashed mid-flight, past lease) re-taken; process.
+        "in_progress" — another worker holds a fresh `pending` claim; treat as duplicate.
+        "completed"   — already finished; duplicate.
+    The INSERT OR IGNORE rowcount is the atomic gate (M1 TOCTOU). Prunes completed rows >30d
+    (M3)."""
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
     with _conn() as con:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        con.execute("DELETE FROM processed_webhook_events WHERE seen_at < ?", (cutoff,))
+        con.execute("DELETE FROM processed_webhook_events WHERE status='completed' AND seen_at < ?",
+                    ((now - timedelta(days=30)).isoformat(),))
         cur = con.execute(
-            "INSERT OR IGNORE INTO processed_webhook_events (dedup_key, seen_at) VALUES (?,?)",
-            (key, datetime.now(timezone.utc).isoformat()),
+            "INSERT OR IGNORE INTO processed_webhook_events "
+            "(dedup_key, status, claimed_at, seen_at) VALUES (?, 'pending', ?, ?)",
+            (key, now_iso, now_iso),
         )
-        return cur.rowcount == 1
+        if cur.rowcount == 1:
+            return "claimed"
+        row = con.execute(
+            "SELECT status, claimed_at FROM processed_webhook_events WHERE dedup_key=?", (key,)
+        ).fetchone()
+        if row is None:                       # raced delete; treat as fresh next retry
+            return "in_progress"
+        if row["status"] == "completed":
+            return "completed"
+        # status == 'pending': reclaim only if the lease has expired (crashed worker).
+        lease_cut = (now - timedelta(seconds=_CLAIM_LEASE_SECONDS)).isoformat()
+        if (row["claimed_at"] or "") < lease_cut:
+            con.execute("UPDATE processed_webhook_events SET claimed_at=? WHERE dedup_key=?",
+                        (now_iso, key))
+            return "reclaimed"
+        return "in_progress"
+
+
+def _complete(key: str) -> None:
+    """Mark a claimed delivery finished — only now is it a permanent duplicate."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE processed_webhook_events SET status='completed', completed_at=? "
+            "WHERE dedup_key=?",
+            (datetime.now(timezone.utc).isoformat(), key),
+        )
 
 
 def _unclaim(key: str) -> None:
-    """Release a claim so Lemon Squeezy's retry can reprocess (used when processing failed
-    or a brand-new user could not be emailed — H5)."""
+    """Release a claim so Lemon Squeezy's retry can reprocess (processing failed or a
+    brand-new user could not be emailed — H5/#4)."""
     with _conn() as con:
         con.execute("DELETE FROM processed_webhook_events WHERE dedup_key=?", (key,))
 
@@ -188,7 +249,7 @@ def _magic_link(email: str) -> str:
 
 
 def provision(email: str, tier: str | None, customer_id: str | None,
-              sub_id: str | None) -> dict[str, Any]:
+              sub_id: str | None, event_at: str = "") -> dict[str, Any]:
     """Create-or-reactivate a subscriber and email a magic link to anyone who is still
     owed one (welcome_emailed_at IS NULL). The NULL-driven flag makes onboarding
     delivery RELIABLE (H5): a failed send leaves the flag unset so the LS retry (or
@@ -196,7 +257,7 @@ def provision(email: str, tier: str | None, customer_id: str | None,
     re-onboarded. Unknown products never reach here (tier is required, H3)."""
     created = auth_users.create_magic_link_user(email, tier=tier)
     auth_users.set_billing(email, tier=tier, customer_id=customer_id,
-                           sub_id=sub_id, status="active")
+                           sub_id=sub_id, status="active", event_at=event_at or None)
     owed = (auth_users.get_user(email) or {}).get("welcome_emailed_at") is None
     emailed = False
     if owed:
@@ -209,7 +270,8 @@ def provision(email: str, tier: str | None, customer_id: str | None,
             "created": created, "owed_email": owed, "emailed": emailed}
 
 
-def revoke(email: str, status: str, event_sub_id: str | None) -> dict[str, Any]:
+def revoke(email: str, status: str, event_sub_id: str | None,
+           event_at: str = "") -> dict[str, Any]:
     """Disable a subscriber — takes effect on their next request (authenticate_session
     re-checks is_active each call). Guarded against STALE-subscription events (H2): if the
     event names a subscription that is NOT the user's current one, it is ignored, so an old
@@ -222,7 +284,7 @@ def revoke(email: str, status: str, event_sub_id: str | None) -> dict[str, Any]:
                     email, event_sub_id, stored_sub)
         return {"action": "ignored", "email": email, "reason": "stale_subscription"}
     auth_users.set_active(email, False)
-    auth_users.set_billing(email, status=status)
+    auth_users.set_billing(email, status=status, event_at=event_at or None)
     auth_users.set_welcome_emailed(email, None)
     logger.info("billing: revoked %s (status=%s)", email, status)
     return {"action": "revoke", "email": email, "status": status}
@@ -230,9 +292,51 @@ def revoke(email: str, status: str, event_sub_id: str | None) -> dict[str, Any]:
 
 # ── orchestrator ─────────────────────────────────────────────────────────────────
 
+def _resolve_account(ev: dict[str, Any]) -> tuple[str, dict | None]:
+    """Resolve which account an event acts on, treating billing_sub_id as authoritative (#5).
+
+    If the subscription already maps to an account under a DIFFERENT email, the customer
+    changed their email — move that one account to the new email rather than creating a
+    second (a signed update under a changed email otherwise made two active accounts).
+    Returns (email_to_use, existing_user_row)."""
+    email, sub_id = ev["email"], ev["sub_id"]
+    by_sub = auth_users.get_user_by_sub_id(sub_id) if sub_id else None
+    if by_sub and email and by_sub["email"] != email:
+        if auth_users.rename_user_email(by_sub["email"], email):
+            logger.info("billing: moved sub=%s %s -> %s (email change)",
+                        sub_id, by_sub["email"], email)
+            return email, auth_users.get_user(email)
+        logger.warning("billing: email-change conflict sub=%s (%s -> %s already taken)",
+                       sub_id, by_sub["email"], email)
+        return by_sub["email"], by_sub        # can't merge; keep operating on the sub's row
+    if by_sub:
+        return by_sub["email"], by_sub
+    return email, auth_users.get_user(email)
+
+
+def _is_stale(ev: dict[str, Any], user: dict | None) -> bool:
+    """True if this event is OLDER than the last billing event we applied to the account —
+    an out-of-order (delayed) delivery that must not overwrite newer state (#2)."""
+    ev_at = ev.get("event_at") or ""
+    prev = (user or {}).get("billing_event_at") or ""
+    return bool(ev_at and prev and ev_at < prev)
+
+
+_STATE_CHANGING = (_ACTIVATE_EVENTS | _REVOKE_EVENTS
+                   | set(_MARK_ONLY_STATUS) | {"subscription_updated"})
+
+
 def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     """Translate a parsed event into an auth_users action (no dedup concerns here)."""
-    name, email = ev["event"], ev["email"]
+    name = ev["event"]
+    email, user = _resolve_account(ev)
+    ev = {**ev, "email": email}                # operate on the resolved (possibly moved) email
+
+    # Drop events that arrive out of order for any state-changing transition (#2).
+    if name in _STATE_CHANGING and _is_stale(ev, user):
+        logger.info("billing: ignored stale event %s for %s (event_at=%s <= applied=%s)",
+                    name, email, ev.get("event_at"), (user or {}).get("billing_event_at"))
+        return {"action": "ignored", "email": email, "reason": "stale_event"}
 
     def _provision_guarded() -> dict[str, Any]:
         # An activation with no recognised tier means an unknown/un-allowlisted product —
@@ -241,35 +345,39 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
             logger.warning("billing: refusing to provision %s on unknown variant (event=%s)",
                            email, name)
             return {"action": "ignored", "email": email, "reason": "unknown_variant"}
-        return provision(email, ev["tier"], ev["customer_id"], ev["sub_id"])
+        return provision(email, ev["tier"], ev["customer_id"], ev["sub_id"], ev.get("event_at", ""))
 
+    eat = ev.get("event_at", "")
     if name in _ACTIVATE_EVENTS:
         return _provision_guarded()
     if name in _REVOKE_EVENTS:
-        return revoke(email, status="expired", event_sub_id=ev["sub_id"])
+        return revoke(email, status="expired", event_sub_id=ev["sub_id"], event_at=eat)
     if name in _MARK_ONLY_STATUS:
         status = _MARK_ONLY_STATUS[name]
-        auth_users.set_billing(email, status=status)
+        auth_users.set_billing(email, status=status, event_at=eat or None)
         return {"action": "mark", "email": email, "status": status}
     if name == "subscription_updated":
         if ev["status"] in ("active", "on_trial", "paid"):
             return _provision_guarded()
         if ev["status"] == "expired":
-            return revoke(email, status="expired", event_sub_id=ev["sub_id"])
+            return revoke(email, status="expired", event_sub_id=ev["sub_id"], event_at=eat)
         # cancelled / past_due / unpaid / paused → keep access, just record status (H4)
         if ev["status"]:
-            auth_users.set_billing(email, status=ev["status"])
+            auth_users.set_billing(email, status=ev["status"], event_at=ev.get("event_at") or None)
             return {"action": "mark", "email": email, "status": ev["status"]}
         return {"action": "noop", "status": ev["status"]}
     return {"action": "ignored", "event": name}
 
 
 def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dict[str, Any]:
-    """Verify → claim (dedup) → parse → dispatch. Returns a small status dict; raises
-    nothing the caller can't turn into an HTTP code (PermissionError = 401, ValueError =
-    400). The dedup key is CLAIMED atomically before dispatch so concurrent identical
-    deliveries can't both act (M1); on a processing failure — or a brand-new user we could
-    not email — the claim is released so the LS retry can reprocess (H5)."""
+    """Verify → claim (dedup outbox) → parse → dispatch → complete. Raises only what the
+    caller can map to HTTP: PermissionError=401, ValueError=400, RetryableError=503.
+
+    The dedup key is claimed as `pending` BEFORE dispatch (atomic, M1) and marked `completed`
+    ONLY on success — a crash mid-flight leaves a leased `pending` row that a later retry
+    reclaims, so an event is never permanently swallowed (#4). A failure, or an onboarding
+    email we couldn't send, releases the claim AND raises RetryableError so the HTTP response
+    is non-2xx and Lemon Squeezy actually retries (#1)."""
     if not verify_signature(raw_body, signature):
         raise PermissionError("invalid webhook signature")
 
@@ -280,7 +388,8 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
         raise ValueError("webhook missing user_email")
 
     key = _dedup_key(raw_body)
-    if not _claim(key):
+    claim = _claim(key)
+    if claim in ("completed", "in_progress"):
         return {"action": "duplicate", "ok": True, "event": name}
 
     try:
@@ -290,11 +399,13 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
         raise
 
     # A brand-new (or re-onboarding) user we failed to email is a dead end — release the
-    # claim so the retry re-sends rather than acking them into limbo (H5).
+    # claim and force a non-2xx so the LS retry re-sends rather than acking into limbo (#1/H5).
     if (result.get("action") == "provision" and result.get("owed_email")
             and not result.get("emailed")):
         _unclaim(key)
+        raise RetryableError(f"onboarding email not sent to {result.get('email')}")
 
+    _complete(key)
     result["ok"] = True
     result["event"] = name
     return result

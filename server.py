@@ -258,11 +258,19 @@ padding:11px;font-weight:700;font-size:14px;cursor:pointer}
 <h1>GESH Financial</h1><div class=sub>Signal-accuracy research · sign in</div>
 <label>Email</label><input name=email type=email autocomplete=username required autofocus>
 <label>Password</label><input name=password type=password autocomplete=current-password required>
-<button type=submit>Sign in</button><div class=err id=e></div></form>
+<button type=submit>Sign in</button><div class=err id=e></div>
+<div class=sub style="margin-top:16px">Subscribed but no password? <a href="#" id=ml style="color:#00d4ff">Email me a sign-in link</a></div>
+<div class=err id=m style="color:#00e87a"></div></form>
 <script>document.getElementById('f').addEventListener('submit',async function(ev){ev.preventDefault();
 var r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({email:ev.target.email.value,password:ev.target.password.value})});
 if(r.ok){location.href='/';}else{document.getElementById('e').textContent='Invalid email or password.';}});
+document.getElementById('ml').addEventListener('click',async function(ev){ev.preventDefault();
+var em=document.querySelector('input[name=email]').value;
+if(!em){document.getElementById('e').textContent='Enter your email first.';return;}
+await fetch('/auth/request-link',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({email:em})});
+document.getElementById('m').textContent='If that email has access, a sign-in link is on its way.';});
 </script></body></html>"""
 
 
@@ -436,6 +444,10 @@ async def billing_webhook(request: Request):
         return JSONResponse(status_code=401, content={"ok": False, "detail": "bad signature"})
     except ValueError as e:
         return JSONResponse(status_code=400, content={"ok": False, "detail": str(e)})
+    except billing.RetryableError as e:
+        # Non-2xx so Lemon Squeezy RETRIES (it only retries non-2xx) — e.g. the onboarding
+        # email could not be sent yet (#1). The dedup claim was already released.
+        return JSONResponse(status_code=503, content={"ok": False, "detail": str(e), "retry": True})
     except Exception as exc:  # noqa: BLE001
         raise _server_error(exc)
 
