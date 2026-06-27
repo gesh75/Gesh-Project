@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import logging
 import os
+import secrets
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -32,7 +33,9 @@ import email_sender
 logger = logging.getLogger(__name__)
 
 MAGIC_LINK_TTL_SECONDS = 15 * 60   # short-lived onboarding link
-_CLAIM_LEASE_SECONDS = 300         # pending claim older than this is presumed crashed (reclaimable)
+# A pending claim older than this is presumed crashed (reclaimable). Short so a crashed
+# claim is reclaimable within Lemon Squeezy's retry window.
+_CLAIM_LEASE_SECONDS = 60
 
 
 class RetryableError(Exception):
@@ -153,13 +156,14 @@ _DEDUP_DDL = """
 CREATE TABLE IF NOT EXISTS processed_webhook_events (
     dedup_key    TEXT PRIMARY KEY,
     status       TEXT NOT NULL DEFAULT 'completed',
+    owner        TEXT,
     claimed_at   TEXT,
     completed_at TEXT,
     seen_at      TEXT NOT NULL
 );
 """
-# Migrate the original (dedup_key, seen_at) table to add the state columns.
-_DEDUP_COLUMNS = {"status": "TEXT NOT NULL DEFAULT 'completed'",
+# Migrate the original (dedup_key, seen_at) table to add the state + owner columns.
+_DEDUP_COLUMNS = {"status": "TEXT NOT NULL DEFAULT 'completed'", "owner": "TEXT",
                   "claimed_at": "TEXT", "completed_at": "TEXT"}
 
 
@@ -187,57 +191,73 @@ def _dedup_key(raw_body: bytes) -> str:
     return hashlib.sha256(raw_body).hexdigest()
 
 
-def _claim(key: str) -> str:
-    """Atomically claim a dedup key as `pending` before dispatching. Returns:
-        "claimed"     — fresh claim; this caller should process.
-        "reclaimed"   — a stale `pending` (crashed mid-flight, past lease) re-taken; process.
-        "in_progress" — another worker holds a fresh `pending` claim; treat as duplicate.
-        "completed"   — already finished; duplicate.
-    The INSERT OR IGNORE rowcount is the atomic gate (M1 TOCTOU). Prunes completed rows >30d
-    (M3)."""
+def _claim(key: str) -> tuple[str, str | None]:
+    """Atomically claim a dedup key as `pending` before dispatching. Returns (status, owner):
+        ("claimed", token)     — fresh claim; this caller should process.
+        ("reclaimed", token)   — a stale `pending` (crashed, past lease) re-taken; process.
+        ("in_progress", None)  — another worker holds a fresh claim, OR we lost the reclaim
+                                 race; the caller must NOT 200 it (LS would stop retrying) —
+                                 it returns 503 so LS retries and the lease can elapse (#4-r4).
+        ("completed", None)    — already finished; a true permanent duplicate.
+    Reclaim is OWNER-FENCED via a compare-and-swap on (owner, claimed_at): two concurrent
+    reclaimers can't both win, and a resurrected old worker can't complete/delete a newer
+    claim (its token no longer matches). Prunes completed rows >30d (M3)."""
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
+    token = secrets.token_hex(16)
     with _conn() as con:
         con.execute("DELETE FROM processed_webhook_events WHERE status='completed' AND seen_at < ?",
                     ((now - timedelta(days=30)).isoformat(),))
         cur = con.execute(
             "INSERT OR IGNORE INTO processed_webhook_events "
-            "(dedup_key, status, claimed_at, seen_at) VALUES (?, 'pending', ?, ?)",
-            (key, now_iso, now_iso),
+            "(dedup_key, status, owner, claimed_at, seen_at) VALUES (?, 'pending', ?, ?, ?)",
+            (key, token, now_iso, now_iso),
         )
         if cur.rowcount == 1:
-            return "claimed"
+            return ("claimed", token)
         row = con.execute(
-            "SELECT status, claimed_at FROM processed_webhook_events WHERE dedup_key=?", (key,)
+            "SELECT status, owner, claimed_at FROM processed_webhook_events WHERE dedup_key=?",
+            (key,),
         ).fetchone()
-        if row is None:                       # raced delete; treat as fresh next retry
-            return "in_progress"
+        if row is None:                       # raced delete; force a retry, don't ack
+            return ("in_progress", None)
         if row["status"] == "completed":
-            return "completed"
-        # status == 'pending': reclaim only if the lease has expired (crashed worker).
+            return ("completed", None)
+        # status == 'pending': reclaim only if the lease has expired (crashed worker), and
+        # only if WE win the CAS against the exact (owner, claimed_at) we just observed.
         lease_cut = (now - timedelta(seconds=_CLAIM_LEASE_SECONDS)).isoformat()
         if (row["claimed_at"] or "") < lease_cut:
-            con.execute("UPDATE processed_webhook_events SET claimed_at=? WHERE dedup_key=?",
-                        (now_iso, key))
-            return "reclaimed"
-        return "in_progress"
+            cas = con.execute(
+                "UPDATE processed_webhook_events SET owner=?, claimed_at=? "
+                "WHERE dedup_key=? AND owner IS ? AND claimed_at IS ?",
+                (token, now_iso, key, row["owner"], row["claimed_at"]),
+            )
+            if cas.rowcount == 1:
+                return ("reclaimed", token)
+        return ("in_progress", None)
 
 
-def _complete(key: str) -> None:
-    """Mark a claimed delivery finished — only now is it a permanent duplicate."""
+def _complete(key: str, token: str | None) -> None:
+    """Mark a claimed delivery finished — only now is it a permanent duplicate. Owner-fenced:
+    a no-op if a later reclaimer already took the row (our token no longer owns it)."""
     with _conn() as con:
         con.execute(
             "UPDATE processed_webhook_events SET status='completed', completed_at=? "
-            "WHERE dedup_key=?",
-            (datetime.now(timezone.utc).isoformat(), key),
+            "WHERE dedup_key=? AND owner IS ?",
+            (datetime.now(timezone.utc).isoformat(), key, token),
         )
 
 
-def _unclaim(key: str) -> None:
-    """Release a claim so Lemon Squeezy's retry can reprocess (processing failed or a
-    brand-new user could not be emailed — H5/#4)."""
+def _unclaim(key: str, token: str | None) -> None:
+    """Release OUR claim so Lemon Squeezy's retry can reprocess (processing failed or a
+    brand-new user could not be emailed — H5/#4). Owner-fenced so we never delete a row a
+    newer reclaimer now owns."""
     with _conn() as con:
-        con.execute("DELETE FROM processed_webhook_events WHERE dedup_key=?", (key,))
+        con.execute(
+            "DELETE FROM processed_webhook_events "
+            "WHERE dedup_key=? AND owner IS ? AND status='pending'",
+            (key, token),
+        )
 
 
 # ── actions ──────────────────────────────────────────────────────────────────────
@@ -292,33 +312,34 @@ def revoke(email: str, status: str, event_sub_id: str | None,
 
 # ── orchestrator ─────────────────────────────────────────────────────────────────
 
-def _resolve_account(ev: dict[str, Any]) -> tuple[str, dict | None]:
-    """Resolve which account an event acts on, treating billing_sub_id as authoritative (#5).
-
-    If the subscription already maps to an account under a DIFFERENT email, the customer
-    changed their email — move that one account to the new email rather than creating a
-    second (a signed update under a changed email otherwise made two active accounts).
-    Returns (email_to_use, existing_user_row)."""
-    email, sub_id = ev["email"], ev["sub_id"]
+def _lookup_account(ev: dict[str, Any]) -> dict | None:
+    """READ-ONLY: find the account an event pertains to, treating billing_sub_id as the
+    authoritative key (email is mutable, #5). NO mutation here — ordering/variant validation
+    must run before any rename, or a stale event could move the account before being rejected
+    (#2-r4). Falls back to email lookup when the subscription isn't on file yet."""
+    sub_id = ev["sub_id"]
     by_sub = auth_users.get_user_by_sub_id(sub_id) if sub_id else None
-    if by_sub and email and by_sub["email"] != email:
-        if auth_users.rename_user_email(by_sub["email"], email):
-            logger.info("billing: moved sub=%s %s -> %s (email change)",
-                        sub_id, by_sub["email"], email)
-            return email, auth_users.get_user(email)
-        logger.warning("billing: email-change conflict sub=%s (%s -> %s already taken)",
-                       sub_id, by_sub["email"], email)
-        return by_sub["email"], by_sub        # can't merge; keep operating on the sub's row
-    if by_sub:
-        return by_sub["email"], by_sub
-    return email, auth_users.get_user(email)
+    return by_sub or auth_users.get_user(ev["email"])
+
+
+def _parse_dt(s: str | None) -> datetime | None:
+    """Parse a Lemon Squeezy ISO-8601 timestamp to an aware datetime, tolerating a trailing
+    'Z'. Comparing parsed datetimes (not raw ISO strings) avoids format-sensitivity, e.g.
+    differing fractional-second precision or offset spelling (#-r4)."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.strip().replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def _is_stale(ev: dict[str, Any], user: dict | None) -> bool:
     """True if this event is OLDER than the last billing event we applied to the account —
     an out-of-order (delayed) delivery that must not overwrite newer state (#2)."""
-    ev_at = ev.get("event_at") or ""
-    prev = (user or {}).get("billing_event_at") or ""
+    ev_at = _parse_dt(ev.get("event_at"))
+    prev = _parse_dt((user or {}).get("billing_event_at"))
     return bool(ev_at and prev and ev_at < prev)
 
 
@@ -326,44 +347,61 @@ _STATE_CHANGING = (_ACTIVATE_EVENTS | _REVOKE_EVENTS
                    | set(_MARK_ONLY_STATUS) | {"subscription_updated"})
 
 
+def _apply_email_change(ev: dict[str, Any], user: dict | None) -> tuple[str, dict | None]:
+    """AFTER validation, move the single account to a changed email (sub_id authoritative,
+    #5). Done here — not in lookup — so a stale/invalid event never mutates the email first
+    (#2-r4). Returns the (email, user_row) to operate on."""
+    email, sub_id = ev["email"], ev["sub_id"]
+    if not (user and sub_id and email and user.get("billing_sub_id") == sub_id
+            and user["email"] != email):
+        return (user["email"] if user else email), user
+    if auth_users.rename_user_email(user["email"], email):
+        logger.info("billing: moved sub=%s %s -> %s (email change)", sub_id, user["email"], email)
+        return email, auth_users.get_user(email)
+    logger.warning("billing: email-change conflict sub=%s (%s -> %s already taken)",
+                   sub_id, user["email"], email)
+    return user["email"], user                 # can't merge; keep operating on the sub's row
+
+
 def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     """Translate a parsed event into an auth_users action (no dedup concerns here)."""
     name = ev["event"]
-    email, user = _resolve_account(ev)
-    ev = {**ev, "email": email}                # operate on the resolved (possibly moved) email
+    user = _lookup_account(ev)                  # READ-ONLY resolve
 
-    # Drop events that arrive out of order for any state-changing transition (#2).
+    # Validate ordering BEFORE any mutation — a stale event must not rename/touch anything (#2).
     if name in _STATE_CHANGING and _is_stale(ev, user):
-        logger.info("billing: ignored stale event %s for %s (event_at=%s <= applied=%s)",
-                    name, email, ev.get("event_at"), (user or {}).get("billing_event_at"))
-        return {"action": "ignored", "email": email, "reason": "stale_event"}
+        logger.info("billing: ignored stale event %s (event_at=%s <= applied=%s)",
+                    name, ev.get("event_at"), (user or {}).get("billing_event_at"))
+        return {"action": "ignored", "email": (user or {}).get("email", ev["email"]),
+                "reason": "stale_event"}
 
-    def _provision_guarded() -> dict[str, Any]:
-        # An activation with no recognised tier means an unknown/un-allowlisted product —
-        # never grant access on it (H3). Require an allowlisted variant.
-        if ev["tier"] is None:
-            logger.warning("billing: refusing to provision %s on unknown variant (event=%s)",
-                           email, name)
-            return {"action": "ignored", "email": email, "reason": "unknown_variant"}
-        return provision(email, ev["tier"], ev["customer_id"], ev["sub_id"], ev.get("event_at", ""))
+    # Classify the action, and validate the VARIANT before any mutation — an unknown/
+    # un-allowlisted product must be refused without having renamed the account (#2-r4/H3).
+    is_activation = (name in _ACTIVATE_EVENTS
+                     or (name == "subscription_updated"
+                         and ev["status"] in ("active", "on_trial", "paid")))
+    if is_activation and ev["tier"] is None:
+        logger.warning("billing: refusing to provision %s on unknown variant (event=%s)",
+                       ev["email"], name)
+        return {"action": "ignored", "email": ev["email"], "reason": "unknown_variant"}
 
+    # Only now (ordering + variant validated) may we move the account to a changed email.
+    email, user = _apply_email_change(ev, user)
+    ev = {**ev, "email": email}
     eat = ev.get("event_at", "")
-    if name in _ACTIVATE_EVENTS:
-        return _provision_guarded()
-    if name in _REVOKE_EVENTS:
+
+    if is_activation:
+        return provision(email, ev["tier"], ev["customer_id"], ev["sub_id"], eat)
+    if name in _REVOKE_EVENTS or (name == "subscription_updated" and ev["status"] == "expired"):
         return revoke(email, status="expired", event_sub_id=ev["sub_id"], event_at=eat)
     if name in _MARK_ONLY_STATUS:
         status = _MARK_ONLY_STATUS[name]
         auth_users.set_billing(email, status=status, event_at=eat or None)
         return {"action": "mark", "email": email, "status": status}
     if name == "subscription_updated":
-        if ev["status"] in ("active", "on_trial", "paid"):
-            return _provision_guarded()
-        if ev["status"] == "expired":
-            return revoke(email, status="expired", event_sub_id=ev["sub_id"], event_at=eat)
         # cancelled / past_due / unpaid / paused → keep access, just record status (H4)
         if ev["status"]:
-            auth_users.set_billing(email, status=ev["status"], event_at=ev.get("event_at") or None)
+            auth_users.set_billing(email, status=ev["status"], event_at=eat or None)
             return {"action": "mark", "email": email, "status": ev["status"]}
         return {"action": "noop", "status": ev["status"]}
     return {"action": "ignored", "event": name}
@@ -375,9 +413,12 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
 
     The dedup key is claimed as `pending` BEFORE dispatch (atomic, M1) and marked `completed`
     ONLY on success — a crash mid-flight leaves a leased `pending` row that a later retry
-    reclaims, so an event is never permanently swallowed (#4). A failure, or an onboarding
-    email we couldn't send, releases the claim AND raises RetryableError so the HTTP response
-    is non-2xx and Lemon Squeezy actually retries (#1)."""
+    reclaims, so an event is never permanently swallowed (#4). `in_progress` (someone else
+    holds a fresh claim, or we lost a reclaim race) raises RetryableError → 503 so LS keeps
+    retrying until the holder either completes (→ later 200 duplicate) or its lease lapses;
+    returning 200 here would make LS stop retrying and the reclaim path would never run
+    (#4-r4). A failure, or an onboarding email we couldn't send, releases OUR claim and
+    raises RetryableError too (#1)."""
     if not verify_signature(raw_body, signature):
         raise PermissionError("invalid webhook signature")
 
@@ -388,24 +429,26 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
         raise ValueError("webhook missing user_email")
 
     key = _dedup_key(raw_body)
-    claim = _claim(key)
-    if claim in ("completed", "in_progress"):
+    claim, token = _claim(key)
+    if claim == "completed":
         return {"action": "duplicate", "ok": True, "event": name}
+    if claim == "in_progress":
+        raise RetryableError("delivery already in progress")   # 503 → LS retries
 
     try:
         result = _dispatch(parse_event(payload))
     except Exception:
-        _unclaim(key)        # let LS retry a transient failure
+        _unclaim(key, token)        # let LS retry a transient failure
         raise
 
     # A brand-new (or re-onboarding) user we failed to email is a dead end — release the
     # claim and force a non-2xx so the LS retry re-sends rather than acking into limbo (#1/H5).
     if (result.get("action") == "provision" and result.get("owed_email")
             and not result.get("emailed")):
-        _unclaim(key)
+        _unclaim(key, token)
         raise RetryableError(f"onboarding email not sent to {result.get('email')}")
 
-    _complete(key)
+    _complete(key, token)
     result["ok"] = True
     result["event"] = name
     return result

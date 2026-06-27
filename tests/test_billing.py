@@ -304,12 +304,39 @@ def test_crash_after_claim_is_reclaimed_after_lease(monkeypatch):
     payload = _payload("subscription_created")
     raw = json.dumps(payload).encode()
     key = billing._dedup_key(raw)
-    assert billing._claim(key) == "claimed"          # worker claimed, then "crashed"
-    assert billing._claim(key) == "in_progress"      # fresh retry within lease → no double act
+    status, _token = billing._claim(key)
+    assert status == "claimed"                       # worker claimed, then "crashed"
+    # a fresh retry within the lease must NOT be acked as done (would stop LS retrying) —
+    # it surfaces as in_progress → 503
+    assert billing._claim(key)[0] == "in_progress"
+    with pytest.raises(billing.RetryableError):
+        billing.handle_webhook(raw, _sign(raw), payload)
     monkeypatch.setattr(billing, "_CLAIM_LEASE_SECONDS", 0)   # lease elapses
     res = billing.handle_webhook(raw, _sign(raw), payload)    # retry reclaims + processes
     assert res["action"] == "provision"
     assert au.get_user("buyer@example.com") is not None
+
+
+def test_reclaim_is_owner_fenced(monkeypatch):
+    """Two reclaimers can't both win, and a resurrected old worker can't complete/delete the
+    newer claim (owner-token CAS, R4-3)."""
+    payload = _payload("subscription_created")
+    raw = json.dumps(payload).encode()
+    key = billing._dedup_key(raw)
+    s0, tok_old = billing._claim(key)
+    assert s0 == "claimed"
+    monkeypatch.setattr(billing, "_CLAIM_LEASE_SECONDS", 0)   # lease expired → reclaimable
+    s1, tok_new = billing._claim(key)
+    assert s1 == "reclaimed" and tok_new != tok_old
+    monkeypatch.setattr(billing, "_CLAIM_LEASE_SECONDS", 3600)  # freeze the lease for the checks
+    # the resurrected old worker tries to finish/release — both must be NO-OPs (it no longer
+    # owns the row); the row stays pending under the new claimer
+    billing._complete(key, tok_old)
+    billing._unclaim(key, tok_old)
+    assert billing._claim(key)[0] == "in_progress"           # still pending, owned by tok_new
+    # the new owner can still complete it
+    billing._complete(key, tok_new)
+    assert billing._claim(key)[0] == "completed"
 
 
 # ── #5 (round-3): an email change keeps ONE account (sub_id authoritative) ─────
@@ -323,6 +350,21 @@ def test_email_change_keeps_single_account():
     assert au.get_user("old@example.com") is None                 # moved, not duplicated
     u = au.get_user("new@example.com")
     assert u and u["is_active"] == 1 and u["billing_sub_id"] == "sub_x"
+
+
+def test_stale_event_does_not_rename_before_rejection():
+    """A delayed stale event must be rejected WITHOUT first mutating the email (R4-2):
+    the account stays on the newer email, not silently renamed back."""
+    _post("subscription_created", email="old@example.com", sub_id="sub_x",
+          updated_at="2026-05-01T00:00:00.000000Z")
+    _post("subscription_updated", email="new@example.com", sub_id="sub_x",
+          status="active", updated_at="2026-05-10T00:00:00.000000Z")     # moved to new@
+    # a delayed (older) event for the same sub under the OLD email arrives now
+    res = _post("subscription_updated", email="old@example.com", sub_id="sub_x",
+                status="active", updated_at="2026-05-05T00:00:00.000000Z")
+    assert res["action"] == "ignored" and res["reason"] == "stale_event"
+    assert au.get_user("new@example.com") is not None                    # not renamed back
+    assert au.get_user("old@example.com") is None
 
 
 # ── #6 (round-3): the /auth/request-link endpoint + its rate limit ────────────

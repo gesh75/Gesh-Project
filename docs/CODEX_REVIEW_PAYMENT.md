@@ -185,3 +185,26 @@ New columns: `users.billing_event_at`; `processed_webhook_events` gains `status/
 **Verification after round-3:** `pytest -q` → **223 passed** (218 + 5 new); `ruff check
 billing.py` clean; `py_compile` ok. Two pre-existing E501s remain in `auth_users.py`
 (`hash_password`, `set_active`) — untouched.
+
+---
+
+## 8. Round-4 resolutions (applied 2026-06-26 — re-verify)
+
+Third Codex pass found concurrency/ordering correctness bugs in the round-3 machinery.
+
+| # | Finding | Resolution | Test |
+|---|---------|-----------|------|
+| R4-1 HIGH | `in_progress` returned 200 → LS stops retrying → 300s reclaim never reached | `handle_webhook` raises `RetryableError` → **503** for `in_progress` (only `completed` 200s); lease shortened **300s → 60s** so a crashed claim is reclaimable inside LS's retry window. | `test_crash_after_claim_is_reclaimed_after_lease` |
+| R4-2 HIGH | Stale event renamed the account before being rejected | `_dispatch` now: read-only `_lookup_account` → validate ordering **and** variant → only then `_apply_email_change`. No mutation precedes validation. | `test_stale_event_does_not_rename_before_rejection` |
+| R4-3 MED | Lease reclaim not owner-fenced (double dispatch / old worker clobbers newer claim) | Each claim carries a random `owner` token; reclaim is a compare-and-swap on `(owner, claimed_at)` (rowcount gate); `_complete`/`_unclaim` are fenced `WHERE owner IS ?`. | `test_reclaim_is_owner_fenced` |
+| R4-4 LOW | Raw ISO-string timestamp compare is format-sensitive | `_parse_dt` parses to aware `datetime` (tolerates trailing `Z`); `_is_stale` compares datetimes. | covered by the ordering tests |
+
+**Schema:** `processed_webhook_events` gains an `owner` column (idempotent ALTER).
+
+**Verification after round-4:** `pytest -q` → **225 passed** (223 + 2 new); `ruff check
+billing.py` clean; `py_compile` ok.
+
+**Residual (unchanged, single-tenant alpha):** no background outbox flusher — recovery is
+LS-retry + lease-reclaim, now correct end-to-end (503 keeps LS retrying until completion or
+lease lapse). A multi-worker deployment is safe via the owner-fenced CAS; a true distributed
+queue remains the eventual production upgrade.
