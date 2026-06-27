@@ -304,7 +304,7 @@ def auth_magic(token: str = ""):
     if not u or not u["is_active"]:
         return RedirectResponse(url="/login?e=expired", status_code=302)
     auth_users.touch_last_login(email)
-    resp = RedirectResponse(url="/", status_code=302)
+    resp = RedirectResponse(url="/", status_code=303)   # 303 See Other after consuming the token
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.set_cookie(
         auth_users.COOKIE_NAME, auth_users.issue_token(email),   # fresh session token
