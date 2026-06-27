@@ -44,8 +44,11 @@ _PBKDF2_ROUNDS = 200_000
 
 # Paths reachable without a session (login flow, public proof/legal pages, health).
 PUBLIC_PREFIXES = (
-    "/login", "/auth/login", "/auth/logout", "/static/",
+    "/login", "/auth/login", "/auth/logout", "/auth/magic", "/static/",
     "/track-record", "/terms", "/disclaimer", "/healthz", "/favicon.ico",
+    # Payment surface: pricing page + provider webhook + post-checkout landing must be
+    # reachable WITHOUT a session (the webhook is signature-gated, not cookie-gated).
+    "/pricing", "/api/billing/webhook", "/billing/success",
 )
 
 
@@ -153,6 +156,25 @@ CREATE TABLE IF NOT EXISTS users (
 );
 """
 
+# Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
+# migration rather than baked into _DDL so EXISTING gesh_auth.db files pick them up too
+# (CREATE TABLE IF NOT EXISTS never alters an existing table). tier/billing_* are NULL for
+# pre-payment alpha users; the login wall still gates only on is_active.
+_BILLING_COLUMNS = {
+    "tier":                "TEXT",   # 'observer' | 'trader' | 'desk'
+    "billing_customer_id": "TEXT",   # provider customer id (Lemon Squeezy)
+    "billing_sub_id":      "TEXT",   # provider subscription id
+    "billing_status":      "TEXT",   # 'active' | 'past_due' | 'cancelled'
+}
+
+
+def _migrate(con) -> None:
+    """Add any missing billing columns (idempotent — safe on every connect)."""
+    have = {r["name"] for r in con.execute("PRAGMA table_info(users)").fetchall()}
+    for col, decl in _BILLING_COLUMNS.items():
+        if col not in have:
+            con.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
+
 
 @contextmanager
 def _conn():
@@ -160,6 +182,7 @@ def _conn():
     con.row_factory = sqlite3.Row
     try:
         con.executescript(_DDL)
+        _migrate(con)
         yield con
         con.commit()
     finally:
@@ -215,6 +238,41 @@ def touch_last_login(email: str) -> None:
 def set_active(email: str, active: bool) -> None:
     with _conn() as con:
         con.execute("UPDATE users SET is_active=? WHERE email=?", (1 if active else 0, _norm(email)))
+
+
+def set_billing(email: str, *, tier: str | None = None, customer_id: str | None = None,
+                sub_id: str | None = None, status: str | None = None) -> None:
+    """Update only the billing fields that are provided (None = leave unchanged)."""
+    sets, params = [], []
+    for col, val in (("tier", tier), ("billing_customer_id", customer_id),
+                     ("billing_sub_id", sub_id), ("billing_status", status)):
+        if val is not None:
+            sets.append(f"{col}=?")
+            params.append(val)
+    if not sets:
+        return
+    params.append(_norm(email))
+    with _conn() as con:
+        con.execute(f"UPDATE users SET {', '.join(sets)} WHERE email=?", params)
+
+
+def create_magic_link_user(email: str, tier: str | None = None) -> bool:
+    """Create a passwordless subscriber (logs in via magic link) OR re-activate an
+    existing one. Returns True if a new row was created. Idempotent — safe to call on
+    every 'subscription active' webhook. The random unusable password keeps the NOT NULL
+    constraint satisfied; the user authenticates via /auth/magic, not a password."""
+    em = _norm(email)
+    if not em:
+        raise ValueError("email required")
+    if get_user(em):
+        set_active(em, True)
+        if tier:
+            set_billing(em, tier=tier)
+        return False
+    create_user(em, secrets.token_urlsafe(24))   # unusable random pw; magic-link login
+    if tier:
+        set_billing(em, tier=tier)
+    return True
 
 
 def list_users() -> list[dict[str, Any]]:

@@ -144,6 +144,7 @@ from trading.contract import from_consensus, manual as manual_intent
 from trading.risk_gate import evaluate as risk_gate_evaluate
 from trading.execution import place as execution_place
 import auth_users   # multi-user login wall (OFF unless GESH_AUTH_ENABLED is set)
+import billing      # Lemon Squeezy payment webhook → provision/revoke auth_users
 
 
 # ─── Startup / Shutdown ───────────────────────────────────────────────────────
@@ -285,6 +286,102 @@ def auth_logout():
     resp = JSONResponse(content={"ok": True})
     resp.delete_cookie(auth_users.COOKIE_NAME)
     return resp
+
+
+@app.get("/auth/magic")
+def auth_magic(token: str = ""):
+    """Passwordless login from the onboarding email's magic link. The token IS a
+    short-TTL session token issued by billing.provision; validate it and set the cookie."""
+    email = auth_users.verify_token(token)
+    if not email or not auth_users.get_user(email):
+        return RedirectResponse(url="/login?e=expired", status_code=302)
+    auth_users.touch_last_login(email)
+    resp = RedirectResponse(url="/", status_code=302)
+    resp.set_cookie(
+        auth_users.COOKIE_NAME, token,
+        httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
+        secure=False,   # set True once :9000 is served over TLS
+    )
+    return resp
+
+
+# ─── Payment: pricing + Lemon Squeezy webhook (provision/revoke) ──────────────
+@app.get("/pricing", response_class=HTMLResponse)
+def pricing_page():
+    """Public pricing page — three tiers linking to Lemon Squeezy hosted checkout
+    (URLs from env; no card data ever touches this server)."""
+    import os as _os
+    tiers = [
+        ("Observer", "49", _os.getenv("LS_CHECKOUT_OBSERVER", "#"),
+         ["Signal-accuracy proof", "Daily report", "Watch dashboard"]),
+        ("Trader", "149", _os.getenv("LS_CHECKOUT_TRADER", "#"),
+         ["Everything in Observer", "Diversification radar", "Deep bull/bear debate"]),
+        ("Desk", "399", _os.getenv("LS_CHECKOUT_DESK", "#"),
+         ["Everything in Trader", "Crypto on-chain signals", "BTC/ETH options flow"]),
+    ]
+    cards = ""
+    for name, price, url, feats in tiers:
+        items = "".join(f"<li>{f}</li>" for f in feats)
+        cards += (
+            "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:24px;"
+            "background:#0d1520;flex:1;min-width:220px\">"
+            f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
+            f"<p style=\"font-size:32px;margin:8px 0\"><strong>${price}</strong>"
+            "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
+            f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
+            f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
+            "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
+            "font-weight:600;margin-top:12px\">Subscribe</a></div>"
+        )
+    return (
+        "<!doctype html><html><head><meta charset=utf-8><title>GESH — Pricing</title>"
+        "<meta name=viewport content=\"width=device-width,initial-scale=1\"></head>"
+        "<body style=\"font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;"
+        "max-width:900px;margin:auto;padding:32px\">"
+        "<h1 style=\"color:#00d4ff\">GESH Financial — Plans</h1>"
+        "<p style=\"color:#aeb9c7\">AI signal intelligence for your portfolio. "
+        "See the <a href=\"/track-record\" style=\"color:#00e87a\">live track record</a> first.</p>"
+        f"<div style=\"display:flex;gap:16px;flex-wrap:wrap;margin:24px 0\">{cards}</div>"
+        "<p style=\"color:#667;font-size:12px\">By subscribing you agree to the "
+        "<a href=\"/terms\" style=\"color:#889\">Terms</a> &amp; "
+        "<a href=\"/disclaimer\" style=\"color:#889\">Disclaimer</a>. "
+        "NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY.</p></body></html>"
+    )
+
+
+@app.get("/billing/success", response_class=HTMLResponse)
+def billing_success():
+    """Post-checkout landing — the magic-link email lands separately."""
+    return (
+        "<!doctype html><html><head><meta charset=utf-8><title>Payment received</title></head>"
+        "<body style=\"font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;"
+        "max-width:560px;margin:auto;padding:48px;text-align:center\">"
+        "<h1 style=\"color:#00e87a\">✓ Payment received</h1>"
+        "<p>Check your email for a sign-in link to access GESH. "
+        "It can take a minute to arrive.</p>"
+        "<p><a href=\"/login\" style=\"color:#00d4ff\">Go to login</a></p></body></html>"
+    )
+
+
+@app.post("/api/billing/webhook")
+async def billing_webhook(request: Request):
+    """Lemon Squeezy webhook — signature-verified + idempotent. Provisions/revokes the
+    auth_users account. Public (in PUBLIC_PREFIXES) because it carries its own HMAC auth."""
+    raw = await request.body()
+    sig = request.headers.get("X-Signature")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    try:
+        result = billing.handle_webhook(raw, sig, payload)
+        return JSONResponse(content=result)
+    except PermissionError:
+        return JSONResponse(status_code=401, content={"ok": False, "detail": "bad signature"})
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"ok": False, "detail": str(e)})
+    except Exception as exc:  # noqa: BLE001
+        raise _server_error(exc)
 
 
 # ─── Public pages: signal-accuracy proof + legal (no auth required) ───────────
