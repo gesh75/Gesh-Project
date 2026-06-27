@@ -386,3 +386,74 @@ def test_request_link_endpoint_and_rate_limit(monkeypatch):
              for _ in range(5)]
     assert codes[:4] == [200] * 4 and codes[4] == 429
     assert sent == ["buyer@example.com"] * 4        # only the active user, only within the limit
+
+
+# ── L2: signature hex-case normalization ──────────────────────────────────────
+
+def test_signature_accepts_uppercase_hex():
+    """Defense-in-depth: a constant-time match must still succeed if the provider ever sends
+    the HMAC as uppercase hex (LS sends lowercase today)."""
+    raw = json.dumps(_payload("subscription_created")).encode()
+    assert billing.verify_signature(raw, _sign(raw).upper()) is True
+    assert billing.verify_signature(raw, "deadbeef") is False   # wrong sig still rejected
+
+
+# ── M2: dead-letter alert fires when onboarding email can't be sent ───────────
+
+def test_failed_email_triggers_dead_letter_alert(monkeypatch):
+    monkeypatch.setattr("billing.email_sender.send_magic_link",
+                        lambda to, link, tier=None: False)      # email provider down
+    alerts: list = []
+    monkeypatch.setattr(billing, "_alert_dead_letter",
+                        lambda email, reason: alerts.append((email, reason)) or True)
+    payload = _payload("subscription_created", email="stuck@example.com")
+    raw = json.dumps(payload).encode()
+    with pytest.raises(billing.RetryableError):
+        billing.handle_webhook(raw, _sign(raw), payload)
+    assert alerts and alerts[0][0] == "stuck@example.com"
+
+
+def test_alert_dead_letter_never_raises(monkeypatch):
+    """Alerting is strictly best-effort — a broken alert channel must not bubble up."""
+    def _boom(*a, **k):
+        raise RuntimeError("telegram down")
+    monkeypatch.setattr("trading.alerts._send", _boom)
+    # even if the send blows up, the helper swallows it and returns False
+    assert billing._alert_dead_letter("x@example.com", reason="test") is False
+
+
+# ── M1: async owed-onboarding sweep recovers stuck subscribers ────────────────
+
+def test_resend_owed_onboarding_recovers_stuck_user(monkeypatch):
+    # first delivery fails → user provisioned but still owed a link (welcome_emailed_at NULL)
+    monkeypatch.setattr("billing.email_sender.send_magic_link",
+                        lambda to, link, tier=None: False)
+    monkeypatch.setattr(billing, "_alert_dead_letter", lambda email, reason: True)
+    payload = _payload("subscription_created", email="late@example.com")
+    raw = json.dumps(payload).encode()
+    with pytest.raises(billing.RetryableError):
+        billing.handle_webhook(raw, _sign(raw), payload)
+    u = au.get_user("late@example.com")
+    assert u["is_active"] == 1 and u["welcome_emailed_at"] is None
+
+    # provider recovers → the sweep re-sends and stamps delivery, idempotently
+    sent: list = []
+    monkeypatch.setattr("billing.email_sender.send_magic_link",
+                        lambda to, link, tier=None: sent.append(to) or True)
+    summary = billing.resend_owed_onboarding()
+    assert summary == {"owed": 1, "sent": 1, "failed": 0}
+    assert sent == ["late@example.com"]
+    assert au.get_user("late@example.com")["welcome_emailed_at"] is not None
+
+    # second sweep is a no-op (no longer owed)
+    assert billing.resend_owed_onboarding() == {"owed": 0, "sent": 0, "failed": 0}
+
+
+def test_sweep_skips_inactive_and_untiered_users():
+    """Only ACTIVE, tiered subscribers are owed onboarding — churned or password users aren't."""
+    au.create_magic_link_user("active@example.com", tier="trader")  # owed (NULL welcome)
+    au.create_magic_link_user("churned@example.com", tier="trader")
+    au.set_active("churned@example.com", False)
+    au.create_user("pwuser@example.com", "pw")                      # no tier → not a subscriber
+    owed = {u["email"] for u in au.list_owed_onboarding()}
+    assert owed == {"active@example.com"}

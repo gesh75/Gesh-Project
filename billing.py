@@ -77,7 +77,9 @@ def verify_signature(raw_body: bytes, signature: str | None) -> bool:
     if not secret or not signature:
         return False
     expected = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature.strip())
+    # Normalize to lowercase hex: LS sends lowercase today, but case-folding removes a latent
+    # silent-outage risk if that ever changes (still constant-time-compared on the digest).
+    return hmac.compare_digest(expected, signature.strip().lower())
 
 
 # ── tier mapping ─────────────────────────────────────────────────────────────────
@@ -268,6 +270,43 @@ def _magic_link(email: str) -> str:
     return f"{base}/auth/magic?token={token}"
 
 
+def _alert_dead_letter(email: str, reason: str) -> bool:
+    """Best-effort operator alert for a webhook dead-letter (M2). Reuses the project's
+    Telegram channel when configured, else just logs. NEVER raises — alerting must not
+    affect the webhook's retry decision. Returns True if an alert was dispatched."""
+    logger.error("billing: DEAD-LETTER for %s — %s", email, reason)
+    try:
+        from trading.alerts import _send   # lazy import: keeps billing import-light + testable
+        return _send(f"⚠️ <b>GESH onboarding stuck</b>\n{email}\n<i>{reason}</i>")
+    except Exception as e:   # noqa: BLE001 — alerting is strictly best-effort
+        logger.warning("billing: dead-letter alert not sent (%s)", e)
+        return False
+
+
+def resend_owed_onboarding(limit: int = 100) -> dict[str, Any]:
+    """Async safety net (M1): re-send the onboarding magic link to every ACTIVE subscriber
+    still owed one (welcome_emailed_at IS NULL). Run from a scheduler/cron so onboarding
+    delivery no longer depends solely on Lemon Squeezy's 4-attempt retry budget — a paid user
+    whose webhook-inline send failed (and exhausted LS retries) is recovered on the next sweep.
+
+    Idempotent: stamps welcome_emailed_at only on a successful send, so a user is re-tried
+    until delivery succeeds and never double-emailed once it does. Returns a summary."""
+    owed = auth_users.list_owed_onboarding(limit=limit)
+    sent, failed = 0, 0
+    for u in owed:
+        email, tier = u["email"], u.get("tier")
+        if email_sender.send_magic_link(email, _magic_link(email), tier=tier):
+            auth_users.set_welcome_emailed(email, datetime.now(timezone.utc).isoformat())
+            sent += 1
+        else:
+            failed += 1
+            _alert_dead_letter(email, reason="onboarding re-send failed (sweep)")
+    if owed:
+        logger.info("billing: onboarding sweep — owed=%d sent=%d failed=%d",
+                    len(owed), sent, failed)
+    return {"owed": len(owed), "sent": sent, "failed": failed}
+
+
 def provision(email: str, tier: str | None, customer_id: str | None,
               sub_id: str | None, event_at: str = "") -> dict[str, Any]:
     """Create-or-reactivate a subscriber and email a magic link to anyone who is still
@@ -446,9 +485,31 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
     if (result.get("action") == "provision" and result.get("owed_email")
             and not result.get("emailed")):
         _unclaim(key, token)
+        # Dead-letter alert (M2): surface a paid-but-un-onboarded user immediately rather than
+        # relying on the operator to notice. Best-effort — never let alerting mask the retry.
+        _alert_dead_letter(str(result.get("email") or email), reason="onboarding email not sent")
         raise RetryableError(f"onboarding email not sent to {result.get('email')}")
 
     _complete(key, token)
     result["ok"] = True
     result["event"] = name
     return result
+
+
+# ── CLI (scheduled onboarding sweep) ──────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if len(sys.argv) >= 2 and sys.argv[1] == "sweep-onboarding":
+        summary = resend_owed_onboarding()
+        print(f"onboarding sweep: owed={summary['owed']} sent={summary['sent']} "
+              f"failed={summary['failed']}")
+    else:
+        print("usage: python3 billing.py sweep-onboarding")
+        raise SystemExit(1)

@@ -354,6 +354,23 @@ def list_users() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def list_owed_onboarding(limit: int = 100) -> list[dict[str, Any]]:
+    """Active subscribers who are still owed a sign-in link (welcome_emailed_at IS NULL).
+
+    Backs the async onboarding safety net: when the webhook-inline send fails and Lemon
+    Squeezy exhausts its retries, these users would otherwise be silently stuck. A scheduled
+    sweep re-mints + re-sends to them (billing.resend_owed_onboarding). Only ever returns
+    ACTIVE users with a tier — a churned/never-paid row is not owed an onboarding link."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT email, tier FROM users "
+            "WHERE is_active=1 AND welcome_emailed_at IS NULL AND tier IS NOT NULL "
+            "ORDER BY created_at LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── gate decision (pure, testable) ──────────────────────────────────────────────
 
 def is_public_path(path: str) -> bool:
