@@ -159,3 +159,46 @@ dependency) to read the session user's `tier` and compare. Keep `/track-record`,
 
 **Next action:** answer **D1–D5** (especially D1 provider). On D1 I can scaffold Phase 1
 (`billing.py` + routes + tests) behind `BILLING_PROVIDER`, with the provider SDK swappable.
+
+---
+
+## 10. Implementation status (SHIPPED — 2026-06-26)
+
+> Decisions landed: **D1 = Lemon Squeezy** (merchant-of-record), **D2 = magic-link**,
+> **D4 = Resend**. Phase 1 is live, hardened across 4 Codex review rounds + an EXA-driven
+> reliability review. `launch_status.json "payment"` ready to flip after a real test purchase.
+
+**Files:** `billing.py` (webhook orchestrator), `auth_users.py` (typed tokens + billing cols),
+`email_sender.py` (Resend), `server.py` (routes + middleware), `tests/test_billing.py` (35 tests, all pass).
+
+**Routes:** `GET /pricing` (public), `GET /billing/success` (public), `POST /api/billing/webhook`
+(public, HMAC-gated) — all wall-exempt via `auth_users.PUBLIC_PREFIXES`.
+
+**Security checklist (§6) — status:**
+- [x] HMAC-SHA256 over **raw body**, constant-time, **case-folded**, fail-closed (`verify_signature`).
+- [x] **Idempotent** — outbox state machine (`pending`→`completed`), owner-fenced reclaim of crashed claims.
+- [x] Hosted checkout only — no card fields touch us (PCI SAQ-A); MoR owns tax/VAT.
+- [x] Secrets in `.env`; webhook body not logged raw.
+- [x] Magic-link tokens **single-use** (`used_magic_tokens`) + 15-min TTL + `typ`-bound (not replayable as a session cookie).
+- [x] Revoke path tested — `subscription_expired` → `is_active=0` → wall blocks within one request.
+- [x] `/api/billing/webhook` rate-limited (under the `/api/` limiter) — it is the only new unauthenticated write.
+
+**Lifecycle mapping (LS event → action):**
+- `subscription_created` / `_resumed` / `_unpaused` / `_payment_success` / `order_created` → **provision** (allowlisted variant required).
+- `subscription_payment_failed` → mark `past_due`, **keep access** (dunning grace — never revoke on first failed charge).
+- `subscription_cancelled` / `_paused` → mark status, keep access to period end.
+- `subscription_expired` → **revoke** (the only true lockout).
+- `subscription_updated` → branch on `status` (active/expired/other).
+
+**Reliability hardening (EXA review R4, 2026-06-26):**
+- **Async onboarding safety net** — `billing.resend_owed_onboarding()` re-sends the magic link to any
+  ACTIVE subscriber still owed one (`welcome_emailed_at IS NULL`), so delivery no longer depends solely
+  on LS's 4-attempt retry budget. Idempotent (stamps only on success). Scheduled every 15 min via the
+  `com.gesh.onboarding-sweep` LaunchAgent (`sweep_onboarding.sh`).
+- **Dead-letter alert** — `billing._alert_dead_letter()` (best-effort, never raises) fires a Telegram
+  alert when a paid user can't be onboarded, so a stuck subscriber surfaces immediately.
+
+**Remaining (accepted / future):**
+- No time-based replay window — LS sends no signed timestamp; dedup + `event_at` monotonic ordering are the mitigations.
+- Tier→feature gating (Phase 2) — alpha sells one honest tier; only `is_active` is enforced today.
+- Self-serve `/billing/portal` (Phase 2).

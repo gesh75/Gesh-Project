@@ -45,10 +45,20 @@ Georgi — Network Engineer, active trader, Robinhood user via robin_stocks.
 Service label: `com.gesh.main` → `~/Library/LaunchAgents/com.gesh.main.plist`  
 Start script: `start_gesh_main.sh` (plist handles log output to `/tmp/gesh_main.log`)
 
+| Label | Schedule | Script | Log | Purpose |
+|---|---|---|---|---|
+| `com.gesh.main` | RunAtLoad | `start_gesh_main.sh` | `/tmp/gesh_main.log` | the :9000 server |
+| `com.gesh.daily-analysis` | 10:30 ET Mon–Fri | `run_daily_analysis.sh` | `/tmp/gesh_fullchain.log` | daily analysis chain |
+| `com.gesh.onboarding-sweep` | every 15 min (`StartInterval 900`) | `sweep_onboarding.sh` | `/tmp/gesh_onboarding_sweep.log` | re-send onboarding magic links to paid-but-un-onboarded subscribers (`billing.resend_owed_onboarding`; idempotent) |
+
 ```bash
 # Restart this service
 launchctl bootout gui/$(id -u)/com.gesh.main
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.gesh.main.plist
+
+# (Re)load the onboarding sweep
+launchctl bootout gui/$(id -u)/com.gesh.onboarding-sweep 2>/dev/null
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.gesh.onboarding-sweep.plist
 
 # Fix all 4 services at once
 bash /Users/georgigaydarov/Projects/gesh-project-trading/fix_and_reload_services.sh
@@ -630,7 +640,9 @@ New modules + routes on :9000 (full writeups: `../gesh-project-trading/docs/SYST
 |---|---|---|
 | `proof_page.py` | `GET /track-record` (public) | Signal-accuracy proof page — the #1 sales asset; reads the -trading tracker DB read-only; honest "day X/180, N/30 closed" |
 | `legal_pages.py` | `GET /terms` `/disclaimer` (public) | Renders `TERMS_OF_SERVICE.md`; **strips the internal "Compliance notes" section** — never serve it |
-| `auth_users.py` | login wall (env-gated **OFF**) | Per-user credentials for the paid alpha; `GESH_AUTH_ENABLED=1` + `GESH_AUTH_SECRET` to enable; immediate revoke via `auth_users.py disable`. Stdlib-only (PBKDF2 + HMAC cookie), no new deps. `gesh_auth.db`. |
+| `auth_users.py` | login wall (env-gated **OFF**) | Per-user credentials for the paid alpha; `GESH_AUTH_ENABLED=1` + `GESH_AUTH_SECRET` to enable; immediate revoke via `auth_users.py disable`. Stdlib-only (PBKDF2 + HMAC cookie), no new deps. `gesh_auth.db`. **Typed tokens** (`typ='session'`/`'magic'` bound into the HMAC payload — a magic URL token can't be replayed as a session cookie). Billing cols + `list_owed_onboarding()` added 2026-06-26. |
+| `billing.py` | `POST /api/billing/webhook` (public, HMAC-gated) | **Lemon Squeezy** (merchant-of-record) webhook → provision/revoke on `auth_users`. Fail-closed HMAC-SHA256 (raw body, constant-time, case-folded); outbox-style **idempotency** (owner-fenced reclaim); **past-due grace** (revoke ONLY on `subscription_expired`, never on first failed charge); sub-id-authoritative resolution + email-change move. Magic-link onboarding via `email_sender.py`. **Async onboarding safety net:** `resend_owed_onboarding()` (CLI `python3 billing.py sweep-onboarding`, scheduled 15-min — see LaunchAgents) re-sends to anyone still owed a link after LS exhausts its retries; `_alert_dead_letter()` fires a Telegram alert on a stuck user. See `docs/PAYMENT_INTEGRATION_PLAN.md` §10. |
+| `email_sender.py` | — | Transactional email (Resend HTTP API, no new SDK). `RESEND_API_KEY` + `EMAIL_FROM`; dev no-op (logs, returns False) when key unset so the webhook path stays testable. |
 | `progress_view.py` | `GET /progress` (internal, wall-gated) | Founder cockpit — weekly burndown to the Sep alpha; reads `weekly_snapshots` (written by the -trading Friday job) |
 | `invest_radar.py` + `invest_view.py` | `GET /invest` `/invest/data` (internal, wall-gated) | **Diversification Radar** — advisory-only daily scan of NEW (non-held) names with a 5-factor score + cash-aware sizing; surfaces book sector concentration + swap ideas. Computed in `run_ai2.py` (the 10:30 job), persisted to `engine_results.json`, rendered in the daily report + `/invest`. **Never auto-trades; read-only; no PII.** Full writeup: `docs/DIVERSIFICATION_RADAR.md` |
 | `db.py::_safe_json` | `/api/history/{id}` | Malformed `result_json` degrades to `parse_error` instead of HTTP 500 |
