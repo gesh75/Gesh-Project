@@ -276,7 +276,7 @@ def _alert_dead_letter(email: str, reason: str) -> bool:
     affect the webhook's retry decision. Returns True if an alert was dispatched."""
     logger.error("billing: DEAD-LETTER for %s — %s", email, reason)
     try:
-        from trading.alerts import _send   # lazy import: keeps billing import-light + testable
+        from trading.alerts import _send  # noqa: I001 — lazy import keeps billing import-light
         return _send(f"⚠️ <b>GESH onboarding stuck</b>\n{email}\n<i>{reason}</i>")
     except Exception as e:   # noqa: BLE001 — alerting is strictly best-effort
         logger.warning("billing: dead-letter alert not sent (%s)", e)
