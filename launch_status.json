@@ -1,0 +1,13 @@
+{
+  "_comment": "Launch readiness gates for the :9000 product. Flip a gate to true only when its exit criteria in docs/PAYMENT_GOLIVE_CHECKLIST.md are met. payment stays false through Phase 0-1 (test-mode validation) and is flipped only at the deliberate go-live cutover (Phase 2).",
+  "updated_at": "2026-06-27",
+  "gates": {
+    "payment": false,
+    "auth_wall": true,
+    "public_endpoint": false
+  },
+  "notes": {
+    "payment": "Code shipped + tested (35/35). Blocked on: LS store activation, Cloudflare Tunnel, test-mode .env wiring, then the 8-row E2E evidence matrix.",
+    "public_endpoint": "Set true once the Cloudflare Tunnel reaches POST /api/billing/webhook over HTTPS and LS shows the endpoint at 2xx."
+  }
+}
