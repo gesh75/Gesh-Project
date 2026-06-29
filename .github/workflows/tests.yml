@@ -59,14 +59,13 @@ jobs:
       - name: Install runtime + test deps
         run: |
           python -m pip install --upgrade pip
-          # Import-time deps for the four modules under test:
-          pip install "numpy>=2,<3" "pandas>=2" "yfinance>=0.2"
-          # Shared core (thin shims under test re-export it):
-          pip install "gesh-core @ git+https://github.com/gesh75/gesh-core.git@v0.4.0"
-          # Import-time deps for two more offline test modules
-          # (test_ai_analyzer_caching -> anthropic, test_data_fetcher_offline -> robin_stocks):
-          pip install anthropic robin_stocks
-          # Test + lint tooling:
+          # Install everything EXCEPT openbb: its resolver backtracks for 20+ min
+          # in CI and no test needs it (fundamentals_openbb.py guards its import).
+          # This pulls fastapi/starlette, praw, nltk, anthropic, robin-stocks, and
+          # the private gesh-core pin (cloned via the PAT configured above).
+          grep -vi 'openbb' requirements.txt > ci-requirements.txt
+          pip install -r ci-requirements.txt
+          # Test + lint tooling (not in requirements.txt):
           pip install pytest pytest-cov ruff
 
       - name: Ruff (new test suite only)
