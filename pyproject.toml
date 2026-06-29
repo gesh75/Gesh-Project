@@ -19,5 +19,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
-# Tests legitimately import after sys.path manipulation and stub modules.
-ignore = ["E402"]
+# E402: tests legitimately import after sys.path manipulation and stub modules.
+# E501: line-length not enforced on tests (long asserts / stub lambdas aren't
+#       worth wrapping) — matches the gesh-core / engine lint policy, which omits
+#       the E5 group. Real-bug rules (F, imports, E7) stay on.
+ignore = ["E402", "E501"]

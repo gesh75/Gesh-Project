@@ -11,9 +11,9 @@ import sys
 import types
 
 import consensus
-import regime
-import macro_connector
 import fft_cycles
+import macro_connector
+import regime
 
 
 def _offline(monkeypatch, regime_label):

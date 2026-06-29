@@ -17,13 +17,11 @@ We assert two independent things per analyzer:
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
 
 import ai_analyzer
-
 
 # ─── Fakes ───────────────────────────────────────────────────────────────────
 

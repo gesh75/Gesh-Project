@@ -1,8 +1,13 @@
 name: tests
 
 # Minimal, additive CI: lint the new test suite with ruff, then run the
-# fully-offline money-moving unit tests. No secrets, no network calls at test
-# time (yfinance/Anthropic/Robinhood are all mocked inside the tests).
+# fully-offline money-moving unit tests. No network at test time
+# (yfinance/Anthropic/Robinhood are all mocked inside the tests).
+#
+# kelly.py / tax_harvester.py / sentiment_connector.py are now thin shims that
+# re-export gesh_core, so the shared package MUST be installed or test collection
+# fails on import. gesh-core is a separate PRIVATE repo, so a GESH_CORE_PAT repo
+# secret (fine-grained PAT, read access to gesh75/gesh-core) is required.
 
 on:
   push:
@@ -38,12 +43,29 @@ jobs:
         with:
           python-version: "3.12"
 
+      # gesh-core lives in a separate PRIVATE repo; CI's default GITHUB_TOKEN
+      # can't clone it. Rewrite the clone URL with a GESH_CORE_PAT secret (passed
+      # via env, never inlined). Warns instead of silently proceeding if unset.
+      - name: Configure private gesh-core access
+        env:
+          GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
+        run: |
+          if [ -n "$GESH_CORE_PAT" ]; then
+            git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
+          else
+            echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
+          fi
+
       - name: Install runtime + test deps
         run: |
           python -m pip install --upgrade pip
-          # Import-time deps for the four modules under test:
-          pip install "numpy>=2,<3" "pandas>=2" "yfinance>=0.2"
-          # Test + lint tooling:
+          # Install everything EXCEPT openbb: its resolver backtracks for 20+ min
+          # in CI and no test needs it (fundamentals_openbb.py guards its import).
+          # This pulls fastapi/starlette, praw, nltk, anthropic, robin-stocks, and
+          # the private gesh-core pin (cloned via the PAT configured above).
+          grep -vi 'openbb' requirements.txt > ci-requirements.txt
+          pip install -r ci-requirements.txt
+          # Test + lint tooling (not in requirements.txt):
           pip install pytest pytest-cov ruff
 
       - name: Ruff (new test suite only)

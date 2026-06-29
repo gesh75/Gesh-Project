@@ -1,7 +1,6 @@
 """Tests for gesh_exit_advice.py — advisory exit-band table from the engine."""
 from gesh_exit_advice import exit_advice
 
-
 KELLY = {
     "NVDA": {"volatility_tier": "MEDIUM"},
     "MU": {"volatility_tier": "HIGH"},
