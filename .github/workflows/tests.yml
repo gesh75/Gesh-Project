@@ -63,6 +63,9 @@ jobs:
           pip install "numpy>=2,<3" "pandas>=2" "yfinance>=0.2"
           # Shared core (thin shims under test re-export it):
           pip install "gesh-core @ git+https://github.com/gesh75/gesh-core.git@v0.4.0"
+          # Import-time deps for two more offline test modules
+          # (test_ai_analyzer_caching -> anthropic, test_data_fetcher_offline -> robin_stocks):
+          pip install anthropic robin_stocks
           # Test + lint tooling:
           pip install pytest pytest-cov ruff
 
