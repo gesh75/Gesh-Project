@@ -39,9 +39,11 @@ def _seed_snapshot(db: Path, **over):
         "on_track": 1, "status": "ON TRACK", "top_blocker": "No payment path", "created_at": "x",
     }
     row.update(over)
-    cols = ",".join(row); ph = ",".join("?" * len(row))
+    cols = ",".join(row)
+    ph = ",".join("?" * len(row))
     con.execute(f"INSERT INTO weekly_snapshots ({cols}) VALUES ({ph})", list(row.values()))
-    con.commit(); con.close()
+    con.commit()
+    con.close()
 
 
 class TestLoadProgress:
@@ -73,7 +75,8 @@ class TestLoadProgress:
 
 class TestRenderProgressHtml:
     def test_pending_state_renders(self, tmp_path):
-        db = tmp_path / "g.db"; db.touch()
+        db = tmp_path / "g.db"
+        db.touch()
         html = progress_view.render_progress_html(progress_view.load_progress(db, today="2026-06-03"))
         assert "<!doctype html" in html.lower()
         assert "ALPHA" in html.upper()

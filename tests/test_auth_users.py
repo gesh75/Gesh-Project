@@ -30,7 +30,6 @@ def isolated_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
 
 import auth_users as au
 
-
 # ── password hashing ──────────────────────────────────────────────────────────
 
 class TestPasswordHashing:

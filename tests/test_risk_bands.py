@@ -1,5 +1,4 @@
 """Tests for risk_bands.py — the canonical exit-risk math shared with agentic-rh-test."""
-import pytest
 
 from risk_bands import exit_analytics, exit_bands, trailing_stop
 

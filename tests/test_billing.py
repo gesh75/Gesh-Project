@@ -176,7 +176,10 @@ def test_session_token_rejected_as_magic():
 
 def test_legacy_typeless_token_treated_as_session():
     """Back-compat: cookies issued before the typ claim (no typ) still authenticate."""
-    import json as _json, time as _time, hashlib as _h, hmac as _hm
+    import hashlib as _h
+    import hmac as _hm
+    import json as _json
+    import time as _time
     payload = au._b64u(_json.dumps(
         {"sub": "buyer@example.com", "exp": int(_time.time()) + 900}).encode())
     sig = au._b64u(_hm.new(au._secret(), payload.encode(), _h.sha256).digest())
@@ -387,7 +390,8 @@ def test_request_link_endpoint_and_rate_limit(monkeypatch):
     """Exercise the real HTTP route: it always 200s (no enumeration), only emails active
     users, and 429s after the per-IP burst limit."""
     from starlette.testclient import TestClient
-    import server                                   # heavy import; route lives here
+
+    import server  # heavy import; route lives here
     sent: list = []
     monkeypatch.setattr(server.email_sender, "send_magic_link",
                         lambda to, link, tier=None: sent.append(to) or True)
