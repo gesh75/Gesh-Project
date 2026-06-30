@@ -1213,6 +1213,13 @@ function setTs(asOf,ageS){
     $('ts').textContent='As of '+t+age;return;}
   $('ts').textContent='Updated '+new Date().toLocaleTimeString();
 }
+// Single source of truth for the connection badge/timestamp from an /api/portfolio payload —
+// both loaders MUST call this so a cached (offline) snapshot is never shown as green "Live"
+// (Codex MEDIUM-1). Snapshot fallback → amber "Cached · as of …"; live → green "Live".
+function applyPortfolioConn(d){
+  setConn(true, !!(d&&d.offline));
+  setTs(d&&d.offline?d.as_of:null, d&&d.offline?d.snapshot_age_seconds:null);
+}
 
 async function loadPortfolio(){
   try{
@@ -1221,9 +1228,7 @@ async function loadPortfolio(){
     const d=(await r.json()).data;
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
-    // Snapshot fallback (RH offline) → show "Cached · as of …", never green "Live" (Codex MEDIUM-3)
-    setConn(true, !!d.offline);
-    setTs(d.offline?d.as_of:null, d.offline?d.snapshot_age_seconds:null);
+    applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
   }catch(e){console.error(e);setConn(false);}
 }
 function renderStats(eq){
@@ -2174,7 +2179,7 @@ async function loadPortfolioWithECG(){
     _lastHoldings=d.holdings;
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
-    setConn(true);setTs();
+    applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
   }catch(e){console.error(e);setConn(false);}
 }
 

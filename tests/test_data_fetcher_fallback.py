@@ -149,3 +149,28 @@ def test_real_bug_in_holdings_is_not_swallowed(monkeypatch):
     monkeypatch.setattr(df.rh, "build_holdings", _boom)
     with pytest.raises(RuntimeError):
         df.get_portfolio_holdings()
+
+
+# ── Codex round-2 LOW-2: non-object JSON must be a clean 503, not an AttributeError 500 ──
+
+@pytest.mark.parametrize("body", ["[]", "42", '"a string"', "null"])
+def test_non_object_snapshot_rejected(tmp_path, body):
+    p = tmp_path / "live_portfolio_snapshot.json"
+    p.write_text(body)
+    with pytest.raises(df.RobinhoodOfflineError):       # not AttributeError
+        df.load_snapshot_payload(p)
+
+
+# ── Codex round-2 MEDIUM-1: BOTH portfolio loaders must render the offline/cached badge ──
+
+def test_dashboard_loaders_are_offline_aware():
+    """Guard against the regression Codex found: the interval loader (loadPortfolioWithECG)
+    showed cached data as green 'Live'. Both loaders must route the badge through the single
+    offline-aware helper, and the unconditional pattern must not reappear."""
+    html = (Path(__file__).resolve().parents[1] / "templates" / "dashboard.html").read_text()
+    assert "setConn(true);setTs()" not in html            # the buggy unconditional pattern is gone
+    assert "function applyPortfolioConn(" in html          # single source of truth exists
+    # both loaders delegate to it
+    for fn in ("loadPortfolio", "loadPortfolioWithECG"):
+        seg = html.split(f"async function {fn}(", 1)[1].split("async function", 1)[0]
+        assert "applyPortfolioConn(d)" in seg, f"{fn} does not use applyPortfolioConn"

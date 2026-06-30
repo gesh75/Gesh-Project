@@ -1,13 +1,14 @@
 from __future__ import annotations
+
 import json
 import math
 import os
-from pathlib import Path
-
-import robin_stocks.robinhood as rh
-import pandas as pd
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+import pandas as pd
+import robin_stocks.robinhood as rh
 
 DEFAULT_WATCHLIST: list[str] = ["MSTR", "SPY", "QQQ"]
 
@@ -46,9 +47,13 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
 
     # ── validate (Codex MEDIUM-3): a `{}` or schema-broken snapshot must NOT be served as a
     # fresh $0 portfolio, and a stale / timestamp-less one must NOT be shown as live.
+    # Check the top-level type BEFORE any .get() — a JSON `[]`/scalar would otherwise raise
+    # AttributeError (→ 500) instead of a clean RobinhoodOfflineError (→ 503) (Codex LOW-2).
+    if not isinstance(snap, dict):
+        raise RobinhoodOfflineError(f"snapshot at {p} is not a JSON object.")
     eqs = snap.get("equity_summary")
     raw_holdings = snap.get("holdings")
-    if not (isinstance(snap, dict) and isinstance(eqs, dict) and isinstance(raw_holdings, list)):
+    if not (isinstance(eqs, dict) and isinstance(raw_holdings, list)):
         raise RobinhoodOfflineError(f"snapshot at {p} missing equity_summary/holdings.")
 
     # Headline equity = ACCOUNT-level (positions + cash), matching the live path and the
