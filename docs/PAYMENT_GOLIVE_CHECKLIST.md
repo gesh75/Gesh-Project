@@ -107,16 +107,28 @@ the live endpoint. Refresh the snapshot via the robinhood-trading MCP →
 
 ---
 
-## Phase 2 — Go-live cutover (LATER — separate, deliberate session; real money)
+## Phase 2 — Go-live cutover (IN PROGRESS — real money)
 
-> Not in scope now. Listed so the path is known.
+### Go-live infrastructure — ✅ DONE (2026-06-30)
+- [x] **Domain** `geshfinance.com` registered on Cloudflare (Registrar, at-cost, Active).
+- [x] **Stable named tunnel** `gesh-pay` (replaces the ephemeral quick tunnel) →
+      `https://pay.geshfinance.com/api/billing/webhook`. LaunchAgent `com.gesh.cloudflared`
+      (KeepAlive, survives reboots); config `~/.cloudflared/config.yml`. The quick tunnel
+      (`com.gesh.cloudflared-quick`) was booted out + plist `.disabled` so it can't
+      self-heal-overwrite `APP_BASE_URL`. `.env APP_BASE_URL=https://pay.geshfinance.com`.
+- [x] **Email from the domain**: `geshfinance.com` verified in Resend (DKIM + SPF
+      auto-configured to Cloudflare DNS); `.env EMAIL_FROM="GESH <access@geshfinance.com>"`.
+      Test onboarding email landed in the Gmail **inbox** (not spam).
 
-- [ ] Toggle LS store to **Live mode**; **"Copy to Live Mode"** the product → **new variant
-      id + new checkout URL** (the #1 launch-week bug is mixing test/live ids).
-- [ ] Swap `.env` to **live** signing secret, **live** `LS_VARIANT_*`, **live**
-      `LS_CHECKOUT_PRIMARY`. Register the **live** webhook endpoint.
-- [ ] **Real-card smoke test** (real money, immediate refund): provision → magic-link →
-      login → cancel/expire → revoke.
+### Remaining cutover steps — gated on LS store approval
+- [ ] **LS store activation (KYC)** — identity/payout submitted, status **IN REVIEW**.
+      Cannot accept live cards until Lemon Squeezy approves. *(Their reviewers; nothing to do.)*
+- [ ] After approval: toggle LS to **Live mode**; create the live product → **new live variant
+      id + checkout URL** (the #1 launch-week bug is mixing test/live ids).
+- [ ] Register the **live** webhook at `https://pay.geshfinance.com/api/billing/webhook`; swap
+      `.env` to the **live** `BILLING_WEBHOOK_SECRET`, `LS_VARIANT_OBSERVER`, `LS_CHECKOUT_PRIMARY`.
+- [ ] **Real-card $49 smoke test** (refund immediately): provision → magic-link login →
+      cancel/expire → revoke.
 - [ ] Verify the checkout URL can be **disabled fast** if fulfillment breaks.
 - [ ] Flip `launch_status.json gates.payment=true`. Monitor the first billing cycle in the
       LS dashboard (webhook 2xx rate, invoices).
