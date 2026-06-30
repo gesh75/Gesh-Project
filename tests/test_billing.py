@@ -563,3 +563,24 @@ def test_payment_success_without_account_is_still_refused():
     res = _post_raw(_payment_success_payload(email="stranger@example.com", sub_id="sub_x"))
     assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
     assert au.get_user("stranger@example.com") is None
+
+
+def test_payment_success_does_not_resurrect_a_revoked_account():
+    """H6: revoke() clears is_active but NOT tier. A payment_success whose event_at is NEWER
+    than the processed subscription_expired passes the _is_stale ordering guard — the
+    existing-tier fallback must STILL refuse it (the account stays revoked), because the
+    fallback is gated on is_active, not merely on a leftover tier. Without that gate this
+    re-provisions a churned account."""
+    # 1) provision an active trader (bootstrap name mapping → tier=trader)
+    _post_raw(_payload("subscription_created", sub_id="sub_1",
+                       updated_at="2026-03-01T00:00:00.000000Z"))
+    # 2) expire it with a LATER timestamp → revoke: is_active=0, tier retained by revoke()
+    _post_raw(_payload("subscription_expired", sub_id="sub_1", status="expired",
+                       updated_at="2026-03-02T00:00:00.000000Z"))
+    revoked = au.get_user("buyer@example.com")
+    assert revoked["is_active"] == 0 and revoked["tier"] == "trader"   # tier NOT cleared
+    # 3) payment_success with an even NEWER event_at (passes ordering) must NOT re-activate
+    res = _post_raw(_payment_success_payload(sub_id="sub_1",
+                    updated_at="2026-03-03T00:00:00.000000Z"))
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    assert au.get_user("buyer@example.com")["is_active"] == 0          # still revoked

@@ -440,11 +440,15 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
                          and ev["status"] in ("active", "on_trial", "paid")))
     tier = ev["tier"]
     # subscription_payment_success (an invoice) carries no variant, so a RENEWAL would map to
-    # tier=None and be wrongly refused. When the event resolves to a known account, keep the
-    # tier already on it. This never ESCALATES (H3 holds): the fallback only re-grants a tier
+    # tier=None and be wrongly refused. When the event resolves to a known ACTIVE account, keep
+    # the tier already on it. This never ESCALATES (H3 holds): the fallback only re-grants a tier
     # an allowlisted activation previously set — a genuinely-new product with no variant and
-    # no account still maps to None below and is refused.
-    if is_activation and tier is None and user and user.get("tier"):
+    # no account still maps to None below and is refused. The is_active gate prevents RESURRECTION
+    # (H6): revoke() clears is_active but NOT tier, so without this a payment_success with an
+    # event_at newer than a processed subscription_expired (passes the _is_stale guard — exactly
+    # what LS test-mode "Simulate event" stamps) would re-activate a revoked account. A past_due
+    # user (H4, dunning) keeps is_active=1, so legitimate recovery renewals still fire.
+    if is_activation and tier is None and user and user.get("tier") and user.get("is_active"):
         tier = user["tier"]
         logger.info("billing: %s carried no variant — keeping account tier=%s for %s",
                     name, tier, ev["email"])
