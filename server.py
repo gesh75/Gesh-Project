@@ -130,7 +130,7 @@ def _bucket_ok(ip: str, bucket: str, limit: int, window: int) -> bool:
 
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, analyze_screener
 from auth import login, logout
-from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError
+from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
 from news_agent import scan_news, get_news_history
 from sec_agent import watch_filings, get_filing_history
@@ -671,14 +671,30 @@ def dashboard():
 def get_portfolio():
     try:
         payload = build_data_payload(DEFAULT_WATCHLIST)
+    except Exception as live_err:
+        # Live robin_stocks session is down → degrade to the MCP-built snapshot rather than
+        # blanking the dashboard (Option A: MCP-first fallback). If the snapshot is also
+        # unusable, surface the same clean offline 503 as before.
+        try:
+            payload = load_snapshot_payload()
+            logger.warning("api/portfolio: live RH offline (%s) — serving snapshot (age=%ss)",
+                           type(live_err).__name__, payload.get("snapshot_age_seconds"))
+        except RobinhoodOfflineError as snap_err:
+            raise _server_error(snap_err)
+        except Exception:                       # noqa: BLE001 — never mask the live cause
+            raise _server_error(live_err)
+
+    try:
         eq = payload["equity_summary"]
         prev = eq.get("adjusted_equity_previous_close", 0)
         curr = eq.get("portfolio_equity", 0)
         eq["day_change"]     = round(curr - prev, 2)
         eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0, 2)
 
-        # Log equity snapshot for ECG (rate-limited — see _maybe_log_snapshot)
-        _maybe_log_snapshot(payload["holdings"])
+        # Log the equity snapshot for ECG only for LIVE data — never persist stale snapshot
+        # values as if they were a fresh tick (would corrupt the equity curve).
+        if not payload.get("offline"):
+            _maybe_log_snapshot(payload["holdings"])
 
         return _sanitize({"status": "ok", "data": payload})
     except Exception as e:

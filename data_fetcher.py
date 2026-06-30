@@ -1,4 +1,8 @@
 from __future__ import annotations
+import json
+import os
+from pathlib import Path
+
 import robin_stocks.robinhood as rh
 import pandas as pd
 from datetime import datetime, timezone
@@ -6,11 +10,83 @@ from typing import Any
 
 DEFAULT_WATCHLIST: list[str] = ["MSTR", "SPY", "QQQ"]
 
+# MCP-first snapshot the daily-analysis chain writes (build_snapshot_from_mcp.py). Read as a
+# fallback when the live robin_stocks session is down so the dashboard degrades to last-known
+# data instead of blanking out. Overridable for tests via GESH_SNAPSHOT_PATH.
+_SNAPSHOT_PATH = Path(os.getenv("GESH_SNAPSHOT_PATH",
+                                str(Path(__file__).parent / "live_portfolio_snapshot.json")))
+
 
 class RobinhoodOfflineError(RuntimeError):
     """Raised when the Robinhood session is missing/expired (every API call 401s,
     so robin_stocks returns None). Lets callers degrade to a clean offline state
     instead of dereferencing None. Recover by running reauth.py interactively."""
+
+
+def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
+    """Map the MCP-built snapshot (live_portfolio_snapshot.json) into the exact shape
+    build_data_payload() returns, so the dashboard can serve last-known data when the live
+    robin_stocks session is offline (the MCP-first fallback — see CLAUDE.md). Marks the result
+    `offline=True` with the snapshot's age so the UI can flag it as cached, not live.
+
+    Raises RobinhoodOfflineError if the snapshot is missing/unreadable — the caller then
+    surfaces the same clean 503 it would have without any snapshot."""
+    p = path or _SNAPSHOT_PATH
+    try:
+        snap = json.loads(p.read_text())
+    except (OSError, ValueError) as e:
+        raise RobinhoodOfflineError(
+            f"Robinhood offline and no usable snapshot at {p} ({e})."
+        ) from e
+
+    eqs = snap.get("equity_summary") or {}
+    raw_holdings = snap.get("holdings") or []
+    total_equity = sum(float(h.get("equity") or 0) for h in raw_holdings) or 0.0
+
+    holdings = []
+    for h in raw_holdings:
+        qty = float(h.get("quantity") or 0)
+        avg = float(h.get("average_buy_price") or 0)
+        equity = float(h.get("equity") or 0)
+        price = float(h.get("price") or h.get("current_price") or 0)
+        holdings.append({
+            "symbol":               h.get("symbol", ""),
+            "quantity":             qty,
+            "average_buy_price":    avg,
+            "equity":               equity,
+            "percent_change":       float(h.get("percent_change") or 0),
+            "equity_change":        round(equity - avg * qty, 2),
+            "current_price":        price,
+            "type":                 h.get("type", "stock"),
+            "pe_ratio":             h.get("pe_ratio"),
+            "portfolio_percentage": round(equity / total_equity * 100, 1) if total_equity else 0.0,
+        })
+
+    fetched_at = snap.get("fetched_at") or ""
+    age_s = None
+    fdt = None
+    try:
+        if fetched_at:
+            fdt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+            age_s = (datetime.now(timezone.utc) - fdt).total_seconds()
+    except ValueError:
+        pass
+
+    return {
+        "as_of":         fetched_at or datetime.now(timezone.utc).isoformat(),
+        "offline":       True,                       # not live — served from snapshot
+        "source":        snap.get("source", "snapshot"),
+        "snapshot_age_seconds": round(age_s) if age_s is not None else None,
+        "equity_summary": {
+            "portfolio_equity":               float(eqs.get("portfolio_equity") or 0),
+            "extended_hours_equity":          float(eqs.get("extended_hours_equity") or 0),
+            "adjusted_equity_previous_close": float(eqs.get("adjusted_equity_previous_close") or 0),
+            "cash":                           float(eqs.get("cash") or 0),
+            "buying_power":                   float(eqs.get("buying_power") or eqs.get("deployable") or 0),
+        },
+        "holdings":  holdings,
+        "watchlist": [],                             # live quotes need RH — empty when offline
+    }
 
 
 def get_portfolio_holdings() -> pd.DataFrame:
