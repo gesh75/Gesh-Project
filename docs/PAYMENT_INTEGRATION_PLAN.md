@@ -121,14 +121,14 @@ dependency) to read the session user's `tier` and compare. Keep `/track-record`,
 
 ---
 
-## 6. Security checklist (must hold before `payment=true`)
-- [ ] Webhook **signature verified** on every call; unsigned/invalid → 400, no side effects.
-- [ ] Webhook **idempotent** (event-id dedup) — providers retry; double-provision must be a no-op.
-- [ ] Hosted checkout only — **no card fields in our HTML** (PCI SAQ-A).
-- [ ] Secrets in `.env` / secret manager; **never** in code or logs; webhook body not logged raw.
-- [ ] Magic-link tokens single-use + short TTL (reuse `issue_token` TTL semantics).
-- [ ] Revoke path tested: cancel → `is_active=0` → wall blocks within one request.
-- [ ] `/api/billing/webhook` is the **only** new unauthenticated write surface — rate-limit it.
+## 6. Security checklist (must hold before `payment=true`) — ✅ ALL DONE (Codex-approved 2026-06-30)
+- [x] Webhook **signature verified** on every call; unsigned/invalid → 400, no side effects.
+- [x] Webhook **idempotent** (event-id dedup) — providers retry; double-provision must be a no-op.
+- [x] Hosted checkout only — **no card fields in our HTML** (PCI SAQ-A).
+- [x] Secrets in `.env` / secret manager; **never** in code or logs; webhook body not logged raw.
+- [x] Magic-link tokens single-use + short TTL (reuse `issue_token` TTL semantics).
+- [x] Revoke path tested: cancel → `is_active=0` → wall blocks within one request.
+- [x] `/api/billing/webhook` is the **only** new unauthenticated write surface — rate-limit it.
 
 ## 7. Test plan
 - Unit: `verify_signature` (good/bad/missing sig), `handle_event` dispatch (created→provision,
