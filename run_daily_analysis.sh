@@ -76,7 +76,7 @@ echo "### FULL 10:30 CHAIN — $(date '+%Y-%m-%d %H:%M:%S %Z')"
 # pickle fetch remains as fallback. Either way the staleness gate below validates it.
 step "1/5 fetch snapshot (MCP-first)"
 if GESH_PY="$PY" /bin/bash "$GP/fetch_snapshot_mcp.sh"; then
-    echo "snapshot source: robinhood_mcp"
+    :  # source is asserted from the file below, not assumed from this exit code
 else
     echo "MCP snapshot path failed — falling back to legacy robin_stocks pickle fetch"
     "$PY" fetch_live_snapshot.py || { echo "FATAL: snapshot fetch failed (MCP + legacy both failed)"; exit 1; }
@@ -86,7 +86,17 @@ import json, sys
 from datetime import datetime, timezone
 d = json.load(open('live_portfolio_snapshot.json'))
 age = (datetime.now(timezone.utc) - datetime.fromisoformat(d['fetched_at'])).total_seconds() / 60
-print(f"snapshot age: {age:.1f} min  holdings: {len(d['holdings'])}")
+src = d.get('source', 'UNKNOWN')
+print(f"snapshot age: {age:.1f} min  holdings: {len(d['holdings'])}  source: {src}")
+# Source assertion (non-fatal): the MCP path returns only settled buying_power, so the
+# leveraged Gold-margin figure (~$21k) can never be sized against. The legacy robin_stocks
+# path ('robinhood_live') repopulates that figure — sizing-safe by code, but worth flagging
+# loudly so any silent fallback is visible in the log + briefing. See CLAUDE.md "Snapshot
+# source assertion". Stays non-fatal because the legacy fallback is a legitimate degraded path.
+if src != 'robinhood_mcp':
+    print(f"WARNING: snapshot source is '{src}', expected 'robinhood_mcp' — "
+          f"ran the legacy robin_stocks fallback; cash fields reflect that path. "
+          f"Verify deployable before trusting any sizing.")
 sys.exit(0 if age <= 30 else 1)
 PYEOF
 

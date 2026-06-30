@@ -663,11 +663,27 @@ Missed-during-sleep runs fire once at wake (off-hours prices + MARKET_HOURS reje
 
 | Step | Script | Output |
 |---|---|---|
-| 1/5 | fetch_live_snapshot.py | live_portfolio_snapshot.json (+ adjusted_equity_previous_close) |
+| 1/5 | fetch_snapshot_mcp.sh → build_snapshot_from_mcp.py (MCP-first; `fetch_live_snapshot.py` legacy fallback) | live_portfolio_snapshot.json (+ adjusted_equity_previous_close) |
 | 2/5 | run_engines2.py | engine_results.json — regime+FRED macro, 11-node consensus, Kelly, MC, vols, alpha, tax, explainability, yield, crypto. MERGE-writes (never clobber) + stamps `*_ran_at` (consensus/kelly/monte_carlo/regime/ai_result) for the sidebar freshness badges |
 | 3/5 | run_ai2.py | radar + one Claude deep-analysis call (bounded client: 240s timeout, max_tokens 10000 + truncation guard) + db.log_analysis/log_equity_snapshot (path-pinned to THIS repo's db.py — plain `import db` resolves to the trading copy) |
 | 4/5 | run_paper_gate2.py | auto-close check → action plan from Kelly+overrides → paper session → 8-gate audit (`action_plan`/`gate_results`/`paper_session` in engine_results.json) → Telegram signal alert (@gesh755bot) |
 | 5/5 | gen_report2.py | gesh_report.html (~73KB, incl. Paper & Risk-Gate Audit section) — served at `GET /report` |
+
+**Snapshot source assertion (step 1/5, added 2026-06-29):** the snapshot is now MCP-first.
+`fetch_snapshot_mcp.sh` writes a raw RH MCP dump to `/tmp/gesh_mcp_raw.json`, then
+`build_snapshot_from_mcp.py` builds `live_portfolio_snapshot.json` with `source: "robinhood_mcp"`,
+pulling cash from `portfolio.buying_power.buying_power` (settled, UNLEVERAGED). **The MCP exposes
+NO Gold-margin figure**, so the builder pins `buying_power_leveraged == margin_buying_power ==
+withdrawable_amount == deployable` — they are back-compat keys only (report/gates read them), carrying
+no independent margin info. This *structurally* eliminates the old ~$21,632 leveraged-BP trap rather
+than guarding against it downstream. If the MCP path fails, the chain falls back to the legacy
+`fetch_live_snapshot.py` (robin_stocks), which stamps `source: "robinhood_live"` and **repopulates the
+real leveraged figure** — sizing-safe by code (`deployable = min(settled, bp_leveraged)`) but a different
+data path. The staleness block in `run_daily_analysis.sh` now reads `d['source']`, prints it on the
+`snapshot age:` line, and emits a **non-fatal `WARNING:`** when it is not `robinhood_mcp`. **`source` is
+the canonical tell for which path ran** — a `robinhood_live` source in a briefing means the MCP fallback
+fired; verify `deployable` before trusting any sizing. Kept non-fatal because the legacy fallback is a
+legitimate degraded path, not a failure.
 
 **sys.path shadowing (critical):** run_engines2/run_ai2 put gesh-project-trading at
 `sys.path[0]` — ALL engine modules + ai_analyzer + db resolve to the TRADING copies.
