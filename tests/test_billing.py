@@ -557,6 +557,20 @@ def test_payment_success_keeps_existing_tier_for_active_user():
     assert u["is_active"] == 1 and u["tier"] == "trader" and u["billing_status"] == "active"
 
 
+def test_foreign_renewal_does_not_replace_subscription():
+    """Codex HIGH-1: two LEGIT LS subscriptions can share an email. A payment_success for a
+    DIFFERENT sub_id (no variant) must NOT keep tier + overwrite billing_sub_id — otherwise the
+    authoritative subscription is replaced and the real sub's later expiry is ignored as stale,
+    leaving the user active forever. Tier retention requires an EXACT sub_id match."""
+    _post("subscription_created", variant_name="Trader plan", sub_id="sub_legit")
+    res = _post_raw(_payment_success_payload(sub_id="sub_other",
+                                             updated_at="2026-05-01T00:00:00.000000Z"))
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    u = au.get_user("buyer@example.com")
+    assert u["billing_sub_id"] == "sub_legit"        # authoritative sub UNCHANGED
+    assert u["is_active"] == 1                        # legit sub still active
+
+
 def test_payment_success_without_account_is_still_refused():
     """H3: a renewal/invoice with no resolvable account AND no variant must NOT provision —
     the existing-tier fallback only ever re-grants a tier the account already had."""

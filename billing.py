@@ -448,10 +448,17 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     # event_at newer than a processed subscription_expired (passes the _is_stale guard — exactly
     # what LS test-mode "Simulate event" stamps) would re-activate a revoked account. A past_due
     # user (H4, dunning) keeps is_active=1, so legitimate recovery renewals still fire.
-    if is_activation and tier is None and user and user.get("tier") and user.get("is_active"):
+    # Tier retention requires an EXACT subscription match (Codex HIGH-1): two legit LS
+    # subscriptions can share an email, so a no-variant renewal for a DIFFERENT sub must not
+    # keep tier — provision() would then overwrite billing_sub_id and let the foreign sub
+    # replace the authoritative one (the real sub's later expiry would be ignored as stale,
+    # stranding the user active forever). A non-matching sub falls through to refusal.
+    same_sub = bool(ev["sub_id"]) and ev["sub_id"] == (user or {}).get("billing_sub_id")
+    if (is_activation and tier is None and user
+            and user.get("tier") and user.get("is_active") and same_sub):
         tier = user["tier"]
-        logger.info("billing: %s carried no variant — keeping account tier=%s for %s",
-                    name, tier, ev["email"])
+        logger.info("billing: %s carried no variant — keeping account tier=%s for %s (sub=%s)",
+                    name, tier, ev["email"], ev["sub_id"])
     if is_activation and tier is None:
         logger.warning("billing: refusing to provision %s on unknown variant (event=%s)",
                        ev["email"], name)

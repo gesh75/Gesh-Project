@@ -670,21 +670,16 @@ def dashboard():
 @app.get("/api/portfolio")
 def get_portfolio():
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
-    except Exception as live_err:
-        # Live robin_stocks session is down → degrade to the MCP-built snapshot rather than
-        # blanking the dashboard (Option A: MCP-first fallback). If the snapshot is also
-        # unusable, surface the same clean offline 503 as before.
         try:
-            payload = load_snapshot_payload()
+            payload = build_data_payload(DEFAULT_WATCHLIST)
+        except RobinhoodOfflineError as live_err:
+            # ONLY a confirmed-offline session degrades to the MCP-built snapshot (Option A).
+            # Any OTHER exception is a real bug — it must NOT be masked by serving stale data;
+            # it falls through to _server_error (500) and reaches monitoring (Codex MEDIUM-4).
+            payload = load_snapshot_payload()       # may re-raise RobinhoodOfflineError → 503
             logger.warning("api/portfolio: live RH offline (%s) — serving snapshot (age=%ss)",
                            type(live_err).__name__, payload.get("snapshot_age_seconds"))
-        except RobinhoodOfflineError as snap_err:
-            raise _server_error(snap_err)
-        except Exception:                       # noqa: BLE001 — never mask the live cause
-            raise _server_error(live_err)
 
-    try:
         eq = payload["equity_summary"]
         prev = eq.get("adjusted_equity_previous_close", 0)
         curr = eq.get("portfolio_equity", 0)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import math
 import os
 from pathlib import Path
 
@@ -15,6 +16,10 @@ DEFAULT_WATCHLIST: list[str] = ["MSTR", "SPY", "QQQ"]
 # data instead of blanking out. Overridable for tests via GESH_SNAPSHOT_PATH.
 _SNAPSHOT_PATH = Path(os.getenv("GESH_SNAPSHOT_PATH",
                                 str(Path(__file__).parent / "live_portfolio_snapshot.json")))
+# Beyond this age a snapshot is too stale to pass off as the live portfolio — serving it would
+# show year-old numbers as "live" (Codex MEDIUM-3). Default 7d covers a long holiday weekend
+# between daily-chain runs; override with GESH_SNAPSHOT_MAX_AGE_SECONDS.
+_SNAPSHOT_MAX_AGE_SECONDS = float(os.getenv("GESH_SNAPSHOT_MAX_AGE_SECONDS", str(7 * 86400)))
 
 
 class RobinhoodOfflineError(RuntimeError):
@@ -39,8 +44,42 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
             f"Robinhood offline and no usable snapshot at {p} ({e})."
         ) from e
 
-    eqs = snap.get("equity_summary") or {}
-    raw_holdings = snap.get("holdings") or []
+    # ── validate (Codex MEDIUM-3): a `{}` or schema-broken snapshot must NOT be served as a
+    # fresh $0 portfolio, and a stale / timestamp-less one must NOT be shown as live.
+    eqs = snap.get("equity_summary")
+    raw_holdings = snap.get("holdings")
+    if not (isinstance(snap, dict) and isinstance(eqs, dict) and isinstance(raw_holdings, list)):
+        raise RobinhoodOfflineError(f"snapshot at {p} missing equity_summary/holdings.")
+
+    # Headline equity = ACCOUNT-level (positions + cash), matching the live path and the
+    # account-level previous close used for day-change — NOT positions-only portfolio_equity
+    # (Codex HIGH-2). Must be a finite, positive number.
+    headline = eqs.get("account_equity") or eqs.get("total") or eqs.get("portfolio_equity")
+    try:
+        headline = float(headline)
+    except (TypeError, ValueError):
+        raise RobinhoodOfflineError(f"snapshot at {p} has no usable account equity.")
+    if not math.isfinite(headline) or headline <= 0:
+        raise RobinhoodOfflineError(f"snapshot at {p} equity non-finite/non-positive ({headline}).")
+
+    # Require a parseable, not-too-old timestamp.
+    fdt = None
+    raw_ts = (snap.get("fetched_at") or "").strip()
+    if raw_ts:
+        try:
+            fdt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+            if fdt.tzinfo is None:
+                fdt = fdt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            fdt = None
+    if fdt is None:
+        raise RobinhoodOfflineError(f"snapshot at {p} has no parseable fetched_at.")
+    age_s = (datetime.now(timezone.utc) - fdt).total_seconds()
+    if age_s > _SNAPSHOT_MAX_AGE_SECONDS:
+        raise RobinhoodOfflineError(
+            f"snapshot at {p} is {age_s / 86400:.1f}d old "
+            f"(> {_SNAPSHOT_MAX_AGE_SECONDS / 86400:.1f}d max).")
+
     total_equity = sum(float(h.get("equity") or 0) for h in raw_holdings) or 0.0
 
     holdings = []
@@ -62,23 +101,13 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
             "portfolio_percentage": round(equity / total_equity * 100, 1) if total_equity else 0.0,
         })
 
-    fetched_at = snap.get("fetched_at") or ""
-    age_s = None
-    fdt = None
-    try:
-        if fetched_at:
-            fdt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
-            age_s = (datetime.now(timezone.utc) - fdt).total_seconds()
-    except ValueError:
-        pass
-
     return {
-        "as_of":         fetched_at or datetime.now(timezone.utc).isoformat(),
+        "as_of":         raw_ts,
         "offline":       True,                       # not live — served from snapshot
         "source":        snap.get("source", "snapshot"),
-        "snapshot_age_seconds": round(age_s) if age_s is not None else None,
+        "snapshot_age_seconds": round(age_s),
         "equity_summary": {
-            "portfolio_equity":               float(eqs.get("portfolio_equity") or 0),
+            "portfolio_equity":               headline,   # account-level (positions + cash)
             "extended_hours_equity":          float(eqs.get("extended_hours_equity") or 0),
             "adjusted_equity_previous_close": float(eqs.get("adjusted_equity_previous_close") or 0),
             "cash":                           float(eqs.get("cash") or 0),
@@ -93,7 +122,19 @@ def get_portfolio_holdings() -> pd.DataFrame:
     rows = []
 
     # ── Stocks ────────────────────────────────────────────────────────────────
-    raw: dict[str, Any] = rh.build_holdings()
+    # robin_stocks raises a BARE Exception ("<fn> can only be called when logged in") when the
+    # session is dead. Normalize it to RobinhoodOfflineError so the API layer can fall back to
+    # the snapshot for offline-only, and let genuine bugs stay 500s (Codex MEDIUM-4).
+    try:
+        raw: dict[str, Any] = rh.build_holdings()
+    except RobinhoodOfflineError:
+        raise
+    except Exception as e:
+        if "logged in" in str(e).lower():
+            raise RobinhoodOfflineError(
+                "Robinhood session not logged in (build_holdings) — run reauth.py."
+            ) from e
+        raise
     for symbol, data in (raw or {}).items():
         try:
             pe = float(data.get("pe_ratio") or "nan")

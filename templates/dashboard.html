@@ -1204,8 +1204,15 @@ function renderPriceChart(d){
   });
 }
 
-function setConn(ok){const w=$('live-wrap'),d=$('live-dot'),t=$('live-txt');if(!w)return;t.textContent=ok?'Live':'Offline';w.style.color=ok?'var(--green)':'var(--red)';if(d)d.style.background=ok?'var(--green)':'var(--red)';}
-function setTs(){$('ts').textContent='Updated '+new Date().toLocaleTimeString();}
+function setConn(ok,cached){const w=$('live-wrap'),d=$('live-dot'),t=$('live-txt');if(!w)return;
+  if(cached){t.textContent='Cached';w.style.color='#e0a800';if(d)d.style.background='#e0a800';return;}
+  t.textContent=ok?'Live':'Offline';w.style.color=ok?'var(--green)':'var(--red)';if(d)d.style.background=ok?'var(--green)':'var(--red)';}
+function setTs(asOf,ageS){
+  if(asOf){const dt=new Date(asOf);const t=isNaN(dt.getTime())?asOf:dt.toLocaleString();
+    let age='';if(ageS){const h=Math.floor(ageS/3600),m=Math.round((ageS%3600)/60);age=' ('+(h?h+'h ':'')+m+'m old)';}
+    $('ts').textContent='As of '+t+age;return;}
+  $('ts').textContent='Updated '+new Date().toLocaleTimeString();
+}
 
 async function loadPortfolio(){
   try{
@@ -1214,7 +1221,9 @@ async function loadPortfolio(){
     const d=(await r.json()).data;
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
-    setConn(true);setTs();
+    // Snapshot fallback (RH offline) → show "Cached · as of …", never green "Live" (Codex MEDIUM-3)
+    setConn(true, !!d.offline);
+    setTs(d.offline?d.as_of:null, d.offline?d.snapshot_age_seconds:null);
   }catch(e){console.error(e);setConn(false);}
 }
 function renderStats(eq){
