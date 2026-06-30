@@ -133,6 +133,19 @@ def _subscription_id(event: str, data: dict, attrs: dict) -> str | None:
     return str(sid) if sid is not None else None
 
 
+def _variant_id(attrs: dict) -> Any:
+    """The variant id sits at top-level attributes for subscription_* events, but an
+    `order_created` payload is an ORDER object that carries the variant under
+    `first_order_item` (a real test purchase refused order_created until this fallback was
+    added). `subscription_payment_*` invoices carry no variant at all — that case is handled
+    downstream by keeping the account's existing tier, not here."""
+    vid = attrs.get("variant_id")
+    if vid is not None:
+        return vid
+    foi = attrs.get("first_order_item") or {}
+    return foi.get("variant_id")
+
+
 def parse_event(payload: dict) -> dict[str, Any]:
     """Flatten a Lemon Squeezy webhook payload into the fields we act on."""
     meta = payload.get("meta") or {}
@@ -148,7 +161,7 @@ def parse_event(payload: dict) -> dict[str, Any]:
         # Subscription's own last-modified time — drives monotonic ordering so an
         # out-of-order (delayed) delivery for an OLD state can't overwrite a newer one (H2).
         "event_at":    (attrs.get("updated_at") or "").strip(),
-        "tier":        _tier_for(attrs.get("variant_id"),
+        "tier":        _tier_for(_variant_id(attrs),
                                  attrs.get("variant_name", ""),
                                  attrs.get("product_name", "")),
     }
@@ -425,14 +438,24 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     is_activation = (name in _ACTIVATE_EVENTS
                      or (name == "subscription_updated"
                          and ev["status"] in ("active", "on_trial", "paid")))
-    if is_activation and ev["tier"] is None:
+    tier = ev["tier"]
+    # subscription_payment_success (an invoice) carries no variant, so a RENEWAL would map to
+    # tier=None and be wrongly refused. When the event resolves to a known account, keep the
+    # tier already on it. This never ESCALATES (H3 holds): the fallback only re-grants a tier
+    # an allowlisted activation previously set — a genuinely-new product with no variant and
+    # no account still maps to None below and is refused.
+    if is_activation and tier is None and user and user.get("tier"):
+        tier = user["tier"]
+        logger.info("billing: %s carried no variant — keeping account tier=%s for %s",
+                    name, tier, ev["email"])
+    if is_activation and tier is None:
         logger.warning("billing: refusing to provision %s on unknown variant (event=%s)",
                        ev["email"], name)
         return {"action": "ignored", "email": ev["email"], "reason": "unknown_variant"}
 
     # Only now (ordering + variant validated) may we move the account to a changed email.
     email, user = _apply_email_change(ev, user)
-    ev = {**ev, "email": email}
+    ev = {**ev, "email": email, "tier": tier}    # carry the resolved tier (renewal fallback)
     eat = ev.get("event_at", "")
 
     if is_activation:

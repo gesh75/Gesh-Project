@@ -25,6 +25,12 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
     monkeypatch.setenv("BILLING_WEBHOOK_SECRET", "whsec_test")
     monkeypatch.setenv("APP_BASE_URL", "https://gesh.test")
     monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
+    # Hermetic tier mapping: clear any ambient LS_VARIANT_* (e.g. a populated .env or shell
+    # env) so name-based tests run in bootstrap mode as they assume; allowlist-mode tests set
+    # these explicitly via monkeypatch. Without this, a real LS_VARIANT_OBSERVER leaks in and
+    # flips _tier_for to strict-allowlist, refusing every name-only payload.
+    for _v in ("LS_VARIANT_OBSERVER", "LS_VARIANT_TRADER", "LS_VARIANT_DESK"):
+        monkeypatch.delenv(_v, raising=False)
     import auth_users as au
     monkeypatch.setattr(au, "AUTH_DB_PATH", db)
     au.init_auth_db()
@@ -501,3 +507,59 @@ def test_auth_db_is_chmod_600():
     au.init_auth_db()
     mode = stat.S_IMODE(au.AUTH_DB_PATH.stat().st_mode)
     assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
+# ── variant resolution on order/payment events (live-test fix 2026-06-30) ──────
+# Real LS purchase showed order_created carries variant in first_order_item, and
+# subscription_payment_success (an invoice) carries no variant at all — both were wrongly
+# refused as "unknown variant". Orders must read first_order_item; renewals must keep the
+# tier already on the account. H3 (no escalation on a genuinely-unknown product) still holds.
+
+def _order_payload(email: str = "buyer@example.com", *, variant_id="555",
+                   order_id: str = "ord_1", customer_id: int = 99,
+                   updated_at: str = "2026-02-01T00:00:00.000000Z") -> dict:
+    return {"meta": {"event_name": "order_created"},
+            "data": {"id": order_id, "type": "orders",
+                     "attributes": {"user_email": email, "status": "paid",
+                                    "customer_id": customer_id,
+                                    "first_order_item": {"variant_id": variant_id},
+                                    "updated_at": updated_at}}}
+
+
+def _payment_success_payload(email: str = "buyer@example.com", *, sub_id: str = "sub_1",
+                             invoice_id: str = "inv_1",
+                             updated_at: str = "2026-03-01T00:00:00.000000Z") -> dict:
+    # subscription-invoice object: data.id is the INVOICE id, sub id is in attributes,
+    # and there is NO variant_id anywhere.
+    return {"meta": {"event_name": "subscription_payment_success"},
+            "data": {"id": invoice_id, "type": "subscription-invoices",
+                     "attributes": {"user_email": email, "status": "paid",
+                                    "subscription_id": sub_id, "updated_at": updated_at}}}
+
+
+def _post_raw(payload: dict) -> dict:
+    raw = json.dumps(payload).encode()
+    return billing.handle_webhook(raw, _sign(raw), payload)
+
+
+def test_order_created_resolves_variant_from_first_order_item(monkeypatch):
+    monkeypatch.setenv("LS_VARIANT_TRADER", "555")
+    res = _post_raw(_order_payload(variant_id="555"))
+    assert res["action"] == "provision" and res["tier"] == "trader"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
+def test_payment_success_keeps_existing_tier_for_active_user():
+    _post("subscription_created", variant_name="Trader plan", sub_id="sub_1")   # → tier trader
+    res = _post_raw(_payment_success_payload(sub_id="sub_1"))                    # invoice, no variant
+    assert res["action"] == "provision" and res["tier"] == "trader"             # kept, not refused
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1 and u["tier"] == "trader" and u["billing_status"] == "active"
+
+
+def test_payment_success_without_account_is_still_refused():
+    """H3: a renewal/invoice with no resolvable account AND no variant must NOT provision —
+    the existing-tier fallback only ever re-grants a tier the account already had."""
+    res = _post_raw(_payment_success_payload(email="stranger@example.com", sub_id="sub_x"))
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    assert au.get_user("stranger@example.com") is None
