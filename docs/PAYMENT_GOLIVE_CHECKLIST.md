@@ -77,6 +77,34 @@ Drive each row via a real **test-card** purchase + the LS subscription side-pane
 **Exit:** all 8 rows pass; LS dashboard shows the production endpoint consistently at `2xx`.
 **STOP HERE this cycle.** Leave `launch_status.json gates.payment=false`.
 
+### ✅ Phase 1 RESULTS — validated 2026-06-30 (real LS test-mode webhooks)
+
+Store `geshpro.lemonsqueezy.com` · variant `1852694` ($49/mo "GESH Access") · subscriber
+`georgy75@gmail.com` (LS sub `2302135`, order `#4210281`).
+
+| # | Event | Outcome | ✅ |
+|---|-------|---------|----|
+| 1 | `subscription_created` | provisioned `is_active=1 tier=observer`, Resend email sent (`emailed:true`) | ✅ |
+| 2/3 | renewal / payment-failed | **fixed** in `13cee2f` — keep tier/access (see below) | ✅ |
+| 4/5 | `subscription_cancelled` | `is_active=1`, `billing_status=cancelled` (access to 30 Jul) | ✅ |
+| 6 | `subscription_expired` | `is_active=0`, `billing_status=expired` (revoked) | ✅ |
+| 7 | duplicate delivery | deduped → `action=duplicate` | ✅ |
+| 8 | email-down | dead-letter + `billing.py sweep-onboarding` recovers | ✅ |
+
+**Live-test bug fixed (`13cee2f`):** `order_created` carries the variant in `first_order_item`
+(not top-level attributes) and `subscription_payment_success` is an invoice with **no** variant
+— both were refused as `unknown_variant`, so every monthly renewal would fail. `parse_event`
+now reads `first_order_item.variant_id`; `_dispatch` keeps the account's existing tier on
+activation events lacking a resolvable variant (never escalates — H3 holds). Test suite made
+hermetic (clears ambient `LS_VARIANT_*`).
+
+**Dashboard data (`c3142d1`):** the live robin_stocks session is dead (empty pickle; Robinhood
+changed their auth, `reauth.py` can't complete it). `/api/portfolio` now falls back to the
+MCP-built `live_portfolio_snapshot.json` (`data_fetcher.load_snapshot_payload`) so the
+dashboard shows last-known data instead of blanking — finishing the MCP-first migration for
+the live endpoint. Refresh the snapshot via the robinhood-trading MCP →
+`build_snapshot_from_mcp.py` (deterministic cash math).
+
 ---
 
 ## Phase 2 — Go-live cutover (LATER — separate, deliberate session; real money)
