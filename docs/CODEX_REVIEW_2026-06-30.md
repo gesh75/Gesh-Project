@@ -9,9 +9,10 @@ for **data contamination** (stale data persisted as live), an error masked, or a
 This is a follow-up to `docs/CODEX_REVIEW_PAYMENT.md` (the original LS integration, already
 reviewed across rounds 1–6). **Only the changes below are new.**
 
-> **STATUS — Round 1: REQUEST-CHANGES (2 HIGH, 2 MEDIUM). All 4 fixed in `9ec2294`.**
-> Re-review against `a25d0e6..HEAD` (now ends at `9ec2294`). Resolutions detailed in **§6**;
-> the §1/§2 questions below are the original brief, kept for context.
+> **STATUS — Round 1: REQUEST-CHANGES (2 HIGH, 2 MEDIUM) → fixed `9ec2294`.
+> Round 2: REQUEST-CHANGES (1 MEDIUM, 1 LOW) → fixed `6311c2c`.**
+> Re-review against `a25d0e6..HEAD` (now ends at `6311c2c`). Resolutions in **§6** (round 1) and
+> **§7** (round 2); the §1/§2 questions below are the original brief, kept for context.
 
 ---
 
@@ -176,3 +177,19 @@ All four Round-1 findings fixed. Full suite **251 passed**; `/api/portfolio` ver
 with a valid variant for a second sub on the same email still re-points the single-account model
 to the newer sub — that is a legitimate new subscription, not the silent-replacement bug. Flag
 if you think multi-sub-per-email needs an explicit policy beyond the alpha's one-sub model.
+
+---
+
+## 7. Round 2 — Resolutions (commit `6311c2c`)
+
+Round 1 verified the three backend resolutions; round 2 found two residual issues — both fixed.
+Full suite **256 passed**; in-scope ruff (`tests/**`) clean; `data_fetcher.py` ruff-clean.
+
+| # | Round-2 finding | Fix | Regression test |
+|---|-----------------|-----|-----------------|
+| **MEDIUM-1** | the real startup/interval loader `loadPortfolioWithECG()` still called `setConn(true);setTs()` unconditionally → cached snapshots shown as green "Live" during normal operation (round 1 only fixed the unused `loadPortfolio()`) | both loaders consolidated through one offline-aware `applyPortfolioConn(d)` helper; unconditional pattern removed (`templates/dashboard.html`) | `test_dashboard_loaders_are_offline_aware` (contract guard: both loaders delegate to the helper, buggy pattern absent) |
+| **LOW-2** | `load_snapshot_payload` called `snap.get()` before `isinstance(snap, dict)` → a JSON `[]`/scalar raised `AttributeError` (500) instead of `RobinhoodOfflineError` (503) | top-level type check moved **before** any field access (`data_fetcher.py`); ruff import-order nit fixed | `test_non_object_snapshot_rejected` (`[]`, `42`, string, `null`) |
+
+**Note on the worktree:** `CLAUDE.md` and `run_daily_analysis.sh` show as modified — these are
+pre-existing, unrelated edits from other work, intentionally left out of every commit in this
+review range. The reviewed diff (`a25d0e6..HEAD`) does not touch them.
