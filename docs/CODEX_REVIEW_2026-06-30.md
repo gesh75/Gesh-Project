@@ -9,6 +9,10 @@ for **data contamination** (stale data persisted as live), an error masked, or a
 This is a follow-up to `docs/CODEX_REVIEW_PAYMENT.md` (the original LS integration, already
 reviewed across rounds 1–6). **Only the changes below are new.**
 
+> **STATUS — Round 1: REQUEST-CHANGES (2 HIGH, 2 MEDIUM). All 4 fixed in `9ec2294`.**
+> Re-review against `a25d0e6..HEAD` (now ends at `9ec2294`). Resolutions detailed in **§6**;
+> the §1/§2 questions below are the original brief, kept for context.
+
 ---
 
 ## 0. Scope — what to review
@@ -153,3 +157,22 @@ For each finding: **severity (CRITICAL/HIGH/MEDIUM/LOW)**, file:line, the concre
 incorrect-behavior scenario, and a suggested fix. Decision: **APPROVE / APPROVE-WITH-COMMENTS /
 REQUEST-CHANGES / BLOCK**. Focus fire on **§1 escalation** and **§2 ECG contamination** — those
 are the two places a subtle bug actually costs money or corrupts the track record.
+
+---
+
+## 6. Round 2 — Resolutions (commit `9ec2294`)
+
+All four Round-1 findings fixed. Full suite **251 passed**; `/api/portfolio` verified live
+(headline `$38,920.51`, day_change `-$88.79` — matches the account-level value Codex computed).
+
+| # | Round-1 finding | Fix | Regression test |
+|---|-----------------|-----|-----------------|
+| **HIGH-1** | foreign renewal (different `sub_id`, shared email, no variant) kept tier → `provision()` overwrote `billing_sub_id` → real sub's expiry then ignored as stale | tier retention now gated on **exact `ev["sub_id"] == user["billing_sub_id"]`** (`billing.py` `_dispatch`); non-matching/absent sub falls through to `unknown_variant` refusal — no provision, no sub overwrite | `test_foreign_renewal_does_not_replace_subscription` |
+| **HIGH-2** | headline equity mapped from **positions-only** `portfolio_equity`, compared to an account-level previous close → overstated day P&L | `load_snapshot_payload` maps headline from **`account_equity` → `total` → `portfolio_equity`** (`data_fetcher.py`) | `test_headline_equity_is_account_level`, `test_account_equity_falls_back_to_total_then_portfolio` |
+| **MEDIUM-3** | stale/empty snapshot served as live indefinitely; `{}` accepted as `$0` portfolio | validate schema + finite-positive equity (reject `{}`), require parseable `fetched_at`, reject age > `GESH_SNAPSHOT_MAX_AGE_SECONDS` (default 7d); dashboard shows amber **"Cached · as of … (Nh old)"** not green "Live" (`data_fetcher.py`, `templates/dashboard.html`) | `test_empty_snapshot_rejected`, `test_zero_equity_snapshot_rejected`, `test_stale_snapshot_beyond_max_age_rejected`, `test_timestampless_snapshot_rejected` |
+| **MEDIUM-4** | broad `except Exception` served stale data even for a real bug | `get_portfolio_holdings` normalizes the bare "not logged in" → `RobinhoodOfflineError`; `/api/portfolio` falls back **only** on `RobinhoodOfflineError`; any other exception → 500 to monitoring (`data_fetcher.py`, `server.py`) | `test_build_data_payload_offline_raises_robinhood_offline`, `test_real_bug_in_holdings_is_not_swallowed` |
+
+**Note on HIGH-1 scope:** the fix bounds the *no-variant renewal* path. A `subscription_created`
+with a valid variant for a second sub on the same email still re-points the single-account model
+to the newer sub — that is a legitimate new subscription, not the silent-replacement bug. Flag
+if you think multi-sub-per-email needs an explicit policy beyond the alpha's one-sub model.
