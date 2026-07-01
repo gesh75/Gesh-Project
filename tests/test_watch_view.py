@@ -30,7 +30,8 @@ CREATE TABLE trade_intents(id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT
   time_in_force TEXT, source TEXT, schema_version INT, raw_json TEXT);
 """
 
-_NO_PRICES = lambda symbols: {}
+def _NO_PRICES(symbols):
+    return {}
 
 
 def _empty_db(tmp_path) -> str:

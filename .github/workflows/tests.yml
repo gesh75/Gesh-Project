@@ -8,27 +8,33 @@ name: tests
 # re-export gesh_core, so the shared package MUST be installed or test collection
 # fails on import. gesh-core is a separate PRIVATE repo, so a GESH_CORE_PAT repo
 # secret (fine-grained PAT, read access to gesh75/gesh-core) is required.
+#
+# Trigger scope (2026-06-30, coverage-audit fix): previously a narrow `paths:` allowlist
+# (kelly/consensus/fft_cycles/trading only) meant a change to server.py, billing.py, or any
+# other app module ran ZERO tests — a payment-code or dashboard-code regression could merge
+# with CI green. Switched to `paths-ignore` (denylist docs/config-only paths) so any code
+# change triggers CI by default; only pure documentation/asset changes are skipped.
 
 on:
   push:
     branches: [main, "optimize/**"]
-    paths:
-      - "kelly.py"
-      - "consensus.py"
-      - "fft_cycles.py"
-      - "trading/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - ".github/workflows/tests.yml"
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+      - "memory-bank/**"
+      - "_archive/**"
+      - "career-ops/**"
+      - "android*/**"
   pull_request:
-    paths:
-      - "kelly.py"
-      - "consensus.py"
-      - "fft_cycles.py"
-      - "trading/**"
-      - "tests/**"
-      - "pyproject.toml"
-      - ".github/workflows/tests.yml"
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
+      - "memory-bank/**"
+      - "_archive/**"
+      - "career-ops/**"
+      - "android*/**"
 
 jobs:
   test:
@@ -73,6 +79,8 @@ jobs:
 
       - name: Run offline money-logic unit tests
         run: |
-          pytest tests/ -q \
-            --cov=kelly --cov=consensus --cov=fft_cycles --cov=trading/risk_gate \
-            --cov-report=term-missing
+          # Whole-repo coverage (config in pyproject.toml [tool.coverage.run]) so gaps in
+          # untested app modules are VISIBLE in the CI log instead of hidden behind a
+          # 4-module allowlist. No --cov-fail-under yet — this establishes the real
+          # baseline first; a floor can be added once the number is known.
+          pytest tests/ -q --cov=. --cov-report=term-missing

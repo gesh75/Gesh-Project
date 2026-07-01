@@ -24,3 +24,26 @@ select = ["E", "F", "I"]
 #       worth wrapping) — matches the gesh-core / engine lint policy, which omits
 #       the E5 group. Real-bug rules (F, imports, E7) stay on.
 ignore = ["E402", "E501"]
+
+[tool.coverage.run]
+# Whole-repo coverage so app-code gaps (server.py, regime.py, monte_carlo.py, ...) are
+# VISIBLE instead of invisible — CI previously only measured 4 of ~90 modules, which hid
+# how little of the app is exercised. This reports the real baseline; it does not require
+# every module to already have tests.
+source = ["."]
+omit = [
+    "venv/*", "*/venv/*",
+    "tests/*",
+    "scripts/*",
+    "_archive/*",
+    "android*/*",
+    "career-ops/*",
+    "memory-bank/*",
+    "security/*",
+    "templates/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+skip_empty = true
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:"]

@@ -20,10 +20,18 @@ client = TestClient(server.app)
 @pytest.fixture(autouse=True)
 def _empty_tracker_db(tmp_path, monkeypatch):
     """Route handlers call load_watch_data() with no db_path → DEFAULT_TRACKER_DB.
-    Redirect that to an empty DB (no tables → honest empty contract, no yfinance)."""
+    Redirect that to an empty DB (no tables → honest empty contract, no yfinance).
+
+    Also force the login wall OFF: `auth.py` (imported transitively via `server`) calls
+    load_dotenv() at import time with no path, so a real .env with GESH_AUTH_ENABLED=1
+    (set for the paid product's login wall) leaks into this process and gates every
+    route below with a 302 instead of the expected 200. test_billing.py guards the same
+    leak the same way — this test predates that .env setting, which is exactly the kind
+    of drift an orphaned (uncollected) test file can hide indefinitely."""
     p = tmp_path / "endpoint.db"
     sqlite3.connect(p).close()
     monkeypatch.setattr(watch_view, "DEFAULT_TRACKER_DB", str(p))
+    monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
 
 
 def test_watch_page_200_html():

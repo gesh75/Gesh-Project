@@ -60,3 +60,10 @@ android */
 
 # sentiment_connector cwd-relative cache (Phase 5)
 .sentiment_cache.json
+
+# Test/coverage artifacts (regenerated on each run — see pyproject.toml [tool.coverage])
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+node_modules/
