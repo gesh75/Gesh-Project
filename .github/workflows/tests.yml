@@ -14,6 +14,13 @@ name: tests
 # other app module ran ZERO tests — a payment-code or dashboard-code regression could merge
 # with CI green. Switched to `paths-ignore` (denylist docs/config-only paths) so any code
 # change triggers CI by default; only pure documentation/asset changes are skipped.
+#
+# android*/** is deliberately NOT in this list (2026-07-01, Codex round-2 fix): an earlier
+# version ignored it, which silently exempted tracked Kotlin/Gradle SOURCE from ever
+# triggering CI — contradicting "any code change triggers CI." Generated Android build
+# artifacts (android*/**/build/, .gradle/) are already gitignored and never reach a diff, so
+# there's nothing left to explicitly ignore; an Android-only change now runs this (Python)
+# suite too — a harmless no-op run, not a gap — until a dedicated Android workflow exists.
 
 on:
   push:
@@ -25,7 +32,6 @@ on:
       - "memory-bank/**"
       - "_archive/**"
       - "career-ops/**"
-      - "android*/**"
   pull_request:
     paths-ignore:
       - "**/*.md"
@@ -34,7 +40,6 @@ on:
       - "memory-bank/**"
       - "_archive/**"
       - "career-ops/**"
-      - "android*/**"
 
 jobs:
   test:

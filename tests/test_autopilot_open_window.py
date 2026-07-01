@@ -13,7 +13,7 @@ fetch, auth, broker execution) and asserts open_window:
   3. pushes that intent through the risk gate to place() (i.e. executes).
 
 Run from the repo root:
-    ./venv/bin/python -m pytest trading/tests/test_autopilot_open_window.py -q
+    ./venv/bin/python -m pytest tests/test_autopilot_open_window.py -q
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from pathlib import Path
 
 import pytest
 
-# Make the repo root importable (tests live two levels deep).
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Make the repo root importable (tests live one level deep, under tests/).
+REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -33,28 +33,49 @@ if str(REPO_ROOT) not in sys.path:
 # ─── Stub heavy top-level modules BEFORE importing trading.autopilot ──────────
 # autopilot.py lazy-loads consensus via _load_consensus() (which does
 # `from consensus import run_consensus_holding`); consensus imports yfinance.
-# Stubbing it keeps the test fully offline even if the lazy path runs.
-def _install_stub_modules() -> None:
+# Stubbing it keeps the `from trading import autopilot` import below fully offline even if
+# some transitive import touches these names.
+def _install_stub_modules() -> set[str]:
+    """Install throwaway stand-ins, returning only the names actually inserted (skips any
+    already present) so the caller can remove exactly those right after the import below.
+    The stubs must NOT linger in sys.modules for the rest of the pytest session — moving this
+    file into tests/ (2026-07-01, Codex round-2 fix) proved that: a lingering fake `auth`
+    module (missing `logout`) broke test_watch_endpoint.py's `from auth import login, logout`
+    when both files ran in the same session. Safe to remove immediately: autopilot.py's
+    loaders (_ensure_logged_in/_load_consensus/_load_data_fetcher) are plain functions, never
+    invoked at import time, and every test below monkeypatches them directly."""
+    installed: set[str] = set()
     if "consensus" not in sys.modules:
         consensus_stub = types.ModuleType("consensus")
         consensus_stub.run_consensus_holding = lambda *a, **k: {}  # patched per-test
         sys.modules["consensus"] = consensus_stub
+        installed.add("consensus")
 
     if "data_fetcher" not in sys.modules:
         data_stub = types.ModuleType("data_fetcher")
         data_stub.build_data_payload = lambda *a, **k: {}
         sys.modules["data_fetcher"] = data_stub
+        installed.add("data_fetcher")
 
     if "auth" not in sys.modules:
         auth_stub = types.ModuleType("auth")
         auth_stub.login = lambda *a, **k: None
+        auth_stub.logout = lambda *a, **k: None
         sys.modules["auth"] = auth_stub
+        installed.add("auth")
+
+    return installed
 
 
-_install_stub_modules()
+_stubbed_modules = _install_stub_modules()
 
 from trading import autopilot  # noqa: E402
 from trading.contract import TradeIntent  # noqa: E402
+
+# Clean up immediately — nothing past this point needs the stubs (see docstring above).
+for _name in _stubbed_modules:
+    del sys.modules[_name]
+del _stubbed_modules
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────

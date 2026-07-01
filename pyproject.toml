@@ -39,10 +39,12 @@ omit = [
     "android*/*",
     "career-ops/*",
     "memory-bank/*",
-    "security/*",
     "templates/*",
     "*/__pycache__/*",
 ]
+# security/ (e.g. api_verifier.py, which powers GET /api/security/health) is NOT omitted —
+# it's real production code (2026-07-01, Codex round-2 fix). Omitting it hid an active
+# endpoint's coverage gap behind a report that otherwise claims to be "whole-repo."
 
 [tool.coverage.report]
 skip_empty = true
