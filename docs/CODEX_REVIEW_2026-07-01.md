@@ -134,3 +134,38 @@ touch money-moving logic, so the bar is "does CI now actually protect what it cl
 "is there an entitlement bug" — focus fire on **§2.1 (auth-leak completeness)** and **§2.2
 (paths-ignore correctness)**, since those are the two places a gap would silently readmit the
 exact "code change, zero tests" failure mode this fix exists to close.
+
+---
+
+## 5. Round 2 — Resolutions (commit `c37a485`)
+
+> **STATUS: Round 1 REQUEST-CHANGES (2 MEDIUM, 1 LOW) → all 3 fixed in `c37a485`.**
+
+| # | Finding | Fix | Verified |
+|---|---------|-----|----------|
+| **MEDIUM-1** | 4 real tests in `trading/tests/test_autopilot_open_window.py` never ran in CI (`testpaths=["tests"]` only); `trading/autopilot.py` showed 0% despite these tests existing | Moved into `tests/` via `git mv` (history preserved); fixed `REPO_ROOT` depth (`parents[2]`→`parents[1]`) | `trading/autopilot.py` now 27% (was 0%); `pytest .` and `pytest tests/` collect identically (334) |
+| **MEDIUM-2** | `android*/**` in `paths-ignore` excluded tracked Kotlin/Gradle **source**, not just gitignored build artifacts — contradicting "any code change triggers CI" | Removed the pattern entirely; an Android-only change now runs the Python suite too (harmless no-op) until a dedicated Android workflow exists | Confirmed via `git show` on the pushed commit — only the explanatory comment mentions "android," no active ignore entry remains |
+| **LOW-3** | `security/*` omitted from `[tool.coverage.run]`, hiding `api_verifier.py` (powers `GET /api/security/health`, real production code) from the "whole-repo" report | Removed the omission | `security/api_verifier.py` now shows 0% (honest gap) in the coverage report |
+
+**Bonus finding while fixing MEDIUM-1:** moving the file into `tests/` immediately surfaced a
+**real, previously-invisible test-isolation bug** — `_install_stub_modules()` installed a fake
+`auth` module (missing `logout`) into `sys.modules` at collection time and never cleaned it
+up. Once this file ran in the same pytest session as `test_watch_endpoint.py` (which does
+`from auth import login, logout`), collection failed with `ImportError`. Confirmed the stubs
+are provably unneeded past the `from trading import autopilot` import line (autopilot's
+loaders are plain functions never invoked at import time, and every test in the file
+monkeypatches them directly) — `_install_stub_modules()` now returns only the names it
+actually inserted, and the test file deletes them from `sys.modules` immediately after the
+import completes. This is the second time in this review chain that relocating an orphaned
+test surfaced a real global-state leak the isolation had been hiding (the first was the
+`GESH_AUTH_ENABLED` leak in round 1) — worth treating as a pattern: **orphaned tests aren't
+just untested, they're unvalidated for session-safety too.**
+
+**Process note:** the first attempt to commit these fixes silently failed to stage the real
+edits (a `git add` with one stale path failed atomically, and the commit that followed had
+0 content diff despite a full commit message describing the fixes). Caught by independently
+verifying the pushed commit's *object content* (`git show <sha>:<path>`) rather than trusting
+the local working tree or the commit message — fixed forward with a new commit (`c37a485`),
+no force-push, no history rewrite.
+
+Verified: 334 tests pass; ruff clean; YAML valid.
