@@ -33,18 +33,20 @@ def _safe(val, default=None):
         return val if val is not None else default
 
 
-def _pct_return(ticker_obj: yf.Ticker, days: int) -> float | None:
-    """Return % price change over last `days` calendar days."""
+def _ret_from_hist(hist: pd.DataFrame | None, days: int) -> float | None:
+    """% price change over the last `days` calendar days, sliced from ONE
+    already-fetched history frame (no extra HTTP call per window)."""
     try:
-        end   = datetime.today()
-        start = end - timedelta(days=days + 5)  # buffer for weekends
-        hist  = ticker_obj.history(start=start.strftime("%Y-%m-%d"),
-                                   end=end.strftime("%Y-%m-%d"),
-                                   auto_adjust=True)
-        if hist.empty or len(hist) < 2:
+        if hist is None or hist.empty or len(hist) < 2:
             return None
-        old = float(hist["Close"].iloc[0])
-        new = float(hist["Close"].iloc[-1])
+        closes = hist["Close"].dropna()
+        if len(closes) < 2:
+            return None
+        start_ts = closes.index[-1] - pd.Timedelta(days=days)
+        window = closes[closes.index >= start_ts]
+        if len(window) < 2:
+            return None
+        old, new = float(window.iloc[0]), float(closes.iloc[-1])
         if old == 0:
             return None
         return round((new - old) / old * 100, 2)
@@ -52,15 +54,20 @@ def _pct_return(ticker_obj: yf.Ticker, days: int) -> float | None:
         return None
 
 
-def _ytd_return(ticker_obj: yf.Ticker) -> float | None:
-    """Return % price change from Jan 1 of current year."""
+def _ytd_from_hist(hist: pd.DataFrame | None) -> float | None:
+    """% price change from Jan 1 of the frame's last year, sliced locally."""
     try:
-        year_start = f"{date.today().year}-01-01"
-        hist = ticker_obj.history(start=year_start, auto_adjust=True)
-        if hist.empty or len(hist) < 2:
+        if hist is None or hist.empty or len(hist) < 2:
             return None
-        old = float(hist["Close"].iloc[0])
-        new = float(hist["Close"].iloc[-1])
+        closes = hist["Close"].dropna()
+        if len(closes) < 2:
+            return None
+        last_ts = closes.index[-1]
+        jan1 = pd.Timestamp(year=last_ts.year, month=1, day=1, tz=getattr(closes.index, "tz", None))
+        window = closes[closes.index >= jan1]
+        if len(window) < 2:
+            return None
+        old, new = float(window.iloc[0]), float(closes.iloc[-1])
         if old == 0:
             return None
         return round((new - old) / old * 100, 2)
@@ -127,13 +134,15 @@ def get_performance_returns(symbols: list[str]) -> dict[str, dict]:
     results: dict[str, dict] = {}
     for sym in symbols:
         try:
-            t = yf.Ticker(sym)
+            # ONE 1y history call per symbol, sliced locally for every window —
+            # the old 5-calls-per-symbol pattern was a Yahoo-429 magnet.
+            hist = yf.Ticker(sym).history(period="1y", auto_adjust=True)
             results[sym] = {
-                "7d":  _pct_return(t, 7),
-                "1m":  _pct_return(t, 30),
-                "3m":  _pct_return(t, 90),
-                "1y":  _pct_return(t, 365),
-                "ytd": _ytd_return(t),
+                "7d":  _ret_from_hist(hist, 7),
+                "1m":  _ret_from_hist(hist, 30),
+                "3m":  _ret_from_hist(hist, 90),
+                "1y":  _ret_from_hist(hist, 365),
+                "ytd": _ytd_from_hist(hist),
             }
         except Exception as e:
             results[sym] = {"error": str(e)}
@@ -321,13 +330,17 @@ def screen_market(top_n: int = 40) -> list[dict]:
     # Use period= (relative) instead of start/end= (absolute) — more resilient
     # to yfinance crumb expiry and always includes today's partial-day bar.
     try:
-        raw = yf.download(
+        import price_source
+        raw = price_source.yf_download(
             universe,
             period="40d",
             progress=False,
             auto_adjust=True,
             threads=False,  # avoid crumb collisions under parallel load
         )
+        if raw is None or raw.empty:
+            print("⚠  Screener batch download returned no data (Yahoo + RH fallback)")
+            return []
     except Exception as e:
         print(f"⚠  Screener batch download failed: {e}")
         return []
@@ -410,10 +423,15 @@ def screen_market(top_n: int = 40) -> list[dict]:
                 "reco_key":       reco,
             })
         except Exception:
+            # Tag the row so a degraded scan is VISIBLE downstream — silent
+            # enrichment failures made Claude score on momentum alone.
+            cand["enrich_error"] = True
             cand.setdefault("company_name", sym)
             cand.setdefault("sector", "")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+    # 4 workers, not 20: the batch download above already sets threads=False to
+    # avoid Yahoo crumb collisions — a 20-way .info burst reintroduced them.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         executor.map(_fetch_info, top)
 
     return top
