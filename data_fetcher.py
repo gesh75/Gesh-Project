@@ -10,6 +10,17 @@ from typing import Any
 import pandas as pd
 import robin_stocks.robinhood as rh
 
+# robin_stocks calls carry NO timeout — a black-holed connection (VPN, engine
+# rule #54) would hang the caller forever. price_source owns the idempotent
+# Session.request timeout patch; apply it here too since this module drives the
+# dashboard's live fetches. NOTE (engine rule #37): this file has an engine twin
+# (gesh-project-trading/data_fetcher.py) — keep behavioral changes in sync.
+try:
+    from price_source import patch_rh_session_timeout
+    patch_rh_session_timeout()
+except Exception:  # noqa: BLE001 — hardening must never break imports
+    pass
+
 DEFAULT_WATCHLIST: list[str] = ["MSTR", "SPY", "QQQ"]
 
 # MCP-first snapshot the daily-analysis chain writes (build_snapshot_from_mcp.py). Read as a
@@ -253,16 +264,44 @@ def get_watchlist_quotes(symbols: list[str] | None = None) -> pd.DataFrame:
         prev = float(q.get("previous_close", 0) or 0)
         chg = last - prev
         chg_p = (chg / prev * 100) if prev else 0.0
-        rows.append({"symbol": sym, "last_trade_price": last, "ask_price": float(q.get("ask_price", 0) or 0), "bid_price": float(q.get("bid_price", 0) or 0), "previous_close": prev, "change": round(chg, 4), "change_pct": round(chg_p, 2)})
+        rows.append({"symbol": sym, "last_trade_price": last, "ask_price": float(q.get("ask_price", 0) or 0), "bid_price": float(q.get("bid_price", 0) or 0), "previous_close": prev, "change": round(chg, 4), "change_pct": round(chg_p, 2), "updated_at": q.get("updated_at")})
     return pd.DataFrame(rows)
+
+
+def _newest_quote_ts(watchlist_rows: list[dict]) -> str | None:
+    """Newest parseable per-quote `updated_at` across the watchlist, else None.
+
+    RH quotes carry their own timestamp; stamping `as_of` with fetch-time now()
+    let an hours-old pre-market quote read as 0-seconds-old downstream (the
+    engine's fail-closed DATA_FRESH gate ages this stamp — engine rule #37 twin).
+    """
+    best = None
+    for r in watchlist_rows:
+        ts = r.get("updated_at")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+        if best is None or dt > best:
+            best = dt
+    return best.isoformat() if best else None
+
 
 def build_data_payload(watchlist: list[str] | None = None) -> dict[str, Any]:
     holdings_df = get_portfolio_holdings()
     equity_info = get_total_equity()
     watchlist_df = get_watchlist_quotes(watchlist)
+    # Prefer the QUOTES' OWN newest `updated_at` over fetch-time now() — mirrored
+    # from the engine copy 2026-07-02 (rule #37).
+    watchlist_rows = watchlist_df.to_dict(orient="records")
+    as_of = _newest_quote_ts(watchlist_rows) or datetime.now(timezone.utc).isoformat()
     return {
-        "as_of": datetime.now(timezone.utc).isoformat(),
+        "as_of": as_of,
         "equity_summary": equity_info,
         "holdings": holdings_df.to_dict(orient="records"),
-        "watchlist": watchlist_df.to_dict(orient="records"),
+        "watchlist": watchlist_rows,
     }
