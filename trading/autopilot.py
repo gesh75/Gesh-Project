@@ -476,12 +476,18 @@ def close_risk_check() -> None:
             if stop and price and price < stop:
                 _sweep_sell(sym, price, stop, "paper")
 
-    for h in holdings:   # legacy real-holdings path — kept, now with a valid intent
-        sym = h.get("symbol")
-        price = float(h.get("current_price") or 0)
-        stop = float(h.get("stop_loss") or 0)       # if holdings carry stop_loss field
-        if stop and price and price < stop:
-            _sweep_sell(sym, price, stop, "live")
+    # Legacy real-holdings sweep — LIVE mode only. In paper mode the paper-book sweep
+    # above is authoritative; this loop must never run then, so a broker holding that
+    # ever DID carry a stop_loss field can't emit a "live"-book intent from a paper run.
+    # (Safe today only because RH holdings lack stop_loss + place() honors PAPER_MODE —
+    # this makes the paper/live boundary a code invariant, not an accident.)
+    if not cfg.paper_mode:
+        for h in holdings:
+            sym = h.get("symbol")
+            price = float(h.get("current_price") or 0)
+            stop = float(h.get("stop_loss") or 0)   # if holdings carry stop_loss field
+            if stop and price and price < stop:
+                _sweep_sell(sym, price, stop, "live")
 
     # Warn if daily loss cap was approached
     if daily_pnl < -0.008:

@@ -310,8 +310,30 @@ def _sync_paper_stop(intent: TradeIntent, fill_price: float, order_row_id: int |
                 volatility_tier="MEDIUM", order_row_id=order_row_id,
             )
         elif intent.action == "SELL":
-            if not paper_open_positions().get(intent.symbol):
-                deactivate_stops(intent.symbol)
+            pos = paper_open_positions().get(intent.symbol)
+            if not pos:
+                deactivate_stops(intent.symbol)          # full close → retire the stop
+            else:
+                # Partial SELL (trim): the position remains but its stop was anchored to
+                # the ORIGINAL fill. Re-anchor it to the REMAINING position's avg cost so
+                # the EOD sweep uses a stop consistent with what's actually still held.
+                # deactivate-then-record = clean replace (no shadow rows); idempotent for a
+                # proportional trim (avg_cost unchanged), and corrects a blended cost after
+                # an add-then-trim. Intent-provided levels still win over the computed bands.
+                entry = float(pos.get("avg_cost") or 0)
+                if entry > 0:
+                    from risk_bands import exit_bands
+                    bands = exit_bands("MEDIUM")
+                    stop_price = intent.stop_loss or round(
+                        entry * (1 - bands["stop_loss_pct"] / 100), 4)
+                    tp_price = intent.take_profit or round(
+                        entry * (1 + bands["take_profit_pct"] / 100), 4)
+                    deactivate_stops(intent.symbol)
+                    record_stop(
+                        symbol=intent.symbol, entry_price=entry,
+                        stop_price=stop_price, take_profit_price=tp_price,
+                        volatility_tier="MEDIUM", order_row_id=order_row_id,
+                    )
     except Exception as e:  # noqa: BLE001
         logger.warning("paper stop sync failed for %s: %s", intent.symbol, e)
 

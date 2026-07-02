@@ -136,3 +136,33 @@ def test_full_paper_close_retires_the_stop(sandbox_db, monkeypatch):
     assert result.fill_qty == pytest.approx(result.qty)
     assert "HOOD" not in sandbox_db.active_stops()
     assert "HOOD" not in sandbox_db.paper_open_positions()
+
+
+# ─── stop re-anchor on partial SELL (audit HIGH fix) ──────────────────────────
+
+def test_partial_sell_reanchors_stop_to_remaining_avg_cost(sandbox_db):
+    """A partial SELL (trim) must re-anchor the paper stop to the REMAINING position's
+    avg cost — not leave the original BUY-time stop stale, and not retire it while shares
+    remain. Regression for the audit HIGH: '_sync_paper_stop only retired on full close'."""
+    _fill(sandbox_db, "HOOD", "BUY", 10.0, 100.0)          # 10 @ $100
+    sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
+    _fill(sandbox_db, "HOOD", "SELL", 4.0, 110.0)          # trim → 6 @ $100 avg still open
+
+    sell = types.SimpleNamespace(action="SELL", symbol="HOOD", stop_loss=None, take_profit=None)
+    execution._sync_paper_stop(sell, 110.0, None)
+
+    stops = sandbox_db.active_stops()
+    assert "HOOD" in stops                                 # NOT retired — position still open
+    assert stops["HOOD"]["entry_price"] == 100.0           # avg cost, NOT the $110 sell price
+    assert stops["HOOD"]["stop_price"] == 95.0             # 100 * (1 - 5%) base band
+
+
+def test_full_close_retires_stop(sandbox_db):
+    """A full close (no shares remain) still retires the stop — unchanged behavior."""
+    _fill(sandbox_db, "HOOD", "BUY", 10.0, 100.0)
+    sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
+    _fill(sandbox_db, "HOOD", "SELL", 10.0, 110.0)         # full close
+
+    sell = types.SimpleNamespace(action="SELL", symbol="HOOD", stop_loss=None, take_profit=None)
+    execution._sync_paper_stop(sell, 110.0, None)
+    assert "HOOD" not in sandbox_db.active_stops()         # retired

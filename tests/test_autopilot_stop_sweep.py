@@ -86,6 +86,25 @@ def test_no_breach_no_sell(sandbox_db, monkeypatch):
     assert captured == []
 
 
+def test_paper_mode_skips_live_holdings_sweep(sandbox_db, monkeypatch):
+    """Audit fix: in PAPER mode the legacy real-holdings sweep must NOT run — a broker
+    holding that DID carry a stop_loss must not emit a 'live'-book intent from a paper run.
+    The paper-book sweep above is authoritative in paper mode (here it's empty)."""
+    snap = {
+        "as_of": "2026-07-02T15:55:00+00:00",
+        "equity_summary": {"portfolio_equity": 10_000.0,
+                           "adjusted_equity_previous_close": 10_000.0},
+        "holdings": [{"symbol": "AAPL", "current_price": 90.0, "stop_loss": 95.0}],  # breached
+        "watchlist": [],
+    }
+    captured: list = []
+    _wire(monkeypatch, snap, captured)
+    monkeypatch.setenv("PAPER_MODE", "true")
+
+    autopilot.close_risk_check()
+    assert captured == []          # live sweep skipped in paper mode; no paper position for AAPL
+
+
 def test_restored_candidates_survive_restart(sandbox_db, monkeypatch):
     """pre_market_scan persists candidate symbols; open_window restores them
     after a process restart (the in-memory _CANDIDATES dict is wiped)."""
