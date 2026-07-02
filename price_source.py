@@ -4,8 +4,9 @@ All engine OHLCV fetches funnel through this module so that a Yahoo Finance
 ``HTTP 401 / Invalid Crumb`` rate-limit storm (which periodically degrades the
 whole consensus/Kelly/vol/Monte-Carlo stack to INSUFFICIENT DATA) no longer
 zeroes out a daily run. On a Yahoo failure or empty result, we fall back to
-``robin_stocks.get_stock_historicals`` using the already-restored Robinhood
-session pickle.
+Robinhood — the authenticated ``robin_stocks.get_stock_historicals`` when a
+session pickle exists, else Robinhood's UNAUTHENTICATED daily historicals
+endpoint (survives both an expired session and the VPN finance-category block).
 
 Two public entry points, both returning a DataFrame shaped IDENTICALLY to
 ``yfinance.download()`` so existing call sites (``raw["Close"].squeeze()``,
@@ -15,9 +16,9 @@ Two public entry points, both returning a DataFrame shaped IDENTICALLY to
 * ``rh_fallback(symbol, ...)`` — Robinhood only (used by consensus.py AFTER its
   own 3× Yahoo retry loop is exhausted, so Yahoo stays primary with full retry).
 
-Robinhood fallback is HOST-ONLY: it needs the session pickle written by the
-Robinhood login. In the sandbox (no pickle) ``_ensure_rh_session()`` returns
-False and the fallback is a no-op — callers degrade exactly as before.
+This file mirrors gesh-project-trading/price_source.py (the engine copy is
+canonical for fallback semantics — ported 2026-07-02) plus two product-side
+additions: the period-frame TTL cache (rule #42) and the session-retry TTL.
 
 Notes
 -----
@@ -32,11 +33,14 @@ from __future__ import annotations
 
 import logging
 import os
-import pickle
+import pickle  # noqa: S403  # nosec B403 — loads only the user's own RH session file (fixed 0600 path)
 import time
-from datetime import datetime, timezone
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+_OHLCV_FIELDS = ("Open", "High", "Low", "Close", "Volume")
 
 # In-process TTL cache for historical-bar downloads. The daily chain fetches the
 # same symbol+window from multiple engines (consensus, kelly, monte_carlo, regime);
@@ -47,9 +51,15 @@ import pandas as pd
 _YF_CACHE: dict[tuple, tuple[float, "pd.DataFrame"]] = {}
 _YF_CACHE_TTL_S = float(os.getenv("YF_CACHE_TTL_S", "600"))
 
-logger = logging.getLogger(__name__)
+# Mirror fetch_live_snapshot.py — the canonical session pickle location.
+_PICKLE_PATH = os.path.expanduser("~/.tokens/robinhoodrobinhood_session.pickle")
 
-_OHLCV_FIELDS = ("Open", "High", "Low", "Close", "Volume")
+# Process-level memo for the (cheap) session restore. Success is remembered
+# forever; failure is retried after a TTL so a long-lived server picks up a
+# pickle that appears (or a token refresh) without a restart.
+_RH_SESSION_READY: bool | None = None
+_RH_SESSION_CHECKED_AT: float = 0.0
+_RH_SESSION_RETRY_S = float(os.getenv("RH_SESSION_RETRY_S", "300"))
 
 
 def _usable_rows(frame: pd.DataFrame | None) -> int:
@@ -70,15 +80,37 @@ def _usable_rows(frame: pd.DataFrame | None) -> int:
         return int(notna.any(axis=1).sum())
     return int(notna.sum())
 
-# Mirror fetch_live_snapshot.py — the canonical session pickle location.
-_PICKLE_PATH = os.path.expanduser("~/.tokens/robinhoodrobinhood_session.pickle")
 
-# Process-level memo for the (cheap) session restore. Success is remembered
-# forever; failure is retried after a TTL so a long-lived server picks up a
-# pickle that appears (or a token refresh) without a restart.
-_RH_SESSION_READY: bool | None = None
-_RH_SESSION_CHECKED_AT: float = 0.0
-_RH_SESSION_RETRY_S = float(os.getenv("RH_SESSION_RETRY_S", "300"))
+def patch_rh_session_timeout(default_timeout: float | None = None) -> None:
+    """Give robin_stocks' shared requests.Session a DEFAULT TIMEOUT (idempotent).
+
+    robin_stocks issues every HTTP call with no ``timeout=`` — under the corporate
+    VPN a black-holed connection blocks FOREVER inside a scheduled job, freezing
+    the entry/exit cycle with the classic 0-fills + 0-rejections signature.
+    Wrapping Session.request covers every get/post robin_stocks makes.
+    Env-overridable via RH_HTTP_TIMEOUT.
+    """
+    try:
+        from robin_stocks.robinhood import helper as _rh_helper
+        sess = _rh_helper.SESSION
+        if getattr(sess, "_gesh_timeout_patched", False):
+            return
+        if default_timeout is None:
+            try:
+                default_timeout = float(os.getenv("RH_HTTP_TIMEOUT", "20"))
+            except ValueError:
+                default_timeout = 20.0
+        orig_request = sess.request
+
+        def _request_with_timeout(method, url, **kwargs):  # noqa: ANN001
+            kwargs.setdefault("timeout", default_timeout)
+            return orig_request(method, url, **kwargs)
+
+        sess.request = _request_with_timeout
+        sess._gesh_timeout_patched = True
+        logger.debug("price_source: robin_stocks session timeout set to %ss", default_timeout)
+    except Exception as e:  # noqa: BLE001 — hardening must never break imports
+        logger.debug("price_source: could not patch RH session timeout — %s", e)
 
 
 # ─── yfinance period/interval → Robinhood span/interval translation ───────────
@@ -152,8 +184,8 @@ def _span_from_period(
 def _ensure_rh_session() -> bool:
     """Restore the stored Robinhood token from pickle (no MFA). Memoized.
 
-    Mirrors fetch_live_snapshot.py::_restore_session so the engine processes —
-    which never logged in themselves — can reach Robinhood market data.
+    Success is memoized forever; failure retries after ``_RH_SESSION_RETRY_S``
+    so a long-lived server picks up a refreshed pickle without a restart.
     """
     global _RH_SESSION_READY, _RH_SESSION_CHECKED_AT
     if _RH_SESSION_READY is True:
@@ -161,6 +193,7 @@ def _ensure_rh_session() -> bool:
     if _RH_SESSION_READY is False and (time.time() - _RH_SESSION_CHECKED_AT) < _RH_SESSION_RETRY_S:
         return False
 
+    patch_rh_session_timeout()   # before any RH HTTP call can be made from here
     _RH_SESSION_READY = False
     _RH_SESSION_CHECKED_AT = time.time()
     try:
@@ -168,11 +201,16 @@ def _ensure_rh_session() -> bool:
             logger.debug("price_source: no RH session pickle at %s", _PICKLE_PATH)
             return False
         st = os.stat(_PICKLE_PATH)
+        if st.st_size == 0:
+            # A failed/MFA-aborted login leaves a 0-byte pickle (observed 2026-06-29).
+            # Treat as "no session" — the unauth historicals fallback covers OHLCV.
+            logger.debug("price_source: empty RH session pickle — using unauth fallback")
+            return False
         if st.st_uid != os.getuid() or (st.st_mode & 0o022):
             logger.warning("price_source: refusing unsafe (writable) RH session file")
             return False
         with open(_PICKLE_PATH, "rb") as fh:
-            data = pickle.load(fh)
+            data = pickle.load(fh)  # noqa: S301  # nosec B301 — trusted local session pickle (uid+perms checked above)
         authorization = f"{data['token_type']} {data['access_token']}"
         from robin_stocks.robinhood.helper import set_login_state, update_session
         set_login_state(True)
@@ -185,17 +223,59 @@ def _ensure_rh_session() -> bool:
     return _RH_SESSION_READY
 
 
-def _rh_history_one(symbol: str, span: str, interval: str) -> pd.DataFrame | None:
-    """Fetch one symbol's OHLCV from Robinhood as a simple-column DataFrame."""
+def _rh_history_one_unauth(symbol: str, span: str) -> pd.DataFrame | None:
+    """Daily OHLCV via Robinhood's UNAUTHENTICATED historicals endpoint.
+
+    Works with no session and survives the VPN finance-category block (which
+    kills yfinance) — so consensus/Kelly/regime keep real bars even when both
+    yfinance and the authed RH session are unavailable. Daily bars only;
+    returns None for sub-daily intervals upstream.
+    """
     try:
-        import robin_stocks.robinhood as rh
-        rows = rh.get_stock_historicals(
-            symbol, interval=interval, span=span, bounds="regular"
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.debug("price_source: RH historicals error for %s: %s", symbol, e)
+        from trading.robinhood_quotes import fetch_daily_ohlcv  # noqa: PLC0415
+        o = fetch_daily_ohlcv(symbol, span=span)
+    except Exception as e:  # noqa: BLE001 — fallback must never raise
+        logger.debug("price_source: unauth RH historicals error for %s: %s", symbol, e)
         return None
+    if not o or not o.get("close"):
+        return None
+    df = pd.DataFrame({
+        "Open": o["open"], "High": o["high"], "Low": o["low"],
+        "Close": o["close"], "Volume": o["volume"],
+    })
+    # Build a real DatetimeIndex from the bars' begins_at timestamps (when
+    # present — guards older/mocked callers without a "date" key). Without
+    # this the DataFrame kept pandas' default RangeIndex (0,1,2,...), so every
+    # date-keyed caller silently got positional integers instead of calendar
+    # dates whenever this fallback fired (2026-06-30 discovery).
+    dates = o.get("date")
+    if dates and len(dates) == len(df):
+        df.index = pd.to_datetime(dates)
+    return df[list(_OHLCV_FIELDS)] if len(df) >= 5 else None
+
+
+def _rh_history_one(symbol: str, span: str, interval: str) -> pd.DataFrame | None:
+    """One symbol's OHLCV as a simple-column DataFrame.
+
+    Prefers the authenticated robin_stocks historicals (richer, any interval)
+    when a live session exists; on any failure — including an expired session,
+    which robin_stocks 3.4.0 cannot refresh — falls back to the UNAUTHENTICATED
+    daily endpoint (daily intervals only) so fetches survive the VPN block.
+    """
+    rows = None
+    if _RH_SESSION_READY:
+        try:
+            import robin_stocks.robinhood as rh
+            rows = rh.get_stock_historicals(
+                symbol, interval=interval, span=span, bounds="regular"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("price_source: RH historicals error for %s: %s", symbol, e)
+            rows = None
     if not rows:
+        # Authed path unavailable/failed → unauth daily fallback (daily only).
+        if interval == "day":
+            return _rh_history_one_unauth(symbol, span)
         return None
 
     idx: list[pd.Timestamp] = []
@@ -231,11 +311,14 @@ def rh_fallback(
 ) -> pd.DataFrame | None:
     """Robinhood-only OHLCV fetch, shaped like ``yfinance.download()``.
 
-    Returns ``None`` if the session is unavailable or every symbol fails — the
-    same sentinel ``yf.download`` failures produce, so callers are unchanged.
+    Returns ``None`` if every symbol fails — the same sentinel ``yf.download``
+    failures produce, so callers are unchanged. Does NOT hard-require a session:
+    ``_ensure_rh_session`` is consulted (the authed path is preferred when live),
+    but daily fetches fall back to the unauthenticated historicals endpoint, so
+    the fallback still works when the RH session is expired (the common case —
+    robin_stocks 3.4.0 cannot refresh it) or absent.
     """
-    if not _ensure_rh_session():
-        return None
+    _ensure_rh_session()   # populate _RH_SESSION_READY; never gate on it (unauth fallback)
 
     span = _span_from_period(period, start, end)
     rh_interval = _interval_to_rh(interval)
@@ -272,6 +355,30 @@ def rh_fallback(
 
 # ─── Universal entry point ────────────────────────────────────────────────────
 
+def _usable_yahoo_symbols(raw: "pd.DataFrame | None", sym_list: list[str]) -> set[str]:
+    """Subset of `sym_list` that have ≥5 non-NaN Close bars in a yfinance frame.
+
+    Why this exists: a multi-symbol ``yf.download`` of a rate-limited (HTTP 429)
+    batch does NOT return None — it returns a frame indexed by DATES with all-NaN
+    columns. A bare ``len(raw) >= 5`` check counts date rows and passes, so the
+    all-NaN frame was returned as "success" and the Robinhood fallback was
+    skipped. We must inspect the Close column per symbol, not the row count.
+    """
+    if raw is None or len(raw) < 5:
+        return set()
+    try:
+        close = raw["Close"]
+    except Exception:  # noqa: BLE001 — unexpected shape → treat as unusable
+        return set()
+    if isinstance(close, pd.Series):              # single-symbol frame
+        return set(sym_list) if int(close.notna().sum()) >= 5 else set()
+    good: set[str] = set()                        # multi-symbol → columns are tickers
+    for sym in sym_list:
+        if sym in close.columns and int(close[sym].notna().sum()) >= 5:
+            good.add(sym)
+    return good
+
+
 def yf_download(
     symbols: str | list[str],
     *,
@@ -287,7 +394,8 @@ def yf_download(
 
     Period-based historical frames are memoized for ``_YF_CACHE_TTL_S`` to cut
     redundant Yahoo hits across engines in a single daily-chain run. Ranged
-    (start/end) queries bypass the cache.
+    (start/end) queries bypass the cache. Only frames with real (non-NaN)
+    Close data are cached.
     """
     cacheable = start is None and end is None
     key = None
@@ -321,10 +429,15 @@ def _yf_download_uncached(
     """Drop-in for ``yfinance.download``: Yahoo primary, Robinhood fallback.
 
     One Yahoo attempt (callers needing heavy retry — e.g. consensus.py — keep
-    their own loop and call ``rh_fallback`` directly). On a 401/crumb error or
-    an empty/too-short frame, transparently fall back to Robinhood.
+    their own loop and call ``rh_fallback`` directly). The fallback fires not
+    only on a 401/crumb error or empty frame, but per-symbol whenever Yahoo
+    returns a date-indexed but all-NaN column for a symbol (the HTTP-429 batch
+    case) — only the symbols Yahoo failed to serve are re-fetched from Robinhood.
     """
     import yfinance as yf
+
+    single = isinstance(symbols, str)
+    sym_list = [symbols] if single else list(symbols)
 
     raw: pd.DataFrame | None = None
     try:
@@ -342,8 +455,60 @@ def _yf_download_uncached(
         logger.debug("price_source: Yahoo download failed (%s) — trying RH", e)
         raw = None
 
-    if _usable_rows(raw) >= 5:
-        return raw
+    usable = _usable_yahoo_symbols(raw, sym_list)
+    if len(usable) == len(sym_list):
+        return raw                                    # every symbol has real data
 
-    fb = rh_fallback(symbols, period=period, start=start, end=end, interval=interval)
-    return fb if fb is not None else raw
+    missing = [s for s in sym_list if s not in usable]
+    fb_arg: str | list[str] = missing[0] if (single and missing) else missing
+    fb = rh_fallback(fb_arg, period=period, start=start, end=end, interval=interval)
+
+    if not usable:                                    # Yahoo served nothing usable
+        if fb is not None:
+            logger.info("price_source: Yahoo unusable for %d symbol(s) — served from RH",
+                        len(sym_list))
+            return fb
+        # BOTH sources failed. Never hand back the date-indexed all-NaN Yahoo
+        # frame: it is non-None, non-empty and len>=5, so `is None`/`.empty`
+        # callers (regime, monte_carlo, correlation, watchlist) would treat it as
+        # data and silently propagate NaN into indicators. None = honest outage.
+        logger.warning("price_source: Yahoo AND Robinhood failed for %s — returning None",
+                       sym_list)
+        return None
+
+    if fb is None:                                    # partial Yahoo, RH unavailable
+        return raw
+    try:                                              # splice RH bars into the Yahoo frame
+        # RH bars are tz-aware UTC, Yahoo bars are tz-naive — combine_first refuses to
+        # join across tz-awareness. Normalize BOTH to naive daily, then dedupe (cannot
+        # align duplicate labels), so the per-symbol fill actually lands.
+        def _naive_daily(frame: pd.DataFrame) -> pd.DataFrame:
+            idx = pd.DatetimeIndex(frame.index)
+            if idx.tz is not None:
+                idx = idx.tz_convert("UTC").tz_localize(None)
+            frame = frame.copy()
+            frame.index = idx.normalize()
+            return frame[~frame.index.duplicated(keep="last")].sort_index()
+
+        raw_c = _naive_daily(raw)
+        fb_c = _naive_daily(fb)
+        # Never mix price regimes WITHIN one symbol: Yahoo bars are dividend-
+        # adjusted (auto_adjust=True) while RH bars are split-adjusted only. A
+        # "missing" symbol can still carry 1–4 residual Yahoo bars, and
+        # combine_first would splice those into its RH column — an artificial
+        # level jump that corrupts ATR/stop math. Blank residuals so each missing
+        # symbol's column comes from a SINGLE source.
+        try:
+            if isinstance(raw_c.columns, pd.MultiIndex):
+                resid = [c for c in raw_c.columns if c[1] in set(missing)]
+                if resid:
+                    raw_c.loc[:, resid] = float("nan")
+        except Exception:  # noqa: BLE001 — best-effort hygiene, never break the merge
+            pass
+        combined = raw_c.combine_first(fb_c)
+        logger.info("price_source: filled %d Yahoo-missing symbol(s) from RH: %s",
+                    len(missing), ", ".join(missing))
+        return combined
+    except Exception as e:  # noqa: BLE001 — merge failure must not break the run
+        logger.debug("price_source: RH/Yahoo merge failed (%s) — returning Yahoo frame", e)
+        return raw
