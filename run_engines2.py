@@ -307,9 +307,13 @@ except Exception as e:
 results['regime_summary'] = regime_summary
 
 # ── Save ──────────────────────────────────────────────────────────────────────
+# Atomic write (temp + replace): the :9000 server reads this file while the
+# chain writes it — a bare open('w') exposes a truncated JSON mid-write.
 out = BASE / 'engine_results.json'
-with open(out, 'w') as f:
+tmp = out.with_name(out.name + '.tmp')
+with open(tmp, 'w') as f:
     json.dump(results, f, indent=2, default=str)
+os.replace(tmp, out)
 
 print(f"\n{_t()} [engines] Done — saved to {out}")
 print(f"[engines] Keys: {list(results.keys())}")

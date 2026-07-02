@@ -142,8 +142,13 @@ try:
     eng['regime_summary'] = regime_summary
     eng['override_context'] = override_context
 
-    with open(BASE / 'engine_results.json', 'w') as f:
+    # Atomic write (temp + replace): the :9000 server reads this file while the
+    # chain writes it — a bare open('w') exposes a truncated JSON mid-write.
+    _out = BASE / 'engine_results.json'
+    _tmp = _out.with_name(_out.name + '.tmp')
+    with open(_tmp, 'w') as f:
         json.dump(eng, f, indent=2, default=str)
+    os.replace(_tmp, _out)
 
     # Also dump ai_result standalone for quick inspection
     with open('/tmp/ai_result2.json', 'w') as f:

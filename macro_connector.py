@@ -85,7 +85,10 @@ def _load_cache() -> dict | None:
 
 def _save_cache(data: dict) -> None:
     try:
-        CACHE_FILE.write_text(json.dumps(data, default=str))
+        # Atomic (temp + replace) so a concurrent reader never sees a half-write.
+        tmp = CACHE_FILE.with_name(CACHE_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(data, default=str))
+        tmp.replace(CACHE_FILE)
     except Exception:
         pass
 
