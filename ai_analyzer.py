@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json, os, re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 import anthropic
 from dotenv import load_dotenv
@@ -10,6 +12,96 @@ MODELS = {
     "haiku":  "claude-haiku-4-5-20251001",
 }
 MODEL = MODELS.get(os.getenv("CLAUDE_MODEL", "sonnet").lower(), MODELS["sonnet"])
+# Screener = structured scoring over pre-computed candidates → Haiku by default
+# (cost-routing convention: cheap batch tasks → Haiku). Override: CLAUDE_SCREENER_MODEL.
+SCREENER_MODEL = MODELS.get(
+    os.getenv("CLAUDE_SCREENER_MODEL", "haiku").lower(), MODELS["haiku"]
+)
+# One count, used by BOTH screener prompts — they used to contradict each other
+# ("exactly 20" in the system prompt vs "best 6" in the user message).
+SCREENER_PICK_COUNT = int(os.getenv("SCREENER_PICK_COUNT", "6"))
+
+# Bounded client everywhere: SDK defaults (600s timeout × retries) allow a
+# ~30-min silent stall in the daily chain.
+_CLIENT_TIMEOUT_S = 240.0
+_CLIENT_MAX_RETRIES = 2
+
+
+def _client() -> anthropic.Anthropic:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise EnvironmentError("ANTHROPIC_API_KEY must be set in your .env file.")
+    return anthropic.Anthropic(
+        api_key=api_key, timeout=_CLIENT_TIMEOUT_S, max_retries=_CLIENT_MAX_RETRIES
+    )
+
+
+# ─── Usage accounting + optional daily budget ────────────────────────────────
+# Every call appends one JSONL row (tokens + est. cost). LLM_DAILY_BUDGET_USD
+# (unset/0 = no cap) hard-stops new calls once today's estimated spend crosses
+# the cap — a runaway retry loop can no longer multiply cost silently.
+_USAGE_LOG = Path(os.getenv("LLM_USAGE_LOG") or (Path(__file__).parent / "llm_usage.jsonl"))
+_DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "0") or 0)
+_PRICE_PER_MTOK = {  # (input $, output $) per million tokens
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5-20251001": (1.0, 5.0),
+}
+
+
+def _est_cost_usd(model: str, in_tok: int, out_tok: int) -> float:
+    p_in, p_out = _PRICE_PER_MTOK.get(model, (3.0, 15.0))
+    return (in_tok * p_in + out_tok * p_out) / 1_000_000
+
+
+def _record_usage(fn: str, model: str, message: Any) -> None:
+    """Append one usage row. Accounting must never break analysis — fail soft."""
+    try:
+        usage = getattr(message, "usage", None)
+        if usage is None:
+            return
+        in_tok = int(getattr(usage, "input_tokens", 0) or 0)
+        out_tok = int(getattr(usage, "output_tokens", 0) or 0)
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "fn": fn, "model": model,
+            "input_tokens": in_tok, "output_tokens": out_tok,
+            "est_cost_usd": round(_est_cost_usd(model, in_tok, out_tok), 6),
+        }
+        with open(_USAGE_LOG, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
+
+def _spent_today_usd() -> float:
+    try:
+        today = datetime.now(timezone.utc).date().isoformat()
+        total = 0.0
+        with open(_USAGE_LOG) as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if str(row.get("ts", "")).startswith(today):
+                    total += float(row.get("est_cost_usd", 0) or 0)
+        return total
+    except FileNotFoundError:
+        return 0.0
+    except Exception:
+        return 0.0
+
+
+def _budget_guard(fn: str) -> None:
+    """Raise BEFORE spending when the optional daily budget is exhausted."""
+    if _DAILY_BUDGET_USD <= 0:
+        return
+    spent = _spent_today_usd()
+    if spent >= _DAILY_BUDGET_USD:
+        raise RuntimeError(
+            f"{fn}: LLM daily budget exhausted (${spent:.2f} of "
+            f"${_DAILY_BUDGET_USD:.2f}) — raise LLM_DAILY_BUDGET_USD or wait for UTC rollover"
+        )
 
 
 def _extract_tool_input(message: Any, fn_name: str) -> dict[str, Any]:
@@ -45,15 +137,14 @@ SYSTEM_PROMPT = """You are an elite quantitative risk manager. Analyze the portf
 Be direct, precise, use dollar figures and percentages."""
 
 def analyze_portfolio(payload: dict[str, Any]) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise EnvironmentError("ANTHROPIC_API_KEY must be set in your .env file.")
-    client = anthropic.Anthropic(api_key=api_key)
+    _budget_guard("analyze_portfolio")
+    client = _client()
     message = client.messages.create(
         model=MODEL, max_tokens=2048,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"Analyze this portfolio:\n\n```json\n{json.dumps(payload, indent=2)}\n```"}]
+        messages=[{"role": "user", "content": f"Analyze this portfolio:\n\n```json\n{json.dumps(payload, separators=(',', ':'))}\n```"}]
     )
+    _record_usage("analyze_portfolio", MODEL, message)
     if getattr(message, "stop_reason", None) == "max_tokens":
         raise RuntimeError("analyze_portfolio: response truncated at max_tokens (2048) — output incomplete")
     if not message.content:
@@ -225,12 +316,10 @@ def deep_analyze_portfolio(
     payload: dict[str, Any],
     regime_context: str | None = None,
 ) -> dict[str, Any]:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise EnvironmentError("ANTHROPIC_API_KEY must be set in your .env file.")
+    _budget_guard("deep_analyze_portfolio")
     # Bounded client: SDK defaults (600s timeout x retries) allow a ~30-min
     # silent stall. 240s covers a slow ~7-10K-token generation.
-    client = anthropic.Anthropic(api_key=api_key, timeout=240.0, max_retries=2)
+    client = _client()
 
     today = __import__('datetime').date.today().isoformat()
     regime_block = f"\n\n{regime_context}" if regime_context else ""
@@ -274,6 +363,7 @@ def deep_analyze_portfolio(
             )
         }]
     )
+    _record_usage("deep_analyze_portfolio", MODEL, message)
     if getattr(message, "stop_reason", None) == "max_tokens":
         raise RuntimeError(
             "deep_analyze_portfolio: tool output truncated at max_tokens — "
@@ -286,9 +376,9 @@ def deep_analyze_portfolio(
 
 # ─── Investment Screener AI Analysis ─────────────────────────────────────────
 
-SCREENER_SYSTEM_PROMPT = """You are an elite quantitative stock screener combining Goldman Sachs research depth with Simply Wall St clarity.
+SCREENER_SYSTEM_PROMPT = f"""You are an elite quantitative stock screener combining Goldman Sachs research depth with Simply Wall St clarity.
 
-Given a list of stock candidates with 1-week data and fundamentals, select exactly 20 stocks that represent the BEST investment opportunities for this week.
+Given a list of stock candidates with 1-week data and fundamentals, select exactly {SCREENER_PICK_COUNT} stocks that represent the BEST investment opportunities for this week.
 
 Selection criteria — use a BALANCED MIXTURE (not pure momentum):
 - MOMENTUM (25%): Strong 1W and 1M price action, volume confirmation
@@ -298,7 +388,7 @@ Selection criteria — use a BALANCED MIXTURE (not pure momentum):
 - QUALITY (10%): Business model durability, balance sheet, sector tailwinds
 
 Rules:
-- Include a mix: 2-3 large-cap stability picks + 5-7 mid-cap growth + 2-3 value plays + 2-3 contrarian/turnaround
+- Include a mix across large-cap stability, mid-cap growth, value, and contrarian/turnaround picks (proportional to the pick count)
 - Avoid ETFs (SPY, QQQ, IWM) as final picks
 - 1-2 picks can be WATCH (not quite BUY but worth monitoring)
 - Be realistic about scores — spread them meaningfully (not all 75-85)
@@ -307,15 +397,13 @@ Order picks by composite_score descending."""
 
 
 def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise EnvironmentError("ANTHROPIC_API_KEY must be set in your .env file.")
-    client = anthropic.Anthropic(api_key=api_key)
+    _budget_guard("analyze_screener")
+    client = _client()
 
     today = __import__('datetime').date.today().isoformat()
 
     message = client.messages.create(
-        model=MODEL,
+        model=SCREENER_MODEL,
         max_tokens=6000,
         system=[{"type": "text", "text": SCREENER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[{
@@ -328,11 +416,12 @@ def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
             "role": "user",
             "content": (
                 f"Today is {today}. Analyze these {len(candidates)} stock candidates "
-                f"and select the best 6 investment opportunities this week.\n\n"
-                f"```json\n{json.dumps(candidates, indent=2)}\n```"
+                f"and select the best {SCREENER_PICK_COUNT} investment opportunities this week.\n\n"
+                f"```json\n{json.dumps(candidates, separators=(',', ':'))}\n```"
             )
         }]
     )
+    _record_usage("analyze_screener", SCREENER_MODEL, message)
     if getattr(message, "stop_reason", None) == "max_tokens":
         raise RuntimeError(
             "analyze_screener: tool output truncated at max_tokens — "

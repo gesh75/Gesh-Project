@@ -67,3 +67,4 @@ android */
 htmlcov/
 .pytest_cache/
 node_modules/
+llm_usage.jsonl
