@@ -141,7 +141,12 @@ def node_momentum(symbol: str, close: np.ndarray | None = None) -> tuple[int | N
         d = np.diff(c); gains = np.where(d>0,d,0); losses = np.where(d<0,-d,0)
         ag = np.convolve(gains,  np.ones(14)/14, 'valid')[-1]
         al = np.convolve(losses, np.ones(14)/14, 'valid')[-1]
-        rsi = 100 - (100/(1+ag/al)) if al > 0 else 50
+        # Zero losses in the window = RSI saturates at 100 (max bullish), NOT a
+        # neutral 50 — the old fallback muted this node in the strongest trends.
+        if al > 0:
+            rsi = 100 - (100 / (1 + ag / al))
+        else:
+            rsi = 100.0 if ag > 0 else 50.0   # 50 only when truly flat (no gains either)
         # MA crossover
         ma20 = np.mean(c[-20:]); ma50 = np.mean(c[-50:]) if len(c)>=50 else ma20
         # Price vs 52w high
@@ -431,14 +436,25 @@ def run_consensus_holding(
 
     try:
         raw_252 = price_source.yf_download(symbol, period="252d", auto_adjust=True, progress=False)
+        # Row-aligned OHLCV: per-column .dropna() let Close/High/Low drift out of
+        # time alignment when a NaN hit only one column (ADX on shifted bars).
+        # Join on the index and drop rows missing any PRICE field instead.
+        import pandas as pd
+        fields = {f: raw_252[f].squeeze() for f in ("Close", "High", "Low", "Volume") if f in raw_252}
+        price_cols = [f for f in ("Close", "High", "Low") if f in fields]
+        aligned = pd.DataFrame(fields).dropna(subset=price_cols) if price_cols else pd.DataFrame()
         cache = {
-            "close": raw_252["Close"].squeeze().dropna().values.astype(float) if "Close" in raw_252 else np.array([]),
-            "high":  raw_252["High"].squeeze().dropna().values.astype(float) if "High" in raw_252 else np.array([]),
-            "low":   raw_252["Low"].squeeze().dropna().values.astype(float) if "Low" in raw_252 else np.array([]),
-            "volume":raw_252["Volume"].squeeze().dropna().values.astype(float) if "Volume" in raw_252 else np.array([]),
+            "close": aligned["Close"].values.astype(float) if "Close" in aligned else np.array([]),
+            "high":  aligned["High"].values.astype(float) if "High" in aligned else np.array([]),
+            "low":   aligned["Low"].values.astype(float) if "Low" in aligned else np.array([]),
+            "volume": aligned["Volume"].fillna(0.0).values.astype(float) if "Volume" in aligned else np.array([]),
         }
         if len(cache["close"]) > 0:
-            returns = np.diff(np.log(cache["close"][-91:]))
+            # SIMPLE returns — matches gesh_core.kelly's pct_change() convention.
+            # Log returns understate mu by ~sigma^2/2, which skewed the Kelly
+            # node bearish vs the dashboard Kelly on volatile names.
+            c91 = cache["close"][-91:]
+            returns = np.diff(c91) / c91[:-1]
         else:
             returns = None
     except Exception:
