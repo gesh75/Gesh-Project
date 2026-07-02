@@ -22,10 +22,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 # APScheduler is the only new dependency — add to requirements if not present.
 # pip install apscheduler
@@ -40,7 +42,14 @@ from .config import load_risk_config
 from .contract import from_consensus, TradeIntent
 from .risk_gate import evaluate
 from .execution import place
-from .state import init_trading_tables, recent_intents
+from .state import (
+    active_stops,
+    get_marker,
+    init_trading_tables,
+    paper_open_positions,
+    recent_intents,
+    set_marker,
+)
 from .alerts import (
     alert_autopilot_start, alert_autopilot_stop,
     alert_scan_summary, alert_error, alert_daily_pnl,
@@ -128,8 +137,50 @@ def _consensus_args(sym: str, snapshot: dict[str, Any]) -> dict[str, float]:
 
 
 # ─── Candidate storage (in-memory between pre-market and open-window) ─────────
-# Keyed by symbol → (TradeIntent, consensus_row)
-_CANDIDATES: dict[str, tuple[TradeIntent, dict]] = {}
+# Keyed by symbol → (TradeIntent, consensus_row). Persisted to a job marker so a
+# process restart between 08:30 and 09:35 no longer silently trades nothing.
+_CANDIDATES: dict[str, tuple[TradeIntent | None, dict]] = {}
+
+_CANDIDATE_MARKER = "premarket_candidates"
+
+
+def _et_today() -> str:
+    return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+def _persist_candidates() -> None:
+    """Write today's candidate symbols to the DB (restart-safe handoff)."""
+    try:
+        set_marker(_CANDIDATE_MARKER, json.dumps({
+            "date": _et_today(),
+            "symbols": sorted(_CANDIDATES),
+        }))
+    except Exception as e:  # noqa: BLE001 — persistence is best-effort
+        logger.warning("pre_market_scan: could not persist candidates: %s", e)
+
+
+def _restore_candidates() -> None:
+    """Reload today's pre-market candidates after a process restart.
+
+    Only the symbols matter — open_window re-runs consensus fresh anyway, so a
+    placeholder (None, {}) tuple is enough. Stale (non-today) markers are ignored.
+    """
+    try:
+        raw = get_marker(_CANDIDATE_MARKER)
+        if not raw:
+            return
+        data = json.loads(raw)
+        if data.get("date") != _et_today():
+            return
+        for sym in data.get("symbols", []):
+            _CANDIDATES.setdefault(sym, (None, {}))
+        if _CANDIDATES:
+            logger.info(
+                "open_window: restored %d candidates from marker after restart",
+                len(_CANDIDATES),
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("open_window: candidate restore failed: %s", e)
 
 
 # ─── Job implementations ──────────────────────────────────────────────────────
@@ -173,14 +224,26 @@ def pre_market_scan() -> None:
             row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
             intent = from_consensus(row, max_position_pct=cfg.max_position_pct)
             if intent.action in ("BUY", "SELL") and intent.confidence >= cfg.min_confidence:
+                # P2 entry-conviction floor (ported from the engine repo): gate NEW
+                # long entries on the consensus raw_score — confidence is data
+                # coverage (≈ nodes-voted/9), so alone it let a near-coin-flip
+                # weighted score through. SELL is a managed exit — never blocked.
+                raw_score = float(row.get("raw_score", row.get("score", 0)) or 0)
+                if intent.action == "BUY" and raw_score < cfg.min_entry_score:
+                    logger.info(
+                        "  ⊘ %s → BUY skipped: raw_score=%.2f < min_entry_score=%.2f (low conviction)",
+                        sym, raw_score, cfg.min_entry_score,
+                    )
+                    continue
                 _CANDIDATES[sym] = (intent, row)
                 logger.info(
-                    "  ✓ %s → %s conf=%.2f verdict=%s",
-                    sym, intent.action, intent.confidence, row.get("verdict"),
+                    "  ✓ %s → %s conf=%.2f raw=%.2f verdict=%s",
+                    sym, intent.action, intent.confidence, raw_score, row.get("verdict"),
                 )
         except Exception as e:
             logger.warning("  ✗ %s failed: %s", sym, e)
 
+    _persist_candidates()
     logger.info(
         "pre_market_scan: complete — %d actionable candidates stored",
         len(_CANDIDATES),
@@ -196,6 +259,8 @@ def open_window() -> None:
     09:35 ET — Execute (or paper-simulate) all candidates from pre_market_scan.
     Each intent is pushed through the full risk gate before any order is placed.
     """
+    if not _CANDIDATES:
+        _restore_candidates()   # in-memory dict is empty after a restart
     logger.info("open_window: starting — %d candidates queued", len(_CANDIDATES))
     if not _CANDIDATES:
         logger.info("open_window: no candidates — skipping")
@@ -237,6 +302,16 @@ def open_window() -> None:
             if intent.action not in ("BUY", "SELL") or intent.confidence < cfg.min_confidence:
                 logger.info("  ✗ %s no longer actionable at open (action=%s conf=%.2f) — skipping",
                             sym, intent.action, intent.confidence)
+                rejected += 1
+                continue
+            # Re-apply the P2 entry-conviction floor against the FRESH open
+            # snapshot — the 08:30 raw_score may have weakened by 09:35.
+            fresh_raw = float(fresh_row.get("raw_score", fresh_row.get("score", 0)) or 0)
+            if intent.action == "BUY" and fresh_raw < cfg.min_entry_score:
+                logger.info(
+                    "  ⊘ %s BUY skipped at open: raw_score=%.2f < min_entry_score=%.2f",
+                    sym, fresh_raw, cfg.min_entry_score,
+                )
                 rejected += 1
                 continue
             verdict = evaluate(intent, snapshot, cfg)
@@ -360,25 +435,53 @@ def close_risk_check() -> None:
     from .config import load_risk_config as _cfg
     alert_daily_pnl(equity, prev_close, daily_pnl, _cfg().max_daily_loss_pct)
 
-    # Stop-loss sweep
+    # Stop-loss sweep — the PAPER book first (positions reconstructed from
+    # SIMULATED fills, stops recorded at fill time by execution._sync_paper_stop).
+    # The old holdings-field sweep was doubly dead: data_fetcher holdings never
+    # carry a stop_loss field, and the SELL intent it built (no
+    # target_position_pct) failed validate() at the gate.
     from .contract import manual as _manual
-    for h in holdings:
+
+    def _sweep_sell(sym: str, price: float, stop: float, book: str) -> None:
+        logger.warning(
+            "  STOP-LOSS BREACH (%s): %s price=%.2f < stop=%.2f — logging SELL intent",
+            book, sym, price, stop,
+        )
+        intent = _manual(
+            sym, "SELL",
+            confidence=1.0,
+            target_position_pct=0.0,   # full close — required for a valid SELL intent
+            rationale=f"EOD stop-loss breach ({book}): price={price:.2f} stop={stop:.2f}",
+            source="stop_sweep",
+        )
+        verdict = evaluate(intent, snapshot, cfg)
+        place(intent, verdict, snapshot, cfg)
+
+    price_by_symbol: dict[str, float] = {
+        h.get("symbol"): float(h.get("current_price") or 0) for h in holdings
+    }
+    for w in snapshot.get("watchlist", []):
+        price_by_symbol.setdefault(w.get("symbol"), float(w.get("last_trade_price") or 0))
+
+    if cfg.paper_mode:
+        try:
+            paper_positions = paper_open_positions()
+            stops = active_stops()
+        except Exception as e:  # noqa: BLE001 — sweep must not die on a book read
+            paper_positions, stops = {}, {}
+            logger.error("close_risk_check: paper-book read failed: %s", e)
+        for sym in paper_positions:
+            stop = float((stops.get(sym) or {}).get("stop_price") or 0)
+            price = float(price_by_symbol.get(sym) or 0)
+            if stop and price and price < stop:
+                _sweep_sell(sym, price, stop, "paper")
+
+    for h in holdings:   # legacy real-holdings path — kept, now with a valid intent
         sym = h.get("symbol")
         price = float(h.get("current_price") or 0)
         stop = float(h.get("stop_loss") or 0)       # if holdings carry stop_loss field
-
         if stop and price and price < stop:
-            logger.warning(
-                "  STOP-LOSS BREACH: %s price=%.2f < stop=%.2f — logging SELL intent",
-                sym, price, stop,
-            )
-            intent = _manual(
-                sym, "SELL",
-                confidence=1.0,
-                rationale=f"EOD stop-loss breach: price={price:.2f} stop={stop:.2f}",
-            )
-            verdict = evaluate(intent, snapshot, cfg)
-            place(intent, verdict, snapshot, cfg)
+            _sweep_sell(sym, price, stop, "live")
 
     # Warn if daily loss cap was approached
     if daily_pnl < -0.008:
