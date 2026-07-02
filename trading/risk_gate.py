@@ -67,9 +67,13 @@ def _spy_above_ma(ma_days: int = 200) -> bool | None:
         return hit[1]
     val: bool | None = None
     try:
-        import yfinance as _yf, numpy as _np
-        raw = _yf.download("SPY", period="2y", interval="1d",
-                           auto_adjust=True, progress=False)
+        # price_source, not raw yfinance: this gate is fail-open, so a Yahoo-429
+        # storm made it go blind exactly during stressed markets. The RH fallback
+        # keeps it sighted.
+        import numpy as _np
+        import price_source as _ps
+        raw = _ps.yf_download("SPY", period="2y", interval="1d",
+                              auto_adjust=True, progress=False)
         closes = raw["Close"].squeeze().dropna().values.astype(float)
         if len(closes) >= max(50, ma_days // 4):
             val = bool(closes[-1] >= float(_np.mean(closes[-ma_days:])))

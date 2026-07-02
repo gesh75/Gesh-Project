@@ -51,11 +51,34 @@ logger = logging.getLogger(__name__)
 
 _OHLCV_FIELDS = ("Open", "High", "Low", "Close", "Volume")
 
+
+def _usable_rows(frame: pd.DataFrame | None) -> int:
+    """Rows with at least one non-NaN Close.
+
+    A Yahoo-429 storm returns a FULL-LENGTH all-NaN frame — a row-count-only
+    check reads that as success, skipping the Robinhood fallback AND caching
+    the poisoned frame for the TTL. Count usable values, not rows.
+    """
+    if frame is None or len(frame) == 0:
+        return 0
+    try:
+        closes = frame["Close"]
+    except Exception:  # no Close column — treat rows as-is (unknown shape)
+        return len(frame)
+    notna = closes.notna()
+    if getattr(notna, "ndim", 1) > 1:   # multi-symbol: Close is a DataFrame
+        return int(notna.any(axis=1).sum())
+    return int(notna.sum())
+
 # Mirror fetch_live_snapshot.py — the canonical session pickle location.
 _PICKLE_PATH = os.path.expanduser("~/.tokens/robinhoodrobinhood_session.pickle")
 
-# Process-level memo so we attempt the (cheap) session restore at most once.
+# Process-level memo for the (cheap) session restore. Success is remembered
+# forever; failure is retried after a TTL so a long-lived server picks up a
+# pickle that appears (or a token refresh) without a restart.
 _RH_SESSION_READY: bool | None = None
+_RH_SESSION_CHECKED_AT: float = 0.0
+_RH_SESSION_RETRY_S = float(os.getenv("RH_SESSION_RETRY_S", "300"))
 
 
 # ─── yfinance period/interval → Robinhood span/interval translation ───────────
@@ -132,11 +155,14 @@ def _ensure_rh_session() -> bool:
     Mirrors fetch_live_snapshot.py::_restore_session so the engine processes —
     which never logged in themselves — can reach Robinhood market data.
     """
-    global _RH_SESSION_READY
-    if _RH_SESSION_READY is not None:
-        return _RH_SESSION_READY
+    global _RH_SESSION_READY, _RH_SESSION_CHECKED_AT
+    if _RH_SESSION_READY is True:
+        return True
+    if _RH_SESSION_READY is False and (time.time() - _RH_SESSION_CHECKED_AT) < _RH_SESSION_RETRY_S:
+        return False
 
     _RH_SESSION_READY = False
+    _RH_SESSION_CHECKED_AT = time.time()
     try:
         if not os.path.isfile(_PICKLE_PATH):
             logger.debug("price_source: no RH session pickle at %s", _PICKLE_PATH)
@@ -276,7 +302,7 @@ def yf_download(
         symbols, period=period, start=start, end=end, interval=interval,
         auto_adjust=auto_adjust, progress=progress, **kwargs,
     )
-    if cacheable and key is not None and raw is not None and len(raw) > 0:
+    if cacheable and key is not None and _usable_rows(raw) > 0:
         _YF_CACHE[key] = (time.time(), raw.copy())
     return raw
 
@@ -316,7 +342,7 @@ def _yf_download_uncached(
         logger.debug("price_source: Yahoo download failed (%s) — trying RH", e)
         raw = None
 
-    if raw is not None and len(raw) >= 5:
+    if _usable_rows(raw) >= 5:
         return raw
 
     fb = rh_fallback(symbols, period=period, start=start, end=end, interval=interval)

@@ -27,9 +27,10 @@ Typical meaningful cycles detected:
 from __future__ import annotations
 
 import numpy as np
-import yfinance as yf
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+import price_source  # Yahoo primary, Robinhood fallback (audit PR3)
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 LOOKBACK_DAYS   = 252   # 1 year of trading history
@@ -58,7 +59,7 @@ def detect_fft_cycles(symbol: str, lookback_days: int = LOOKBACK_DAYS, prices: n
             end   = datetime.today()
             start = end - timedelta(days=lookback_days + 40)   # extra buffer for weekends
 
-            raw = yf.download(
+            raw = price_source.yf_download(
                 symbol,
                 start=start.strftime("%Y-%m-%d"),
                 end=end.strftime("%Y-%m-%d"),
