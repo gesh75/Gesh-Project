@@ -2,6 +2,30 @@
 
 _Last updated: 2026-07-02_
 
+## Done — MCP-first data revival under VPN block (2026-07-02 afternoon)
+
+- Yahoo hard-blocked from this host (VPN finance-category, curl → 000) AND the
+  RH session pickle is 0 bytes (robin_stocks can't re-auth) → whole price layer
+  was dark; chain gated 0 all day. **Robinhood MCP is the data path now.**
+- Snapshot refreshed via RH MCP (portfolio+positions+quotes → /tmp/gesh_mcp_raw
+  → build_snapshot_from_mcp.py): $37,238.33, 10 holdings, src=robinhood_mcp.
+- Ported the engine's price_source wholesale (commit 2487ce5): per-symbol
+  usable-Close detection, RH-splice into partial Yahoo frames, robin_stocks
+  HTTP timeout, 0-byte-pickle tolerance, **unauth RH daily historicals
+  fallback** (trading/robinhood_quotes.py) — verified live: SPY 62 bars with
+  Yahoo dead + no session. Kept product TTL cache + session-retry TTL.
+- Fixed pre-existing single-symbol regime crash (679c7cd): _get_col returned
+  (n,1) arrays on MultiIndex 1-symbol frames → float(adx) TypeError. Live:
+  SPY RANGING adx 18.9.
+- FFT endpoint phase bias: REFUTED (synthetic sweep, max err 0.001) — audit
+  item closed. RS window alignment: still suspected, needs a market-hours
+  re-check now that data flows.
+- Engine tracker: 16 CLOSED / 18 OPEN — autonomy gate at 16/30 closed trades.
+- Suites: product 366 ✓. Services restarted on 679c7cd.
+- Still open: PR8 dual-repo autopilot extraction; engine full suite hangs on
+  network tests; LS P2-3 billing tests (no P2/P3 markers found in docs — needs
+  Georgi's pointer to what was meant).
+
 ## Done — Money-path audit + remediation (2026-07-02)
 
 Principal-level audit (6 dimensions) of consensus/kelly/market_data/risk_bands/
