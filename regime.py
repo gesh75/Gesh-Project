@@ -339,9 +339,15 @@ def detect_regimes(symbols: list[str]) -> dict[str, Any]:
 
     def _get_col(col: str, sym: str) -> np.ndarray:
         try:
-            if len(symbols) == 1:
-                return raw[col].values.astype(float)
-            return raw[col][sym].dropna().values.astype(float)
+            series = raw[col]
+            # A 1-symbol request still yields (field, ticker) MultiIndex columns
+            # (both yfinance and the RH fallback's multi-symbol path) — select
+            # the ticker column when present, else squeeze the 1-col frame.
+            # The old single-symbol branch returned a (n,1) 2-D array here,
+            # which kept every ADX/BB op array-shaped until float() exploded.
+            if hasattr(series, "columns"):
+                series = series[sym] if sym in series.columns else series.squeeze()
+            return series.dropna().values.astype(float)
         except Exception:
             return np.array([])
 
