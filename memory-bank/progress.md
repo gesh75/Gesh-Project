@@ -1,6 +1,40 @@
 # Progress
 
-_Last updated: 2026-05-28_
+_Last updated: 2026-07-02_
+
+## Done — Money-path audit + remediation (2026-07-02)
+
+Principal-level audit (6 dimensions) of consensus/kelly/market_data/risk_bands/
+ai_analyzer + execution tier, then implemented all accepted fixes. Uncommitted.
+
+- **PR1 (CRITICAL)** Paper-book ledger: `paper_open_positions()` in gesh-core
+  state; paper SELL/BUY sizing reads the paper book, not real RH holdings —
+  fixes "0 closed trades / phantom qty=0" (execution.py:207 SKIPPED path).
+- **PR2 (CRITICAL)** Working stop path: `paper_stops` table + record/active/
+  deactivate; execution records stops on paper BUY fills; close_risk_check
+  sweeps paper book; stop SELLs now pass `validate()` (target 0.0).
+- **PR3 (HIGH)** price_source `_usable_rows()` — all-NaN Yahoo-429 batches now
+  trigger the RH fallback and are never cached; RH session memo retries after
+  300s; `_spy_above_ma`/fft_cycles/screen_market routed through price_source.
+- **PR4 (HIGH, reconciled)** Conviction gating via `min_entry_score` raw-score
+  floor ported into product autopilot (08:30 + 09:35). First attempt blended
+  conviction into `from_consensus` confidence — broke engine-repo
+  test_entry_conviction_floor; reverted to participation-only (shared contract).
+- **PR5 (HIGH)** Kelly node gets SIMPLE returns (was log — understated mu by
+  ~sigma²/2); RSI saturates to 100 on all-gains windows; OHLCV cache row-aligned.
+- **PR6** Candidates persisted via job marker; atomic temp+replace writes in
+  run_ai2/run_engines2/macro_connector; fresh-DB creation warning in db_path.
+- **PR7** All Anthropic clients bounded (240s/2 retries); compact JSON payloads;
+  screener prompt contradiction fixed (`SCREENER_PICK_COUNT=6`); screener on
+  Haiku; usage log + optional `LLM_DAILY_BUDGET_USD` guard.
+- market_data: 1 history fetch per symbol (was 5); enrichment 4 workers +
+  `enrich_error` tags.
+- New tests: test_paper_book (8), test_autopilot_stop_sweep (4),
+  test_price_source_nan_guard (3), test_consensus_money_fixes (4),
+  test_market_data_returns (4), test_autopilot_entry_floor (3) + gesh-core
+  contract semantics test. Suites: product 361 ✓, gesh-core 168 ✓.
+- **Not done (deferred)**: PR8 dual-repo autopilot extraction into gesh-core
+  (L effort); trading-repo full suite hangs on network-bound tests (pre-existing).
 
 ## Done — Security audit & remediation (2026-05-28)
 

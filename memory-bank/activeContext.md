@@ -1,8 +1,30 @@
 # Active Context
 
-_Last updated: 2026-05-28_
+_Last updated: 2026-07-02_
 
-## Current focus
+## Current focus (2026-07-02) — money-path audit remediation, complete
+
+Full-system quant audit of the money path (price → consensus → Kelly → gate →
+order → stop → close) followed by remediation of every accepted finding.
+All code changes landed UNCOMMITTED on `main` (commit not requested yet).
+Suites green: product 361, gesh-core 168, trading-repo floor tests 11.
+
+Key behavior changes to know when operating:
+- **Paper SELLs can now close**: `trading/execution._estimate_qty` sizes from
+  the PAPER book (`state.paper_open_positions()`, reconstructed from SIMULATED
+  fills) in paper mode — no longer from real RH holdings.
+- **Stops are real now**: paper BUY fills persist stop/TP (`paper_stops` table,
+  `risk_bands.exit_bands` MEDIUM); `close_risk_check` sweeps the paper book and
+  emits VALID full-close SELLs (`target_position_pct=0.0`, source=`stop_sweep`).
+- **Entry-conviction floor ported from the engine**: BUY candidates need
+  `raw_score ≥ cfg.min_entry_score` (0.35, env `MIN_ENTRY_SCORE`) at 08:30 AND
+  09:35. `from_consensus` confidence stays participation-only (engine parity —
+  a conviction-blended confidence broke the engine's floor tests; reverted).
+- **Screener runs on Haiku** by default (`CLAUDE_SCREENER_MODEL` to override);
+  optional `LLM_DAILY_BUDGET_USD` hard cap; usage → `llm_usage.jsonl`.
+- Autopilot candidates survive restarts (job marker `premarket_candidates`).
+
+## Previous focus (2026-05-28) — security remediation, complete
 Security remediation of the GESH platform — **complete**. Full audit run against
 `gesh-project` (port 9000, product dashboard) plus a follow-on fix in
 `gesh-project-trading` (port 9003, trading engine). Both services restarted onto
