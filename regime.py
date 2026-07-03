@@ -276,14 +276,21 @@ def get_macro_context() -> dict[str, Any]:
         lines.append(f"Yield Curve (10Y-2Y): {spread:+.2f}% [{state} — {state_note}]")
         result["available"] = True
 
-    # ── CPI Inflation (YoY approx) ──────────────────────────────────────────
-    cpi = _fetch_fred_series("CPIAUCSL", limit_rows=14)  # ~14 months
+    # ── CPI Inflation (YoY, BLS-headline methodology) ───────────────────────
+    # Use CPIAUCNS (NOT seasonally adjusted) — the series BLS uses for the
+    # official headline 12-month change. The SA series (CPIAUCSL) gives a
+    # slightly different figure (~0.1pp) that read as "wrong" against the BLS
+    # release. Trend still uses month-over-month direction on the same series.
+    cpi = _fetch_fred_series("CPIAUCNS", limit_rows=14)  # ~14 months
     if len(cpi) >= 13:
         latest = cpi[-1][1]
         year_ago = cpi[-13][1]
+        as_of = str(cpi[-1][0])[:7] if cpi[-1][0] else "?"   # YYYY-MM of latest print
         if year_ago > 0:
             yoy = round((latest - year_ago) / year_ago * 100, 2)
             result["cpi_yoy_pct"] = yoy
+            result["cpi_as_of"] = as_of
+            result["cpi_series"] = "CPIAUCNS"
             # Trend: compare last 3 months vs prior 3 months
             recent_avg  = sum(v for _, v in cpi[-3:]) / 3
             prior_avg   = sum(v for _, v in cpi[-6:-3]) / 3
@@ -294,7 +301,8 @@ def get_macro_context() -> dict[str, Any]:
             else:
                 trend = "STABLE"
             result["inflation_trend"] = trend
-            lines.append(f"CPI (YoY): {yoy:.1f}% — Inflation {trend}")
+            # Auditable label: value + BLS-matching series + as-of month.
+            lines.append(f"CPI YoY {yoy:.1f}% as of {as_of} (FRED CPIAUCNS, BLS headline basis) — Inflation {trend}")
             result["available"] = True
 
     if lines:
