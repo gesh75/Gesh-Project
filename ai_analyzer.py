@@ -179,7 +179,13 @@ SCORING GUIDE (be realistic — avoid clustering all at 50):
 - momentum: 0=down >50% with deteriorating fundamentals, 50=sideways, 100=strong uptrend
 - dividend: 0=no dividend, 60=moderate 2-4% yield, 100=high yield >5% safe payout
 
-Provide 2-4 risks per stock and 1-3 rewards. Be specific — reference actual business metrics."""
+Provide 2-4 risks per stock and 1-3 rewards. Be specific — reference actual business metrics.
+
+CONSISTENCY (mandatory): keep regime language internally consistent. If ANY named holding is
+trending, do NOT write that the "entire portfolio" is ranging — say "most names are ranging"
+or "the portfolio is broadly ranging, except <tickers>". Never make a whole-portfolio absolute
+claim you then contradict with per-name exceptions. Use the same regime label for a given
+ticker everywhere it appears in your response."""
 
 
 
