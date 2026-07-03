@@ -502,6 +502,21 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
         raise PermissionError("invalid webhook signature")
 
     name = (payload.get("meta") or {}).get("event_name", "")
+
+    # Env-gated raw-payload capture (debug tool, OFF unless BILLING_CAPTURE_DIR is
+    # set): signature-verified deliveries only, so the dump can't be attacker-fed.
+    # Used to fix parse gaps against LS's REAL payload shapes (e.g. the 2026-07-03
+    # order_created "unknown variant" refusal). Never allowed to break handling.
+    _cap = os.getenv("BILLING_CAPTURE_DIR", "").strip()
+    if _cap:
+        try:
+            from pathlib import Path as _Path
+            import time as _time
+            _d = _Path(_cap)
+            _d.mkdir(parents=True, exist_ok=True)
+            (_d / f"{int(_time.time() * 1000)}_{name or 'unknown'}.json").write_bytes(raw_body)
+        except Exception:  # noqa: BLE001
+            pass
     email = ((payload.get("data") or {}).get("attributes") or {}).get("user_email")
     if not (email or "").strip():
         # Validate BEFORE claiming so a malformed delivery isn't permanently deduped.
