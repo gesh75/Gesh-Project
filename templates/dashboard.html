@@ -1222,12 +1222,28 @@ function applyPortfolioConn(d){
 // Customer sessions: the server masks dollars to a $100k model book and tags the
 // response view=model_book. ONE shared helper (both portfolio loaders call it —
 // the duplicate inline copies drifted once already, Codex P1): show the
-// disclosure badge, hide owner-only header links.
+// disclosure badge, hide owner-only header links + owner-only run buttons.
+window.__isCustomer=false;
 function applyViewDisclosure(body){
   if(!body || body.view!=='model_book') return;
+  window.__isCustomer=true;
   const mb=$('modelbook-badge');if(mb)mb.style.display='inline-flex';
   const wl=$('watch-link');if(wl)wl.style.display='none';   // internal cockpit — owner only
   const iv=document.querySelector('a[href="/invest"]');if(iv)iv.style.display='none';
+  // Live re-runs spend the owner's LLM/broker budget and are owner-only (server
+  // returns 403). Hide the run buttons for customers so a click never surfaces a
+  // raw error — customers consume the owner's latest CACHED research (the product).
+  document.querySelectorAll('button[onclick]').forEach(b=>{
+    if(/(run[A-Z]|daRunAnalysis|runAllAgents|runMainDebate|runScreener|runScanner|runDryRun|runPaperSession)/
+        .test(b.getAttribute('onclick')||'')){ b.style.display='none'; }
+  });
+}
+// Backstop: turn an owner-only 403 (or its raw JSON body) into a clean line.
+function friendlyErr(e){
+  const m=(e&&e.message)?e.message:String(e||'');
+  return /Owner-only|model_book|\b403\b/.test(m)
+    ? 'Showing the latest cached research — live re-runs happen on the daily schedule.'
+    : m;
 }
 
 async function loadPortfolio(){
@@ -1528,7 +1544,7 @@ async function runDeepAnalysis(){
       cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
       toast('Sign in to run a live Claude analysis','error',6000);
     }else{
-      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${e.message}</div></div>`;
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${friendlyErr(e)}</div></div>`;
       toast('Deep analysis failed','error');
     }
     console.error(e);
@@ -1996,7 +2012,7 @@ async function loadIntelHistory(){
       fetch('/api/agents/fundamentals/latest').then(r=>r.json()),
     ]);
     renderIntelligence(secR.data, newsR.data, fundR.data);
-  }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Load failed: ${e.message}</div></div>`;}
+  }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${friendlyErr(e)}</div></div>`;}
 }
 
 async function runAllAgents(){
@@ -2018,7 +2034,7 @@ async function runAllAgents(){
     const fundR=await fetch('/api/agents/fundamentals',{method:'POST'}).then(r=>r.json());
     renderIntelligence(secR.data?.results||[], newsR.data, fundR.data);
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Agent run failed: ${e.message}</div></div>`;
+    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${friendlyErr(e)}</div></div>`;
     console.error(e);
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-run Agents';}
 }
@@ -2544,7 +2560,7 @@ async function daRunAnalysis(){
       $('da-placeholder').innerHTML=`<div class="deep-ph-icon">🔒</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Daily Analysis again.</div>`;
       if(typeof toast==='function') toast('Sign in to run a live Claude analysis','error',6000);
     }else{
-      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(String(e))}</div>`;
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>`;
     }
   }finally{
     $('da-loading').style.display='none';
@@ -3052,7 +3068,7 @@ function runErr(e, contId, label){
     if(c) c.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>${label} runs only for a signed-in session. Sign in, then click the run button again.</div></div>`;
     toast('Sign in to run '+label,'error',6000);
   }else{
-    if(c) c.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${label} failed: ${e&&e.message?e.message:e}</div></div>`;
+    if(c) c.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;
     toast(label+' failed','error');
   }
   console.error(e);
