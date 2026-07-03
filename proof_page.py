@@ -348,6 +348,7 @@ def render_html(data: dict[str, Any]) -> str:
  <div style="display:flex;gap:24px;flex-wrap:wrap;color:{_DIM};font-size:12px;margin-bottom:24px">
    <span>Wins: <b style="color:{_GREEN}" class="num">{data['wins']}</b></span>
    <span>Losses: <b style="color:{_RED}" class="num">{data['losses']}</b></span>
+   <span>Breakeven: <b class="num" style="color:{_DIM}">{data['breakeven']}</b></span>
    <span>Profit factor: <b class="num" style="color:#e8eef6">{data['profit_factor']}</b></span>
    <span>Avg win: <b class="num" style="color:{_GREEN}">{data['avg_win_pct']*100:+.1f}%</b></span>
    <span>Avg loss: <b class="num" style="color:{_RED}">{data['avg_loss_pct']*100:+.1f}%</b></span>

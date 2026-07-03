@@ -993,7 +993,7 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
           <div class="deep-ph-text">
             <strong style="color:var(--text)">Weekly Investment Radar</strong><br>
             Screens 100+ stocks on momentum · value · growth · analyst consensus<br>
-            <span style="font-size:15px">Claude selects the 20 best opportunities this week with scored thesis for each.</span>
+            <span style="font-size:15px">Claude surfaces this week's best opportunities with a scored thesis for each.</span>
           </div>
         </div>
       </div>
@@ -1931,6 +1931,19 @@ const urgCls=u=>({'HIGH':'sp-high','MEDIUM':'sp-medium','LOW':'sp-low'}[u]||'sp-
 const sentCls=s=>s.includes('POSITIVE')||s==='BULLISH'?'sp-bullish':s.includes('NEGATIVE')||s==='BEARISH'?'sp-bearish':'sp-neutral';
 
 function renderIntelligence(sec, news, fund){
+  // Honest empty state: SEC/news/fundamental agents publish on a schedule; before
+  // the first run there's no cached data. Three dead "0 filings" panels read as
+  // broken — show one clear "not yet published" message instead.
+  const secN=(sec||[]).length;
+  const newsN=(news&&news.symbols?news.symbols.length:(news&&news.avg_score!=null?1:0));
+  const fundN=(fund&&fund.stocks_analyzed)||0;
+  if(!secN && !newsN && !fundN){
+    $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text">`+
+      `No company intelligence published yet.<br><span style="font-size:13px;color:var(--muted)">`+
+      `SEC filings, news sentiment, and fundamental momentum are refreshed on a schedule — check back soon.</span></div></div>`;
+    const ts=$('intel-ts'); if(ts) ts.textContent='';
+    return;
+  }
   // ── SEC Panel
   const secItems=(sec||[]).map(f=>{
     const a=f.analysis||{};
@@ -2249,6 +2262,7 @@ function switchTab(name, btn){
   if(name==='analysis'){ tryLoadCachedAnalysis(); }
   if(name==='signals'){ if(typeof loadCachedConsensus==='function') loadCachedConsensus(); if(typeof loadCachedKelly==='function') loadCachedKelly(); }
   if(name==='radar'){ if(typeof loadCachedScreener==='function') loadCachedScreener(); }
+  if(name==='intelligence'){ if(typeof loadIntelHistory==='function') loadIntelHistory(); }
   if(name==='scanner' && typeof loadScannerConfig==='function'){ loadScannerConfig(); }
   if(name==='trading' && typeof loadTradeStats==='function'){ loadTradeStats(); }
   if(name==='daily' && typeof daAutoLoadLatest==='function'){ daAutoLoadLatest(); }
