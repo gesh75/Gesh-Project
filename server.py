@@ -230,6 +230,86 @@ async def _auth_gate_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+# ─── Customer view: model-book masking (launch gap #1) ─────────────────────────
+# Customers pay for the RESEARCH (signals, regime, Kelly %, risk, analysis) —
+# not a window into the owner's bank life. Non-owner sessions get every /api/*
+# JSON response normalized to a $100k MODEL BOOK: all dollar amounts and share
+# quantities are scaled by (model / real_total), so percentages, ratios and
+# per-share prices stay exactly right while real wealth never leaves the server.
+# Owner-only views that embed raw dollars in HTML (/report, /invest, /progress)
+# are refused outright for customers.
+
+_MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
+_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress")
+_MONEY_KEYS = {
+    "equity", "cash", "deployable", "settled_cash", "buying_power",
+    "buying_power_leveraged", "margin_buying_power", "withdrawable_amount",
+    "pending_deposits", "uncleared_deposits", "total", "account_equity",
+    "portfolio_equity", "adjusted_equity_previous_close", "equity_value",
+    "market_value", "recommended_usd", "delta_usd", "cost_basis",
+    "total_equity", "day_change", "total_value",
+}
+_QTY_KEYS = {"quantity", "qty", "shares", "fill_qty", "delta_shares",
+             "shares_to_buy", "shares_to_trim"}
+
+
+def _customer_scale_factor() -> float:
+    """model_book / real_total from the live snapshot. Fail CLOSED: if the real
+    total can't be determined, return 0.0 so dollars zero out rather than leak."""
+    try:
+        snap = _json.loads((Path(__file__).parent / "live_portfolio_snapshot.json").read_text())
+        total = float(snap.get("equity_summary", {}).get("total", 0) or 0)
+        return _MODEL_BOOK_USD / total if total > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _scale_money(obj, factor: float):
+    """Recursively scale money/quantity fields; new objects, never mutates."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            lk = str(k).lower()
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and (
+                lk in _MONEY_KEYS or lk.endswith("_usd") or lk.endswith("_dollars")
+            ):
+                out[k] = round(v * factor, 2)
+            elif isinstance(v, (int, float)) and not isinstance(v, bool) and lk in _QTY_KEYS:
+                out[k] = round(v * factor, 4)
+            else:
+                out[k] = _scale_money(v, factor)
+        return out
+    if isinstance(obj, list):
+        return [_scale_money(x, factor) for x in obj]
+    return obj
+
+
+@app.middleware("http")
+async def _customer_view_middleware(request: Request, call_next):
+    if not auth_users.auth_enabled():
+        return await call_next(request)
+    email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+    if not email or auth_users.is_owner(email):
+        return await call_next(request)
+
+    path = request.url.path
+    if path == "/report" or any(path == p or path.startswith(p + "/") for p in _OWNER_ONLY_PATHS):
+        return JSONResponse(status_code=403, content={"detail": "Owner-only view"})
+
+    resp = await call_next(request)
+    if not path.startswith("/api/") or "application/json" not in resp.headers.get("content-type", ""):
+        return resp
+    body = b"".join([chunk async for chunk in resp.body_iterator])
+    try:
+        masked = _scale_money(_json.loads(body), _customer_scale_factor())
+        if isinstance(masked, dict):
+            masked["view"] = "model_book"   # UI/debug tell — customer-scaled response
+        return JSONResponse(status_code=resp.status_code, content=masked)
+    except Exception:
+        # Fail CLOSED for customers: never fall through to the raw-dollar body.
+        return JSONResponse(status_code=500, content={"detail": "masking error"})
+
+
 # Explicit CORS policy: same-origin dashboard only, no credentialed cross-origin.
 app.add_middleware(
     CORSMiddleware,
@@ -1078,6 +1158,26 @@ def deep_analysis_cached():
 @app.get("/api/consensus/cached")
 def consensus_cached():
     return _cached_response("consensus")
+
+
+@app.get("/api/consensus/{symbol}")
+def consensus_symbol(symbol: str):
+    """Run the 11-node consensus engine on ANY ticker — not just held positions.
+
+    This is the 'analyse any share' surface for customers: same engine, same
+    weights, run stateless (no position context). Declared AFTER the literal
+    /cached route so 'cached' never matches the path parameter. Guarded by the
+    heavy-endpoint rate limiter like the portfolio consensus run."""
+    sym = _safe_symbol(symbol)
+    try:
+        from consensus import run_consensus_holding
+        row = run_consensus_holding(sym, equity=0.0, total_portfolio=1.0,
+                                    avg_cost=0.0, current_price=0.0)
+        return {"status": "ok", "data": row}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
 
 
 @app.get("/api/kelly/cached")

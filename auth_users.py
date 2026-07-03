@@ -403,6 +403,16 @@ def is_public_path(path: str) -> bool:
     return any(path == p or path.startswith(p) for p in PUBLIC_PREFIXES)
 
 
+def is_owner(email: str | None) -> bool:
+    """True for the account that owns the underlying brokerage book.
+
+    Everyone else is a CUSTOMER session: the server masks absolute dollars /
+    share quantities (normalized to a model book) and owner-only views
+    (/report, /invest, /progress) are refused. Override via GESH_OWNER_EMAIL."""
+    owner = os.getenv("GESH_OWNER_EMAIL", "georgy75@gmail.com").strip().lower()
+    return bool(email) and email.strip().lower() == owner
+
+
 def consume_magic_token(token: str | None) -> str | None:
     """Single-use validation for a magic-link token. Returns the subject email on the
     FIRST valid use and atomically marks the token spent; any later use (or an invalid/
