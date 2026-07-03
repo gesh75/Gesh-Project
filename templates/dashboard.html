@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
 <style>
 :root{
   /* Surfaces — elevated dark observability palette */
@@ -1099,6 +1099,7 @@ const $=id=>document.getElementById(id);
 // automatically — the server's require_api_key accepts an owner session. So
 // protected calls just need credentials:'same-origin'; no header, no prompt.
 const authHeaders=extra=>Object.assign({},extra||{});
+const daEsc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');  // HTML-escape untrusted (AI/news/SEC) text
 // One-time cleanup of any key a previous build persisted.
 try{localStorage.removeItem('gesh_api_key');}catch(e){}
 const fmt=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
@@ -1387,8 +1388,8 @@ function buildBars(s){
 }
 
 function buildRR(risks,rewards){
-  const r=(risks||[]).slice(0,3).map(x=>`<div class="mini-risk"><span class="mini-dot ${sevCls(x.severity)}"></span><span>${x.text}</span></div>`).join('');
-  const rew=(rewards||[]).slice(0,2).map(x=>`<div class="mini-reward"><span class="mini-star">★</span><span>${x.text}</span></div>`).join('');
+  const r=(risks||[]).slice(0,3).map(x=>`<div class="mini-risk"><span class="mini-dot ${sevCls(x.severity)}"></span><span>${daEsc(x.text)}</span></div>`).join('');
+  const rew=(rewards||[]).slice(0,2).map(x=>`<div class="mini-reward"><span class="mini-star">★</span><span>${daEsc(x.text)}</span></div>`).join('');
   return r+rew;
 }
 
@@ -1434,7 +1435,7 @@ function stockCard(h,i,mkt){
   return `<div class="sc" style="animation:fadeIn .4s ease ${i*.06}s both">
     <div class="sc-head"><div><div class="sc-sym">${h.symbol}</div><div class="sc-company">${h.company_type||''}</div></div><span class="verdict-badge ${verdictCls(h.verdict)}">${h.verdict||'HOLD'}</span></div>
     <div class="sc-body">
-      <div class="sc-radar"><canvas id="${cid}" width="150" height="150"></canvas><div class="sf-summary">${h.snowflake_summary||''}</div></div>
+      <div class="sc-radar"><canvas id="${cid}" width="150" height="150"></canvas><div class="sf-summary">${daEsc(h.snowflake_summary||'')}</div></div>
       <div class="sc-right">
         <div class="score-bars">${buildBars(s)}</div>
         <div class="fv-section"><div class="fv-title">Fair Value Estimate</div>${buildFV(h.fair_value)}</div>
@@ -1444,8 +1445,8 @@ function stockCard(h,i,mkt){
     </div>
     <div class="sc-foot">
       <div class="pred-row"><span class="pred-lbl">3M</span><span class="pred-badge ${predCls(p3)}">${p3}</span><span class="pred-lbl" style="margin-left:6px">12M</span><span class="pred-badge ${predCls(p12)}">${p12}</span></div>
-      ${p.rationale?`<div class="pred-rationale">${p.rationale}</div>`:''}
-      ${h.analyst_note?`<div class="analyst-note">${h.analyst_note}</div>`:''}
+      ${p.rationale?`<div class="pred-rationale">${daEsc(p.rationale)}</div>`:''}
+      ${h.analyst_note?`<div class="analyst-note">${daEsc(h.analyst_note)}</div>`:''}
     </div>
   </div>`;
 }
@@ -1453,8 +1454,8 @@ function stockCard(h,i,mkt){
 function piCard(a){
   const sc=a.portfolio_score||0,rc=sc>=67?'#00e676':sc>=34?'#ffd700':'#ff4444';
   const riskC=a.risk_score>=7?'var(--red)':a.risk_score>=4?'var(--yellow)':'var(--green)';
-  const risks=(a.portfolio_risks||[]).map(r=>`<li class="risk-item"><span class="risk-dot ${sevCls(r.severity)}"></span><span>${r.text}</span></li>`).join('');
-  const recs=(a.portfolio_recommendations||[]).map(r=>`<div class="rec-item pri-${r.priority||'medium'}"><span class="rec-arrow">▸</span><div><div>${r.action}</div>${r.rationale?`<div class="rec-rationale">${r.rationale}</div>`:''}</div></div>`).join('');
+  const risks=(a.portfolio_risks||[]).map(r=>`<li class="risk-item"><span class="risk-dot ${sevCls(r.severity)}"></span><span>${daEsc(r.text)}</span></li>`).join('');
+  const recs=(a.portfolio_recommendations||[]).map(r=>`<div class="rec-item pri-${r.priority||'medium'}"><span class="rec-arrow">▸</span><div><div>${daEsc(r.action)}</div>${r.rationale?`<div class="rec-rationale">${daEsc(r.rationale)}</div>`:''}</div></div>`).join('');
   const sects=(a.sector_breakdown||[]).map(s=>`<span class="sector-pill sa-${s.assessment||'neutral'}">${s.sector}${s.allocation_pct?' '+s.allocation_pct.toFixed(0)+'%':''}</span>`).join('');
   return `<div class="pi-card">
     <div class="ch">
@@ -1473,7 +1474,7 @@ function piCard(a){
       <div class="pi-right">
         <div>
           <div class="pi-section-title">Market Context</div>
-          <div class="pi-context">${a.market_context||''}</div>
+          <div class="pi-context">${daEsc(a.market_context||'')}</div>
           ${risks?`<div style="margin-top:14px"><div class="pi-section-title">Portfolio Risks</div><ul class="risk-list">${risks}</ul></div>`:''}
         </div>
         <div><div class="pi-section-title">Recommendations</div>${recs}</div>
@@ -2046,8 +2047,8 @@ function radarCard(p,i){
       <div class="rc-scores">
         ${scoreChip('M',p.momentum_score)}${scoreChip('V',p.value_score)}${scoreChip('G',p.growth_score)}${scoreChip('A',p.analyst_score)}
       </div>
-      <div class="rc-thesis">${p.key_thesis||''}</div>
-      ${p.main_risk?`<div class="rc-risk">⚠ ${p.main_risk}</div>`:''}
+      <div class="rc-thesis">${daEsc(p.key_thesis||'')}</div>
+      ${p.main_risk?`<div class="rc-risk">⚠ ${daEsc(p.main_risk)}</div>`:''}
     </div>
     <div class="rc-foot">
       <div class="rc-ret">
@@ -2275,7 +2276,7 @@ loadRegime();
 // ══════════════════════════════════════════════════════════════════════
 // GESH DAILY PORTFOLIO ANALYSIS TAB
 // ══════════════════════════════════════════════════════════════════════
-const daEsc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+// daEsc defined at top of script (needed by earlier renderers)
 const daFmt=(n,d=2)=>(n==null)?'—':Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
 
 function daScoreColor(n){

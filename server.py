@@ -350,6 +350,41 @@ async def _customer_view_middleware(request: Request, call_next):
         return JSONResponse(status_code=500, content={"detail": "masking error"})
 
 
+# ─── Browser hardening headers (Codex P1) ──────────────────────────────────────
+# The dashboard renders AI/news/SEC text (some model- or externally-sourced)
+# through innerHTML. Defense in depth: this CSP allows inline scripts/handlers
+# (the app uses onclick=/onchange= + one inline <script> block) but pins
+# connect-src/img-src/script-src so an injected handler CANNOT beacon data to an
+# attacker host or pull external script — the classic XSS exfiltration channels.
+# Chart.js is the one external script, allow-listed by exact host + SRI (below).
+_CHARTJS_HOST = "https://cdn.jsdelivr.net"
+_CSP = (
+    "default-src 'self'; "
+    f"script-src 'self' 'unsafe-inline' {_CHARTJS_HOST}; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; "
+    "object-src 'none'"
+)
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("Content-Security-Policy", _CSP)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    resp.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    # HSTS only over real HTTPS (the Cloudflare tunnel terminates TLS) — never on
+    # plain-http localhost, which would poison the dev origin.
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return resp
+
+
 # Explicit CORS policy: same-origin dashboard only, no credentialed cross-origin.
 app.add_middleware(
     CORSMiddleware,

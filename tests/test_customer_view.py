@@ -160,3 +160,20 @@ def test_no_key_no_session_fails_closed(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         server.require_api_key(req, x_api_key=None)
     assert ei.value.status_code == 503
+
+
+# ─── B2: security headers (Codex P1) ──────────────────────────────────────────
+
+def test_security_headers_present(monkeypatch, client):
+    _as(monkeypatch, "customer@example.com")
+    monkeypatch.setattr(server, "_customer_scale_factor", lambda: 0.5)
+    r = client.get("/pricing")
+    h = r.headers
+    assert "Content-Security-Policy" in h
+    csp = h["Content-Security-Policy"]
+    assert "connect-src 'self'" in csp          # blocks XSS exfiltration beacons
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert h.get("X-Content-Type-Options") == "nosniff"
+    assert h.get("X-Frame-Options") == "DENY"
+    assert "Permissions-Policy" in h
