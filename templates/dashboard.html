@@ -1990,7 +1990,7 @@ function renderIntelligence(sec, news, fund){
     const a=f.analysis||{};
     const sig=a.action_signal||'NEUTRAL';
     const urg=a.urgency||'LOW';
-    const findings=(a.key_findings||[]).slice(0,2).map(x=>`<div>• ${x}</div>`).join('');
+    const findings=(a.key_findings||[]).slice(0,2).map(x=>`<div>• ${daEsc(x)}</div>`).join('');
     return `<div class="intel-card">
       <div class="intel-card-head">
         <span class="intel-sym">${f.symbol}</span>
@@ -2000,11 +2000,11 @@ function renderIntelligence(sec, news, fund){
         </div>
       </div>
       <div class="intel-title">${f.form_type} — ${f.analysis?.period||''}</div>
-      <div class="intel-body">${a.summary||''}</div>
+      <div class="intel-body">${daEsc(a.summary||'')}</div>
       ${findings?`<div class="intel-body" style="margin-top:3px">${findings}</div>`:''}
       <div class="intel-tags">
-        ${(a.red_flags||[]).slice(0,1).map(x=>`<span class="signal-pill sp-bearish">⚠ ${x.slice(0,50)}</span>`).join('')}
-        ${(a.positive_signals||[]).slice(0,1).map(x=>`<span class="signal-pill sp-bullish">★ ${x.slice(0,50)}</span>`).join('')}
+        ${(a.red_flags||[]).slice(0,1).map(x=>`<span class="signal-pill sp-bearish">⚠ ${daEsc(String(x).slice(0,50))}</span>`).join('')}
+        ${(a.positive_signals||[]).slice(0,1).map(x=>`<span class="signal-pill sp-bullish">★ ${daEsc(String(x).slice(0,50))}</span>`).join('')}
       </div>
       <div class="intel-date">${new Date(f.analyzed_at||f.filing_date).toLocaleDateString()}</div>
     </div>`;
@@ -2027,9 +2027,9 @@ function renderIntelligence(sec, news, fund){
         <span style="font-size:14px;color:var(--muted)">score · ${n.article_count||0} articles</span>
         ${n.rolling_score!=null?`<span style="font-size:13px;color:var(--muted)">7D avg: ${n.rolling_score>0?'+':''}${n.rolling_score}</span>`:''}
       </div>
-      <div class="intel-body">${a.momentum_narrative||''}</div>
+      <div class="intel-body">${daEsc(a.momentum_narrative||'')}</div>
       <div class="intel-tags">
-        ${(a.key_themes||[]).slice(0,3).map(t=>`<span class="signal-pill sp-neutral">${t}</span>`).join('')}
+        ${(a.key_themes||[]).slice(0,3).map(t=>`<span class="signal-pill sp-neutral">${daEsc(t)}</span>`).join('')}
       </div>
     </div>`;
   }).join('') || '<div class="empty" style="padding:20px">No news data</div>';
@@ -2060,7 +2060,7 @@ function renderIntelligence(sec, news, fund){
   // Label cached narratives with the SCAN date — 'Updated <load time>' made a
   // two-month-old market summary read as current.
   const fundAge=fund&&fund.cached_at?`<div style="font-size:11px;color:var(--yellow);margin-bottom:6px">📅 Scan from ${new Date(fund.cached_at+'Z').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} — narrative reflects that date, not today</div>`:'';
-  const fundMacro=fund?`${fundAge}<div class="mood-banner" style="font-size:15px;color:var(--muted2)">${fund.market_summary||''}</div>`:'';
+  const fundMacro=fund?`${fundAge}<div class="mood-banner" style="font-size:15px;color:var(--muted2)">${daEsc(fund.market_summary||'')}</div>`:'';
 
   $('intel-container').innerHTML=`
     <div class="agents-grid">

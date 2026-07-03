@@ -114,20 +114,40 @@ def test_monte_carlo_outcome_fields_are_scaled():
     assert "$12,637" in out["buckets"][0]["label"]          # label dollars scaled too
 
 
-def test_prose_dollars_and_shares_are_scaled():
-    txt = "TRIM 5 shares of HOOD (~$450) and keep $509.70 cash; price $112.73."
-    out = server._scale_prose(txt, 2.0)
-    assert "10.00 shares" in out
-    assert "$900" in out
-    assert "$1,019" in out                                  # real cash never escapes
-    assert "509.70" not in out and "$450)" not in out
+def test_prose_redacts_amounts_ranges_and_shares_never_scales_prices():
+    """Codex P0: the old scaler corrupted prices and half-scaled ranges. Now we
+    REDACT owner-specific figures — every $-amount (incl. ranges) and share count
+    goes to a neutral token; NOTHING is scaled, so no real value leaks and no
+    price is changed."""
+    txt = "TRIM 4-5 shares of HOOD (~$450-560) at $112.73; keep $509.70 cash."
+    out = server._mask_string(txt, 2.665)
+    # every real figure is gone — no leak, no wrong number
+    for real in ("450", "560", "112.73", "509.70", "4-5", " 5 ", " 4 "):
+        assert real not in out, f"{real!r} leaked: {out!r}"
+    assert "shares" not in out or "a position" in out
+    assert out.count("$•••") >= 1
+
+
+def test_pure_money_label_is_scaled_not_redacted():
+    assert server._mask_string("$25,274–$28,518", 2.0) == "$50,548–$57,036"
 
 
 def test_scale_money_reaches_strings_recursively():
     obj = {"portfolio_recommendations": [{"action": "Sell 4 shares ($38 risk)"}]}
     out = server._scale_money(obj, 2.665)
     s = out["portfolio_recommendations"][0]["action"]
-    assert "4 shares" not in s and "$38" not in s
+    assert "4 shares" not in s and "$38" not in s and "38" not in s
+
+
+def test_ecg_equity_history_array_is_scaled_not_leaked():
+    """Codex P0: bare-number arrays (equity_history) had no dict key so the naive
+    recursion returned the owner's real per-position dollars unchanged."""
+    obj = {"states": [{"symbol": "NVDA", "state": "COOLING", "drawdown_pct": -7.5,
+                       "equity_history": [5843.32, 5446.28]}]}
+    out = server._scale_money(obj, 2.0)
+    eh = out["states"][0]["equity_history"]
+    assert eh == [pytest.approx(11686.64), pytest.approx(10892.56)]
+    assert out["states"][0]["drawdown_pct"] == -7.5        # a % — untouched
 
 
 # ─── B1: mutating / spend endpoints reject customers, accept owner ────────────

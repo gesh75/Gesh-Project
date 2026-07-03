@@ -271,24 +271,37 @@ _MONEY_KEYS = {
 _QTY_KEYS = {"quantity", "qty", "shares", "fill_qty", "delta_shares",
              "shares_to_buy", "shares_to_trim"}
 
-# Prose scaling (Codex P0): AI narratives, recommendation text and histogram
-# labels embed owner dollars ("sell 5 shares … $450 at $112.73") that no
-# key-name rule can reach. Scale every $-amount and every "N shares" count in
-# EVERY string of a masked response. Figures inside prose are then model-scale
-# — internally approximate, but no REAL amount can escape through text.
-_MONEY_RE = re.compile(r"\$([\d,]+(?:\.\d+)?)")
-_SHARES_RE = re.compile(r"\b(\d+(?:\.\d+)?)(\s+shares?\b)")
+# Bare-number arrays that carry OWNER DOLLARS (no dict key on the elements, so
+# the recursive scaler would return them unchanged and leak — Codex P0 on
+# /api/ecg's equity_history). Listed keys have their numeric elements scaled.
+_MONEY_LIST_KEYS = {"equity_history", "equity_series", "equity_curve"}
+
+# Prose REDACTION (Codex P0): AI narratives embed owner sizing ("sell 4-5 shares
+# ~$450 at $112.73"). The old regex SCALER was doubly broken — it scaled only the
+# last number in a range ("4-13.33 shares"), left un-prefixed range endpoints
+# raw ("$1,199-560"), and scaled per-share PRICES ($112.73 -> $300), corrupting
+# the advice. Prices must NEVER be scaled, and a scaler can't tell a position
+# dollar from a price. So for customers we REDACT owner-specific figures — every
+# $-amount and every share count (incl. ranges) -> a neutral token. Nothing
+# leaks and nothing is financially wrong; the qualitative thesis remains.
+_MONEY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s?[-–—]\s?\$?\d[\d,]*(?:\.\d+)?)?")
+_SHARES_RE = re.compile(r"\b\d+(?:\.\d+)?(?:\s?[-–—]\s?\d+(?:\.\d+)?)?\s+shares?\b", re.I)
+_NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# A string that is ONLY a dollar amount or dollar range (a formatted number like
+# a histogram bucket label "$25,274–$28,518") — safe to SCALE. Anything with
+# words is PROSE and gets redacted instead (a scaler corrupts prices there).
+_PURE_MONEY_RE = re.compile(
+    r"^\s*\$?\d[\d,]*(?:\.\d+)?\s*(?:[-–—]\s*\$?\d[\d,]*(?:\.\d+)?\s*)?$")
 
 
-def _scale_prose(text: str, factor: float) -> str:
-    def _money(m: "re.Match[str]") -> str:
-        val = float(m.group(1).replace(",", "")) * factor
-        return f"${val:,.2f}" if val < 100 else f"${val:,.0f}"
-
-    def _shares(m: "re.Match[str]") -> str:
-        return f"{float(m.group(1)) * factor:,.2f}{m.group(2)}"
-
-    return _SHARES_RE.sub(_shares, _MONEY_RE.sub(_money, text))
+def _mask_string(text: str, factor: float) -> str:
+    if _PURE_MONEY_RE.match(text):
+        # formatted money/range → scale each number, keep the format
+        return _NUM_RE.sub(lambda m: f"{float(m.group(0).replace(',', '')) * factor:,.0f}", text)
+    # prose → REDACT owner-specific figures (never scale: corrupts prices/ranges)
+    text = _MONEY_RE.sub("$•••", text)
+    text = _SHARES_RE.sub("a position", text)
+    return text
 
 
 def _customer_scale_factor() -> float:
@@ -302,8 +315,14 @@ def _customer_scale_factor() -> float:
         return 0.0
 
 
-def _scale_money(obj, factor: float):
-    """Recursively scale money/quantity fields; new objects, never mutates."""
+def _scale_money(obj, factor: float, parent_key: str = ""):
+    """Recursively build a customer-safe copy (never mutates):
+      * dict money/qty fields → scaled by factor;
+      * bare-number arrays under a MONEY_LIST key (e.g. equity_history) → each
+        element scaled (semantic list context, Codex P0 — these have no dict key
+        so the naive recursion returned them raw);
+      * strings → owner-specific $-amounts and share counts REDACTED (never
+        scaled: a scaler corrupts per-share prices and half-scales ranges)."""
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
@@ -314,13 +333,17 @@ def _scale_money(obj, factor: float):
                 out[k] = round(v * factor, 2)
             elif isinstance(v, (int, float)) and not isinstance(v, bool) and lk in _QTY_KEYS:
                 out[k] = round(v * factor, 4)
+            elif isinstance(v, list) and lk in _MONEY_LIST_KEYS:
+                out[k] = [round(x * factor, 2) if isinstance(x, (int, float))
+                          and not isinstance(x, bool) else _scale_money(x, factor, lk)
+                          for x in v]
             else:
-                out[k] = _scale_money(v, factor)
+                out[k] = _scale_money(v, factor, lk)
         return out
     if isinstance(obj, list):
-        return [_scale_money(x, factor) for x in obj]
-    if isinstance(obj, str) and ("$" in obj or "share" in obj):
-        return _scale_prose(obj, factor)
+        return [_scale_money(x, factor, parent_key) for x in obj]
+    if isinstance(obj, str) and ("$" in obj or "share" in obj.lower()):
+        return _mask_string(obj, factor)
     return obj
 
 
