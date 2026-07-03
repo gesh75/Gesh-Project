@@ -1222,19 +1222,24 @@ function applyPortfolioConn(d){
   setTs(d&&d.offline?d.as_of:null, d&&d.offline?d.snapshot_age_seconds:null);
 }
 
+// Customer sessions: the server masks dollars to a $100k model book and tags the
+// response view=model_book. ONE shared helper (both portfolio loaders call it —
+// the duplicate inline copies drifted once already, Codex P1): show the
+// disclosure badge, hide owner-only header links.
+function applyViewDisclosure(body){
+  if(!body || body.view!=='model_book') return;
+  const mb=$('modelbook-badge');if(mb)mb.style.display='inline-flex';
+  const wl=$('watch-link');if(wl)wl.style.display='none';   // internal cockpit — owner only
+  const iv=document.querySelector('a[href="/invest"]');if(iv)iv.style.display='none';
+}
+
 async function loadPortfolio(){
   try{
     const r=await fetch('/api/portfolio');
     if(!r.ok) throw new Error(r.status);
     const body=await r.json();
     const d=body.data;
-    // Customer sessions: the server masks dollars to a $100k model book and tags
-    // the response — show the badge so sizing reads as illustrative, not real.
-    if(body.view==='model_book'){
-      const mb=$('modelbook-badge');if(mb)mb.style.display='inline-flex';
-      const wl=$('watch-link');if(wl)wl.style.display='none';   // internal cockpit — owner only
-      const iv=document.querySelector('a[href="/invest"]');if(iv)iv.style.display='none';
-    }
+    applyViewDisclosure(body);
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
     applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
@@ -2184,7 +2189,9 @@ async function loadPortfolioWithECG(){
   try{
     const r=await fetch('/api/portfolio');
     if(!r.ok) throw new Error(r.status);
-    const d=(await r.json()).data;
+    const body=await r.json();
+    const d=body.data;
+    applyViewDisclosure(body);   // Codex P1: this loader used to DISCARD body.view
     _lastHoldings=d.holdings;
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
