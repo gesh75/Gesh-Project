@@ -358,12 +358,14 @@ async def _customer_view_middleware(request: Request, call_next):
 # attacker host or pull external script — the classic XSS exfiltration channels.
 # Chart.js is the one external script, allow-listed by exact host + SRI (below).
 _CHARTJS_HOST = "https://cdn.jsdelivr.net"
+_FONTS_CSS = "https://fonts.googleapis.com"
+_FONTS_FILES = "https://fonts.gstatic.com"
 _CSP = (
     "default-src 'self'; "
     f"script-src 'self' 'unsafe-inline' {_CHARTJS_HOST}; "
-    "style-src 'self' 'unsafe-inline'; "
+    f"style-src 'self' 'unsafe-inline' {_FONTS_CSS}; "
     "img-src 'self' data:; "
-    "font-src 'self' data:; "
+    f"font-src 'self' data: {_FONTS_FILES}; "
     "connect-src 'self'; "
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; "
     "object-src 'none'"
@@ -979,25 +981,37 @@ def regime_endpoint(force_live: bool = False):
     fresh (<4h) — the live path re-downloads 8 symbols of OHLCV + FRED on every
     dashboard load for data the 10:30 chain already computed. ?force_live=true
     bypasses the cache."""
-    if not force_live:
-        try:
-            eng = _load_engine_results()
-            cached = eng.get("regime")
-            ran = eng.get("regime_ran_at")
-            if cached and cached.get("regimes") and ran:
-                from datetime import datetime as _rdt, timezone as _rtz
-                age_s = (_rdt.now(_rtz.utc)
-                         - _rdt.fromisoformat(str(ran))).total_seconds()
-                if age_s < 4 * 3600:
-                    return {"status": "ok", "data": cached,
-                            "cached": True, "ran_at": ran}
-        except Exception:
-            pass  # any cache problem → fall through to live
+    # Read whatever regime the chain cached (may be stale) — used both as the
+    # fast path when fresh AND as the degraded fallback when live is offline.
+    cached, ran = None, None
     try:
-        payload  = build_data_payload(DEFAULT_WATCHLIST)
+        eng = _load_engine_results()
+        cached = eng.get("regime")
+        ran = eng.get("regime_ran_at")
+    except Exception:
+        pass
+
+    if not force_live and cached and cached.get("regimes") and ran:
+        try:
+            from datetime import datetime as _rdt, timezone as _rtz
+            age_s = (_rdt.now(_rtz.utc) - _rdt.fromisoformat(str(ran))).total_seconds()
+            if age_s < 4 * 3600:
+                return {"status": "ok", "data": cached, "cached": True, "ran_at": ran}
+        except Exception:
+            pass
+
+    try:
+        payload  = _resolved_payload()
         symbols  = [h["symbol"] for h in payload["holdings"]]
         result   = detect_regimes(symbols)
         return {"status": "ok", "data": result}
+    except RobinhoodOfflineError:
+        # No live session AND (usually) a stale cache — serve the stale cache as a
+        # degraded snapshot rather than 503-ing the whole Risk tab into an error.
+        if cached and cached.get("regimes"):
+            return {"status": "degraded", "data": cached, "cached": True, "ran_at": ran}
+        return {"status": "degraded",
+                "data": {"regimes": [], "regime_summary": "Live regime unavailable."}}
     except Exception as e:
         raise _server_error(e)
 

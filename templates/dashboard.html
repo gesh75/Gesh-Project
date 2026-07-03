@@ -980,7 +980,7 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
       <div class="ch">
         <div style="display:flex;align-items:center;gap:10px">
           <span class="ct">Investment Radar</span>
-          <span class="badge b-green" style="font-size:10px">AI-Screened · 100+ Stocks · 20 Best Picks</span>
+          <span class="badge b-green" style="font-size:10px">AI-Screened Weekly Picks</span>
         </div>
         <div style="display:flex;gap:10px;align-items:center">
           <span id="radar-ts" class="ts"></span>
@@ -992,7 +992,7 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
           <div class="deep-ph-icon">📡</div>
           <div class="deep-ph-text">
             <strong style="color:var(--text)">Weekly Investment Radar</strong><br>
-            Screens 100+ stocks on momentum · value · growth · analyst consensus<br>
+            Screens the market on momentum · value · growth · analyst consensus<br>
             <span style="font-size:15px">Claude surfaces this week's best opportunities with a scored thesis for each.</span>
           </div>
         </div>
@@ -2118,7 +2118,7 @@ function radarCard(p,i){
 async function runScreener(){
   const btn=$('btn-radar'),cont=$('radar-container');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Scanning...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Screening 100+ stocks · fetching fundamentals · running AI scoring…<br><span style="font-size:15px">This takes ~30-45 seconds — batch downloading price data + analyst targets</span></div></div>`;
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Screening the market · fetching fundamentals · running AI scoring…<br><span style="font-size:15px">This takes ~30-45 seconds — batch downloading price data + analyst targets</span></div></div>`;
   try{
     const r=await fetch('/api/screener',{method:'POST'});
     check401(r);
