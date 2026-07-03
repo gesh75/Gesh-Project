@@ -571,12 +571,16 @@ def test_foreign_renewal_does_not_replace_subscription():
     assert u["is_active"] == 1                        # legit sub still active
 
 
-def test_payment_success_without_account_is_still_refused():
-    """H3: a renewal/invoice with no resolvable account AND no variant must NOT provision —
-    the existing-tier fallback only ever re-grants a tier the account already had."""
-    res = _post_raw(_payment_success_payload(email="stranger@example.com", sub_id="sub_x"))
-    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
-    assert au.get_user("stranger@example.com") is None
+def test_payment_success_without_account_is_retryable_not_granted():
+    """H3 refined (2026-07-03 launch finding): a renewal/invoice with no resolvable
+    account and no variant is the RACING-BURST shape — payment_success can arrive
+    before the subscription_created that binds billing_sub_id. It must not provision
+    (nothing is granted), but it 503s so the LS retry converges once the sub lands,
+    instead of acking a paying renewal into limbo."""
+    import billing as _b
+    with pytest.raises(_b.RetryableError):
+        _post_raw(_payment_success_payload(email="stranger@example.com", sub_id="sub_x"))
+    assert au.get_user("stranger@example.com") is None   # still nothing granted
 
 
 def test_payment_success_does_not_resurrect_a_revoked_account():

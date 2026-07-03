@@ -161,6 +161,15 @@ def parse_event(payload: dict) -> dict[str, Any]:
         # Subscription's own last-modified time — drives monotonic ordering so an
         # out-of-order (delayed) delivery for an OLD state can't overwrite a newer one (H2).
         "event_at":    (attrs.get("updated_at") or "").strip(),
+        # Resolved variant (top-level OR first_order_item) — None means the payload
+        # carried NO variant information at all (invoice, or a not-yet-materialized
+        # order item), which _dispatch treats as retryable rather than refusable.
+        "variant_id":  _variant_id(attrs),
+        # True when the payload names a product/variant even without an id — a
+        # NAMED-but-unallowlisted product is a settled refusal (H3), not a race.
+        "variant_hint": bool(attrs.get("variant_name") or attrs.get("product_name")
+                             or (attrs.get("first_order_item") or {}).get("variant_name")
+                             or (attrs.get("first_order_item") or {}).get("product_name")),
         "tier":        _tier_for(_variant_id(attrs),
                                  attrs.get("variant_name", ""),
                                  attrs.get("product_name", "")),
@@ -460,6 +469,25 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
         logger.info("billing: %s carried no variant — keeping account tier=%s for %s (sub=%s)",
                     name, tier, ev["email"], ev["sub_id"])
     if is_activation and tier is None:
+        # Two very different "no tier" cases (2026-07-03 live-launch finding):
+        #  (a) The payload carries NO variant info at all — LS fires its initial
+        #      burst concurrently, so order_created can arrive before the order
+        #      item is materialized, and subscription_payment_success (an
+        #      invoice, variant-less by design) can race ahead of the
+        #      subscription_created that writes billing_sub_id (making the
+        #      same_sub tier-keep above miss). Both self-heal on retry → 503.
+        #  (b) A variant IS present but not allowlisted — genuinely unknown
+        #      product; refusing permanently is the H3 security property.
+        # Retry ONLY the genuinely-racy shape: an inherently variant-less/racy
+        # event type AND no account exists yet. Every settled state — revoked
+        # account (H6), foreign-sub renewal (HIGH-1), variant-less
+        # subscription_created (H3) — still refuses permanently below.
+        racy_event = name == "order_created" or name.startswith("subscription_payment_")
+        if (ev.get("variant_id") is None and not ev.get("variant_hint")
+                and racy_event and user is None):
+            logger.warning("billing: %s for %s carries no variant info yet — 503 for LS retry",
+                           name, ev["email"])
+            raise RetryableError(f"{name} has no variant info yet (racing delivery burst)")
         logger.warning("billing: refusing to provision %s on unknown variant (event=%s)",
                        ev["email"], name)
         return {"action": "ignored", "email": ev["email"], "reason": "unknown_variant"}
