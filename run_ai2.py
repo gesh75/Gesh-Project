@@ -148,6 +148,8 @@ try:
     _tmp = _out.with_name(_out.name + '.tmp')
     with open(_tmp, 'w') as f:
         json.dump(eng, f, indent=2, default=str)
+        f.flush()
+        os.fsync(f.fileno())          # durable before rename — not just atomic
     os.replace(_tmp, _out)
 
     # Also dump ai_result standalone for quick inspection

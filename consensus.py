@@ -454,7 +454,14 @@ def run_consensus_holding(
             # Log returns understate mu by ~sigma^2/2, which skewed the Kelly
             # node bearish vs the dashboard Kelly on volatile names.
             c91 = cache["close"][-91:]
-            returns = np.diff(c91) / c91[:-1]
+            # Guard the denominator: a halted/delisted bar at 0.0 would make simple
+            # returns inf, poisoning mu/sigma → NaN Sharpe into the Kelly node. Drop
+            # non-finite rows so a bad price degrades to a shorter (or empty) series.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                returns = np.diff(c91) / c91[:-1]
+            returns = returns[np.isfinite(returns)]
+            if returns.size == 0:
+                returns = None
         else:
             returns = None
     except Exception:

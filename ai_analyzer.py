@@ -77,14 +77,20 @@ def _spent_today_usd() -> float:
     try:
         today = datetime.now(timezone.utc).date().isoformat()
         total = 0.0
-        with open(_USAGE_LOG) as f:
-            for line in f:
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if str(row.get("ts", "")).startswith(today):
-                    total += float(row.get("est_cost_usd", 0) or 0)
+        # Read only the TAIL: rows are append-only so today's are always at the end.
+        # Bounds the per-call budget check no matter how large the log grows (1 MiB ≫
+        # any single day). A partial first line after the seek fails json.loads → skipped.
+        with open(_USAGE_LOG, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 1_048_576))
+            chunk = f.read().decode("utf-8", "replace")
+        for line in chunk.splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if str(row.get("ts", "")).startswith(today):
+                total += float(row.get("est_cost_usd", 0) or 0)
         return total
     except FileNotFoundError:
         return 0.0
@@ -93,14 +99,18 @@ def _spent_today_usd() -> float:
 
 
 def _budget_guard(fn: str) -> None:
-    """Raise BEFORE spending when the optional daily budget is exhausted."""
-    if _DAILY_BUDGET_USD <= 0:
+    """Raise BEFORE spending when the optional daily budget is exhausted.
+
+    Budget is read at CALL time (not import) so an env change or a test override via
+    os.environ is honored — the import-time constant only documents the default."""
+    budget = float(os.getenv("LLM_DAILY_BUDGET_USD", "0") or 0)
+    if budget <= 0:
         return
     spent = _spent_today_usd()
-    if spent >= _DAILY_BUDGET_USD:
+    if spent >= budget:
         raise RuntimeError(
             f"{fn}: LLM daily budget exhausted (${spent:.2f} of "
-            f"${_DAILY_BUDGET_USD:.2f}) — raise LLM_DAILY_BUDGET_USD or wait for UTC rollover"
+            f"${budget:.2f}) — raise LLM_DAILY_BUDGET_USD or wait for UTC rollover"
         )
 
 

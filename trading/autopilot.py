@@ -463,7 +463,10 @@ def close_risk_check() -> None:
             stops = active_stops()
         except Exception as e:  # noqa: BLE001 — sweep must not die on a book read
             paper_positions, stops = {}, {}
+            # A book-read failure blanks the ENTIRE stop sweep for the day (no stop can
+            # trigger) — that's a silent protection gap, so page it, don't just log it.
             logger.error("close_risk_check: paper-book read failed: %s", e)
+            alert_error("close_risk_check", f"paper-book read failed — stop sweep skipped: {e}")
         for sym in paper_positions:
             stop = float((stops.get(sym) or {}).get("stop_price") or 0)
             price = float(price_by_symbol.get(sym) or 0)

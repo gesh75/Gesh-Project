@@ -313,6 +313,8 @@ out = BASE / 'engine_results.json'
 tmp = out.with_name(out.name + '.tmp')
 with open(tmp, 'w') as f:
     json.dump(results, f, indent=2, default=str)
+    f.flush()
+    os.fsync(f.fileno())              # durable before rename — not just atomic
 os.replace(tmp, out)
 
 print(f"\n{_t()} [engines] Done — saved to {out}")
