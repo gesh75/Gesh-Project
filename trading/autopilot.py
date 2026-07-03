@@ -139,9 +139,17 @@ def _consensus_args(sym: str, snapshot: dict[str, Any]) -> dict[str, float]:
 # ─── Candidate storage (in-memory between pre-market and open-window) ─────────
 # Keyed by symbol → (TradeIntent, consensus_row). Persisted to a job marker so a
 # process restart between 08:30 and 09:35 no longer silently trades nothing.
-_CANDIDATES: dict[str, tuple[TradeIntent | None, dict]] = {}
+# Marker/floor/sweep-intent logic is SHARED gesh-core code (autopilot_core,
+# PR8 phase 1) so the two repos' autopilots can't drift on these again.
+from gesh_core.trading.autopilot_core import (  # noqa: E402
+    CANDIDATE_MARKER,
+    candidates_marker_json,
+    entry_floor_blocks,
+    restore_candidate_symbols,
+    stop_sweep_intent,
+)
 
-_CANDIDATE_MARKER = "premarket_candidates"
+_CANDIDATES: dict[str, tuple[TradeIntent | None, dict]] = {}
 
 
 def _et_today() -> str:
@@ -151,10 +159,7 @@ def _et_today() -> str:
 def _persist_candidates() -> None:
     """Write today's candidate symbols to the DB (restart-safe handoff)."""
     try:
-        set_marker(_CANDIDATE_MARKER, json.dumps({
-            "date": _et_today(),
-            "symbols": sorted(_CANDIDATES),
-        }))
+        set_marker(CANDIDATE_MARKER, candidates_marker_json(_CANDIDATES, _et_today()))
     except Exception as e:  # noqa: BLE001 — persistence is best-effort
         logger.warning("pre_market_scan: could not persist candidates: %s", e)
 
@@ -166,13 +171,7 @@ def _restore_candidates() -> None:
     placeholder (None, {}) tuple is enough. Stale (non-today) markers are ignored.
     """
     try:
-        raw = get_marker(_CANDIDATE_MARKER)
-        if not raw:
-            return
-        data = json.loads(raw)
-        if data.get("date") != _et_today():
-            return
-        for sym in data.get("symbols", []):
+        for sym in restore_candidate_symbols(get_marker(CANDIDATE_MARKER), _et_today()):
             _CANDIDATES.setdefault(sym, (None, {}))
         if _CANDIDATES:
             logger.info(
@@ -224,12 +223,12 @@ def pre_market_scan() -> None:
             row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
             intent = from_consensus(row, max_position_pct=cfg.max_position_pct)
             if intent.action in ("BUY", "SELL") and intent.confidence >= cfg.min_confidence:
-                # P2 entry-conviction floor (ported from the engine repo): gate NEW
+                # P2 entry-conviction floor (shared gesh-core logic): gate NEW
                 # long entries on the consensus raw_score — confidence is data
                 # coverage (≈ nodes-voted/9), so alone it let a near-coin-flip
                 # weighted score through. SELL is a managed exit — never blocked.
                 raw_score = float(row.get("raw_score", row.get("score", 0)) or 0)
-                if intent.action == "BUY" and raw_score < cfg.min_entry_score:
+                if entry_floor_blocks(intent.action, raw_score, cfg.min_entry_score):
                     logger.info(
                         "  ⊘ %s → BUY skipped: raw_score=%.2f < min_entry_score=%.2f (low conviction)",
                         sym, raw_score, cfg.min_entry_score,
@@ -307,7 +306,7 @@ def open_window() -> None:
             # Re-apply the P2 entry-conviction floor against the FRESH open
             # snapshot — the 08:30 raw_score may have weakened by 09:35.
             fresh_raw = float(fresh_row.get("raw_score", fresh_row.get("score", 0)) or 0)
-            if intent.action == "BUY" and fresh_raw < cfg.min_entry_score:
+            if entry_floor_blocks(intent.action, fresh_raw, cfg.min_entry_score):
                 logger.info(
                     "  ⊘ %s BUY skipped at open: raw_score=%.2f < min_entry_score=%.2f",
                     sym, fresh_raw, cfg.min_entry_score,
@@ -439,21 +438,16 @@ def close_risk_check() -> None:
     # SIMULATED fills, stops recorded at fill time by execution._sync_paper_stop).
     # The old holdings-field sweep was doubly dead: data_fetcher holdings never
     # carry a stop_loss field, and the SELL intent it built (no
-    # target_position_pct) failed validate() at the gate.
-    from .contract import manual as _manual
+    # target_position_pct) failed validate() at the gate. The intent itself is
+    # shared gesh-core logic (autopilot_core.stop_sweep_intent) — gate-valid by
+    # construction, so neither repo can regress it independently again.
 
     def _sweep_sell(sym: str, price: float, stop: float, book: str) -> None:
         logger.warning(
             "  STOP-LOSS BREACH (%s): %s price=%.2f < stop=%.2f — logging SELL intent",
             book, sym, price, stop,
         )
-        intent = _manual(
-            sym, "SELL",
-            confidence=1.0,
-            target_position_pct=0.0,   # full close — required for a valid SELL intent
-            rationale=f"EOD stop-loss breach ({book}): price={price:.2f} stop={stop:.2f}",
-            source="stop_sweep",
-        )
+        intent = stop_sweep_intent(sym, price=price, stop=stop, book=book)
         verdict = evaluate(intent, snapshot, cfg)
         place(intent, verdict, snapshot, cfg)
 
