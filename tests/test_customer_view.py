@@ -177,3 +177,29 @@ def test_security_headers_present(monkeypatch, client):
     assert h.get("X-Content-Type-Options") == "nosniff"
     assert h.get("X-Frame-Options") == "DENY"
     assert "Permissions-Policy" in h
+
+
+# ─── C1: ECG degrades instead of 503-ing into a forever spinner ───────────────
+
+def test_ecg_degrades_when_no_snapshot(monkeypatch, client):
+    import data_fetcher
+    _as(monkeypatch, "georgy75@gmail.com")   # owner (masking irrelevant here)
+    def boom(*a, **k): raise data_fetcher.RobinhoodOfflineError("offline")
+    monkeypatch.setattr(server, "_resolved_payload", boom)
+    r = client.get("/api/ecg")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["data"]["portfolio_gate"] == "UNKNOWN"
+    assert body["data"]["states"] == []
+
+
+def test_ecg_ok_from_snapshot(monkeypatch, client):
+    _as(monkeypatch, "georgy75@gmail.com")
+    monkeypatch.setattr(server, "_resolved_payload",
+                        lambda *a, **k: {"holdings": [], "offline": True})
+    monkeypatch.setattr(server, "compute_ecg", lambda h, fn: {"states": [], "portfolio_gate": "OPEN"})
+    r = client.get("/api/ecg")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["degraded"] is True and "cached snapshot" in d["portfolio_message"]

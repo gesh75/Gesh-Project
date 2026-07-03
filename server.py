@@ -822,6 +822,21 @@ def dashboard():
 
 # ─── Portfolio data ───────────────────────────────────────────────────────────
 
+def _resolved_payload(_watchlist=None) -> dict:
+    """Portfolio payload with the confirmed-offline → MCP-snapshot fallback.
+
+    The reauth-dead Robinhood session raises RobinhoodOfflineError; every analysis
+    endpoint should degrade to the snapshot the daily chain / MCP already built,
+    NOT hard-503 (Codex P1: the Risk tab's ECG panel spun forever). Any OTHER
+    exception is a real bug and propagates. Returns a payload with `offline` set
+    when serving the snapshot so callers can label a degraded state.
+    """
+    try:
+        return build_data_payload(_watchlist if _watchlist is not None else DEFAULT_WATCHLIST)
+    except RobinhoodOfflineError:
+        return load_snapshot_payload()   # re-raises RobinhoodOfflineError only if NO snapshot exists
+
+
 @app.get("/api/portfolio")
 def get_portfolio():
     try:
@@ -930,13 +945,27 @@ def monte_carlo():
 @app.get("/api/ecg")
 def equity_curve_gate():
     try:
-        payload  = build_data_payload(DEFAULT_WATCHLIST)
+        try:
+            payload = _resolved_payload()
+        except RobinhoodOfflineError:
+            # No live session AND no snapshot: degrade explicitly, never 503 into a
+            # forever-spinner. ECG runs off the equity_snapshots table, so a snapshot
+            # is normally present; this is the true-dark fallback.
+            return {"status": "degraded",
+                    "data": {"portfolio_gate": "UNKNOWN",
+                             "portfolio_message": "Live data unavailable — ECG paused. Showing no live gate.",
+                             "states": []}}
         holdings = payload["holdings"]
 
         def history_fn(symbol: str):
             return get_equity_history(symbol, days=30)
 
         result = compute_ecg(holdings, history_fn)
+        result.setdefault("portfolio_gate", "UNKNOWN")
+        result.setdefault("portfolio_message", "")
+        if payload.get("offline"):
+            result["degraded"] = True
+            result["portfolio_message"] = (result.get("portfolio_message") or "") + " (cached snapshot)"
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)

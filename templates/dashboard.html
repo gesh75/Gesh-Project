@@ -1553,6 +1553,7 @@ async function runDeepAnalysis(){
 
 /* ── ECG ── */
 async function loadECG(){
+  const panel=$('ecg-panel');
   try{
     const r=await fetch('/api/ecg');
     if(!r.ok) throw new Error(r.status);
@@ -1563,14 +1564,16 @@ async function loadECG(){
 
     // Update banner
     const banner=$('ecg-gate-banner');
-    const gateClass='gate-'+d.portfolio_gate.toLowerCase();
+    const gateClass='gate-'+String(d.portfolio_gate||'unknown').toLowerCase();
     banner.className='gate-banner '+gateClass;
     banner.style.display='flex';
     $('ecg-gate-msg').textContent=d.portfolio_message||'';
 
-    // Render items
-    const panel=$('ecg-panel');
-    if(!d.states||!d.states.length){panel.innerHTML='<div class="empty" style="padding:20px">No holdings found</div>';return;}
+    // Render items — degraded/empty resolves the spinner with an honest message.
+    if(!d.states||!d.states.length){
+      panel.innerHTML=`<div class="empty" style="padding:20px">${daEsc(d.portfolio_message||'No equity-curve data available right now.')}</div>`;
+      return;
+    }
     panel.innerHTML=`<div class="ecg-panel">${d.states.map(s=>{
       const ic=s.state==='HEALTHY'?'🟢':s.state==='COOLING'?'🟡':'🔴';
       const cls2=`ecg-item`;
@@ -1586,7 +1589,10 @@ async function loadECG(){
     $('ecg-ts').textContent='Updated '+new Date().toLocaleTimeString();
     // re-render table ECG badges
     renderHoldings(_lastHoldings||[]);
-  }catch(e){console.error('ECG',e);}
+  }catch(e){
+    console.error('ECG',e);
+    if(panel) panel.innerHTML='<div class="empty" style="padding:20px">Equity-curve gate temporarily unavailable — retry with ↻ Refresh.</div>';
+  }
 }
 
 /* ── Regime ── */
