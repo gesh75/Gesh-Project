@@ -2,6 +2,25 @@
 
 _Last updated: 2026-07-02_
 
+## Done — open-items closeout (2026-07-02 evening)
+
+- **RS window alignment**: live-verified aligned; hardened anyway — SPY cache
+  now invalidates across the 09:30 ET open (gesh-core 644d389 + tests).
+- **"LS P2-3 tests" decoded**: = Phase 2/3 of docs/PAYMENT_GOLIVE_CHECKLIST.md,
+  gated on Lemon Squeezy KYC (IN REVIEW) — go-live steps, not code tests.
+  ⚠ Found the payment tunnel DOWN: cloudflared can't resolve argotunnel.com
+  under the VPN DNS block → pay.geshfinance.com unreachable. Harmless while LS
+  is unapproved (no live traffic; LS retries + 15-min sweep recover misses),
+  but the VPN needs a split-tunnel/DNS exception before go-live.
+- **Engine suite "hang" solved**: not a hang — record_exit's Telegram alert
+  (ENABLED baked at import) waited out its 8s timeout per seeded close under
+  the blocked network; test_tracker.py alone 354s @3% CPU. Conftest autouse
+  ENABLED=False → **full engine suite 502 passed in 10.6s** (engine 9f0150d).
+- **PR8 phase 1 shipped**: gesh_core.trading.autopilot_core — entry floor,
+  candidate marker, stop-sweep intent (gate-valid by construction) — product
+  autopilot wired onto it (6392c30); engine adoption = phase 2, next session.
+- Suites: gesh-core 197 ✓, product 366 ✓, engine 502 ✓. :9000 restarted.
+
 ## Done — MCP-first data revival under VPN block (2026-07-02 afternoon)
 
 - Yahoo hard-blocked from this host (VPN finance-category, curl → 000) AND the
