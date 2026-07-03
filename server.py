@@ -240,7 +240,8 @@ async def _auth_gate_middleware(request: Request, call_next):
 # are refused outright for customers.
 
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
-_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress")
+# /watch is the INTERNAL cockpit (raw paper P&L, provisional win rate) — owner only.
+_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch")
 _MONEY_KEYS = {
     "equity", "cash", "deployable", "settled_cash", "buying_power",
     "buying_power_leveraged", "margin_buying_power", "withdrawable_amount",

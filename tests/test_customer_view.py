@@ -91,7 +91,7 @@ def test_owner_sees_raw_dollars(monkeypatch, client):
     assert "view" not in r.json()
 
 
-@pytest.mark.parametrize("path", ["/report", "/invest", "/invest/data", "/progress"])
+@pytest.mark.parametrize("path", ["/report", "/invest", "/invest/data", "/progress", "/watch"])
 def test_owner_only_views_refused_for_customers(monkeypatch, client, path):
     _as(monkeypatch, "customer@example.com")
     r = client.get(path)

@@ -516,7 +516,7 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
   <span class="badge b-cyan" id="model-badge">{{ model }}</span>
   <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
   <span class="ts" id="ts">—</span>
-  <a href="/watch" class="badge b-cyan" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
+  <a href="/watch" id="watch-link" class="badge b-cyan" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
   <a href="/invest" class="badge b-cyan" style="text-decoration:none" title="Diversification radar — where new cash should go (advisory)">💎 Invest</a>
   <button class="btn-ref" onclick="loadPortfolio()">↻ Refresh</button>
 </header>
@@ -1230,7 +1230,11 @@ async function loadPortfolio(){
     const d=body.data;
     // Customer sessions: the server masks dollars to a $100k model book and tags
     // the response — show the badge so sizing reads as illustrative, not real.
-    if(body.view==='model_book'){const mb=$('modelbook-badge');if(mb)mb.style.display='inline-flex';}
+    if(body.view==='model_book'){
+      const mb=$('modelbook-badge');if(mb)mb.style.display='inline-flex';
+      const wl=$('watch-link');if(wl)wl.style.display='none';   // internal cockpit — owner only
+      const iv=document.querySelector('a[href="/invest"]');if(iv)iv.style.display='none';
+    }
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
     applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
