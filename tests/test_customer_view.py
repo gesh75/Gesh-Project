@@ -97,3 +97,34 @@ def test_owner_only_views_refused_for_customers(monkeypatch, client, path):
     r = client.get(path)
     assert r.status_code == 403
     assert "Owner-only" in r.json()["detail"]
+
+
+# ─── A1: Monte-Carlo + prose masking (Codex P0) ───────────────────────────────
+
+def test_monte_carlo_outcome_fields_are_scaled():
+    payload = {"median": 38527.04, "current_equity": 36970.93, "cvar_95": 10346.95,
+               "p5": 28826.97, "cvar_95_pct": 27.9,
+               "buckets": [{"label": "$25,274–$28,518", "center": 26895.93, "pct": 4.0}]}
+    out = server._scale_money(payload, 0.5)
+    assert out["median"] == pytest.approx(19263.52)
+    assert out["current_equity"] == pytest.approx(18485.47)
+    assert out["cvar_95"] == pytest.approx(5173.48)
+    assert out["cvar_95_pct"] == 27.9                       # percentages untouched
+    assert out["buckets"][0]["center"] == pytest.approx(13447.97)
+    assert "$12,637" in out["buckets"][0]["label"]          # label dollars scaled too
+
+
+def test_prose_dollars_and_shares_are_scaled():
+    txt = "TRIM 5 shares of HOOD (~$450) and keep $509.70 cash; price $112.73."
+    out = server._scale_prose(txt, 2.0)
+    assert "10.00 shares" in out
+    assert "$900" in out
+    assert "$1,019" in out                                  # real cash never escapes
+    assert "509.70" not in out and "$450)" not in out
+
+
+def test_scale_money_reaches_strings_recursively():
+    obj = {"portfolio_recommendations": [{"action": "Sell 4 shares ($38 risk)"}]}
+    out = server._scale_money(obj, 2.665)
+    s = out["portfolio_recommendations"][0]["action"]
+    assert "4 shares" not in s and "$38" not in s

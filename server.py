@@ -249,9 +249,31 @@ _MONEY_KEYS = {
     "portfolio_equity", "adjusted_equity_previous_close", "equity_value",
     "market_value", "recommended_usd", "delta_usd", "cost_basis",
     "total_equity", "day_change", "total_value",
+    # Monte-Carlo / distribution outcomes (Codex P0: these leaked raw dollars)
+    "mean", "median", "p5", "p25", "p75", "p95", "var_95", "cvar_95",
+    "current_equity", "center",
 }
 _QTY_KEYS = {"quantity", "qty", "shares", "fill_qty", "delta_shares",
              "shares_to_buy", "shares_to_trim"}
+
+# Prose scaling (Codex P0): AI narratives, recommendation text and histogram
+# labels embed owner dollars ("sell 5 shares … $450 at $112.73") that no
+# key-name rule can reach. Scale every $-amount and every "N shares" count in
+# EVERY string of a masked response. Figures inside prose are then model-scale
+# — internally approximate, but no REAL amount can escape through text.
+_MONEY_RE = re.compile(r"\$([\d,]+(?:\.\d+)?)")
+_SHARES_RE = re.compile(r"\b(\d+(?:\.\d+)?)(\s+shares?\b)")
+
+
+def _scale_prose(text: str, factor: float) -> str:
+    def _money(m: "re.Match[str]") -> str:
+        val = float(m.group(1).replace(",", "")) * factor
+        return f"${val:,.2f}" if val < 100 else f"${val:,.0f}"
+
+    def _shares(m: "re.Match[str]") -> str:
+        return f"{float(m.group(1)) * factor:,.2f}{m.group(2)}"
+
+    return _SHARES_RE.sub(_shares, _MONEY_RE.sub(_money, text))
 
 
 def _customer_scale_factor() -> float:
@@ -282,6 +304,8 @@ def _scale_money(obj, factor: float):
         return out
     if isinstance(obj, list):
         return [_scale_money(x, factor) for x in obj]
+    if isinstance(obj, str) and ("$" in obj or "share" in obj):
+        return _scale_prose(obj, factor)
     return obj
 
 
