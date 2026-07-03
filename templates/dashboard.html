@@ -1664,7 +1664,7 @@ async function runConsensus(){
 async function loadCachedConsensus(){
   const cont=$('cons-container'); if(!cont||cont.dataset.loaded) return;
   try{ const r=await fetch('/api/consensus/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); prependStaleBadge('cons-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); prependStaleBadge('cons-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){console.error('cachedConsensus',e);}
 }
 
 const NODE_ICONS={
@@ -1700,6 +1700,22 @@ function scoreBar(rawScore){
 function renderConsensus(d){
   const cont=$('cons-container');
   if(!d||!d.holdings){cont.innerHTML='<div style="color:var(--muted);padding:16px">No data</div>';return;}
+  // Live portfolio run returns strong_buys/buys/sells summary arrays; the CACHED
+  // (daily-chain) shape is per-symbol holdings only. Derive the summary from the
+  // holdings' verdicts when absent — without this d.strong_buys was undefined and
+  // .length threw, and loadCachedConsensus's empty catch{} silently left the
+  // 'Click Run Consensus' placeholder (which customers can't click).
+  if(!Array.isArray(d.strong_buys)){
+    const V=v=>String(v||'').toUpperCase();
+    d.strong_buys=d.holdings.filter(h=>V(h.verdict)==='STRONG BUY').map(h=>h.symbol);
+    d.buys       =d.holdings.filter(h=>V(h.verdict)==='BUY').map(h=>h.symbol);
+    d.sells      =d.holdings.filter(h=>['SELL','STRONG SELL'].includes(V(h.verdict))).map(h=>h.symbol);
+  }
+  if(d.total_analyzed==null) d.total_analyzed=d.holdings.length;
+  if(d.avg_confidence==null){
+    const cs=d.holdings.map(h=>+h.confidence).filter(v=>!isNaN(v));
+    d.avg_confidence=cs.length?Math.round(cs.reduce((a,b)=>a+b,0)/cs.length):0;
+  }
 
   const sbColor=d.strong_buys.length>0?'var(--green)':'var(--muted)';
   const sellColor=d.sells.length>0?'var(--red)':'var(--muted)';
@@ -1776,7 +1792,7 @@ async function runKelly(){
 async function loadCachedKelly(){
   const cont=$('kelly-container'); if(!cont||cont.dataset.loaded) return;
   try{ const r=await fetch('/api/kelly/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderKelly(j.data, j.total_equity); prependStaleBadge('kelly-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('kelly-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){}
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderKelly(j.data, j.total_equity); prependStaleBadge('kelly-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('kelly-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){console.error('cachedKelly',e);}
 }
 
 function kellyBar(currentPct, optimalPct){
@@ -1802,6 +1818,27 @@ function volBadge(tier){
 function renderKelly(d, totalEq){
   const cont=$('kelly-container');
   if(!d||!d.holdings){cont.innerHTML='<div style="color:var(--muted);padding:16px">No data</div>';return;}
+
+  // Cached (daily-chain) Kelly is per-symbol with no trim/add/avoid summary lists
+  // (only a live run_kelly_analysis produces them). Derive from each holding's
+  // action so d.trim_list.length doesn't throw into the silent catch{} and leave
+  // the 'Click Size Positions' placeholder for customers.
+  if(!Array.isArray(d.trim_list)){
+    const A=a=>String(a||'').toUpperCase();
+    d.trim_list =d.holdings.filter(h=>A(h.action)==='TRIM').map(h=>h.symbol);
+    d.add_list  =d.holdings.filter(h=>A(h.action)==='ADD').map(h=>h.symbol);
+    d.avoid_list=d.holdings.filter(h=>A(h.action)==='AVOID').map(h=>h.symbol);
+    if(d.total_optimal_allocated_pct==null){
+      const alloc=d.holdings.reduce((a,h)=>a+(+h.optimal_pct||0),0);
+      d.total_optimal_allocated_pct=Math.round(alloc*10)/10;
+    }
+    if(d.cash_recommended_pct==null)
+      d.cash_recommended_pct=Math.max(0,Math.round((100-d.total_optimal_allocated_pct)*10)/10);
+  }
+  if(d.portfolio_kelly_score==null){
+    const ks=d.holdings.map(h=>+h.half_kelly).filter(v=>!isNaN(v)&&v>0);
+    d.portfolio_kelly_score=ks.length?Math.round(ks.reduce((a,b)=>a+b,0)/ks.length*10)/10:0;
+  }
 
   // Summary bar
   const trimCount=d.trim_list.length, addCount=d.add_list.length, avoidCount=d.avoid_list.length;
