@@ -998,11 +998,16 @@ def price_chart(symbol: str, period: str = "1mo"):
             return hit[1]
 
     try:
-        import yfinance as yf
+        # price_source, not raw yfinance: under the VPN finance-block Yahoo
+        # returns nothing and the dashboard chart rendered BLANK. The unauth
+        # Robinhood fallback serves daily bars with no session (intraday 1d/5d
+        # still needs Yahoo or an authed RH session — daily ranges always work).
+        import price_source
         period_map = {"1d":"1d","5d":"5d","1w":"5d","1mo":"1mo","3mo":"3mo","6mo":"6mo","1y":"1y"}
         yf_period = period_map.get(period, "1mo")
         interval  = "5m" if period in ("1d","5d") else "1d"
-        raw = yf.download(sym, period=yf_period, interval=interval, auto_adjust=True, progress=False)
+        raw = price_source.yf_download(sym, period=yf_period, interval=interval,
+                                       auto_adjust=True, progress=False)
         if raw is None or raw.empty:
             raise HTTPException(status_code=404, detail="No data")
         closes = raw["Close"].squeeze().dropna()
