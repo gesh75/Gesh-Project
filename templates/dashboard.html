@@ -69,14 +69,15 @@ td,.sval,.num{font-variant-numeric:tabular-nums}
 .b-orange{background:var(--odim);color:var(--orange);border:1px solid var(--orange)}
 .b-purple{background:var(--pdim);color:var(--purple);border:1px solid var(--purple)}
 .b-muted{background:transparent;color:var(--muted);border:1px solid var(--border)}
-.ts{color:var(--muted);font-size:17px}
+.ts{color:var(--muted);font-size:13px}
+.topbar .ts{white-space:nowrap;font-size:12px}
 .main{padding:20px 24px;max-width:1700px;margin:0 auto;overflow-x:hidden}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
 .scard{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:18px 22px;transition:border-color .25s,box-shadow .25s;position:relative;overflow:hidden}
 .scard::after{content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(0,212,255,.03) 0%,transparent 60%);pointer-events:none}
 .scard:hover{border-color:var(--accent);box-shadow:var(--glow-a)}
 .slabel{color:var(--muted);font-size:16px;text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px}
-.sval{font-size:34px;font-weight:700;letter-spacing:-.02em}
+.sval{font-size:clamp(22px,2.1vw,34px);font-weight:700;letter-spacing:-.02em;white-space:nowrap}
 .ssub{font-size:17px;margin-top:4px;color:var(--muted)}
 .grid{display:grid;grid-template-columns:1fr 420px;gap:14px;margin-bottom:18px}
 .rcol{display:flex;flex-direction:column;gap:14px;min-width:0;overflow:hidden}
@@ -227,6 +228,9 @@ tr:hover td{background:var(--hover)}
 
 @media(max-width:1300px){.stock-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:1100px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.pi-body{grid-template-columns:1fr}.pi-left{border-right:none;border-bottom:1px solid var(--border)}.pi-right{grid-template-columns:1fr}}
+/* KPI cards: single column on phones so long dollar values never clip (declared
+   AFTER the ≤1100px 2-col rule so source order wins at equal specificity). */
+@media(max-width:600px){.stats{grid-template-columns:1fr}}
 @media(max-width:800px){.stock-grid{grid-template-columns:1fr}.sc-body{grid-template-columns:1fr}.sc-radar{border-right:none;border-bottom:1px solid var(--border)}}
 
 /* ── ECG Badges ─────────────────────────────────────────────────────── */
@@ -413,7 +417,7 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
 .nav-badge.stale{background:var(--amber);border-color:var(--amber)}
 .sb-foot{margin-top:auto;padding:14px 18px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
 /* Topbar */
-.topbar{display:flex;align-items:center;justify-content:flex-end;gap:12px;height:var(--header-h);padding:0 24px;background:rgba(10,14,20,.7);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:150}
+.topbar{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px 12px;min-height:var(--header-h);padding:8px 24px;background:rgba(10,14,20,.7);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:150}
 .topbar .live-wrap{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--green);text-transform:uppercase}
 /* KPI row enhancements */
 .scard{position:relative;padding-left:22px}
