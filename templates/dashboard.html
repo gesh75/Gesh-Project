@@ -315,6 +315,7 @@ tr:hover td{background:var(--hover)}
 .rc-sym{font-size:28px;font-weight:700;color:var(--accent)}
 /* Period buttons */
 .period-btn{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:4px 12px;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:.05em}
+[data-chartmsg]::after{content:attr(data-chartmsg);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 24px;color:var(--muted);font-size:14px}
 .period-btn:hover{color:var(--accent);border-color:var(--accent)}
 .period-btn.active{background:var(--adim);color:var(--accent);border-color:var(--accent)}
 /* Consensus panel */
@@ -1124,16 +1125,34 @@ function setPeriod(p, btn){
   loadChart();
 }
 
+function _chartMsg(text){
+  // Clear any stale chart and show an honest message instead of silently
+  // leaving the previous period's graph on screen (bug #1: clicking 5D kept
+  // the 1Y render when intraday data was unavailable).
+  if(priceChart){priceChart.destroy();priceChart=null;}
+  const lbl=$('chart-period-label'); if(lbl) lbl.textContent='';
+  const price=$('chart-price'); if(price) price.textContent='—';
+  const chg=$('chart-chg'); if(chg) chg.textContent='';
+  const wrap=$('price-chart'); if(wrap && wrap.parentElement)
+    wrap.parentElement.setAttribute('data-chartmsg', text);
+}
 async function loadChart(){
   const sel=$('chart-sym');
   if(!sel||!sel.value) return;
   const sym=sel.value;
+  const wrap=$('price-chart'); if(wrap && wrap.parentElement) wrap.parentElement.removeAttribute('data-chartmsg');
   try{
     const r=await fetch(`/api/chart/${sym}?period=${currentPeriod}`);
-    if(!r.ok) return;
+    if(!r.ok){
+      _chartMsg(currentPeriod==='1d'||currentPeriod==='5d'
+        ? 'Intraday data unavailable right now — try a daily range (1M–1Y).'
+        : 'Price data unavailable for this range.');
+      return;
+    }
     const d=await r.json();
+    if(!d.prices||!d.prices.length){ _chartMsg('No price data for this range.'); return; }
     renderPriceChart(d);
-  }catch(e){console.error('chart',e);}
+  }catch(e){console.error('chart',e); _chartMsg('Chart failed to load — retry.');}
 }
 
 function renderPriceChart(d){
