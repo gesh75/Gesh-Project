@@ -35,13 +35,28 @@ def _sanitize(obj):
     return obj
 
 
-def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> bool:
-    """Auth gate for mutating endpoints (config changes + trade execution).
+def require_api_key(
+    request: Request,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> bool:
+    """Auth gate for mutating / spend-triggering endpoints (config, trades, paper,
+    live analysis runs).
 
-    Fails closed: if GESH_API_KEY is unset in the environment, the endpoint is
-    blocked entirely (503) rather than left open. Set GESH_API_KEY in .env and
-    send it as the `X-API-Key` request header.
+    Accepts EITHER proof of ownership:
+      1. A valid OWNER session cookie (dashboard path — no key in the browser,
+         closes the Codex stored-XSS -> key-theft vector).
+      2. The `X-API-Key` header matching GESH_API_KEY (headless scripts / cron).
+
+    A CUSTOMER session is explicitly rejected (403): these endpoints mutate the
+    shared engine cache and spend the owner's LLM/broker budget (Codex P1).
+    Fails closed if GESH_API_KEY is unset and there is no owner session.
     """
+    if auth_users.auth_enabled():
+        email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+        if email and auth_users.is_owner(email):
+            return True
+        if email:
+            raise HTTPException(status_code=403, detail="Owner-only action")
     expected = os.getenv("GESH_API_KEY", "")
     if not expected:
         raise HTTPException(status_code=503, detail="Endpoint disabled: GESH_API_KEY not configured")
@@ -803,7 +818,7 @@ def get_portfolio():
 
 # ─── Quick AI analysis ────────────────────────────────────────────────────────
 
-@app.post("/api/analyze")
+@app.post("/api/analyze", dependencies=[Depends(require_api_key)])
 def run_analysis():
     try:
         payload  = build_data_payload(DEFAULT_WATCHLIST)
@@ -815,7 +830,7 @@ def run_analysis():
 
 # ─── Deep AI analysis (with regime injection + DB logging) ───────────────────
 
-@app.post("/api/deep-analysis")
+@app.post("/api/deep-analysis", dependencies=[Depends(require_api_key)])
 def run_deep_analysis():
     try:
         payload = build_data_payload(DEFAULT_WATCHLIST)
@@ -861,7 +876,7 @@ def run_deep_analysis():
 
 # ─── Step 2 — Monte Carlo stress test ────────────────────────────────────────
 
-@app.post("/api/monte-carlo")
+@app.post("/api/monte-carlo", dependencies=[Depends(require_api_key)])
 def monte_carlo():
     try:
         payload  = build_data_payload(DEFAULT_WATCHLIST)
@@ -962,7 +977,7 @@ def market_data_endpoint():
 
 # ─── Company Intelligence Agents ─────────────────────────────────────────────
 
-@app.post("/api/agents/sec")
+@app.post("/api/agents/sec", dependencies=[Depends(require_api_key)])
 def agent_sec():
     """Watch SEC filings for current holdings (last 7 days)."""
     try:
@@ -986,7 +1001,7 @@ def agent_sec_history(days: int = 30):
         raise _server_error(e)
 
 
-@app.post("/api/agents/news")
+@app.post("/api/agents/news", dependencies=[Depends(require_api_key)])
 def agent_news():
     """Scan news sentiment for current holdings + watchlist."""
     try:
@@ -1010,7 +1025,7 @@ def agent_news_history(days: int = 7):
         raise _server_error(e)
 
 
-@app.post("/api/agents/fundamentals")
+@app.post("/api/agents/fundamentals", dependencies=[Depends(require_api_key)])
 def agent_fundamentals():
     """Run full fundamental momentum scan (~3-5 min, uses Claude Sonnet)."""
     try:
@@ -1034,7 +1049,7 @@ def agent_fundamentals_latest():
 
 # ─── Investment Screener ──────────────────────────────────────────────────────
 
-@app.post("/api/screener")
+@app.post("/api/screener", dependencies=[Depends(require_api_key)])
 def run_screener():
     try:
         # Reduced from 20 to 10 to instantly resolve perceived hangs
@@ -1053,7 +1068,7 @@ def run_screener():
 
 # ─── Kelly Criterion Position Sizer ──────────────────────────────────────────
 
-@app.post("/api/kelly")
+@app.post("/api/kelly", dependencies=[Depends(require_api_key)])
 def kelly_endpoint():
     try:
         payload        = build_data_payload(DEFAULT_WATCHLIST)
@@ -1135,7 +1150,7 @@ def price_chart(symbol: str, period: str = "1mo"):
 
 # ─── Consensus Engine ────────────────────────────────────────────────────────
 
-@app.post("/api/consensus")
+@app.post("/api/consensus", dependencies=[Depends(require_api_key)])
 def consensus_endpoint():
     try:
         payload      = build_data_payload(DEFAULT_WATCHLIST)
@@ -1304,8 +1319,8 @@ def fft_cycles_single(symbol: str):
 # Legacy endpoints return 410 Gone with a redirect message.
 
 @app.get("/api/ollama/status")
-@app.post("/api/ollama/analyze")
-@app.post("/api/ollama/second-opinion/{symbol}")
+@app.post("/api/ollama/analyze", dependencies=[Depends(require_api_key)])
+@app.post("/api/ollama/second-opinion/{symbol}", dependencies=[Depends(require_api_key)])
 async def ollama_removed_endpoint(symbol: str = ""):
     raise HTTPException(
         status_code=410,
@@ -1458,7 +1473,7 @@ def consolidation_zone_single(symbol: str, interval: str = "5m", period: str = "
         raise _server_error(e)
 
 
-@app.post("/api/scanner/consolidation")
+@app.post("/api/scanner/consolidation", dependencies=[Depends(require_api_key)])
 async def consolidation_zone_batch(request: Request):
     """
     Batch consolidation zone scan. Body: {"symbols": [...], "interval": "5m", "period": "1d", "min_rr": 2.0}
@@ -1495,7 +1510,7 @@ def sector_hot_single(symbol: str):
         raise _server_error(e)
 
 
-@app.post("/api/scanner/sector")
+@app.post("/api/scanner/sector", dependencies=[Depends(require_api_key)])
 async def sector_hot_batch(request: Request):
     """
     Batch sector volume pre-filter. Body: {"symbols": [...]}
@@ -1582,7 +1597,7 @@ async def close_trade_endpoint(trade_id: int, request: Request):
 
 # ─── Paper Trading ────────────────────────────────────────────────────────────
 
-@app.post("/api/paper/run")
+@app.post("/api/paper/run", dependencies=[Depends(require_api_key)])
 async def paper_run_endpoint(request: Request):
     """
     Simulate an action plan in paper mode.
@@ -1604,7 +1619,7 @@ async def paper_run_endpoint(request: Request):
         raise _server_error(e)
 
 
-@app.post("/api/paper/check-closes")
+@app.post("/api/paper/check-closes", dependencies=[Depends(require_api_key)])
 def paper_check_closes():
     """Auto-close paper positions that hit stop or target."""
     try:

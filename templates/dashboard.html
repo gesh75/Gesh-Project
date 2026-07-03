@@ -1092,19 +1092,15 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
 const REFRESH=30000;
 const $=id=>document.getElementById(id);
 
-// ── API key for protected (config + trade) endpoints ─────────────────────────
-// Held in localStorage (same-origin protected), never embedded in page source.
-// Run geshClearApiKey() in the console if you mistype it.
-function geshApiKey(){
-  let k=localStorage.getItem('gesh_api_key');
-  if(!k){
-    k=(prompt('Enter GESH_API_KEY (from your .env) — needed for config & trade actions:')||'').trim();
-    if(k) localStorage.setItem('gesh_api_key',k);
-  }
-  return k||'';
-}
-const authHeaders=extra=>Object.assign({'X-API-Key':geshApiKey()},extra||{});
-window.geshClearApiKey=()=>{localStorage.removeItem('gesh_api_key');console.log('GESH API key cleared — next protected action will re-prompt.');};
+// ── Auth for protected (config + trade + live-run) endpoints ─────────────────
+// The privileged GESH_API_KEY is NO LONGER stored in the browser (Codex P0:
+// localStorage + innerHTML rendering = stored-XSS -> key theft). Authorization
+// now rides the HttpOnly owner SESSION COOKIE, which same-origin fetches send
+// automatically — the server's require_api_key accepts an owner session. So
+// protected calls just need credentials:'same-origin'; no header, no prompt.
+const authHeaders=extra=>Object.assign({},extra||{});
+// One-time cleanup of any key a previous build persisted.
+try{localStorage.removeItem('gesh_api_key');}catch(e){}
 const fmt=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
 const fmtp=n=>(n>=0?'+':'')+n.toFixed(2)+'%';
 const cls=n=>n>=0?'pos':'neg';

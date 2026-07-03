@@ -128,3 +128,35 @@ def test_scale_money_reaches_strings_recursively():
     out = server._scale_money(obj, 2.665)
     s = out["portfolio_recommendations"][0]["action"]
     assert "4 shares" not in s and "$38" not in s
+
+
+# ─── B1: mutating / spend endpoints reject customers, accept owner ────────────
+
+@pytest.mark.parametrize("path", ["/api/paper/run", "/api/paper/check-closes",
+                                   "/api/deep-analysis", "/api/screener",
+                                   "/api/consensus", "/api/config"])
+def test_customer_cannot_trigger_spend_or_mutation(monkeypatch, client, path):
+    _as(monkeypatch, "customer@example.com")
+    r = client.post(path, json={})
+    assert r.status_code == 403, f"{path} must be owner-only for customers"
+
+
+def test_owner_passes_the_gate(monkeypatch):
+    """Owner session satisfies require_api_key without any X-API-Key header."""
+    monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "georgy75@gmail.com")
+    import types
+    req = types.SimpleNamespace(cookies={server.auth_users.COOKIE_NAME: "x"})
+    assert server.require_api_key(req, x_api_key=None) is True
+
+
+def test_no_key_no_session_fails_closed(monkeypatch):
+    monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
+    monkeypatch.delenv("GESH_API_KEY", raising=False)
+    import types
+    from fastapi import HTTPException
+    req = types.SimpleNamespace(cookies={})
+    with pytest.raises(HTTPException) as ei:
+        server.require_api_key(req, x_api_key=None)
+    assert ei.value.status_code == 503
