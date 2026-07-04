@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+
 def _load_env_secret() -> None:
     """The running server signs session cookies with GESH_AUTH_SECRET from .env;
     this pytest process must use the SAME secret or every cookie 401s. Parse .env

@@ -14,7 +14,6 @@ from starlette.testclient import TestClient
 import auth_users
 import server
 
-
 # ─── _scale_money (pure) ──────────────────────────────────────────────────────
 
 def test_scale_money_scales_money_and_qty_not_prices():
@@ -187,6 +186,7 @@ def test_no_key_no_session_fails_closed(monkeypatch):
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
     monkeypatch.delenv("GESH_API_KEY", raising=False)
     import types
+
     from fastapi import HTTPException
     req = types.SimpleNamespace(cookies={})
     with pytest.raises(HTTPException) as ei:
