@@ -134,3 +134,55 @@ stays hermetic.
 - **Full suite:** `./venv/bin/python -m pytest tests/ -q` → 431 passing.
 - **Live:** log in via magic link as the test account → masked $100K model-book
   dashboard; the owner never exposes real dollars to a customer session.
+
+---
+
+## 4th-pass resolutions (commit `50f27ec`, 2026-07-04)
+
+Responding to the 4th-pass `REQUEST CHANGES`. All code items landed; **446 tests
+pass** and CI is green on **two** jobs (`test` + a new `customer-isolation` gate).
+
+- **P0 — remaining XSS sinks → FIXED.** `daEsc()` now wraps every model/external
+  string that reached `innerHTML` raw: prediction 3m/12m badges
+  (`dashboard.html:1490`), SEC `action_signal`/`urgency`, news
+  `overall_sentiment`/`market_mood`, fundamental momentum-gap/horizon/
+  `insider_activity`, kelly/trade `action`, gate `reason`, ECG/error messages,
+  cmdk labels. The classifiers (`…Cls`/`…Style`) are confirmed allowlists (fixed
+  class/style output), so `class=`/`style=` attrs were already safe.
+- **P0 — renderer-wiring test → ADDED.** `tests/test_dashboard_xss_wiring.py`
+  parses the real template and FAILS if any known AI/external field is
+  interpolated without `daEsc`/`_esc` or an allowlist classifier — it verifies the
+  sinks *call* the escaper, not just that a Python reimplementation works. Has a
+  synthetic-sink teeth test.
+- **P1 — leak sweep is now a CI gate.** `tests/test_customer_leak_sweep.py`
+  rewritten to run **in-process (Starlette TestClient) against a seeded
+  owner-sentinel fixture** — no port 9000, no network, **no skips**. Runs in the
+  new required `customer-isolation` job. Per endpoint it asserts `status==200`
+  (a 401/403/404/5xx **fails** — never a pass), `view=="model_book"` (proves the
+  response routed through masking), and no exact sentinel. Wrong-auth → 401 is
+  asserted as failure. Verified teeth: an identity-scale run leaks
+  `37522.83`/`509.7`/`101.99` and the sweep fails.
+- **P1 — coverage from `app.routes`.** `test_all_customer_gets_categorized`
+  derives the route set from `server.app.routes`; a new customer GET that nobody
+  categorizes fails the test. Added the **10 routes** the review found missing
+  (fft-cycles/{sym}, gemini/status, config, scanner/consolidation|sector/{sym},
+  benchmarks/{period}, crypto-correlation, security/health,
+  volatility/compare/{sym}). `/api/ollama/status` is `EXCLUDED` (410 Gone).
+- **P1 — exact structured sentinels.** No rounding: the sweep + a direct
+  `_scale_money` test assert the synthetic leaks Codex injected — fractional
+  quantity `6.078929`, per-lot equity `101.988616`, historical-series `5843.32`
+  — all scale away.
+- **Nit — gesh-core wheel version.** Bumped `0.4.0 → 0.5.1` and re-tagged; the
+  pinned wheel now self-reports `0.5.1`.
+- **Stale customer analysis.** Engine fix (`CPIAUCNS`) is already in `regime.py`;
+  the cached copy refreshes on the next sanctioned daily run (Mon 10:30 ET)
+  before any invitation — not force-regenerated on the July-4 holiday.
+
+**CI note (your correction):** acknowledged — #69 was the first green since **#33**
+(not ever); #33 ran 334 tests.
+
+### Still open (disclosed)
+- CSP still carries `'unsafe-inline'` for the inline handlers; `connect-src`/
+  `script-src` are self-pinned (exfiltration blocked). Nonce-CSP tracked, not done.
+- Per-endpoint customer DTOs remain the agreed prerequisite for **wider paid
+  rollout** (not the ~5-user comped alpha).
