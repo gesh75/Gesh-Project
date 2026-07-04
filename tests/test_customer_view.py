@@ -250,3 +250,12 @@ def test_daesc_helper_escapes_html_payload():
     out = daEsc(payload)
     assert "<img" not in out and "onerror" in out and "&lt;img" in out
     assert "<" not in out and ">" not in out
+
+
+# ─── /api/portfolio/history sparkline series must scale (Fable audit, 4th of class) ─
+
+def test_portfolio_history_series_scaled_for_customer():
+    obj = {"status": "ok", "series": [37080.88, 36970.94], "points": 2}
+    out = server._scale_money(obj, 2.0)
+    assert out["series"] == [pytest.approx(74161.76), pytest.approx(73941.88)]
+    assert out["points"] == 2   # a count, not money — untouched

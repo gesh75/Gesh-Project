@@ -274,7 +274,8 @@ _QTY_KEYS = {"quantity", "qty", "shares", "fill_qty", "delta_shares",
 # Bare-number arrays that carry OWNER DOLLARS (no dict key on the elements, so
 # the recursive scaler would return them unchanged and leak — Codex P0 on
 # /api/ecg's equity_history). Listed keys have their numeric elements scaled.
-_MONEY_LIST_KEYS = {"equity_history", "equity_series", "equity_curve"}
+_MONEY_LIST_KEYS = {"equity_history", "equity_series", "equity_curve",
+                    "series"}   # /api/portfolio/history KPI-sparkline equity (owner $)
 
 # Prose REDACTION (Codex P0): AI narratives embed owner sizing ("sell 4-5 shares
 # ~$450 at $112.73"). The old regex SCALER was doubly broken — it scaled only the
