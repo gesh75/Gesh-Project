@@ -1394,6 +1394,10 @@ const verdictCls=v=>{
 };
 const predCls=p=>p==='BULLISH'?'pb-bull':p==='BEARISH'?'pb-bear':'pb-neut';
 const sevCls=s=>({critical:'sev-critical',high:'sev-high',medium:'sev-medium',low:'sev-low'}[s]||'sev-medium');
+// Allowlists for AI-supplied values that DERIVE css class names — never
+// interpolate a raw model string into a class attribute (class break-out XSS).
+const saCls=a=>({positive:'sa-positive',neutral:'sa-neutral',negative:'sa-negative',warning:'sa-warning'}[String(a||'').toLowerCase()]||'sa-neutral');
+const priCls=p=>({high:'pri-high',medium:'pri-medium',low:'pri-low',p1:'pri-high',p2:'pri-medium',p3:'pri-low'}[String(p||'').toLowerCase()]||'pri-medium');
 
 function buildScoreRing(cid,score){
   const c=$(cid); if(!c) return;
@@ -1472,7 +1476,7 @@ function stockCard(h,i,mkt){
   const p3=p['3m']||'NEUTRAL',p12=p['12m']||'NEUTRAL';
   const cid=`radar-${h.symbol}`;
   return `<div class="sc" style="animation:fadeIn .4s ease ${i*.06}s both">
-    <div class="sc-head"><div><div class="sc-sym">${h.symbol}</div><div class="sc-company">${h.company_type||''}</div></div><span class="verdict-badge ${verdictCls(h.verdict)}">${h.verdict||'HOLD'}</span></div>
+    <div class="sc-head"><div><div class="sc-sym">${h.symbol}</div><div class="sc-company">${daEsc(h.company_type||'')}</div></div><span class="verdict-badge ${verdictCls(h.verdict)}">${daEsc(h.verdict||'HOLD')}</span></div>
     <div class="sc-body">
       <div class="sc-radar"><canvas id="${cid}" width="150" height="150"></canvas><div class="sf-summary">${daEsc(h.snowflake_summary||'')}</div></div>
       <div class="sc-right">
@@ -1494,11 +1498,11 @@ function piCard(a){
   const sc=a.portfolio_score||0,rc=sc>=67?'#00e676':sc>=34?'#ffd700':'#ff4444';
   const riskC=a.risk_score>=7?'var(--red)':a.risk_score>=4?'var(--yellow)':'var(--green)';
   const risks=(a.portfolio_risks||[]).map(r=>`<li class="risk-item"><span class="risk-dot ${sevCls(r.severity)}"></span><span>${daEsc(r.text)}</span></li>`).join('');
-  const recs=(a.portfolio_recommendations||[]).map(r=>`<div class="rec-item pri-${r.priority||'medium'}"><span class="rec-arrow">▸</span><div><div>${daEsc(r.action)}</div>${r.rationale?`<div class="rec-rationale">${daEsc(r.rationale)}</div>`:''}</div></div>`).join('');
-  const sects=(a.sector_breakdown||[]).map(s=>`<span class="sector-pill sa-${s.assessment||'neutral'}">${s.sector}${s.allocation_pct?' '+s.allocation_pct.toFixed(0)+'%':''}</span>`).join('');
+  const recs=(a.portfolio_recommendations||[]).map(r=>`<div class="rec-item ${priCls(r.priority)}"><span class="rec-arrow">▸</span><div><div>${daEsc(r.action)}</div>${r.rationale?`<div class="rec-rationale">${daEsc(r.rationale)}</div>`:''}</div></div>`).join('');
+  const sects=(a.sector_breakdown||[]).map(s=>`<span class="sector-pill ${saCls(s.assessment)}">${daEsc(s.sector)}${s.allocation_pct?' '+s.allocation_pct.toFixed(0)+'%':''}</span>`).join('');
   return `<div class="pi-card">
     <div class="ch">
-      <div style="display:flex;align-items:center;gap:10px"><span class="ct">Portfolio Intelligence</span><span class="badge b-muted">${a.portfolio_type||'Mixed'}</span></div>
+      <div style="display:flex;align-items:center;gap:10px"><span class="ct">Portfolio Intelligence</span><span class="badge b-muted">${daEsc(a.portfolio_type||'Mixed')}</span></div>
       <div style="display:flex;align-items:center;gap:8px">
         <span style="font-size:13px;color:var(--muted)">Risk:</span><span style="font-weight:700;color:${riskC}">${a.risk_score||'—'}<span style="font-size:12px;color:var(--muted)">/100</span></span>
         <span style="font-size:13px;color:var(--muted);margin-left:6px">Diversification:</span><span style="font-weight:700;color:var(--accent)">${a.diversification_score||0}<span style="font-size:12px;color:var(--muted)">/100</span></span>
@@ -1507,7 +1511,7 @@ function piCard(a){
     <div class="pi-body">
       <div class="pi-left">
         <div class="score-ring-wrap"><canvas id="score-ring-canvas" width="130" height="130"></canvas><div class="score-ring-center"><div class="score-num" style="color:${rc}">${sc}</div><div class="score-lbl">Score</div></div></div>
-        <div class="pi-verdict">${a.portfolio_verdict||''}</div>
+        <div class="pi-verdict">${daEsc(a.portfolio_verdict||'')}</div>
         ${sects?`<div class="sector-row">${sects}</div>`:''}
       </div>
       <div class="pi-right">
@@ -1993,13 +1997,13 @@ function renderIntelligence(sec, news, fund){
     const findings=(a.key_findings||[]).slice(0,2).map(x=>`<div>• ${daEsc(x)}</div>`).join('');
     return `<div class="intel-card">
       <div class="intel-card-head">
-        <span class="intel-sym">${f.symbol}</span>
+        <span class="intel-sym">${daEsc(f.symbol)}</span>
         <div style="display:flex;gap:4px;align-items:center">
           <span class="signal-pill ${sigCls(sig)}">${sig}</span>
           <span class="signal-pill ${urgCls(urg)}">${urg}</span>
         </div>
       </div>
-      <div class="intel-title">${f.form_type} — ${f.analysis?.period||''}</div>
+      <div class="intel-title">${daEsc(f.form_type)} — ${daEsc(f.analysis?.period||'')}</div>
       <div class="intel-body">${daEsc(a.summary||'')}</div>
       ${findings?`<div class="intel-body" style="margin-top:3px">${findings}</div>`:''}
       <div class="intel-tags">
@@ -2019,7 +2023,7 @@ function renderIntelligence(sec, news, fund){
     const sc=score>20?'pos':score<-20?'neg':'';
     return `<div class="intel-card">
       <div class="intel-card-head">
-        <span class="intel-sym">${n.symbol}</span>
+        <span class="intel-sym">${daEsc(n.symbol)}</span>
         <span class="signal-pill ${sentCls(n.overall_sentiment||'NEUTRAL')}">${n.overall_sentiment||'NEUTRAL'}</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
@@ -2040,13 +2044,13 @@ function renderIntelligence(sec, news, fund){
     const mgapCls=mgap==='HIGH'?'sp-bullish':mgap==='MEDIUM'?'sp-medium':'sp-low';
     return `<div class="fund-card">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div><span class="fund-sym">${s.symbol}</span> <span style="font-size:14px;color:var(--muted)">${s.sector||''}</span></div>
+        <div><span class="fund-sym">${daEsc(s.symbol)}</span> <span style="font-size:14px;color:var(--muted)">${daEsc(s.sector||'')}</span></div>
         <div style="display:flex;gap:4px">
           <span class="signal-pill ${mgapCls}">Gap: ${mgap||'?'}</span>
           <span style="font-size:18px;font-weight:700;color:var(--accent)">${s.fundamental_score||0}<span style="font-size:12px;color:var(--muted)">/100</span></span>
         </div>
       </div>
-      <div class="fund-thesis">${s.thesis||''}</div>
+      <div class="fund-thesis">${daEsc(s.thesis||'')}</div>
       <div class="fund-metrics">
         ${s.revenue_growth!=null?`<span class="fund-chip">Rev ${s.revenue_growth>0?'+':''}${s.revenue_growth}%</span>`:''}
         ${s.analyst_upside!=null?`<span class="fund-chip">Target ${s.analyst_upside>0?'+':''}${s.analyst_upside}%</span>`:''}
@@ -2131,8 +2135,8 @@ function radarCard(p,i){
   const recoCls={'Strong Buy':'reco-strong-buy','Buy':'reco-buy','Hold':'reco-hold','Sell':'reco-sell'}[p.recommendation]||'reco-hold';
   return `<div class="rc" style="animation:fadeIn .35s ease ${i*.04}s both">
     <div class="rc-head">
-      <div><div class="rc-sym">${p.symbol}</div><div class="rc-company">${p.company_name||''} <span style="font-size:13px;color:var(--muted)">${p.sector||''}</span></div></div>
-      <span class="verdict-badge ${verdictRadarCls(p.verdict)}">${p.verdict||'BUY'}</span>
+      <div><div class="rc-sym">${daEsc(p.symbol)}</div><div class="rc-company">${daEsc(p.company_name||'')} <span style="font-size:13px;color:var(--muted)">${daEsc(p.sector||'')}</span></div></div>
+      <span class="verdict-badge ${verdictRadarCls(p.verdict)}">${daEsc(p.verdict||'BUY')}</span>
     </div>
     <div class="rc-body">
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -2777,7 +2781,7 @@ function renderSectorResults(d, total){
       const ratio=(s.volume_ratio||1).toFixed(1);
       html+=`<div style="background:var(--gdim);border:1px solid var(--green);border-radius:6px;padding:8px 14px;display:flex;align-items:center;gap:8px">
         <span style="color:var(--accent);font-weight:700">${s.symbol}</span>
-        <span style="color:var(--muted);font-size:13px">${s.sector_etf||''}</span>
+        <span style="color:var(--muted);font-size:13px">${daEsc(s.sector_etf||'')}</span>
         <span style="color:var(--green);font-weight:700">${ratio}×</span>
       </div>`;
     });

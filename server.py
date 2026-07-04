@@ -287,20 +287,27 @@ _MONEY_LIST_KEYS = {"equity_history", "equity_series", "equity_curve"}
 _MONEY_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?(?:\s?[-–—]\s?\$?\d[\d,]*(?:\.\d+)?)?")
 _SHARES_RE = re.compile(r"\b\d+(?:\.\d+)?(?:\s?[-–—]\s?\d+(?:\.\d+)?)?\s+shares?\b", re.I)
 _NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
-# A string that is ONLY a dollar amount or dollar range (a formatted number like
-# a histogram bucket label "$25,274–$28,518") — safe to SCALE. Anything with
-# words is PROSE and gets redacted instead (a scaler corrupts prices there).
-_PURE_MONEY_RE = re.compile(
-    r"^\s*\$?\d[\d,]*(?:\.\d+)?\s*(?:[-–—]\s*\$?\d[\d,]*(?:\.\d+)?\s*)?$")
+
+# STRING masking is by SEMANTIC PATH (the dict key), never by string shape — a
+# per-share price forecast ("$180–210") and a portfolio histogram bucket label
+# ("$25,274–$28,518") are shape-identical, so shape can't tell them apart
+# (Codex P0). Three explicit policies:
+#   SCALE  — the value is portfolio dollars: only the Monte-Carlo bucket label.
+#   KEEP   — the value is a PER-SHARE price / forecast (public, stock-level, not
+#            owner-private): predictions, fair value, targets → leave raw.
+#   REDACT — everything else with a $-amount or share count is owner sizing prose.
+_KEEP_STRING_KEYS = {"3m", "12m", "prediction", "fair_value", "estimate",
+                     "target", "current", "price", "forecast", "analyst_target"}
 
 
-def _mask_string(text: str, factor: float) -> str:
-    if _PURE_MONEY_RE.match(text):
-        # formatted money/range → scale each number, keep the format
-        return _NUM_RE.sub(lambda m: f"{float(m.group(0).replace(',', '')) * factor:,.0f}", text)
-    # prose → REDACT owner-specific figures (never scale: corrupts prices/ranges)
-    text = _MONEY_RE.sub("$•••", text)
-    text = _SHARES_RE.sub("a position", text)
+def _scale_label(text: str, factor: float) -> str:
+    return _NUM_RE.sub(
+        lambda m: f"{float(m.group(0).replace(',', '')) * factor:,.0f}", text)
+
+
+def _redact_prose(text: str) -> str:
+    text = _MONEY_RE.sub("$•••", text)          # owner $-amounts / ranges
+    text = _SHARES_RE.sub("a position", text)   # share counts / ranges
     return text
 
 
@@ -337,13 +344,21 @@ def _scale_money(obj, factor: float, parent_key: str = ""):
                 out[k] = [round(x * factor, 2) if isinstance(x, (int, float))
                           and not isinstance(x, bool) else _scale_money(x, factor, lk)
                           for x in v]
+            elif isinstance(v, str) and lk == "label" and parent_key == "buckets":
+                out[k] = _scale_label(v, factor)   # MC histogram label = portfolio $
+            elif isinstance(v, str) and lk in _KEEP_STRING_KEYS:
+                out[k] = v                          # per-share price/forecast — keep raw
+            elif isinstance(v, str) and ("$" in v or "share" in v.lower()):
+                out[k] = _redact_prose(v)           # owner sizing prose — redact
             else:
                 out[k] = _scale_money(v, factor, lk)
         return out
     if isinstance(obj, list):
         return [_scale_money(x, factor, parent_key) for x in obj]
+    # A bare string reached outside a dict (e.g. list element): safe default is
+    # to KEEP price-forecast contexts, else REDACT anything with $ / shares.
     if isinstance(obj, str) and ("$" in obj or "share" in obj.lower()):
-        return _mask_string(obj, factor)
+        return obj if parent_key in _KEEP_STRING_KEYS else _redact_prose(obj)
     return obj
 
 
