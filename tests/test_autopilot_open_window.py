@@ -69,13 +69,19 @@ def _install_stub_modules() -> set[str]:
 
 _stubbed_modules = _install_stub_modules()
 
-from trading import autopilot  # noqa: E402
-from trading.contract import TradeIntent  # noqa: E402
-
-# Clean up immediately — nothing past this point needs the stubs (see docstring above).
-for _name in _stubbed_modules:
-    del sys.modules[_name]
-del _stubbed_modules
+# try/finally so the stubs are removed even if the import below RAISES. A fileless
+# stub left in sys.modules poisons every later test that imports the real module —
+# e.g. server's `from data_fetcher import DEFAULT_WATCHLIST` then fails with
+# "cannot import name ... (unknown location)". Observed in CI: a transitive
+# gesh-core ImportError aborted this module mid-import, leaking the data_fetcher
+# stub and cascading collection errors into test_chart/test_customer_view/test_watch.
+try:
+    from trading import autopilot  # noqa: E402
+    from trading.contract import TradeIntent  # noqa: E402
+finally:
+    for _name in _stubbed_modules:
+        sys.modules.pop(_name, None)
+    del _stubbed_modules
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
