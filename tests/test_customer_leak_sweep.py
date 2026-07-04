@@ -1,150 +1,256 @@
-"""Defense-in-depth: no customer-reachable GET may return a real owner value.
+"""Deterministic, CI-gating customer-isolation sweep (Codex 4th-pass P1).
 
-The masking middleware scales by field NAME, so any new bare-number money array
-under an un-listed key leaks silently (Codex found ECG.equity_history; a Fable
-audit found portfolio_history.series — same class, 4th instance). Rather than
-chase keys one at a time, this sweep proves the invariant on EVERY endpoint:
-fetch it as a customer, assert no known owner dollar/share sentinel appears.
+The prior version ran only against a live :9000 server, so in GitHub Actions every
+case SKIPPED — CI gated the offline suite but never customer isolation. It also
+accepted 401/403/404/timeout as "pass" and rounded its sentinels. This rewrite
+fixes all of that:
 
-Integration test — needs the live server on :9000 with the owner snapshot loaded
-(the daily chain / MCP writes live_portfolio_snapshot.json). Skips cleanly when
-the server is down or the snapshot is absent, so the unit suite stays hermetic.
-Run explicitly:  pytest tests/test_customer_leak_sweep.py -v
+  * IN-PROCESS via Starlette TestClient with a seeded fixture — no port, no
+    network, no skips. Runs in CI as a required job.
+  * ROUTE INVENTORY derived from server.app.routes: a customer-reachable
+    GET /api/* that nobody categorized FAILS test_all_customer_gets_categorized,
+    so new endpoints can't silently bypass the sweep.
+  * PER ENDPOINT asserts: status == 200 (a 401/403/404/5xx FAILS — never a pass),
+    the masked `view == "model_book"` tell is present, and no EXACT owner sentinel
+    (unrounded total, cash, fractional quantity, per-lot equity, historical-series
+    value) appears in the body.
+  * EXACT structured sentinels — the synthetic raw leaks Codex injected
+    (6.078929, 101.988616, 5843.32) are detected, not rounded away.
+
+The masking middleware (server.py) masks EVERY customer /api JSON dict and stamps
+view=model_book, failing CLOSED (500) if scaling throws — so `view` present +
+200 together prove the response actually routed through masking.
 """
 from __future__ import annotations
 
 import json
-import os
-import urllib.error
-import urllib.request
-from pathlib import Path
 
+import pandas as pd
 import pytest
+from starlette.testclient import TestClient
+
+import server
+
+# ── Owner sentinels: EXACT values, no rounding. None may appear in a customer body.
+OWNER = {
+    "total": 37522.83,       # portfolio equity
+    "cash": 509.70,          # settled cash / deployable
+    "qty": 6.078929,         # a fractional share count (Codex: rounding hid this)
+    "equity": 101.988616,    # a per-lot dollar equity (Codex synthetic leak)
+    "series": [5843.32, 5901.11, 6012.44, 5980.10],  # historical equity curve
+}
+SCALE = 2.5  # deterministic model/real factor (avoids identity so scaled != sentinel)
 
 
-def _load_env_secret() -> None:
-    """The running server signs session cookies with GESH_AUTH_SECRET from .env;
-    this pytest process must use the SAME secret or every cookie 401s. Parse .env
-    manually (find_dotenv misbehaves under some runners) and inject the auth keys."""
-    env = Path(__file__).resolve().parents[1] / ".env"
-    if not env.exists():
-        return
-    for line in env.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        k, v = k.strip(), v.strip().strip('"').strip("'")
-        if k in ("GESH_AUTH_SECRET", "GESH_AUTH_ENABLED", "GESH_OWNER_EMAIL") and k not in os.environ:
-            os.environ[k] = v
-
-
-_load_env_secret()
-
-import auth_users  # noqa: E402  (import after env is populated)
-
-BASE = "http://localhost:9000"
-CUSTOMER = "codex-review@geshfinance.com"
-
-
-@pytest.fixture(autouse=True)
-def _no_network():
-    """Override conftest's socket-blocking guard — this file is a LIVE integration
-    sweep that must reach the running server on :9000."""
-    yield
-SNAPSHOT = Path(__file__).resolve().parents[1] / "live_portfolio_snapshot.json"
-
-
-def _server_up() -> bool:
-    try:
-        urllib.request.urlopen(BASE + "/healthz", timeout=3)
-        return True
-    except Exception:
-        try:
-            urllib.request.urlopen(BASE + "/login", timeout=3)
-            return True
-        except Exception:
-            return False
-
-
-pytestmark = pytest.mark.skipif(not _server_up(),
-                                reason="live server on :9000 required for the leak sweep")
-
-
-def _owner_sentinels() -> list[str]:
-    """Concrete owner values that MUST NOT appear in a customer response —
-    portfolio total, cash, and each holding's real share count + equity."""
-    if not SNAPSHOT.exists():
-        pytest.skip("live_portfolio_snapshot.json absent")
-    snap = json.loads(SNAPSHOT.read_text())
-    es = snap.get("equity_summary", {})
+def _sentinel_strings() -> list[str]:
     vals: set[str] = set()
-    for key in ("total", "portfolio_equity", "cash", "deployable"):
-        v = es.get(key)
-        if isinstance(v, (int, float)) and v > 1:
-            vals.add(f"{v:,.2f}")      # "37,522.83"
-            vals.add(f"{v:.2f}")       # "37522.83"
-    for h in snap.get("holdings", []):
-        for key in ("equity", "quantity"):
-            v = h.get(key)
-            if isinstance(v, (int, float)) and v > 1:
-                vals.add(f"{round(v, 2)}")
-    # keep only distinctive numbers (>= 4 chars) to avoid false positives on
-    # small shared integers
-    return sorted(x for x in vals if len(x.replace(",", "").replace(".", "")) >= 4)
+    for v in (OWNER["total"], OWNER["cash"], OWNER["qty"], OWNER["equity"], *OWNER["series"]):
+        vals.add(f"{v}")          # raw repr  -> "6.078929", "5843.32"
+        vals.add(f"{v:.2f}")      # 2-dp      -> "509.70"
+        vals.add(f"{v:,.2f}")     # grouped   -> "5,843.32"
+    return sorted(vals)
 
 
-def _customer_cookie() -> str:
-    auth_users.create_magic_link_user(CUSTOMER, tier="observer")
-    return "gesh_session=" + auth_users.issue_token(CUSTOMER, ttl=120, typ="session")
+def _owner_payload() -> dict:
+    """Fresh copy each call (handlers may read/iterate it)."""
+    return json.loads(json.dumps({
+        "as_of": "2026-07-04T13:35:00+00:00", "source": "test",
+        "equity_summary": {"total": OWNER["total"], "portfolio_equity": OWNER["total"],
+                           "cash": OWNER["cash"], "deployable": OWNER["cash"]},
+        "holdings": [{"symbol": "NVDA", "quantity": OWNER["qty"], "price": 194.51,
+                      "equity": OWNER["equity"], "average_buy_price": 180.0,
+                      "percent_change": -3.51, "pnl_usd": -78.0}],
+        "watchlist": [{"symbol": "SPY", "price": 612.0}],
+    }))
 
 
-# Representative path params so parametrized routes are actually exercised.
-_ENDPOINTS = [
-    "/api/portfolio", "/api/portfolio/history?points=30", "/api/ecg", "/api/regime",
-    "/api/history?limit=3", "/api/consensus/cached", "/api/kelly/cached",
-    "/api/monte-carlo/cached", "/api/screener/cached", "/api/deep-analysis/cached",
-    "/api/market-data", "/api/agents/sec/history", "/api/agents/news/history",
-    "/api/agents/fundamentals/latest", "/api/chart/NVDA?period=1mo",
-    "/api/consensus/NVDA", "/api/fft-cycles", "/api/sections/status",
-    "/api/trades", "/api/trades/stats", "/api/paper/summary",
-    "/api/tax/harvest", "/api/explainability/NVDA", "/api/yield/landscape",
-]
+def _cached(key: str) -> dict:
+    if key == "monte_carlo":
+        data = {"median": OWNER["total"], "current_equity": OWNER["total"],
+                "buckets": [{"label": f"${OWNER['series'][0]:,.2f}–${OWNER['series'][1]:,.2f}",
+                             "center": OWNER["equity"], "pct": 4.0}]}
+    else:
+        data = {"total_equity": OWNER["total"],
+                "holdings": [{"symbol": "NVDA", "equity": OWNER["equity"],
+                              "quantity": OWNER["qty"], "price": 194.51}]}
+    return {"status": "ok", "cached": True, "data": data}
 
 
-@pytest.mark.parametrize("path", _ENDPOINTS)
-def test_no_owner_value_leaks_to_customer(path):
-    sentinels = _owner_sentinels()
-    if not sentinels:
-        pytest.skip("no owner sentinels derivable from snapshot")
-    cookie = _customer_cookie()
-    req = urllib.request.Request(BASE + path, headers={"Cookie": cookie})
-    try:
-        body = urllib.request.urlopen(req, timeout=45).read().decode()
-    except urllib.error.HTTPError as e:
-        if e.code in (403, 404):
-            return                      # owner-only / absent — nothing to leak
-        body = (e.read() or b"").decode()
-    except Exception as ex:
-        pytest.skip(f"{path} unreachable/slow: {ex}")
-        return
-
-    hits = [s for s in sentinels if s in body]
-    assert not hits, f"OWNER VALUE LEAKED at {path}: {hits}"
+_CHART_DF = pd.DataFrame(
+    {"Close": [100.0, 101.0, 102.0, 101.5, 103.0]},
+    index=pd.date_range("2026-06-01", periods=5, freq="D"),
+)
 
 
-def test_history_detail_no_leak():
-    """/api/history/{id} embeds the stored owner snapshot — check the latest."""
-    sentinels = _owner_sentinels()
-    if not sentinels:
-        pytest.skip("no sentinels")
-    cookie = _customer_cookie()
-    idx = urllib.request.Request(BASE + "/api/history?limit=1", headers={"Cookie": cookie})
-    rows = json.loads(urllib.request.urlopen(idx, timeout=20).read()).get("data", [])
-    if not rows:
-        pytest.skip("no history rows")
-    rid = rows[0].get("id")
-    req = urllib.request.Request(f"{BASE}/api/history/{rid}", headers={"Cookie": cookie})
-    body = urllib.request.urlopen(req, timeout=30).read().decode()
-    hits = [s for s in sentinels if s in body]
-    assert not hits, f"OWNER VALUE LEAKED at /api/history/{rid}: {hits}"
+@pytest.fixture
+def client(monkeypatch):
+    """In-process app with all data seams seeded (owner sentinels where a real
+    endpoint would carry owner dollars; static market fixtures elsewhere)."""
+    monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+    monkeypatch.setattr(server, "_customer_scale_factor", lambda: SCALE)
+
+    # broad server-module seams
+    monkeypatch.setattr(server, "build_data_payload", lambda *a, **k: _owner_payload())
+    monkeypatch.setattr(server, "_resolved_payload", lambda *a, **k: _owner_payload(), raising=False)
+    monkeypatch.setattr(server, "_cached_response", _cached)
+    monkeypatch.setattr(server, "_load_engine_results",
+                        lambda *a, **k: {"regime": {"NVDA": {"regime": "TRENDING"}},
+                                         "regime_ran_at": "2026-07-04T13:00:00+00:00"}, raising=False)
+    monkeypatch.setattr(server, "get_all_market_data", lambda syms: {s: {"price": 100.0} for s in syms}, raising=False)
+    monkeypatch.setattr(server, "batch_fft_cycles", lambda syms: {s: {"signal": "NEUTRAL"} for s in syms}, raising=False)
+    monkeypatch.setattr(server, "get_trade_history", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(server, "trade_summary_for_report", lambda *a, **k: {"win_rate": 50.0, "trades": 0}, raising=False)
+    monkeypatch.setattr(server, "get_paper_summary", lambda *a, **k: {"trades": 0}, raising=False)
+    monkeypatch.setattr(server, "detect_consolidation", lambda *a, **k: {"found": False}, raising=False)
+    monkeypatch.setattr(server, "is_sector_hot", lambda *a, **k: {"hot": False}, raising=False)
+    monkeypatch.setattr(server, "get_analysis_history",
+                        lambda *a, **k: [{"id": 1, "created_at": "2026-07-04", "model": "sonnet"}], raising=False)
+    # Mirror db.get_analysis_by_id: it PARSES result_json into `result` (a dict)
+    # and pops the raw string, so masking scales it. A stored owner snapshot here
+    # proves /api/history/{id} masks the embedded analysis.
+    monkeypatch.setattr(server, "get_analysis_by_id",
+                        lambda rid: {"id": rid, "created_at": "2026-07-04",
+                                     "result": _owner_payload(), "payload": {}}, raising=False)
+    monkeypatch.setattr(server, "get_filing_history", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(server, "get_gemini_status", lambda *a, **k: {"available": False}, raising=False)
+
+    # source-module fns imported *inside* handlers (patch at the source)
+    monkeypatch.setattr("db.get_portfolio_equity_history",
+                        lambda *a, **k: [{"total_equity": v} for v in OWNER["series"]], raising=False)
+    monkeypatch.setattr("consensus.run_consensus_holding",
+                        lambda *a, **k: {"symbol": "NVDA", "verdict": "BUY", "regime": "NEUTRAL", "score": 0.3}, raising=False)
+    monkeypatch.setattr("fft_cycles.detect_fft_cycles",
+                        lambda *a, **k: {"symbol": "NVDA", "signal": "NEUTRAL", "period_days": 21}, raising=False)
+    monkeypatch.setattr("benchmarks.batch_alpha", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr("crypto_correlation.crypto_risk_summary", lambda *a, **k: {"crypto_pct": 0.0}, raising=False)
+    monkeypatch.setattr("defi_yield.get_yield_landscape", lambda *a, **k: {"options": []}, raising=False)
+    monkeypatch.setattr("tax_harvester.get_harvest_summary", lambda *a, **k: {"candidates": []}, raising=False)
+    monkeypatch.setattr("volatility_models.compare_vol_models", lambda *a, **k: {"ewma": 0.2, "garch": 0.2}, raising=False)
+    monkeypatch.setattr("explainability.build_transparency_report", lambda *a, **k: {"explanation": "test"}, raising=False)
+    monkeypatch.setattr("price_source.yf_download", lambda *a, **k: _CHART_DF, raising=False)
+    monkeypatch.setattr("yfinance.download", lambda *a, **k: _CHART_DF, raising=False)
+    monkeypatch.setattr("security.api_verifier.all_api_health", lambda *a, **k: {}, raising=False)
+    # some endpoints kick a background Robinhood-refresh thread; no-op it so the
+    # run stays fully offline and deterministic (no stray thread network attempt).
+    monkeypatch.setattr("fetch_live_data.fetch_and_cache", lambda *a, **k: {}, raising=False)
+
+    return TestClient(server.app, raise_server_exceptions=False)
+
+
+def _as_customer(monkeypatch):
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "customer@example.com")
+    monkeypatch.setattr(server.auth_users, "gate_decision", lambda path, cookie: "allow")
+
+
+# ── concrete request URL for every customer-reachable GET (path params filled) ──
+COVERED: dict[str, str] = {
+    "/api/portfolio": "/api/portfolio",
+    "/api/ecg": "/api/ecg",
+    "/api/regime": "/api/regime",
+    "/api/history": "/api/history?limit=3",
+    "/api/history/{run_id}": "/api/history/1",
+    "/api/market-data": "/api/market-data",
+    "/api/agents/sec/history": "/api/agents/sec/history",
+    "/api/agents/news/history": "/api/agents/news/history",
+    "/api/agents/fundamentals/latest": "/api/agents/fundamentals/latest",
+    "/api/chart/{symbol}": "/api/chart/NVDA?period=1mo",
+    "/api/deep-analysis/cached": "/api/deep-analysis/cached",
+    "/api/consensus/cached": "/api/consensus/cached",
+    "/api/consensus/{symbol}": "/api/consensus/NVDA",
+    "/api/kelly/cached": "/api/kelly/cached",
+    "/api/monte-carlo/cached": "/api/monte-carlo/cached",
+    "/api/screener/cached": "/api/screener/cached",
+    "/api/portfolio/history": "/api/portfolio/history?points=30",
+    "/api/sections/status": "/api/sections/status",
+    "/api/fft-cycles": "/api/fft-cycles",
+    "/api/fft-cycles/{symbol}": "/api/fft-cycles/NVDA",
+    "/api/gemini/status": "/api/gemini/status",
+    "/api/config": "/api/config",
+    "/api/scanner/consolidation/{symbol}": "/api/scanner/consolidation/NVDA",
+    "/api/scanner/sector/{symbol}": "/api/scanner/sector/NVDA",
+    "/api/trades": "/api/trades",
+    "/api/trades/stats": "/api/trades/stats",
+    "/api/paper/summary": "/api/paper/summary",
+    "/api/tax/harvest": "/api/tax/harvest",
+    "/api/benchmarks/{period}": "/api/benchmarks/1mo",
+    "/api/explainability/{symbol}": "/api/explainability/NVDA",
+    "/api/crypto-correlation": "/api/crypto-correlation",
+    "/api/yield/landscape": "/api/yield/landscape",
+    "/api/security/health": "/api/security/health",
+    "/api/volatility/compare/{symbol}": "/api/volatility/compare/NVDA",
+}
+# GET /api routes deliberately not swept, each with a reason.
+EXCLUDED: dict[str, str] = {
+    "/api/ollama/status": "410 Gone — endpoint permanently removed; carries no data",
+}
+
+
+def _registered_customer_gets() -> set[str]:
+    out: set[str] = set()
+    for r in server.app.routes:
+        methods = getattr(r, "methods", None) or set()
+        path = getattr(r, "path", "")
+        if "GET" in methods and path.startswith("/api/"):
+            out.add(path)
+    return out
+
+
+def test_all_customer_gets_categorized():
+    """Route coverage is derived from app.routes: a new customer GET that nobody
+    added to COVERED/EXCLUDED fails here, so it can't silently skip the sweep."""
+    registered = _registered_customer_gets()
+    uncategorized = registered - set(COVERED) - set(EXCLUDED)
+    assert not uncategorized, (
+        "Customer GET route(s) not categorized in the leak sweep — add to COVERED "
+        f"(with a concrete request) or EXCLUDED (with a reason): {sorted(uncategorized)}"
+    )
+    # and the sweep list must not rot: no stale entries for removed routes
+    stale = (set(COVERED) | set(EXCLUDED)) - registered
+    assert not stale, f"Sweep lists reference routes that no longer exist: {sorted(stale)}"
+
+
+@pytest.mark.parametrize("url", sorted(set(COVERED.values())))
+def test_customer_get_masks_and_gates(monkeypatch, client, url):
+    _as_customer(monkeypatch)
+    r = client.get(url)
+    # 200 REQUIRED — a 401/403/404/5xx (incl. the fail-closed 500 masking error) FAILS.
+    assert r.status_code == 200, f"{url} returned {r.status_code}, expected 200 (never treat as pass)"
+    assert "application/json" in r.headers.get("content-type", ""), f"{url} not JSON"
+    body = r.json()
+    assert isinstance(body, dict), f"{url} body not a dict"
+    # The masking middleware stamps this on every customer dict; its presence proves
+    # the response actually routed through _scale_money.
+    assert body.get("view") == "model_book", f"{url} missing model_book marker — bypassed masking"
+    blob = json.dumps(body)
+    leaked = [s for s in _sentinel_strings() if s in blob]
+    assert not leaked, f"OWNER VALUE LEAKED at {url}: {leaked}"
+
+
+def test_wrong_auth_is_rejected_not_passed(monkeypatch, client):
+    """An unauthenticated request must 401 — proving the sweep never mistakes a
+    401 for success (the prior version's core flaw)."""
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
+    r = client.get("/api/portfolio")
+    assert r.status_code == 401, f"expected 401 for unauthenticated /api, got {r.status_code}"
+
+
+def test_scale_money_masks_every_exact_sentinel():
+    """Direct masking proof with EXACT structured sentinels: fractional quantity,
+    per-lot equity, and every historical-series value scale away — none survive."""
+    fixture = {
+        "equity_summary": {"total": OWNER["total"], "cash": OWNER["cash"]},
+        "holdings": [{"quantity": OWNER["qty"], "equity": OWNER["equity"], "price": 194.51}],
+        "equity_history": list(OWNER["series"]),
+        "series": list(OWNER["series"]),
+    }
+    out = server._scale_money(fixture, SCALE)
+    blob = json.dumps(out)
+    survivors = [s for s in _sentinel_strings() if s in blob]
+    assert not survivors, f"sentinel(s) survived masking: {survivors}"
+    # model-book values are present and correctly scaled
+    assert out["equity_summary"]["total"] == pytest.approx(OWNER["total"] * SCALE)
+    # quantity is rounded to 4dp by the masker — compare with matching tolerance
+    assert out["holdings"][0]["quantity"] == pytest.approx(OWNER["qty"] * SCALE, abs=1e-3)
+    assert out["holdings"][0]["price"] == 194.51  # per-share price untouched
+    assert out["equity_history"][0] == pytest.approx(OWNER["series"][0] * SCALE)
+    assert out["series"][-1] == pytest.approx(OWNER["series"][-1] * SCALE)

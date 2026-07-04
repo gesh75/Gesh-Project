@@ -89,3 +89,38 @@ jobs:
           # 4-module allowlist. No --cov-fail-under yet — this establishes the real
           # baseline first; a floor can be added once the number is known.
           pytest tests/ -q --cov=. --cov-report=term-missing
+
+  # Separate REQUIRED gate for customer data-isolation (Codex 4th-pass P1): the
+  # leak sweep + XSS-wiring guard run in-process against a deterministic seeded
+  # fixture (no live server, no network — fully offline), so a masking or template
+  # regression fails its OWN check instead of hiding among the unit tests. Runs the
+  # exact same files the unit job does; the value is an explicit, named gate that
+  # branch protection can require on its own.
+  customer-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure private gesh-core access
+        env:
+          GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
+        run: |
+          if [ -n "$GESH_CORE_PAT" ]; then
+            git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
+          else
+            echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
+          fi
+      - name: Install runtime + test deps
+        run: |
+          python -m pip install --upgrade pip
+          grep -vi 'openbb' requirements.txt > ci-requirements.txt
+          pip install -r ci-requirements.txt
+          pip install pytest ruff
+      - name: Customer-isolation leak sweep + XSS wiring (deterministic, in-process)
+        run: |
+          pytest tests/test_customer_leak_sweep.py tests/test_dashboard_xss_wiring.py \
+                 tests/test_customer_view.py -q

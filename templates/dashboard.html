@@ -1454,7 +1454,7 @@ function buildAnalystStrip(sym, mkt){
   };
   const insiderHtml=ins.length?ins.map(t=>{
     const ic=t.is_buy?'🟢':'🔴';
-    return `<span class="perf-chip" style="font-size:13px;color:var(--muted)">${ic} ${t.name?t.name.split(' ').slice(-1)[0]:'Insider'} ${t.is_buy?'bought':'sold'} ${t.shares?t.shares.toLocaleString():''} shares</span>`;
+    return `<span class="perf-chip" style="font-size:13px;color:var(--muted)">${ic} ${daEsc(t.name?t.name.split(' ').slice(-1)[0]:'Insider')} ${t.is_buy?'bought':'sold'} ${t.shares?t.shares.toLocaleString():''} shares</span>`;
   }).join(''):''
   return `<div class="analyst-strip">
     <div class="analyst-strip-title">Analyst Consensus &amp; Performance</div>
@@ -1487,7 +1487,7 @@ function stockCard(h,i,mkt){
       </div>
     </div>
     <div class="sc-foot">
-      <div class="pred-row"><span class="pred-lbl">3M</span><span class="pred-badge ${predCls(p3)}">${p3}</span><span class="pred-lbl" style="margin-left:6px">12M</span><span class="pred-badge ${predCls(p12)}">${p12}</span></div>
+      <div class="pred-row"><span class="pred-lbl">3M</span><span class="pred-badge ${predCls(p3)}">${daEsc(p3)}</span><span class="pred-lbl" style="margin-left:6px">12M</span><span class="pred-badge ${predCls(p12)}">${daEsc(p12)}</span></div>
       ${p.rationale?`<div class="pred-rationale">${daEsc(p.rationale)}</div>`:''}
       ${h.analyst_note?`<div class="analyst-note">${daEsc(h.analyst_note)}</div>`:''}
     </div>
@@ -1609,7 +1609,7 @@ async function loadECG(){
           <span class="ecg-sym">${s.symbol}</span>
           <span class="ecg-badge ecg-${s.state.toLowerCase()}">${ic} ${s.state}</span>
         </div>
-        <div class="ecg-msg">${s.message}</div>
+        <div class="ecg-msg">${daEsc(s.message)}</div>
         <div class="ecg-meta">Drawdown: ${s.drawdown_pct.toFixed(1)}%  ·  Streak: ${s.loss_streak}  ·  ${s.snapshots_available} snapshots</div>
       </div>`;
     }).join('')}</div>`;
@@ -1878,7 +1878,7 @@ function renderKelly(d, totalEq){
     html+=`<div class="kelly-card kc-${ac} ${isAVOID && hasPenalty ? 'unanimous-avoid' : ''}" style="animation:fadeIn .4s both">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span class="kelly-sym">${h.symbol}</span>
-        <span class="kelly-action ka-${ac}">${h.action}${avoidHighlights}</span>
+        <span class="kelly-action ka-${ac}">${daEsc(h.action)}${avoidHighlights}</span>
       </div>
       ${kellyBar(h.current_pct, h.optimal_pct)}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
@@ -1999,8 +1999,8 @@ function renderIntelligence(sec, news, fund){
       <div class="intel-card-head">
         <span class="intel-sym">${daEsc(f.symbol)}</span>
         <div style="display:flex;gap:4px;align-items:center">
-          <span class="signal-pill ${sigCls(sig)}">${sig}</span>
-          <span class="signal-pill ${urgCls(urg)}">${urg}</span>
+          <span class="signal-pill ${sigCls(sig)}">${daEsc(sig)}</span>
+          <span class="signal-pill ${urgCls(urg)}">${daEsc(urg)}</span>
         </div>
       </div>
       <div class="intel-title">${daEsc(f.form_type)} — ${daEsc(f.analysis?.period||'')}</div>
@@ -2024,7 +2024,7 @@ function renderIntelligence(sec, news, fund){
     return `<div class="intel-card">
       <div class="intel-card-head">
         <span class="intel-sym">${daEsc(n.symbol)}</span>
-        <span class="signal-pill ${sentCls(n.overall_sentiment||'NEUTRAL')}">${n.overall_sentiment||'NEUTRAL'}</span>
+        <span class="signal-pill ${sentCls(n.overall_sentiment||'NEUTRAL')}">${daEsc(n.overall_sentiment||'NEUTRAL')}</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
         <span class="${sc}" style="font-size:21px;font-weight:700">${score>0?'+':''}${score}</span>
@@ -2046,7 +2046,7 @@ function renderIntelligence(sec, news, fund){
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div><span class="fund-sym">${daEsc(s.symbol)}</span> <span style="font-size:14px;color:var(--muted)">${daEsc(s.sector||'')}</span></div>
         <div style="display:flex;gap:4px">
-          <span class="signal-pill ${mgapCls}">Gap: ${mgap||'?'}</span>
+          <span class="signal-pill ${mgapCls}">Gap: ${daEsc(mgap||'?')}</span>
           <span style="font-size:18px;font-weight:700;color:var(--accent)">${s.fundamental_score||0}<span style="font-size:12px;color:var(--muted)">/100</span></span>
         </div>
       </div>
@@ -2055,9 +2055,9 @@ function renderIntelligence(sec, news, fund){
         ${s.revenue_growth!=null?`<span class="fund-chip">Rev ${s.revenue_growth>0?'+':''}${s.revenue_growth}%</span>`:''}
         ${s.analyst_upside!=null?`<span class="fund-chip">Target ${s.analyst_upside>0?'+':''}${s.analyst_upside}%</span>`:''}
         ${s.pe_ratio!=null?`<span class="fund-chip">PE ${s.pe_ratio}</span>`:''}
-        ${s.insider_activity?`<span class="fund-chip">${s.insider_activity==='BUYING'?'🟢':'🔴'} Insider ${s.insider_activity}</span>`:''}
+        ${s.insider_activity?`<span class="fund-chip">${s.insider_activity==='BUYING'?'🟢':'🔴'} Insider ${daEsc(s.insider_activity)}</span>`:''}
       </div>
-      <div style="font-size:13px;color:var(--muted)">Horizon: ${s.investment_horizon||'?'}</div>
+      <div style="font-size:13px;color:var(--muted)">Horizon: ${daEsc(s.investment_horizon||'?')}</div>
     </div>`;
   }).join('') || '<div class="empty" style="padding:20px">No scan data yet</div>';
 
@@ -2073,7 +2073,7 @@ function renderIntelligence(sec, news, fund){
         <div class="agent-panel-body">${secItems}</div>
       </div>
       <div class="agent-panel">
-        <div class="agent-panel-head"><span class="agent-panel-title">📰 News Sentiment</span>${news?.avg_score!=null?`<span style="font-weight:700;color:${moodColor}">${news.market_mood||''} · Avg ${news.avg_score>0?'+':''}${news.avg_score}</span>`:''}</div>
+        <div class="agent-panel-head"><span class="agent-panel-title">📰 News Sentiment</span>${news?.avg_score!=null?`<span style="font-weight:700;color:${moodColor}">${daEsc(news.market_mood||'')} · Avg ${news.avg_score>0?'+':''}${news.avg_score}</span>`:''}</div>
         <div class="agent-panel-body">${newsItems}</div>
       </div>
       <div class="agent-panel">
@@ -2271,7 +2271,7 @@ async function runFFTCycle(){
       <div style="font-size:12px;color:var(--muted);padding-top:6px">Symbol: <strong style="color:var(--text)">${sym}</strong> · as of ${(d.as_of||'').slice(0,10)}</div>`;
     $('fft-ts').textContent='Updated '+new Date().toLocaleTimeString();
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">FFT failed: ${e.message}</div></div>`;
+    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">FFT failed: ${daEsc(e.message)}</div></div>`;
   }
 }
 
@@ -2475,7 +2475,7 @@ function daRender(data, meta, kellyData, portData){
             <td style="padding:9px 10px"><span class="da-pri" style="${daPriStyle(pri)}">${pri}</span></td>
             <td style="padding:9px 10px;font-weight:700;color:var(--accent);font-size:15px">${daEsc(sym)}</td>
             <td style="padding:9px 10px;text-align:center">
-              <span style="font-size:12px;font-weight:700;color:${ac};background:${ac}18;padding:3px 10px;border-radius:4px;border:1px solid ${ac}44">${k.action}</span>
+              <span style="font-size:12px;font-weight:700;color:${ac};background:${ac}18;padding:3px 10px;border-radius:4px;border:1px solid ${ac}44">${daEsc(k.action)}</span>
             </td>
             <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums">${currQty>0?currQty.toFixed(2):'—'}</td>
             <td style="padding:9px 10px;text-align:right;font-weight:700;color:${ac};font-variant-numeric:tabular-nums">
@@ -2761,7 +2761,7 @@ async function runScanner(){
     const czd=await czr.json();
     renderCZResults(czd, scanSyms.length);
   }catch(e){
-    $('sector-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${e.message}</div>`;
+    $('sector-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
     $('cz-container').innerHTML='';
   }
   btn.disabled=false; btn.textContent='▶ Run Scanner';
@@ -2905,7 +2905,7 @@ function renderTradeHistory(trades){
     const dt=t.entry_time?new Date(t.entry_time).toLocaleDateString():'—';
     html+=`<tr>
       <td style="text-align:left"><span class="sym">${t.symbol}</span></td>
-      <td><span class="badge ${t.action==='BUY'?'b-green':'b-red'}" style="font-size:11px">${t.action}</span></td>
+      <td><span class="badge ${t.action==='BUY'?'b-green':'b-red'}" style="font-size:11px">${daEsc(t.action)}</span></td>
       <td>${t.shares||'—'}</td>
       <td>${t.entry_price?'$'+t.entry_price.toFixed(2):'—'}</td>
       <td style="color:var(--red)">${t.stop_loss?'$'+t.stop_loss.toFixed(2):'—'}</td>
@@ -2961,7 +2961,7 @@ async function runPaperSession(){
     renderPaperSessionResults(results);
     await loadTradeStats();
   }catch(e){
-    $('pt-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${e.message}</div>`;
+    $('pt-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
   }
   btn.disabled=false; btn.textContent='▶ Simulate Today';
 }
@@ -2979,7 +2979,7 @@ function renderPaperSessionResults(results){
     html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
       <span style="color:var(--accent);font-weight:700;min-width:60px">${r.symbol}</span>
       <span class="badge ${approved_flag?'b-green':'b-red'}" style="font-size:11px">${approved_flag?'APPROVED':'REJECTED'}</span>
-      <span style="color:var(--muted);font-size:13px">${r.verdict?.reason||r.gate?.reason||r.reason||status}</span>
+      <span style="color:var(--muted);font-size:13px">${daEsc(r.verdict?.reason||r.gate?.reason||r.reason||status)}</span>
       ${r.order?.fill_qty?`<span style="color:${color};font-size:13px">${r.order.fill_qty} shares @ $${(r.order.fill_price||0).toFixed(2)}</span>`:''}
     </div>`;
   });
@@ -3008,7 +3008,7 @@ async function runDryRun(){
     const d=await r.json();
     renderGateVerdict(d, sym, action);
   }catch(e){
-    $('gate-container').innerHTML=`<div style="color:var(--red)">Error: ${e.message}</div>`;
+    $('gate-container').innerHTML=`<div style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
   }
   btn.disabled=false; btn.textContent='▶ Gate Check';
 }
@@ -3027,7 +3027,7 @@ function renderGateVerdict(resp, sym, action){
     <span style="color:var(--accent)">${sym} ${action}</span>
   </div>`;
   if(!approved&&d.reason){
-    html+=`<div style="background:var(--rdim);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:14px;color:var(--red)">${d.reason}</div>`;
+    html+=`<div style="background:var(--rdim);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:14px;color:var(--red)">${daEsc(d.reason)}</div>`;
   }
   html+=`<div style="display:flex;flex-wrap:wrap;gap:8px">`;
   gateNames.forEach(g=>{
@@ -3197,7 +3197,7 @@ function renderCmdk(q){
   (typeof chartSymbols!=='undefined'?chartSymbols:[]).forEach(s=>{ if(!q||s.toLowerCase().includes(q)) items.push({label:s,kind:'symbol',run:()=>{switchTab('overview');const sel=document.getElementById('chart-sym');if(sel){sel.value=s;loadChart&&loadChart();}}}); });
   _cmdkItems=items; _cmdkSel=0;
   const list=document.getElementById('cmdk-list');
-  list.innerHTML = items.length? items.map((it,i)=>`<div class="cmdk-item${i===0?' sel':''}" data-i="${i}"><span>${it.label}</span><span class="cmdk-kind">${it.kind}</span></div>`).join('') : '<div class="cmdk-empty">No matches</div>';
+  list.innerHTML = items.length? items.map((it,i)=>`<div class="cmdk-item${i===0?' sel':''}" data-i="${i}"><span>${daEsc(it.label)}</span><span class="cmdk-kind">${daEsc(it.kind)}</span></div>`).join('') : '<div class="cmdk-empty">No matches</div>';
   list.querySelectorAll('.cmdk-item').forEach(el=>{el.onclick=()=>{items[+el.dataset.i].run();closeCmdk();};});
 }
 document.addEventListener('keydown',e=>{
