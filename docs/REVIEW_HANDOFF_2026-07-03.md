@@ -1,0 +1,136 @@
+# GESH — Review Handoff (4th pass)
+
+_Prepared 2026-07-03 for a fresh Codex/Gemini adversarial pass. Responds to the
+**3rd-pass `REQUEST CHANGES`** verdict and covers everything shipped since.
+Commit range: `28061e5..d21dab9` on `main` (4 commits), all pushed. **431 tests
+passing** (was 405 at the 3rd review; +26, incl. a new live leak sweep)._
+
+---
+
+## TL;DR for the reviewer
+
+The 3rd pass flagged two launch blockers. Both are fixed and, more importantly,
+the **whole leak class is now covered by a live integration sweep** instead of
+key-by-key patching:
+
+1. **P0-1 (AI price forecasts corrupted by masking)** → fixed with a
+   **semantic-path** policy: mask by dict KEY/path, never by string SHAPE.
+2. **P0-3 (unescaped AI string sinks / XSS)** → every remaining model-generated
+   sink escaped + class-name allowlists.
+3. **New, self-found (Fable audit): a 4th instance of the same leak class** —
+   `/api/portfolio/history` sparkline `series` leaked raw owner equity. Fixed,
+   and a **defense-in-depth sweep** now proves the invariant on every endpoint.
+
+Everything below is the detail + what I want you to try to break.
+
+---
+
+## Prior 3rd-pass findings → resolution
+
+### P0-1 — AI per-share price forecasts were being scaled → FIXED (`a7b04e4`)
+
+- **Was:** `_PURE_MONEY_RE` scaled *every* `$`-amount in AI prose by the model-book
+  factor (≈2.665). A per-share forecast `prediction.3m = "$180–210"` became
+  `"$480–560"` — corrupt, and misleading to a customer. Root cause: a per-share
+  **price range** and a portfolio-dollar **bucket label** are *shape-identical*
+  (`$X–$Y`), so no regex on the string shape can tell them apart.
+- **Now:** **semantic-path masking** — decide by the field's KEY/path, not its text:
+  - **SCALE** only genuine model-dollar fields: money dict-keys, money-list arrays
+    (`equity_history`, `equity_series`, `equity_curve`, `series`), and
+    `monte_carlo.buckets[].label`.
+  - **KEEP raw** per-share fields: `3m`, `12m`, `prediction`, `fair_value`,
+    `target`, `estimate`, `current`, `price`, `forecast`, `analyst_target`.
+  - **REDACT** any other `$`-amount / "N shares" prose → `$•••` / "a position"
+    (fail-safe: if we can't prove a string is a per-share price, we don't emit a
+    number at all).
+- **Verified:** a customer sees the NVDA 12m forecast in real per-share dollars,
+  while portfolio totals read on the $100K book. `tests/test_customer_view.py`
+  asserts predictions stay raw and MC buckets scale.
+
+### P0-3 — Unescaped AI/external string sinks → FIXED (`a7b04e4`)
+
+- Escaped every remaining model-generated sink B2 missed: fundamental thesis,
+  `company_type`, radar+screener `verdict`, `portfolio_type`/`portfolio_verdict`,
+  `sector(s)`, `sector_etf`, SEC `form_type`/`period`, `symbols`.
+- Added `saCls()` / `priCls()` **allowlists** so an AI-supplied assessment/priority
+  string can't break out of a `class="..."` attribute (joining the existing
+  `verdictCls`/`sevCls`/`sentCls`/`verdictRadarCls` allowlists).
+- Adversarial `daEsc` test added.
+
+---
+
+## Self-found since the 3rd pass (not in your review)
+
+### P0 — `/api/portfolio/history` sparkline leaked raw owner equity → FIXED (`61ea22a`)
+
+- The dashboard sparkline endpoint returned `{"series":[37080.88, 39121.44, …]}`
+  — a **bare number array under an un-listed key**, so the key-name masker skipped
+  it and a customer saw the owner's real equity curve. This is the **4th instance
+  of one class** (Codex found `ecg.equity_history`; this is the same bug shape).
+- Fixed by adding `series` to `_MONEY_LIST_KEYS`; customer now sees the curve
+  scaled ×2.665 onto the $100K book.
+
+### The structural fix — a live leak sweep (`d21dab9`)
+
+Rather than keep chasing keys, `tests/test_customer_leak_sweep.py` proves the
+invariant on **every customer-reachable GET**: mint a real customer session,
+fetch the endpoint, and assert **no known owner value** (portfolio total
+`$37,522.83`, cash `$509.70`, share counts, each equity-series number) appears
+anywhere in the raw body. 24 endpoints + history-detail. **This sweep would have
+caught both the ECG and the sparkline leaks.**
+
+Proof it has teeth (not passing vacuously): the same owner total `$37,522.83`
+masks to **exactly `$100,000.00`** in the customer's `/api/portfolio`, and zero
+raw sentinels appear. Skips cleanly when the server is down so the unit suite
+stays hermetic.
+
+---
+
+## What I want you to try to break
+
+1. **Masking completeness.** Is there any customer-reachable path — GET or the
+   error branch of a POST — that can surface a real dollar amount or share count?
+   The sweep covers the ~24 GETs I enumerated; if you can name an endpoint or a
+   nested field it misses, that's the finding I most want.
+2. **The semantic-path policy itself.** Is the KEEP/SCALE/REDACT split in
+   `_scale_money` / `_redact_prose` sound, or can you construct a real response
+   where a per-share field carries a portfolio-dollar value (or vice-versa) and
+   the path-based rule does the wrong thing?
+3. **Authz on mutating/spend endpoints.** `require_api_key` accepts an owner
+   session cookie OR `X-API-Key`, and rejects an authenticated customer with 403.
+   Applied to `/api/paper/*` and the 13 live-run POSTs. Any bypass?
+4. **XSS.** Any remaining innerHTML sink fed by AI/news/SEC/external data that
+   isn't run through `daEsc()`/`_esc()` or a class allowlist?
+
+---
+
+## Known-open (disclosed, not blockers — tell me if you disagree)
+
+- **CSP still carries `'unsafe-inline'`** for the inline event handlers in
+  `dashboard.html`. `connect-src`/`script-src` are pinned to self + jsdelivr
+  (blocks exfiltration + external script load), but a nonce-based CSP is the real
+  hardening. Tracked, not yet done. *Is `'unsafe-inline'` + self-pinned
+  `connect-src` an acceptable interim, given exfiltration is already blocked?*
+- **Stale cached AI narrative (P2).** The cached `ai_result` still shows the
+  pre-E2/E3 copy (CPI 4.3%, "entire portfolio ranging"). It regenerates on the
+  next clean daily run (10:30 ET) or a manual trigger — code is fixed, cache is
+  stale. Not a security issue.
+- **Architecture question (the honest one).** The masking is generic-middleware
+  post-processing of arbitrary JSON. You argued twice this is "a losing game" vs
+  per-endpoint customer DTOs. I agree it's the right end state (Phase D: build
+  each customer response from model-book inputs, not scale the owner response).
+  The sweep test is my interim safety net until that refactor. **Do you consider
+  the sweep + semantic-path policy sufficient to onboard ~5 comped alpha users,
+  or is the DTO refactor a hard pre-req?** This is the decision I want your call on.
+
+---
+
+## How to reproduce
+
+- **Test account (customer/observer):** `codex-review@geshfinance.com`
+  (revoke after review: `python3 scripts/comp_user.py revoke codex-review@geshfinance.com`).
+- **Run the sweep:** `pytest tests/test_customer_leak_sweep.py -v` (needs the live
+  server on :9000 with the owner snapshot loaded; skips otherwise).
+- **Full suite:** `./venv/bin/python -m pytest tests/ -q` → 431 passing.
+- **Live:** log in via magic link as the test account → masked $100K model-book
+  dashboard; the owner never exposes real dollars to a customer session.
