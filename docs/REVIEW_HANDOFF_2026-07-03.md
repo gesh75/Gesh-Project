@@ -228,3 +228,38 @@ negatives). 446 tests pass; both CI jobs green.
    call → body-audited, HTML-local → construction-audited, numeric-used property)
    valid, or can you construct a raw sink the guard rules safe?
 2. Any customer-reachable render still unescaped that the guard missed.
+
+---
+
+## 6th-pass resolutions (commit `9857f72`, 2026-07-04)
+
+The 5th-pass guard had real bypasses (good catch). Fixed both the sinks and the
+guard's over-broad exemptions. 448 tests pass; both CI jobs green.
+
+- **P0 — raw sinks → FIXED.** `friendlyErr(e)` (returns the raw `e.message` for
+  non-403 errors) is now `daEsc(friendlyErr(e))` at all 5 call sites; the consensus
+  symbol lists are `d.strong_buys.map(daEsc).join(', ')` / `d.sells.map(daEsc)…`;
+  the `buildBars`/da-score numeric `${v}` renders are escaped too (`node --check`
+  passes).
+- **P1 — guard now genuinely deny-by-default.** The four bypasses are closed:
+  1. **Arbitrary function calls** are no longer trusted — the call-site exemption
+     is restricted to `_SAFE_CALL_NAME` (escapers/formatters/classifiers + a small,
+     explicitly-audited list of HTML builders whose *own template bodies the guard
+     walks*). `friendlyErr` is deliberately excluded (it `return`s raw data, not a
+     template).
+  2. **`x || 0`** no longer implies numeric — `A||B` is safe iff *both* operands
+     are; genuinely-numeric props stay covered by numeric-*usage* inference.
+  3. **`.map(cb).join()`** is callback-aware: safe only if `cb` is `daEsc`/`_esc`
+     or returns a template / safe expr. Bare `arr.join(', ')` and `.map(s=>s)` are
+     flagged.
+  4. **generic `html`** removed from `_SAFE_IDENTS` — it stays safe only via the
+     principled HTML-valued-local rule, and I verified there is no raw `html = …`
+     assignment (all are template/empty-built).
+- **Negative tests** now lock all four bypasses shut (`friendlyErr(e)`,
+  `anyHelper(x.data)`, `x.foo||0`, `d.strong_buys.join(', ')`, `.map(s=>s).join`,
+  a bare identifier → all asserted **False**; `.map(daEsc).join`, audited builders,
+  `daEsc(friendlyErr(e))` → asserted **True**).
+
+Noted (your standing decisions): the pre-push hook is local/bypassable — GitHub
+Pro to mark `customer-isolation` required is the durable fix; the stale July-3
+analysis regenerates on Monday's sanctioned run before invitations.
