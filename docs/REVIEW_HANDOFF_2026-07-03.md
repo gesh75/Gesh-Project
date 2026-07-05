@@ -263,3 +263,35 @@ guard's over-broad exemptions. 448 tests pass; both CI jobs green.
 Noted (your standing decisions): the pre-push hook is local/bypassable — GitHub
 Pro to mark `customer-isolation` required is the durable fix; the stale July-3
 analysis regenerates on Monday's sanctioned run before invitations.
+
+---
+
+## 7th-pass resolutions (commit `cea2275`, 2026-07-04)
+
+An adversarial security-agent pass verdict'd today's page as clean/shippable but
+found **two latent HIGH soundness gaps** — unsound guard *rules* (not live sinks)
+that would silently pass the next field added. Both closed; 451 tests green, both
+CI jobs pass.
+
+- **Gap 1 — `_NUM_PROPS` global-by-name (relocated `||0` bypass) → FIXED.** It was
+  a set of bare prop *names*, so a numeric `d.revenue_growth` vouched for a string
+  `x.revenue_growth` everywhere; and one signal was `.p||<number>` — the exact
+  unsoundness the 6th pass removed from `_is_safe`. Now scoped to **(object, prop)
+  pairs**, and the `||number` signal is dropped. The residual check matches
+  terminal `obj.prop` pairs against the scoped set.
+- **Gap 2 — `_HTML_LOCALS` trusted a name on `any()` template assignment → FIXED.**
+  `r` was trusted because *one* assignment was a template, despite ~20 raw
+  `r = await fetch(...)` assignments. Removed `_HTML_LOCALS` entirely; HTML-valued
+  locals now go through the sound safe-set, which requires **all** assignments safe
+  (a template blanks to `''` with leaves walked; a raw fetch does not). The two
+  genuinely-HTML but **scope-shadowed** locals (`recs`/`sectors`) were renamed
+  `recsHtml`/`sectorsHtml` so the name no longer collides with a raw-array
+  assignment elsewhere.
+- **Gap 3 — `depth > 40` now fails CLOSED** (was fail-open).
+- Fixed `_ends_with_call` to select the `.map()`/`.join()` whose paren closes at
+  the end (it had picked an inner `.map` on `secItems`).
+- Escaped the display-number renders that lost their now-sound numeric proof.
+- **Negative tests** lock all three gaps: object-scoped numeric props
+  (`x.revenue_growth` flagged even when `d.revenue_growth` is numeric; `a.count||0`
+  not trusted); all-assignments-safe (the `r = fetch()` shape rejected);
+  depth-fail-closed.
