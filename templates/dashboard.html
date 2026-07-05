@@ -1460,7 +1460,7 @@ function buildAnalystStrip(sym, mkt){
     <div class="analyst-strip-title">Analyst Consensus &amp; Performance</div>
     <div class="analyst-reco-row">
       ${at.recommendation?`<span class="reco-pill ${rc}">${daEsc(at.recommendation)}</span>`:''}
-      ${at.num_analysts?`<span style="font-size:15px;color:var(--muted)">${at.num_analysts} analysts</span>`:''}
+      ${at.num_analysts?`<span style="font-size:15px;color:var(--muted)">${daEsc(at.num_analysts)} analysts</span>`:''}
       ${at.target_mean?`<span style="font-size:15px;color:var(--muted2)">Target: <strong style="color:var(--text)">$${at.target_mean.toFixed(2)}</strong></span>`:''}
       ${at.upside_pct!=null?`<span style="font-size:15px;font-weight:700;color:${upColor}">${upArrow} ${Math.abs(at.upside_pct).toFixed(1)}% upside</span>`:''}
     </div>
@@ -1498,14 +1498,14 @@ function piCard(a){
   const sc=a.portfolio_score||0,rc=sc>=67?'#00e676':sc>=34?'#ffd700':'#ff4444';
   const riskC=a.risk_score>=7?'var(--red)':a.risk_score>=4?'var(--yellow)':'var(--green)';
   const risks=(a.portfolio_risks||[]).map(r=>`<li class="risk-item"><span class="risk-dot ${sevCls(r.severity)}"></span><span>${daEsc(r.text)}</span></li>`).join('');
-  const recs=(a.portfolio_recommendations||[]).map(r=>`<div class="rec-item ${priCls(r.priority)}"><span class="rec-arrow">▸</span><div><div>${daEsc(r.action)}</div>${r.rationale?`<div class="rec-rationale">${daEsc(r.rationale)}</div>`:''}</div></div>`).join('');
+  const recsHtml=(a.portfolio_recommendations||[]).map(r=>`<div class="rec-item ${priCls(r.priority)}"><span class="rec-arrow">▸</span><div><div>${daEsc(r.action)}</div>${r.rationale?`<div class="rec-rationale">${daEsc(r.rationale)}</div>`:''}</div></div>`).join('');
   const sects=(a.sector_breakdown||[]).map(s=>`<span class="sector-pill ${saCls(s.assessment)}">${daEsc(s.sector)}${s.allocation_pct?' '+s.allocation_pct.toFixed(0)+'%':''}</span>`).join('');
   return `<div class="pi-card">
     <div class="ch">
       <div style="display:flex;align-items:center;gap:10px"><span class="ct">Portfolio Intelligence</span><span class="badge b-muted">${daEsc(a.portfolio_type||'Mixed')}</span></div>
       <div style="display:flex;align-items:center;gap:8px">
         <span style="font-size:13px;color:var(--muted)">Risk:</span><span style="font-weight:700;color:${riskC}">${a.risk_score||'—'}<span style="font-size:12px;color:var(--muted)">/100</span></span>
-        <span style="font-size:13px;color:var(--muted);margin-left:6px">Diversification:</span><span style="font-weight:700;color:var(--accent)">${a.diversification_score||0}<span style="font-size:12px;color:var(--muted)">/100</span></span>
+        <span style="font-size:13px;color:var(--muted);margin-left:6px">Diversification:</span><span style="font-weight:700;color:var(--accent)">${daEsc(a.diversification_score||0)}<span style="font-size:12px;color:var(--muted)">/100</span></span>
       </div>
     </div>
     <div class="pi-body">
@@ -1520,7 +1520,7 @@ function piCard(a){
           <div class="pi-context">${daEsc(a.market_context||'')}</div>
           ${risks?`<div style="margin-top:14px"><div class="pi-section-title">Portfolio Risks</div><ul class="risk-list">${risks}</ul></div>`:''}
         </div>
-        <div><div class="pi-section-title">Recommendations</div>${recs}</div>
+        <div><div class="pi-section-title">Recommendations</div>${recsHtml}</div>
       </div>
     </div>
   </div>`;
@@ -1764,7 +1764,7 @@ function renderConsensus(d){
         <span style="color:var(--red);font-weight:700">🔴 ${daEsc(h.bearish)} bear</span>
         <span>⚪ ${daEsc(h.neutral)} neutral</span>
         <span style="color:var(--muted)" title="News needs agent run · ECG needs equity history">✗ ${h.abstains} no-data${h.abstains>0?' ⓘ':''}</span>
-        <span style="margin-left:auto;color:var(--accent);font-weight:700">conf ${h.confidence}%</span>
+        <span style="margin-left:auto;color:var(--accent);font-weight:700">conf ${daEsc(h.confidence)}%</span>
       </div>
       ${scoreBar(h.raw_score)}
       <div class="vote-row">${voteChips}</div>
@@ -1886,7 +1886,7 @@ function renderKelly(d, totalEq){
         <div class="kelly-stat" style="flex:1;min-width:110px"><span>Δ</span><strong style="color:${deltaColor}">${deltaSign}${h.delta_pct}% (${deltaUsdStr})</strong></div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-        <div class="kelly-stat" style="flex:1;min-width:90px"><span>Win rate</span><strong>${h.win_rate}%</strong></div>
+        <div class="kelly-stat" style="flex:1;min-width:90px"><span>Win rate</span><strong>${daEsc(h.win_rate)}%</strong></div>
         <div class="kelly-stat" style="flex:1;min-width:90px"><span>Payoff R</span><strong>${daEsc(h.payoff_ratio)}×</strong></div>
         <div class="kelly-stat" style="flex:1;min-width:90px"><span>Sharpe</span><strong>${daEsc(h.sharpe)}</strong></div>
       </div>
@@ -2027,8 +2027,8 @@ function renderIntelligence(sec, news, fund){
         <span class="signal-pill ${sentCls(n.overall_sentiment||'NEUTRAL')}">${daEsc(n.overall_sentiment||'NEUTRAL')}</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span class="${daEsc(sc)}" style="font-size:21px;font-weight:700">${score>0?'+':''}${score}</span>
-        <span style="font-size:14px;color:var(--muted)">score · ${n.article_count||0} articles</span>
+        <span class="${daEsc(sc)}" style="font-size:21px;font-weight:700">${score>0?'+':''}${daEsc(score)}</span>
+        <span style="font-size:14px;color:var(--muted)">score · ${daEsc(n.article_count||0)} articles</span>
         ${n.rolling_score!=null?`<span style="font-size:13px;color:var(--muted)">7D avg: ${n.rolling_score>0?'+':''}${n.rolling_score}</span>`:''}
       </div>
       <div class="intel-body">${daEsc(a.momentum_narrative||'')}</div>
@@ -2047,7 +2047,7 @@ function renderIntelligence(sec, news, fund){
         <div><span class="fund-sym">${daEsc(s.symbol)}</span> <span style="font-size:14px;color:var(--muted)">${daEsc(s.sector||'')}</span></div>
         <div style="display:flex;gap:4px">
           <span class="signal-pill ${mgapCls}">Gap: ${daEsc(mgap||'?')}</span>
-          <span style="font-size:18px;font-weight:700;color:var(--accent)">${s.fundamental_score||0}<span style="font-size:12px;color:var(--muted)">/100</span></span>
+          <span style="font-size:18px;font-weight:700;color:var(--accent)">${daEsc(s.fundamental_score||0)}<span style="font-size:12px;color:var(--muted)">/100</span></span>
         </div>
       </div>
       <div class="fund-thesis">${daEsc(s.thesis||'')}</div>
@@ -2077,7 +2077,7 @@ function renderIntelligence(sec, news, fund){
         <div class="agent-panel-body">${newsItems}</div>
       </div>
       <div class="agent-panel">
-        <div class="agent-panel-head"><span class="agent-panel-title">📈 Fundamental Momentum</span><span class="ts">${fund?.stocks_analyzed||0} stocks scanned</span></div>
+        <div class="agent-panel-head"><span class="agent-panel-title">📈 Fundamental Momentum</span><span class="ts">${daEsc(fund?.stocks_analyzed||0)} stocks scanned</span></div>
         ${fundMacro}
         <div class="agent-panel-body">${fundItems}</div>
       </div>
@@ -2181,7 +2181,7 @@ function renderScreener(j, cachedMeta){
   const d=j.data;
   const picks=d.picks||[];
   const biasColor=d.market_bias==='BULLISH'?'var(--green)':d.market_bias==='BEARISH'?'var(--red)':'var(--yellow)';
-  const sectors=(d.top_sectors||[]).map(s=>`<span class="sector-pill sa-bullish">${daEsc(s)}</span>`).join('');
+  const sectorsHtml=(d.top_sectors||[]).map(s=>`<span class="sector-pill sa-bullish">${daEsc(s)}</span>`).join('');
   cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}</style>
     <div class="radar-summary">
       <div class="radar-summary-text">${daEsc(d.screen_summary||'')}</div>
@@ -2190,8 +2190,8 @@ function renderScreener(j, cachedMeta){
           <span style="font-size:15px;color:var(--muted)">Market Bias:</span>
           <span style="font-weight:700;color:${biasColor}">${daEsc(d.market_bias||'NEUTRAL')}</span>
         </div>
-        ${sectors?`<div style="display:flex;gap:5px;flex-wrap:wrap">${sectors}</div>`:''}
-        <div style="font-size:14px;color:var(--muted)">${j.candidates_screened||0} stocks screened · ${picks.length} picks</div>
+        ${sectorsHtml?`<div style="display:flex;gap:5px;flex-wrap:wrap">${sectorsHtml}</div>`:''}
+        <div style="font-size:14px;color:var(--muted)">${daEsc(j.candidates_screened||0)} stocks screened · ${picks.length} picks</div>
       </div>
     </div>
     <div class="radar-grid">${picks.map((p,i)=>radarCard(p,i)).join('')}</div>`;
@@ -2910,7 +2910,7 @@ function renderTradeHistory(trades){
       <td>${t.entry_price?'$'+t.entry_price.toFixed(2):'—'}</td>
       <td style="color:var(--red)">${t.stop_loss?'$'+t.stop_loss.toFixed(2):'—'}</td>
       <td style="color:var(--green)">${t.target_price?'$'+t.target_price.toFixed(2):'—'}</td>
-      <td class="${pnlCls}">${pnl}</td>
+      <td class="${pnlCls}">${daEsc(pnl)}</td>
       <td><span class="badge ${oc}" style="font-size:11px">${daEsc(outcome)}</span></td>
       <td style="text-align:left;color:var(--muted);font-size:13px">${daEsc(t.scanner_source||'—')}</td>
       <td style="text-align:left;color:var(--muted);font-size:13px">${daEsc(dt)}</td>

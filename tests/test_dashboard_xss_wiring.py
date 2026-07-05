@@ -58,8 +58,6 @@ _NUM_METHODS = ("toFixed", "toLocaleString", "toLocaleDateString",
                 "sort", "flat", "concat", "entries", "keys", "values")
 _MAP_LOCALS: set[str] = set()   # object-literal maps with literal values
 _NUM_PROPS: set[str] = set()    # property names used numerically somewhere in the JS
-_HTML_LOCALS: set[str] = set()  # locals whose value is HTML built from a template
-                                # (their construction leaves are audited separately)
 _IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 _JS_KEYWORDS = {
     "true", "false", "null", "undefined", "new", "Date", "Math", "Number",
@@ -385,16 +383,14 @@ def _split_top(e: str, ops: tuple[str, ...]) -> list[str] | None:
 
 
 def _ends_with_call(e: str, name: str) -> tuple[str, str] | None:
-    """If `e` ends with `.name(<args>)` (balanced), return (receiver, args)."""
-    m = None
-    for mm in re.finditer(r"\.\s*" + name + r"\s*\(", e):
-        m = mm
-    if not m:
-        return None
-    close = _match_paren(e, m.end() - 1)
-    if close != len(e) - 1:
-        return None
-    return e[:m.start()], e[m.end():close]
+    """If `e` ends with `.name(<args>)`, return (receiver, args). Selects the
+    `.name(` whose MATCHING close paren is at the very end — not the textually
+    last one, which for `outer.map(...inner.map(...)...)` would wrongly pick the
+    inner call."""
+    for m in re.finditer(r"\.\s*" + name + r"\s*\(", e):
+        if _match_paren(e, m.end() - 1) == len(e) - 1:
+            return e[:m.start()], e[m.end():len(e) - 1]
+    return None
 
 
 def _map_cb_safe(cb: str, locals_: set[str], depth: int) -> bool:
@@ -437,8 +433,10 @@ def _map_join_safe(e: str, locals_: set[str], depth: int) -> bool | None:
 
 def _is_safe(expr: str, locals_: set[str], depth: int = 0) -> bool:
     e = _blank_templates(expr).strip()
-    if not e or depth > 40:
+    if not e:
         return True
+    if depth > 40:
+        return False   # fail CLOSED on pathological nesting (not fail-open)
     # unwrap balanced parens
     if e.startswith("(") and _match_paren(e, 0) == len(e) - 1:
         return _is_safe(e[1:-1], locals_, depth + 1)
@@ -474,16 +472,20 @@ def _is_safe(expr: str, locals_: set[str], depth: int = 0) -> bool:
     r = _blank_numeric(_blank_safe_calls(_strip_strings(e)))
     if re.fullmatch(r"[\s\d.+\-*/%'()]*", r):        # pure literal / number
         return True
-    residual_props = re.findall(r"\.\s*([A-Za-z_$][\w$]*)", r)
-    if residual_props:
-        # a residual data .property is safe only if it is a numeric property
-        # (proven by numeric use elsewhere in the JS: .p.toFixed / .p> / .p||0 …)
-        if all(p in _NUM_PROPS for p in residual_props):
+    if re.search(r"\.\s*[A-Za-z_$]", r):
+        # residual data .property render — safe only if EVERY terminal `obj.prop`
+        # is a proven-numeric (object, prop) pair. Intermediate navigation (the
+        # `a.b` in `a.b.c`) doesn't render, so only terminal pairs are checked.
+        terminals = re.findall(r"([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)(?![\w.])", r)
+        stripped = re.sub(r"([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)(?![\w.])", " ", r)
+        # a bracket/paren access `.prop` with no identifiable object is never trusted
+        if re.search(r"\.\s*[A-Za-z_$]", stripped):
+            return False
+        if terminals and all(f"{o}.{p}" in _NUM_PROPS for o, p in terminals):
             return True
         return False
     for ident in _IDENT.findall(r):
-        if (ident in _JS_KEYWORDS or ident in _SAFE_IDENTS or ident in locals_
-                or ident in _HTML_LOCALS):
+        if ident in _JS_KEYWORDS or ident in _SAFE_IDENTS or ident in locals_:
             continue
         return False
     return True
@@ -567,13 +569,11 @@ def _literal_valued_locals(text: str) -> set[str]:
             dm = re.match(r"\s*([A-Za-z_$][\w$]*)\s*=\s*(.+)", part, re.S)
             if dm:
                 byname.setdefault(dm.group(1), []).append(dm.group(2))
-    # A local that is built as HTML from a template is safe to render raw — the
-    # template's interpolations are walked/audited separately (same soundness
-    # argument as a function body). Its render site must NOT be daEsc'd.
-    _HTML_LOCALS.clear()
-    for name, rhss in byname.items():
-        if any("<" in r and "`" in r for r in rhss):
-            _HTML_LOCALS.add(name)
+    # HTML-valued locals are handled by the safe-set below, NOT a separate
+    # any()-template rule: a local is safe to render raw ONLY if EVERY assignment
+    # is safe (an HTML template blanks to '' and its leaves are walked; a raw
+    # `r = await fetch(...)` is NOT safe). Trusting a name because ONE assignment
+    # was a template let `r` (also `r = await fetch()`) through — gap 2, removed.
     safe: set[str] = set()
     for _ in range(5):
         grew = False
@@ -633,22 +633,26 @@ def _top_templates(text: str) -> list[str]:
 
 
 def _numeric_props(js: str) -> set[str]:
-    """Property names used numerically somewhere — a numeric render can't inject
-    markup. Signals: `.p.toFixed(`/`.toLocaleString(`, comparison/arithmetic with
-    a number, `.p||<number>`, or `Number(x.p)`."""
-    props: set[str] = set()
+    """`obj.prop` pairs used NUMERICALLY somewhere — a numeric render can't inject
+    markup. Scoped to (object, prop) so a numeric `d.revenue_growth` does NOT vouch
+    for a string `x.revenue_growth` (Codex/security-agent gap 1). The `.p||<number>`
+    signal is deliberately EXCLUDED — `x.p||0` returns `x.p` raw when truthy, so it
+    proves nothing (same unsoundness removed from _is_safe). Sound signals only:
+    numeric-format methods, arithmetic/comparison with a literal number, prop-vs-prop
+    comparison, and Number()/parseInt()/parseFloat()."""
+    pairs: set[str] = set()
+    o, p = r"([A-Za-z_$][\w$]*)", r"([A-Za-z_$][\w$]*)"
     pats = [
-        r"\.([A-Za-z_$][\w$]*)\s*\.\s*(?:toFixed|toLocaleString|toPrecision)\b",
-        r"\.([A-Za-z_$][\w$]*)\s*(?:[<>]=?|[-+*/%])\s*-?\d",
-        r"-?\d\s*(?:[<>]=?|[-+*/%])\s*[\w.]*\.([A-Za-z_$][\w$]*)\b",
-        r"\.([A-Za-z_$][\w$]*)\s*\|\|\s*-?\d",
-        r"\.([A-Za-z_$][\w$]*)\s*[<>]=?\s*[\w.]*\.[A-Za-z_$]",   # a.x >= b.y (both numeric)
-        r"(?:Number|parseInt|parseFloat)\s*\(\s*[\w.]*\.([A-Za-z_$][\w$]*)",
-        r"\.([A-Za-z_$][\w$]*)\s*\.\s*toFixed",
+        rf"{o}\.{p}\s*\.\s*(?:toFixed|toLocaleString|toPrecision)\b",
+        rf"{o}\.{p}\s*(?:[<>]=?|[-+*/%])\s*-?\d",
+        rf"-?\d\s*(?:[<>]=?|[-+*/%])\s*{o}\.{p}\b",
+        rf"{o}\.{p}\s*[<>]=?\s*[A-Za-z_$][\w$]*\.[A-Za-z_$]",   # a.x >= b.y (both numeric)
+        rf"(?:Number|parseInt|parseFloat)\s*\(\s*{o}\.{p}",
     ]
-    for p in pats:
-        props.update(re.findall(p, js))
-    return props
+    for pat in pats:
+        for obj, prop in re.findall(pat, js):
+            pairs.add(f"{obj}.{prop}")
+    return pairs
 
 
 def _scan() -> list[str]:
@@ -735,6 +739,47 @@ def test_guard_still_accepts_genuinely_safe_forms():
     assert _is_safe("stockCard(h,i,mkt)", sl)                    # audited builder
     assert _is_safe("cls(x.percent_change)", sl)                 # class helper
     assert _is_safe("fmtp(x.change_pct)", sl)                    # numeric formatter
+
+
+def test_num_props_are_object_scoped():
+    """Gap 1 (security agent): a property proven numeric on ONE object must not
+    vouch for a string of the same name on ANOTHER object, and `x||0` must not be
+    a numeric signal."""
+    from test_dashboard_xss_wiring import _NUM_PROPS, _numeric_props
+    _NUM_PROPS.clear()
+    _NUM_PROPS.update(_numeric_props("d.revenue_growth.toFixed(1); s.foo > 3;"))
+    sl: set[str] = set()
+    assert _is_safe("d.revenue_growth", sl)          # numeric on d
+    assert not _is_safe("x.revenue_growth", sl)      # SAME name, different object → flagged
+    assert _is_safe("s.foo", sl)
+    assert not _is_safe("t.foo", sl)
+    # `x||0` alone never proves numeric (the relocated bypass)
+    _NUM_PROPS.clear()
+    _NUM_PROPS.update(_numeric_props("a.count || 0; a.count || 5;"))
+    assert not _is_safe("a.count", sl)
+
+
+def test_html_local_requires_all_assignments_safe():
+    """Gap 2 (security agent): a name with one HTML-template assignment AND a raw
+    assignment (the `r = await fetch()` shape) must NOT be trusted as an HTML local."""
+    src = (
+        "function a(){ const r = `<div>${daEsc(x)}</div>`; return r; }\n"
+        "function b(){ const r = await fetch('/api/x'); const q = r; return q; }\n"
+    )
+    byname: dict[str, list[str]] = {}
+    for decl in re.findall(r"\b(?:const|let|var)\s+([^;\n]+)", src):
+        for part in _split_commas(decl):
+            m = re.match(r"\s*([A-Za-z_$][\w$]*)\s*=\s*(.+)", part, re.S)
+            if m:
+                byname.setdefault(m.group(1), []).append(m.group(2))
+    # `r` has a template rhs AND a raw `await fetch()` rhs → all-safe rule rejects it
+    rhss = byname["r"]
+    assert not all(_is_safe(rhs, set()) for rhs in rhss)
+
+
+def test_deep_nesting_fails_closed():
+    """Gap 3: pathological nesting fails CLOSED (unsafe), not open."""
+    assert _is_safe("x", set(), depth=41) is False
 
 
 def test_daEsc_helper_exists():
