@@ -32,20 +32,29 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "dashboard.html"
 # Bare identifiers that are structurally safe regardless of value: loop indices,
 # element ids the app generates, and the like. (Colors/classes/numbers are
 # auto-derived below from their declarations, not hard-coded here.)
-_SAFE_IDENTS = {"i", "j", "idx", "cid", "uid", "id", "key", "html", "NUM", "SAFE"}
+_SAFE_IDENTS = {"i", "j", "idx", "cid", "uid", "id", "key", "NUM", "SAFE"}
 
 # Call names whose RETURN value is safe to drop into HTML: the escaper, numeric
 # formatters, URL-encoders, and the allowlist class/style/color helpers (which
 # emit only fixed strings).
+# Escapers, numeric formatters, URL-encoders, allowlist class/style/color helpers,
+# and audited HTML-builder helpers. A builder is safe because its OWN body is a
+# template literal the guard walks separately (so a raw leaf inside it is caught at
+# its definition) — this is NOT a blanket "any call is safe" (that let friendlyErr,
+# which returns a raw error string, slip through). Add a helper here only after
+# confirming it builds HTML via a template (never `return <rawData>`).
 _SAFE_CALL_NAME = re.compile(
-    r"^(daEsc|_esc|_fmt|fmt|daFmt|_debArgs|encodeURIComponent|Number|parseInt|"
-    r"parseFloat|scoreChip|[A-Za-z]\w*(Cls|Style)|[A-Za-z]*[Cc]olor\w*|scoreColor\w*)$"
+    r"^(daEsc|_esc|_fmt|fmt|fmtp|daFmt|_debArgs|cls|encodeURIComponent|Number|"
+    r"parseInt|parseFloat|scoreChip|scoreBar|kellyBar|perfChip|volBadge|piCard|"
+    r"radarCard|stockCard|voteChip|build[A-Z]\w*|[A-Za-z]\w*(Cls|Style)|"
+    r"[A-Za-z]*[Cc]olor\w*|scoreColor\w*)$"
 )
-# methods whose result is a number-string or a structurally-built (already
-# recursed) array/HTML — never a raw data string. Receiver is consumed.
+# methods whose result is a number-string or a structurally-built array — never a
+# raw data string. NOTE: map/join are handled specially (callback-aware) and are
+# NOT here — blanket-blanking them let `d.strong_buys.join(', ')` render raw.
 _NUM_METHODS = ("toFixed", "toLocaleString", "toLocaleDateString",
                 "toLocaleTimeString", "toPrecision", "length",
-                "map", "join", "filter", "forEach", "reduce", "reverse",
+                "filter", "forEach", "reduce", "reverse",
                 "sort", "flat", "concat", "entries", "keys", "values")
 _MAP_LOCALS: set[str] = set()   # object-literal maps with literal values
 _NUM_PROPS: set[str] = set()    # property names used numerically somewhere in the JS
@@ -375,6 +384,57 @@ def _split_top(e: str, ops: tuple[str, ...]) -> list[str] | None:
     return None
 
 
+def _ends_with_call(e: str, name: str) -> tuple[str, str] | None:
+    """If `e` ends with `.name(<args>)` (balanced), return (receiver, args)."""
+    m = None
+    for mm in re.finditer(r"\.\s*" + name + r"\s*\(", e):
+        m = mm
+    if not m:
+        return None
+    close = _match_paren(e, m.end() - 1)
+    if close != len(e) - 1:
+        return None
+    return e[:m.start()], e[m.end():close]
+
+
+def _map_cb_safe(cb: str, locals_: set[str], depth: int) -> bool:
+    """A .map(cb) callback is safe iff it escapes each element (bare `daEsc`/`_esc`)
+    or returns a template/expression that is itself safe."""
+    cb = cb.strip()
+    if cb in ("daEsc", "_esc"):
+        return True
+    body = re.split(r"=>", cb, maxsplit=1)
+    if len(body) == 2:
+        b = body[1].strip()
+        if b.startswith("{"):
+            # block-body arrow: safe iff EVERY `return <expr>` returns a template
+            # (whose leaves the guard walks separately) or an otherwise-safe expr.
+            for m in re.finditer(r"\breturn\b", b):
+                ret = _read_statement(b, m.end()).strip()
+                if ret.startswith("`"):
+                    continue
+                if not _is_safe(ret, locals_, depth + 1):
+                    return False
+            return True
+        return _is_safe(b, locals_, depth + 1)
+    return False
+
+
+def _map_join_safe(e: str, locals_: set[str], depth: int) -> bool | None:
+    """Classify `X.map(cb)` / `X.map(cb).join(sep)` / `X.join(sep)`.
+    Returns True/False, or None if `e` is not a map/join expression."""
+    joined = _ends_with_call(e, "join")
+    recv = joined[0] if joined else e
+    mapped = _ends_with_call(recv, "map")
+    if mapped:
+        return _map_cb_safe(mapped[1], locals_, depth)
+    if joined:
+        # `.join(...)` with no safe .map → renders raw array elements unless the
+        # receiver is a literal array or itself provably safe.
+        return _is_safe(recv, locals_, depth + 1)
+    return None
+
+
 def _is_safe(expr: str, locals_: set[str], depth: int = 0) -> bool:
     e = _blank_templates(expr).strip()
     if not e or depth > 40:
@@ -382,25 +442,29 @@ def _is_safe(expr: str, locals_: set[str], depth: int = 0) -> bool:
     # unwrap balanced parens
     if e.startswith("(") and _match_paren(e, 0) == len(e) - 1:
         return _is_safe(e[1:-1], locals_, depth + 1)
-    # a whole-expression FUNCTION call `name(...)` is safe: the function's own body
-    # template is walked separately by this guard, so any raw sink inside it is
-    # caught at its definition (e.g. volBadge/piCard/buildBars/perfChip). Method
-    # calls `x.foo(...)` are NOT covered here — they fall through to the reductions.
-    call = re.match(r"[A-Za-z_$][\w$]*\s*\(", e)
+    # a whole-expression call is safe ONLY when the callee is in _SAFE_CALL_NAME
+    # (escaper / formatter / classifier / audited HTML builder whose own body is
+    # walked). An arbitrary call is NOT trusted — `friendlyErr(e)` returns raw
+    # `e.message`, so it must be flagged and daEsc'd at its call site.
+    call = re.match(r"([A-Za-z_$][\w$]*)\s*\(", e)
     if call and _match_paren(e, call.end() - 1) == len(e) - 1:
-        return True
+        return bool(_SAFE_CALL_NAME.match(call.group(1)))
+    # `X.map(cb)[.join(sep)]` — safe iff the callback escapes/builds a template;
+    # `X.join(sep)` with no safe map renders raw elements → unsafe.
+    mj = _map_join_safe(e, locals_, depth)
+    if mj is not None:
+        return mj
     # ternary: only the VALUE branches render; ignore the condition
     tern = _split_top(e, ("?",))
     if tern:
         rest = _split_top(tern[1], (":",))
         if rest:
             return _is_safe(rest[0], locals_, depth + 1) and _is_safe(rest[1], locals_, depth + 1)
-    # logical default `A || B`: if the default B is a numeric literal, the whole
-    # expression is numeric (e.g. `s.total_trades || 0`) → safe.
+    # logical `A || B` / `A && B`: EVERY operand must be safe. (A `|| 0` default is
+    # NOT a numeric guarantee — `x || 0` returns x, a possibly-raw string, when
+    # truthy. Genuinely-numeric props are covered by numeric-usage inference.)
     logic = _split_top(e, ("||", "&&"))
     if logic:
-        if re.fullmatch(r"[\s\d.+\-*/%()]+", logic[1]):
-            return True
         return all(_is_safe(p, locals_, depth + 1) for p in logic)
     # string concatenation: every operand must be safe
     cat = _split_top(e, ("+",))
@@ -640,6 +704,37 @@ def test_guard_flags_property_access_and_aliases():
     assert _is_safe_leaf("sentCls(x.overall_sentiment||'NEUTRAL')", sl)  # classifier
     assert _is_safe_leaf("(p.ret_1w||0).toFixed(1)", sl)      # numeric
     assert _is_safe_leaf("t.is_buy?'bought':'sold'", sl)      # literal ternary
+
+
+def test_guard_is_deny_by_default_no_bypasses():
+    """Codex 6th-pass: the guard must NOT exempt arbitrary function calls,
+    `value || 0`, raw `.map(...).join()`, or a generic identifier. Each of these
+    is a bypass that previously let a raw sink through."""
+    sl: set[str] = set()
+    # arbitrary function calls are NOT trusted (friendlyErr returns raw e.message)
+    assert not _is_safe("friendlyErr(e)", sl)
+    assert not _is_safe("anyHelper(x.data)", sl)
+    # `x || 0` does NOT prove numeric — x is returned raw when truthy
+    assert not _is_safe("x.foo||0", sl)
+    assert not _is_safe("s.name||0", sl)
+    # a raw join / non-escaping map renders raw elements
+    assert not _is_safe("d.strong_buys.join(', ')", sl)
+    assert not _is_safe("d.strong_buys.map(s=>s).join(', ')", sl)
+    assert not _is_safe("arr.map(x=>x.name).join('')", sl)
+    # a bare data identifier is not blanket-safe
+    assert not _is_safe("someRawVar", sl)
+
+
+def test_guard_still_accepts_genuinely_safe_forms():
+    """The tightening must not over-flag: escaper-wrapped maps, audited HTML
+    builders, and numeric formatters stay safe."""
+    sl: set[str] = set()
+    assert _is_safe("d.strong_buys.map(daEsc).join(', ')", sl)   # escaped elements
+    assert _is_safe("daEsc(friendlyErr(e))", sl)                 # escaped call
+    assert _is_safe("piCard(a)", sl)                             # audited builder
+    assert _is_safe("stockCard(h,i,mkt)", sl)                    # audited builder
+    assert _is_safe("cls(x.percent_change)", sl)                 # class helper
+    assert _is_safe("fmtp(x.change_pct)", sl)                    # numeric formatter
 
 
 def test_daEsc_helper_exists():

@@ -1427,7 +1427,7 @@ function buildFV(fv){
 }
 
 function buildBars(s){
-  return [['Val',s.valuation||0],['Growth',s.growth||0],['Health',s.health||0],['Momt',s.momentum||0],['Div',s.dividend||0]].map(([l,v])=>`<div class="sbar-row"><span class="sbar-label">${daEsc(l)}</span><div class="sbar-track"><div class="sbar-fill" style="width:${v}%;background:${scoreColor(v)}"></div></div><span class="sbar-val" style="color:${scoreColor(v)}">${v}</span></div>`).join('');
+  return [['Val',s.valuation||0],['Growth',s.growth||0],['Health',s.health||0],['Momt',s.momentum||0],['Div',s.dividend||0]].map(([l,v])=>`<div class="sbar-row"><span class="sbar-label">${daEsc(l)}</span><div class="sbar-track"><div class="sbar-fill" style="width:${daEsc(v)}%;background:${scoreColor(v)}"></div></div><span class="sbar-val" style="color:${scoreColor(v)}">${daEsc(v)}</span></div>`).join('');
 }
 
 function buildRR(risks,rewards){
@@ -1571,7 +1571,7 @@ async function runDeepAnalysis(){
       cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
       toast('Sign in to run a live Claude analysis','error',6000);
     }else{
-      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${friendlyErr(e)}</div></div>`;
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(friendlyErr(e))}</div></div>`;
       toast('Deep analysis failed','error');
     }
     console.error(e);
@@ -1733,8 +1733,8 @@ function renderConsensus(d){
     <div class="ks-item"><span class="ks-lbl">Buy</span><span class="ks-val" style="color:var(--green)">${d.buys.length}</span></div>
     <div class="ks-item"><span class="ks-lbl">Sell/Exit</span><span class="ks-val" style="color:${sellColor}">${d.sells.length}</span></div>
     <div class="ks-item"><span class="ks-lbl">Avg Confidence</span><span class="ks-val">${daEsc(d.avg_confidence)}%</span></div>
-    ${d.strong_buys.length?`<div class="ks-item"><span class="ks-lbl">Strong Buys</span><span style="font-size:14px;font-weight:700;color:var(--green)">${d.strong_buys.join(', ')}</span></div>`:''}
-    ${d.sells.length?`<div class="ks-item"><span class="ks-lbl">Exit Signals</span><span style="font-size:14px;font-weight:700;color:var(--red)">${d.sells.join(', ')}</span></div>`:''}
+    ${d.strong_buys.length?`<div class="ks-item"><span class="ks-lbl">Strong Buys</span><span style="font-size:14px;font-weight:700;color:var(--green)">${d.strong_buys.map(daEsc).join(', ')}</span></div>`:''}
+    ${d.sells.length?`<div class="ks-item"><span class="ks-lbl">Exit Signals</span><span style="font-size:14px;font-weight:700;color:var(--red)">${d.sells.map(daEsc).join(', ')}</span></div>`:''}
   </div><div class="cons-grid">`;
 
   for(const h of d.holdings){
@@ -2095,7 +2095,7 @@ async function loadIntelHistory(){
       fetch('/api/agents/fundamentals/latest').then(r=>r.json()),
     ]);
     renderIntelligence(secR.data, newsR.data, fundR.data);
-  }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${friendlyErr(e)}</div></div>`;}
+  }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;}
 }
 
 async function runAllAgents(){
@@ -2117,7 +2117,7 @@ async function runAllAgents(){
     const fundR=await fetch('/api/agents/fundamentals',{method:'POST'}).then(r=>r.json());
     renderIntelligence(secR.data?.results||[], newsR.data, fundR.data);
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${friendlyErr(e)}</div></div>`;
+    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;
     console.error(e);
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-run Agents';}
 }
@@ -2546,8 +2546,8 @@ function daRender(data, meta, kellyData, portData){
       <div class="da-sbars">
         ${skeys.map(k=>{const v=sc[k]||0;return `<div class="da-sbar">
           <span class="nm">${daEsc(k.slice(0,3).toUpperCase())}</span>
-          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${v}</span>
-          <div class="tr"><div class="fl" style="width:${v}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
+          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${daEsc(v)}</span>
+          <div class="tr"><div class="fl" style="width:${daEsc(v)}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
         </div>`;}).join('')}
       </div>
       <div style="font-size:13px;color:var(--muted2);margin-bottom:8px;font-style:italic">${daEsc(h.snowflake_summary||'')}</div>
