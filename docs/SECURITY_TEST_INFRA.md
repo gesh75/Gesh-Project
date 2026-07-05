@@ -22,7 +22,7 @@ hold forever: (1) no real owner dollar/share value reaches a customer response,
 | Masking/authz (test) | `tests/test_customer_view.py` | `_scale_money`, prose redaction, owner-vs-customer, headers, degraded fallbacks |
 | CI job | `.github/workflows/tests.yml` → `customer-isolation` | Runs the three test files above on every push/PR |
 | Local hook | `scripts/hooks/pre-push` | Same gate before every push (advisory; bypassable) |
-| Required check | `docs/BRANCH_PROTECTION.md` | Makes `customer-isolation` un-mergeable when red (needs GitHub Pro) |
+| Required check | `docs/BRANCH_PROTECTION.md` | Makes `customer-isolation` un-mergeable when red — **deferred** (needs GitHub Pro; pre-push hook covers the solo alpha, adopt Pro on traction/collaborators) |
 
 Run the whole gate locally:
 

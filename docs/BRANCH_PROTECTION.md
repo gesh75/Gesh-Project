@@ -1,11 +1,30 @@
 # Branch Protection — make the security gates *required*
 
-_Status: DRAFT, ready to apply. Blocked on **GitHub Pro** for the private repo
-(free plan can't require status checks / rulesets on a private repo). The
-`scripts/hooks/pre-push` gate enforces the same checks locally today, but it is
-bypassable (`git push --no-verify`), so a guard regression could still land. This
+_Status: DRAFT, ready to apply. Needs **GitHub Pro** for the private repo (free
+plan can't require status checks / rulesets on a private repo)._
+
+## Do I need this now? — NO for the solo alpha (decided 2026-07-04)
+
+**Deferred by design.** For a **solo** founder the `scripts/hooks/pre-push` gate
+already blocks the common case — a regression can't push unless you consciously
+type `git push --no-verify`. That's enough protection to run the ~5-user comped
+alpha. **Ship on the hook; do not let $4/mo gate the launch.**
+
+**Adopt GitHub Pro (~$4/mo, ~$40/yr) and apply this ruleset WHEN:**
+- the project shows traction and is worth the spend (the plan — "definitely go Pro
+  if we see benefit"), **or**
+- a collaborator / another agent starts pushing to the repo (the hook is local and
+  per-machine — it does nothing for other pushers or PRs).
+
+Until then the pre-push hook is the enforcement. This doc is the one-command
+turn-key for the day Pro is on.
+
+---
+
+_The `scripts/hooks/pre-push` gate enforces the same checks locally today, but it
+is bypassable (`git push --no-verify`) and per-machine, so it is advisory. This
 doc makes the checks **required server-side** — the durable fix the security
-review asked for._
+review asked for, for when the repo has more than one pusher._
 
 ## Why this matters
 
