@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Local enforcement of the customer-isolation + XSS gate.
+#
+# GitHub branch-protection rulesets require GitHub Pro on a private repo, so the
+# `customer-isolation` CI job cannot be marked *required* on this plan — a direct
+# push could otherwise merge a masking/XSS regression. This hook runs the same
+# deterministic, offline gate before every push and BLOCKS the push if it fails.
+#
+# Install:  bash scripts/install-git-hooks.sh   (symlinks this into .git/hooks)
+# Bypass (emergency only, discouraged):  git push --no-verify
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+cd "$ROOT"
+
+PY="./venv/bin/python"
+[ -x "$PY" ] || PY="python3"
+
+echo "pre-push: running customer-isolation + XSS gate…"
+if ! "$PY" -m pytest -q \
+      tests/test_customer_leak_sweep.py \
+      tests/test_dashboard_xss_wiring.py \
+      tests/test_customer_view.py; then
+  echo ""
+  echo "✗ pre-push BLOCKED: customer-isolation / XSS gate failed."
+  echo "  Fix the failures above, or (emergency only) push with --no-verify."
+  exit 1
+fi
+echo "✓ pre-push: isolation + XSS gate passed."
