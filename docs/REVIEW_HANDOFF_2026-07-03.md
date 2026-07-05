@@ -186,3 +186,45 @@ pass** and CI is green on **two** jobs (`test` + a new `customer-isolation` gate
   `script-src` are self-pinned (exfiltration blocked). Nonce-CSP tracked, not done.
 - Per-endpoint customer DTOs remain the agreed prerequisite for **wider paid
   rollout** (not the ~5-user comped alpha).
+
+---
+
+## 5th-pass resolutions (commit `69de15b`, 2026-07-04)
+
+Responding to the 5th-pass `REQUEST CHANGES` (XSS still P0; guard had false
+negatives). 446 tests pass; both CI jobs green.
+
+- **P0 — raw AI/external sinks → FIXED.** The prior XSS guard used a field-name
+  allowlist and so had **confirmed false negatives** (missed `recommendation`,
+  `screen_summary`, `market_bias`, aliases `p3`/`p12`, map var `s`). Replaced with
+  a **deny-by-default** static guard: it parses every `${…}` in HTML-bearing
+  template literals (JS pulled from `<script>`, regex/comment/string-aware,
+  nesting-aware) and treats each as a sink **unless provably safe** — `daEsc`/
+  `_esc`, an allowlist classifier, a numeric/format expression, a pure-literal
+  ternary, a **function call** (its body is walked separately, so an internal raw
+  sink like `volBadge`'s was caught and fixed), an **HTML-valued local** (its
+  construction leaves are walked separately), or a **numeric-used property**. No
+  field names anywhere — an omitted field or alias can't slip through. It also has
+  a teeth test and a synthetic-sink test. **112** previously-raw interpolations
+  were escaped at their exact positions (every symbol/source/state/regime render,
+  the analyst + radar `recommendation`, `top_sectors`, `screen_summary`,
+  `market_bias`, gate/scan strings, error/toast messages, `volBadge` tier). `node
+  --check` confirms the JS still parses.
+- **P1 — guard false negatives → FIXED** by the deny-by-default rewrite above
+  (that was the root of the finding).
+- **P1 — `customer-isolation` not *required*.** Correct — GitHub rulesets need Pro
+  on a private repo, so it can't be a required check on this plan. Mitigation:
+  a **pre-push hook** (`scripts/hooks/pre-push`, installed via
+  `scripts/install-git-hooks.sh`) runs the isolation + XSS gate locally and blocks
+  the push on failure; `--no-verify` bypass is emergency-only. Upgrading to GitHub
+  Pro to mark the check required is the durable fix (documented, your call).
+- **P2 — runtime version → FIXED.** `gesh_core.__version__` bumped `0.1.0 → 0.5.2`
+  to match wheel metadata; pin advanced to `v0.5.2`.
+- **Stale analysis** regenerates on the next sanctioned daily run (Mon 10:30 ET)
+  before any invitation — not force-run on the holiday.
+
+### Requested focus for re-review
+1. The deny-by-default guard's soundness: are the "safe" reductions (function
+   call → body-audited, HTML-local → construction-audited, numeric-used property)
+   valid, or can you construct a raw sink the guard rules safe?
+2. Any customer-reachable render still unescaped that the guard missed.
