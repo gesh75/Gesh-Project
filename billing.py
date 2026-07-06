@@ -371,7 +371,16 @@ def revoke(email: str, status: str, event_sub_id: str | None,
                     email, event_sub_id, stored_sub)
         return {"action": "ignored", "email": email, "reason": "stale_subscription"}
     auth_users.set_active(email, False)
-    auth_users.set_billing(email, status=status, event_at=event_at or None)
+    # ADVANCE the ordering watermark on revoke, even when the expiry event carried
+    # no updated_at. set_billing treats None as "leave unchanged", so a
+    # timestamp-less expiry would leave billing_event_at at its pre-expiry value —
+    # and a REORDERED subscription_updated(active) carrying a variant (tier != None,
+    # so the H6 tier-retention guard doesn't fire) would then pass _is_stale and
+    # RESURRECT the revoked account (8th-pass, Fable audit). Fence future
+    # reactivation by received-at time: a genuine later re-subscribe still has a
+    # newer timestamp and re-activates; a stale reordered update is rejected.
+    watermark = event_at or datetime.now(timezone.utc).isoformat()
+    auth_users.set_billing(email, status=status, event_at=watermark)
     auth_users.set_welcome_emailed(email, None)
     logger.info("billing: revoked %s (status=%s)", email, status)
     return {"action": "revoke", "email": email, "status": status}

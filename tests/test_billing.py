@@ -602,3 +602,27 @@ def test_payment_success_does_not_resurrect_a_revoked_account():
                     updated_at="2026-03-03T00:00:00.000000Z"))
     assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
     assert au.get_user("buyer@example.com")["is_active"] == 0          # still revoked
+
+
+def test_expired_without_timestamp_blocks_reordered_reactivation():
+    """8th-pass (Fable adversarial audit). A timestamp-less subscription_expired must
+    still ADVANCE the ordering watermark. Otherwise a REORDERED subscription_updated
+    (status=active, carrying a variant so tier != None) — delivered after the expiry
+    but stamped earlier — passes _is_stale and RESURRECTS a revoked account. The H6
+    guard only covers the tier-None case; a variant-carrying reactivation slips past
+    it, so revoke() must fence future reactivation by received-at time when the expiry
+    event omits updated_at. HMAC-gated (no forgery), but LS can both omit updated_at
+    and reorder delivery."""
+    # 1) provision (old timestamp)
+    _post("subscription_created", variant_name="Trader plan", sub_id="sub_1",
+          updated_at="2020-01-01T00:00:00.000000Z")
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+    # 2) expire WITHOUT updated_at → revoke; watermark must not remain at 2020-01-01
+    _post("subscription_expired", status="expired", sub_id="sub_1", updated_at="")
+    assert au.get_user("buyer@example.com")["is_active"] == 0
+    # 3) reordered active update, stamped AFTER the created but BEFORE now → must be stale
+    res = _post("subscription_updated", status="active", variant_name="Trader plan",
+                sub_id="sub_1", updated_at="2020-06-01T00:00:00.000000Z")
+    assert au.get_user("buyer@example.com")["is_active"] == 0, \
+        "revoked account resurrected by a reordered stale reactivation"
+    assert res["action"] != "provision"
