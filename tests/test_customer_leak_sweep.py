@@ -38,13 +38,20 @@ OWNER = {
     "qty": 6.078929,         # a fractional share count (Codex: rounding hid this)
     "equity": 101.988616,    # a per-lot dollar equity (Codex synthetic leak)
     "series": [5843.32, 5901.11, 6012.44, 5980.10],  # historical equity curve
+    # 8th-pass (Fable audit): owner-$ keys the mask OMITTED → leaked raw. The mock
+    # holding previously used the covered name `pnl_usd` while production emits
+    # `equity_change`, so the sweep was structurally blind. Seed the REAL keys.
+    "pos_change": 3211.44,   # per-position unrealized $ P&L (data_fetcher `equity_change`)
+    "xhours": 41988.17,      # extended-hours account equity (data_fetcher `extended_hours_equity`)
+    "trade_pnl": 1287.44,    # realized trade $ P&L (trade_log `realized_pnl`/`total_realized_pnl`)
 }
 SCALE = 2.5  # deterministic model/real factor (avoids identity so scaled != sentinel)
 
 
 def _sentinel_strings() -> list[str]:
     vals: set[str] = set()
-    for v in (OWNER["total"], OWNER["cash"], OWNER["qty"], OWNER["equity"], *OWNER["series"]):
+    for v in (OWNER["total"], OWNER["cash"], OWNER["qty"], OWNER["equity"],
+              OWNER["pos_change"], OWNER["xhours"], OWNER["trade_pnl"], *OWNER["series"]):
         vals.add(f"{v}")          # raw repr  -> "6.078929", "5843.32"
         vals.add(f"{v:.2f}")      # 2-dp      -> "509.70"
         vals.add(f"{v:,.2f}")     # grouped   -> "5,843.32"
@@ -56,10 +63,13 @@ def _owner_payload() -> dict:
     return json.loads(json.dumps({
         "as_of": "2026-07-04T13:35:00+00:00", "source": "test",
         "equity_summary": {"total": OWNER["total"], "portfolio_equity": OWNER["total"],
-                           "cash": OWNER["cash"], "deployable": OWNER["cash"]},
+                           "cash": OWNER["cash"], "deployable": OWNER["cash"],
+                           # real data_fetcher key — account-level owner equity
+                           "extended_hours_equity": OWNER["xhours"]},
         "holdings": [{"symbol": "NVDA", "quantity": OWNER["qty"], "price": 194.51,
                       "equity": OWNER["equity"], "average_buy_price": 180.0,
-                      "percent_change": -3.51, "pnl_usd": -78.0}],
+                      # real data_fetcher key — per-position owner $ P&L (was fake `pnl_usd`)
+                      "percent_change": -3.51, "equity_change": OWNER["pos_change"]}],
         "watchlist": [{"symbol": "SPY", "price": 612.0}],
     }))
 
@@ -98,8 +108,17 @@ def client(monkeypatch):
                                          "regime_ran_at": "2026-07-04T13:00:00+00:00"}, raising=False)
     monkeypatch.setattr(server, "get_all_market_data", lambda syms: {s: {"price": 100.0} for s in syms}, raising=False)
     monkeypatch.setattr(server, "batch_fft_cycles", lambda syms: {s: {"signal": "NEUTRAL"} for s in syms}, raising=False)
-    monkeypatch.setattr(server, "get_trade_history", lambda *a, **k: [], raising=False)
-    monkeypatch.setattr(server, "trade_summary_for_report", lambda *a, **k: {"win_rate": 50.0, "trades": 0}, raising=False)
+    # Owner trade rows carry raw realized-$ P&L (latent today: owner is paper-only,
+    # but /api/trades + /api/trades/stats are customer-reachable and unmasked keys
+    # would leak the instant a real trade is logged — 8th-pass, Fable audit).
+    monkeypatch.setattr(server, "get_trade_history",
+                        lambda *a, **k: [{"symbol": "NVDA", "realized_pnl": OWNER["trade_pnl"],
+                                          "pnl_pct": -4.2, "outcome": "LOSS"}], raising=False)
+    monkeypatch.setattr(server, "trade_summary_for_report",
+                        lambda *a, **k: {"win_rate_pct": 50.0, "total_realized_pnl": OWNER["trade_pnl"],
+                                         "best_trade": {"symbol": "NVDA", "realized_pnl": OWNER["trade_pnl"],
+                                                        "pnl_pct": 12.0},
+                                         "worst_trade": None}, raising=False)
     monkeypatch.setattr(server, "get_paper_summary", lambda *a, **k: {"trades": 0}, raising=False)
     monkeypatch.setattr(server, "detect_consolidation", lambda *a, **k: {"found": False}, raising=False)
     monkeypatch.setattr(server, "is_sector_hot", lambda *a, **k: {"hot": False}, raising=False)
@@ -254,3 +273,48 @@ def test_scale_money_masks_every_exact_sentinel():
     assert out["holdings"][0]["price"] == 194.51  # per-share price untouched
     assert out["equity_history"][0] == pytest.approx(OWNER["series"][0] * SCALE)
     assert out["series"][-1] == pytest.approx(OWNER["series"][-1] * SCALE)
+
+
+def test_scale_money_masks_position_account_and_trade_dollars():
+    """8th-pass (Fable audit): owner-$ keys the mask previously OMITTED — per-position
+    `equity_change`, account `extended_hours_equity`, and trade `realized_pnl` /
+    `total_realized_pnl` (incl. nested best/worst_trade rows) — must scale to the model
+    book, not leak raw. Percentages and per-share prices must stay untouched."""
+    fixture = {
+        "equity_summary": {"portfolio_equity": OWNER["total"],
+                           "extended_hours_equity": OWNER["xhours"]},
+        "holdings": [{"symbol": "NVDA", "equity": OWNER["equity"],
+                      "equity_change": OWNER["pos_change"], "percent_change": -3.5,
+                      "average_buy_price": 180.0}],
+        "data": {"total_realized_pnl": OWNER["trade_pnl"],
+                 "best_trade": {"symbol": "NVDA", "realized_pnl": OWNER["trade_pnl"],
+                                "pnl_pct": 4.2}},
+    }
+    out = server._scale_money(fixture, SCALE)
+    survivors = [s for s in _sentinel_strings() if s in json.dumps(out)]
+    assert not survivors, f"owner-$ sentinel survived masking: {survivors}"
+    assert out["equity_summary"]["extended_hours_equity"] == pytest.approx(OWNER["xhours"] * SCALE)
+    assert out["holdings"][0]["equity_change"] == pytest.approx(OWNER["pos_change"] * SCALE)
+    assert out["data"]["total_realized_pnl"] == pytest.approx(OWNER["trade_pnl"] * SCALE)
+    assert out["data"]["best_trade"]["realized_pnl"] == pytest.approx(OWNER["trade_pnl"] * SCALE)
+    # percentages and per-share prices are NOT owner dollars — must stay raw
+    assert out["holdings"][0]["percent_change"] == -3.5
+    assert out["holdings"][0]["average_buy_price"] == 180.0
+    assert out["data"]["best_trade"]["pnl_pct"] == 4.2
+
+
+def test_public_insider_shares_kept_raw():
+    """Insider transactions are PUBLIC market data, not owner sizing. The key `shares`
+    scales owner holdings (fetch_live_data / paper_trading), but under the public
+    `insider_trades` subtree it must be kept RAW — scaling by the model-book factor
+    corrupts a public share count shown to the customer (8th-pass, Fable audit)."""
+    fixture = {
+        "insider_trades": {"NVDA": [{"name": "Jensen", "shares": 100000, "value": 5000000}]},
+        "holdings": [{"shares": 1000}],
+    }
+    out = server._scale_money(fixture, SCALE)
+    # public insider figures untouched...
+    assert out["insider_trades"]["NVDA"][0]["shares"] == 100000
+    assert out["insider_trades"]["NVDA"][0]["value"] == 5000000
+    # ...but a genuine owner holding `shares` still scales (owner-sizing mask intact)
+    assert out["holdings"][0]["shares"] == pytest.approx(1000 * SCALE, abs=1e-3)
