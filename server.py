@@ -267,9 +267,22 @@ _MONEY_KEYS = {
     # Monte-Carlo / distribution outcomes (Codex P0: these leaked raw dollars)
     "mean", "median", "p5", "p25", "p75", "p95", "var_95", "cvar_95",
     "current_equity", "center",
+    # 8th-pass (Fable audit): owner-$ keys the recursion previously passed through
+    # RAW — same leak class as the ECG array / sparkline `series`. `equity_change`
+    # = per-position unrealized $ P&L (data_fetcher), `extended_hours_equity` =
+    # account equity (data_fetcher), `realized_pnl`/`total_realized_pnl` = trade $
+    # P&L (trade_log, incl. nested best/worst_trade rows — scaled recursively).
+    "equity_change", "extended_hours_equity", "realized_pnl", "total_realized_pnl",
 }
 _QTY_KEYS = {"quantity", "qty", "shares", "fill_qty", "delta_shares",
              "shares_to_buy", "shares_to_trim"}
+
+# PUBLIC market-data subtrees kept VERBATIM (never scaled). The key `shares`
+# scales owner sizing (fetch_live_data / paper_trading holdings), but the same key
+# under `insider_trades` is a PUBLIC transaction count — scaling it by the
+# model-book factor shows the customer a corrupt number (8th-pass, Fable audit).
+# Semantic-path rule: decide by subtree, not by the bare key.
+_PUBLIC_RAW_KEYS = {"insider_trades"}
 
 # Bare-number arrays that carry OWNER DOLLARS (no dict key on the elements, so
 # the recursive scaler would return them unchanged and leak — Codex P0 on
@@ -335,7 +348,9 @@ def _scale_money(obj, factor: float, parent_key: str = ""):
         out = {}
         for k, v in obj.items():
             lk = str(k).lower()
-            if isinstance(v, (int, float)) and not isinstance(v, bool) and (
+            if lk in _PUBLIC_RAW_KEYS:
+                out[k] = v                          # public market data — never scale
+            elif isinstance(v, (int, float)) and not isinstance(v, bool) and (
                 lk in _MONEY_KEYS or lk.endswith("_usd") or lk.endswith("_dollars")
             ):
                 out[k] = round(v * factor, 2)
