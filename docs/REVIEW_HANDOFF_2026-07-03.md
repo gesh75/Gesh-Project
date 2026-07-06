@@ -1,4 +1,38 @@
-# GESH — Review Handoff (4th pass)
+# GESH — Review Handoff (4th → 8th pass)
+
+## 🚦 GO / NO-GO — Founder-Invitation Checklist (8th pass · 2026-07-05)
+
+> **STATUS: NO-GO until PRs #6–#10 are MERGED and the :9000 service is RESTARTED.**
+> The 8th adversarial pass (Fable) found a **live P0 customer-data leak** — already
+> fixed on a branch but **not yet on `main`**. Inviting before merge+restart would
+> expose the owner's real per-position P&L and account equity to paying customers.
+
+| # | Gate | State | Blocks invite? |
+|---|------|-------|----------------|
+| 1 | **P0 leak** — `equity_change` + `extended_hours_equity` masked on `/api/portfolio` | Fixed in **[#6]** (CI green), **not merged** | **YES — merge + restart** |
+| 2 | P1 — trade P&L (`realized_pnl`/`total_realized_pnl`) masked on `/api/trades*` | **[#6]** | latent today (owner is paper-only) |
+| 3 | P2 — public insider `shares` no longer over-scaled | **[#6]** | correctness, recommended |
+| 4 | P2 — `/track-record` DB strings HTML-escaped | **[#7]** (green) | recommended (public page) |
+| 5 | P3 — `/api/portfolio/history` no longer leaks `str(e)` | **[#8]** (green) | recommended |
+| 6 | P3 — billing revoke advances watermark (no resurrection) | **[#9]** (green) | recommended |
+| 7 | E2E lifecycle proof — pay → magic-link → masked dashboard → cancel → lockout | **[#10]** (green) | — |
+| 8 | Both CI jobs (`test` + `customer-isolation`) green on every PR | ✅ | — |
+| 9 | Stale 2026-07-03 analysis regenerated | Auto on **Mon 2026-07-06 10:30 ET** sanctioned run | wait for it — do not hand-run |
+| 10 | `customer-isolation` a REQUIRED GitHub check | needs GitHub Pro — **advisory**, pre-push hook covers solo alpha | deferred (owner's call) |
+
+**Path to GO:** (1) merge **#6 first** (it closes the live P0), then #7–#10;
+(2) restart the service so it drops its in-memory old code:
+`launchctl bootout gui/$(id -u)/com.gesh.main && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.gesh.main.plist`;
+(3) confirm Monday's daily run regenerated the analysis (report ≥60 KB, fresh DB row);
+(4) **then** send the founder invites (`docs/FOUNDER_OUTREACH.md`).
+
+[#6]: https://github.com/gesh75/Gesh-Project/pull/6
+[#7]: https://github.com/gesh75/Gesh-Project/pull/7
+[#8]: https://github.com/gesh75/Gesh-Project/pull/8
+[#9]: https://github.com/gesh75/Gesh-Project/pull/9
+[#10]: https://github.com/gesh75/Gesh-Project/pull/10
+
+---
 
 _Prepared 2026-07-03 for a fresh Codex/Gemini adversarial pass. Responds to the
 **3rd-pass `REQUEST CHANGES`** verdict and covers everything shipped since.
@@ -295,3 +329,56 @@ CI jobs pass.
   (`x.revenue_growth` flagged even when `d.revenue_growth` is numeric; `a.count||0`
   not trusted); all-assignments-safe (the `r = fetch()` shape rejected);
   depth-fail-closed.
+
+---
+
+## 8th-pass resolutions — final adversarial audit (Fable, 2026-07-05)
+
+A full multi-agent adversarial audit of the **entire customer-facing surface** (6
+lenses — XSS, auth/isolation, payment/webhook, financial-correctness, PII/secret
+leak, error-handling — each finding adversarially verified against the live code).
+10 raw findings; after verification, **6 real issues across 5 logical units**, each
+shipped with a failing-first negative test. PRs **#6–#10**, both CI jobs green.
+
+### Found + fixed
+
+| Sev | Finding | Fix (PR) |
+|-----|---------|----------|
+| **P0** (live) | `/api/portfolio` leaked `equity_change` (per-position owner $ P&L) + `extended_hours_equity` (account equity) — keys absent from `_MONEY_KEYS`, so the recursive masker passed them **raw** to customers. Same leak class as the ECG-array / sparkline-`series` leaks. | `#6` — added the keys; **hardened the leak sweep** (its mock used the covered name `pnl_usd` while production emits `equity_change`, so it was structurally blind) to seed the REAL production keys. |
+| **P1** (latent) | `/api/trades` + `/api/trades/stats` leaked `realized_pnl` / `total_realized_pnl` (+ nested best/worst_trade). Latent only because the owner runs paper-only. | `#6` — added to `_MONEY_KEYS`; sweep now seeds an owner trade row. |
+| **P2** (correctness) | `/api/market-data` **over-scaled** public insider `shares` by the model-book factor (key `shares` masks owner sizing in `fetch_live_data`/`paper_trading`, but under `insider_trades` it is public data) → customers saw corrupt insider counts. | `#6` — `_PUBLIC_RAW_KEYS = {"insider_trades"}` kept verbatim. |
+| **P2** (XSS) | Public `/track-record` (`proof_page.py`) interpolated DB `symbol`/`source`/`outcome`/timestamps into HTML with **no escaping** — outside the dashboard guard; CSP has `'unsafe-inline'`. Low exploitability (engine-written values) but a real stored-XSS surface. | `#7` — `html.escape` on every DB-sourced string sink. |
+| **P3** (leak) | `/api/portfolio/history` (customer-reachable) returned `{"error": str(e)}` → a DB failure leaked the sqlite path / "database disk image is malformed" / schema (masker only redacts `$`-prose). | `#8` — log server-side, return generic `"unavailable"`. |
+| **P3** (integrity) | `revoke()` used `set_billing(event_at=event_at or None)`; a **timestamp-less** `subscription_expired` left `billing_event_at` unadvanced, so a **reordered** `subscription_updated(active, variant)` (tier ≠ None → skips the H6 guard) passed `_is_stale` and **resurrected** a revoked account. HMAC-gated (no forgery). | `#9` — advance the watermark on revoke (event ts, else received-at now). |
+
+### Reviewed and intentionally kept (not leaks)
+- `/api/config` `str(e)` — **owner-gated** (`require_api_key`); intentional validation feedback to the trusted owner.
+- `RobinhoodOfflineError` → 503 — a **typed, non-secret** message.
+- Billing-webhook 400/503 `str(e)` — returns to an **HMAC-authenticated** Lemon Squeezy (bad signature 401s *before* any `str(e)`); server-to-server, not a browser.
+- XSS guard `_MAP_LOCALS` / `_SAFE_CALL_NAME` probed again — no new bypass; the 7th-pass soundness rules hold.
+
+### Also added
+- **E2E lifecycle integration test** (`#10`) — pay → magic-link → masked dashboard → replay-rejected → cancel → lockout, across the real code paths.
+
+### Still open (disclosed — deferred, not launch blockers for the ~5-user alpha)
+- **CSP `'unsafe-inline'`** on `script-src` (the dashboard uses inline handlers +
+  one inline `<script>`); `connect-src`/`img-src`/`script-src` are self-pinned, so
+  exfiltration is blocked. Nonce-CSP is the durable fix — tracked, not done.
+- **Per-endpoint customer DTOs** — the allowlist-masking approach is sound and swept,
+  but a positive-allowlist DTO per endpoint is the agreed prerequisite for **wider
+  paid rollout** (not the comped alpha).
+- **`customer-isolation` as a REQUIRED GitHub check** — needs GitHub Pro on a private
+  repo (free tier can't require checks). The `scripts/hooks/pre-push` gate + green CI
+  cover the solo alpha; adopt Pro when a collaborator/agent starts pushing. See
+  `docs/BRANCH_PROTECTION.md` (one-command turn-key).
+- **Backlog PR-4…7 (gesh-core)** — batch `yf.download` + single-connection tax scan
+  (PR-4), resolver unification + python-dotenv (PR-5), coverage 76→80% on
+  `sentiment_connector` (PR-6), wash-sale **±30-day backward** lookback (PR-7, the
+  current `get_wash_status` only checks the forward window). Perf/coverage/tax-accuracy
+  — none block founder invitations.
+
+### Next owner
+- **Merge order:** #6 first (live P0), then #7–#10; **restart `com.gesh.main`** after
+  merge (it runs stale in-memory code). Then verify Monday's analysis regen, then invite.
+- All 5 PRs are independent (the two touching `server.py` hit non-overlapping regions),
+  mergeable in any order — but #6 is the one that must land before any invite.
