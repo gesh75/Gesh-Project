@@ -21,12 +21,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import html
 import math
 import os
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+
+
+# Public page rendered OUTSIDE the dashboard XSS guard, under a CSP that carries
+# 'unsafe-inline' — so every DB-sourced string (symbol/source/outcome/timestamps)
+# MUST be HTML-escaped at the sink or a `<` in the data executes (8th-pass, Fable
+# audit). Numbers are float()/int()-coerced elsewhere and are safe.
+def _esc(v: Any) -> str:
+    return html.escape(str(v if v is not None else ""))
 
 # Tracker lives in the trading engine repo; default to its gesh_financial.db.
 DEFAULT_TRACKER_DB = os.getenv(
@@ -243,7 +252,7 @@ def _fmt_spy(v: Any) -> str:
 def _fmt_sources(by_source: Any) -> str:
     if not by_source:
         return "—"
-    return " · ".join(f"{k} {v}" for k, v in sorted(by_source.items(), key=lambda x: -x[1]))
+    return " · ".join(f"{_esc(k)} {int(v)}" for k, v in sorted(by_source.items(), key=lambda x: -x[1]))
 
 
 def render_html(data: dict[str, Any]) -> str:
@@ -284,17 +293,17 @@ def render_html(data: dict[str, Any]) -> str:
     for t in reversed(data["trades"][-50:]):
         oc = t["outcome"]
         c = _GREEN if oc == "WIN" else (_RED if oc == "LOSS" else _DIM)
-        ts = lambda v: (str(v or "")[:16].replace("T", " ")) or "—"
+        ts = lambda v: _esc((str(v or "")[:16].replace("T", " ")) or "—")
         rows_html += (
             f'<tr style="border-bottom:1px solid {_BORDER}">'
-            f'<td style="padding:8px 12px">{t["symbol"]}</td>'
-            f'<td style="padding:8px 12px;color:{_DIM}">{t.get("source","")}</td>'
+            f'<td style="padding:8px 12px">{_esc(t["symbol"])}</td>'
+            f'<td style="padding:8px 12px;color:{_DIM}">{_esc(t.get("source",""))}</td>'
             f'<td style="padding:8px 12px;color:{_DIM};white-space:nowrap">{ts(t.get("entry_at"))}</td>'
             f'<td style="padding:8px 12px;color:{_DIM};white-space:nowrap">{ts(t.get("exit_at"))}</td>'
             f'<td style="padding:8px 12px;text-align:right">${float(t["entry_price"]):.2f}</td>'
             f'<td style="padding:8px 12px;text-align:right">${float(t["exit_price"]):.2f}</td>'
             f'<td style="padding:8px 12px;text-align:right;color:{c}">{float(t["pnl_pct"])*100:+.1f}%</td>'
-            f'<td style="padding:8px 12px;text-align:right;color:{c};font-weight:600">{oc}</td>'
+            f'<td style="padding:8px 12px;text-align:right;color:{c};font-weight:600">{_esc(oc)}</td>'
             f'<td style="padding:8px 12px;text-align:right;color:{_DIM}">{float(t.get("hold_days") or 0):.1f}d</td>'
             f'</tr>'
         )
@@ -333,7 +342,7 @@ def render_html(data: dict[str, Any]) -> str:
  <h1 style="color:{_CYAN}">GESH Financial — Signal Accuracy Track Record</h1>
  <div class="sub">Documented paper-trade performance — every signal recorded at decision time
    by the live engine (sources labeled per trade: consensus = 11-node engine, manual = rated entries) ·
-   generated {data['generated_at']}</div>
+   generated {_esc(data['generated_at'])}</div>
 
  <div style="background:{_SURFACE};border:1px solid {banner_color};border-left:4px solid {banner_color};
    border-radius:8px;padding:14px 16px;margin-bottom:20px;color:#dfe8f2;font-size:14px">{banner_txt}</div>
