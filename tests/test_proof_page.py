@@ -121,3 +121,22 @@ class TestRenderHtml:
         html = proof_page.render_html(proof_page.load_track_record(db, today="2026-06-03"))
         assert "NVDA" in html
         assert "TSLA" in html
+
+
+class TestProofPageEscaping:
+    """8th-pass (Fable audit): /track-record is a PUBLIC page rendered OUTSIDE the
+    dashboard XSS guard, and CSP carries 'unsafe-inline' — so a `<` in a DB-sourced
+    symbol/source would execute. Every DB string must be HTML-escaped."""
+
+    def test_db_strings_are_html_escaped(self, tmp_path):
+        db = _make_db(tmp_path, [
+            {"symbol": "<script>alert(1)</script>",
+             "source": "<img src=x onerror=alert(2)>", "exit": 130, "outcome": "WIN"},
+        ])
+        html = proof_page.render_html(proof_page.load_track_record(db, today="2026-06-03"))
+        # raw injection must NOT survive (row cell AND the by-source summary)
+        assert "<script>alert(1)</script>" not in html
+        assert "<img src=x onerror=alert(2)>" not in html
+        # escaped form is what renders
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+        assert "&lt;img src=x onerror=alert(2)&gt;" in html
