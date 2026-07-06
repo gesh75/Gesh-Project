@@ -1377,8 +1377,12 @@ def portfolio_history(points: int = 60):
                   for h in hist if h.get("total_equity") is not None]
         return {"status": "ok", "series": series, "points": len(series)}
     except Exception as e:
-        # Graceful — the sparkline draws nothing rather than erroring.
-        return {"status": "error", "series": [], "error": str(e)}
+        # Graceful — the sparkline draws nothing rather than erroring. Log the
+        # detail server-side; NEVER return str(e) to the client — a DB failure
+        # carries the sqlite path / "database disk image is malformed" / schema
+        # (8th-pass, Fable audit: customer-reachable str(e) leak).
+        logger.warning("portfolio_history failed: %s", e)
+        return {"status": "error", "series": [], "error": "unavailable"}
 
 
 @app.get("/api/sections/status")
