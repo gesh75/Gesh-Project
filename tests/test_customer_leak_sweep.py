@@ -140,6 +140,15 @@ def client(monkeypatch):
                         lambda *a, **k: {"symbol": "NVDA", "verdict": "BUY", "regime": "NEUTRAL", "score": 0.3}, raising=False)
     monkeypatch.setattr("fft_cycles.detect_fft_cycles",
                         lambda *a, **k: {"symbol": "NVDA", "signal": "NEUTRAL", "period_days": 21}, raising=False)
+    # per-ticker "analyze any share" surfaces (public data, no owner dollars)
+    monkeypatch.setattr("regime.detect_regimes",
+                        lambda syms: {"regimes": [{"symbol": syms[0], "regime": "NEUTRAL",
+                                      "adx": 20.0, "rsi": 50.0, "pct_b": 0.5, "bb_width": 0.1,
+                                      "icon": "•", "description": "flat"}], "regime_summary": "x"},
+                        raising=False)
+    monkeypatch.setattr("fundamental_agent._fetch_fundamentals_batch",
+                        lambda syms: [{"symbol": syms[0], "momentum_gap": "LOW", "score": 50}],
+                        raising=False)
     monkeypatch.setattr("benchmarks.batch_alpha", lambda *a, **k: [], raising=False)
     monkeypatch.setattr("crypto_correlation.crypto_risk_summary", lambda *a, **k: {"crypto_pct": 0.0}, raising=False)
     monkeypatch.setattr("defi_yield.get_yield_landscape", lambda *a, **k: {"options": []}, raising=False)
@@ -183,6 +192,8 @@ COVERED: dict[str, str] = {
     "/api/sections/status": "/api/sections/status",
     "/api/fft-cycles": "/api/fft-cycles",
     "/api/fft-cycles/{symbol}": "/api/fft-cycles/NVDA",
+    "/api/regime/{symbol}": "/api/regime/NVDA",
+    "/api/fundamentals/{symbol}": "/api/fundamentals/NVDA",
     "/api/gemini/status": "/api/gemini/status",
     "/api/config": "/api/config",
     "/api/scanner/consolidation/{symbol}": "/api/scanner/consolidation/NVDA",
@@ -201,6 +212,7 @@ COVERED: dict[str, str] = {
 # GET /api routes deliberately not swept, each with a reason.
 EXCLUDED: dict[str, str] = {
     "/api/ollama/status": "410 Gone — endpoint permanently removed; carries no data",
+    "/api/me": "returns only a session role string (owner|customer) — no owner financial data",
 }
 
 
