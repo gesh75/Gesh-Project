@@ -371,11 +371,21 @@ shipped with a failing-first negative test. PRs **#6–#10**, both CI jobs green
   repo (free tier can't require checks). The `scripts/hooks/pre-push` gate + green CI
   cover the solo alpha; adopt Pro when a collaborator/agent starts pushing. See
   `docs/BRANCH_PROTECTION.md` (one-command turn-key).
-- **Backlog PR-4…7 (gesh-core)** — batch `yf.download` + single-connection tax scan
-  (PR-4), resolver unification + python-dotenv (PR-5), coverage 76→80% on
-  `sentiment_connector` (PR-6), wash-sale **±30-day backward** lookback (PR-7, the
-  current `get_wash_status` only checks the forward window). Perf/coverage/tax-accuracy
-  — none block founder invitations.
+- **Backlog PR-4…7 (gesh-core)** — dispositioned 2026-07-05; none block invitations:
+  - **PR-6 (coverage 76→80%): ALREADY MET.** gesh-core's own suite is at **81%**
+    (`pytest --cov=gesh_core`; 197 tests). No CI coverage gate exists. Nothing to do.
+  - **PR-7 (wash-sale ±30-day backward): data-blocked — do not ship partial.** The IRS
+    rule is symmetric; the current `tax_harvester.get_wash_status` models only the
+    **forward** window (post-harvest re-buy). The **backward** half needs lot-level
+    **purchase dates**, but `/api/tax/harvest` passes only `{symbol, quantity, equity,
+    average_buy_price}` — no acquisition date. A correct fix must first plumb recent
+    BUY-order dates (Robinhood orders / `trade_log`) into `scan_tax_loss_candidates`;
+    a version without that would **mis-state a tax-eligibility number** shown to a
+    paying customer. Feature-sized, deferred (not a quick logic fix).
+  - **PR-4 (batch `yf.download` + single-connection tax scan):** perf. `market_fetch`
+    is one-symbol-per-call; the win requires the consensus-convergence refactor (callers
+    batch), noted "future" in the module docstring. Deferred (perf-only, higher risk).
+  - **PR-5 (resolver unification + python-dotenv):** infra cleanup. Deferred.
 
 ### Next owner
 - **Merge order:** #6 first (live P0), then #7–#10; **restart `com.gesh.main`** after
