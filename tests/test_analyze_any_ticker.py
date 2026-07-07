@@ -211,7 +211,19 @@ def test_rh_analyst_none_when_no_ratings(monkeypatch):
     assert market_data.rh_analyst("NVDA") is None
 
 
+def test_news_prefers_alpaca(monkeypatch):
+    """Alpaca is primary (VPN-safe); RSS is not consulted when Alpaca returns items."""
+    monkeypatch.setattr("news_agent._fetch_alpaca_news",
+                        lambda sym, limit=8: [{"title": "AI chip news", "url": "http://a",
+                                               "source": "benzinga", "published": "2026-07-07"}],
+                        raising=False)
+    r = _client(monkeypatch).get("/api/news/NVDA")
+    assert r.status_code == 200
+    assert r.json()["data"][0]["source"] == "benzinga"
+
+
 def test_news_symbol_returns_trimmed_headlines(monkeypatch):
+    monkeypatch.setattr("news_agent._fetch_alpaca_news", lambda sym, limit=8: [], raising=False)  # RSS fallback
     monkeypatch.setattr(
         "news_agent._fetch_all_news",
         lambda sym, days_back=7: [{"title": "NVDA soars", "url": "http://x", "source": "Yahoo",
@@ -226,7 +238,37 @@ def test_news_symbol_returns_trimmed_headlines(monkeypatch):
 
 
 def test_news_symbol_empty_is_ok_not_404(monkeypatch):
+    monkeypatch.setattr("news_agent._fetch_alpaca_news", lambda sym, limit=8: [], raising=False)
     monkeypatch.setattr("news_agent._fetch_all_news", lambda sym, days_back=7: [], raising=False)
     r = _client(monkeypatch).get("/api/news/NVDA")
     assert r.status_code == 200
     assert r.json()["data"] == []
+
+
+def test_fetch_alpaca_news_maps_shape(monkeypatch):
+    import news_agent
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+
+    # Real Alpaca shape: articles under res.data['news'], each a dict (no .news attr).
+    class _Res:
+        data = {"news": [{"headline": "NVDA up", "url": "http://x", "source": "benzinga",
+                          "created_at": "2026-07-07T10:00:00+00:00"}]}
+
+    class _Client:
+        def __init__(self, *a):
+            pass
+
+        def get_news(self, req):
+            return _Res()
+    monkeypatch.setattr("alpaca.data.historical.news.NewsClient", _Client, raising=False)
+    out = news_agent._fetch_alpaca_news("NVDA")
+    assert out[0]["title"] == "NVDA up" and out[0]["source"] == "benzinga"
+    assert out[0]["published"] == "2026-07-07T10:00"   # trimmed to minute
+
+
+def test_fetch_alpaca_news_no_keys_empty(monkeypatch):
+    import news_agent
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    assert news_agent._fetch_alpaca_news("NVDA") == []
