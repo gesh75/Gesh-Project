@@ -588,6 +588,7 @@ body.customer .owner-only{display:none!important}
         <button class="btn-analyze" onclick="analyzeTicker(document.getElementById('analyze-input').value)">▶ Analyze</button>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Not financial advice — research/observability only. Signals are live on public market data; you trade your own account.</div>
+      <div id="analyze-watchlist" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px"></div>
       <div id="analyze-results">
         <div class="deep-placeholder"><div class="deep-ph-text">Enter a ticker to get a live read — consensus verdict, market regime, dominant price cycle, and fundamental momentum, on any US-listed stock.</div></div>
       </div>
@@ -2415,6 +2416,25 @@ async function applyRoleNav(){
     window.__isCustomer=true;
     switchTab('analyze');
   }
+  loadWatchlist();
+}
+
+// ── per-user watchlist (saved tickers on the Analyze tab) ─────────────────────
+async function loadWatchlist(){
+  const el=document.getElementById('analyze-watchlist'); if(!el) return;
+  try{
+    const wl=(((await fetch('/api/watchlist').then(r=>r.json()))||{}).data)||[];
+    el.innerHTML = wl.length
+      ? `<span style="color:var(--muted);font-size:12px;margin-right:4px">Watchlist:</span>`
+        + wl.map(s=>`<span onclick="analyzeTicker('${daEsc(s)}')" style="cursor:pointer;background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;font-weight:700">${daEsc(s)} <span onclick="event.stopPropagation();removeFromWatch('${daEsc(s)}')" style="color:var(--muted);margin-left:4px">✕</span></span>`).join('')
+      : `<span style="color:var(--muted);font-size:12px">No saved tickers yet — analyze one and click ★ Save.</span>`;
+  }catch(e){ el.innerHTML=''; }
+}
+async function addToWatch(sym){
+  try{ await fetch('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})}); loadWatchlist(); if(window.toast)toast('Saved '+sym+' to watchlist','success'); }catch(e){}
+}
+async function removeFromWatch(sym){
+  try{ await fetch('/api/watchlist/'+encodeURIComponent(sym),{method:'DELETE'}); loadWatchlist(); }catch(e){}
 }
 
 // buildRow: named to match the XSS guard's audited build* builder pattern — its
@@ -2481,7 +2501,7 @@ async function analyzeTicker(raw){
       <div class="card" style="margin-top:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
           <div style="${T}">Price — ${daEsc(sym)}</div>
-          <div>${periods.map(p=>`<button class="per-btn" onclick="analyzeChart('${daEsc(sym)}','${daEsc(p)}')">${daEsc(p.toUpperCase())}</button>`).join('')}</div>
+          <div><button class="per-btn" style="background:rgba(0,212,255,.12);border-color:var(--accent);color:var(--accent);margin-right:6px" onclick="addToWatch('${daEsc(sym)}')" title="Save to watchlist">★ Save</button>${periods.map(p=>`<button class="per-btn" onclick="analyzeChart('${daEsc(sym)}','${daEsc(p)}')">${daEsc(p.toUpperCase())}</button>`).join('')}</div>
         </div>
         <div id="analyze-chart" style="min-height:220px"></div>
       </div>
