@@ -1533,14 +1533,20 @@ def regime_symbol(symbol: str):
 
 @app.get("/api/fundamentals/{symbol}")
 def fundamentals_symbol(symbol: str):
-    """Fundamental momentum for ANY ticker (public yfinance data)."""
+    """Company fundamentals for ANY ticker. Robinhood is PRIMARY (VPN-safe: PE / P/B
+    / market-cap / 52-week range / dividend-yield / sector); yfinance momentum row is
+    the fallback (its .info is category-blocked under the owner's VPN)."""
     sym = _safe_symbol(symbol)
     try:
-        import fundamental_agent
-        rows = fundamental_agent._fetch_fundamentals_batch([sym])
-        if not rows or rows[0].get("error"):
+        import market_data
+        row = market_data.rh_fundamentals(sym)
+        if not row:
+            import fundamental_agent
+            rows = fundamental_agent._fetch_fundamentals_batch([sym])
+            row = rows[0] if rows and not rows[0].get("error") else None
+        if not row:
             raise HTTPException(status_code=404, detail="No fundamentals")
-        return {"status": "ok", "data": rows[0]}
+        return {"status": "ok", "data": row}
     except HTTPException:
         raise
     except Exception as e:
@@ -1549,13 +1555,17 @@ def fundamentals_symbol(symbol: str):
 
 @app.get("/api/analyst/{symbol}")
 def analyst_symbol(symbol: str):
-    """Wall-Street analyst targets for ANY ticker (public yfinance data)."""
+    """Analyst ratings for ANY ticker. Robinhood is PRIMARY (VPN-safe buy/hold/sell
+    consensus + # analysts); yfinance price-targets are the fallback."""
     sym = _safe_symbol(symbol)
     try:
         import market_data
-        data = market_data.get_analyst_targets([sym]) or {}
-        row = data.get(sym)
-        if not row or row.get("error"):   # yfinance failure returns an error row — don't leak it
+        row = market_data.rh_analyst(sym)
+        if not row:
+            data = market_data.get_analyst_targets([sym]) or {}
+            yf_row = data.get(sym)
+            row = yf_row if (yf_row and not yf_row.get("error")) else None
+        if not row:
             raise HTTPException(status_code=404, detail="No analyst data")
         return {"status": "ok", "data": row}
     except HTTPException:

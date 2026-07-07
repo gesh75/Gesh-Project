@@ -51,6 +51,7 @@ def test_regime_symbol_no_data_is_404(monkeypatch):
 
 
 def test_fundamentals_symbol_returns_single_row(monkeypatch):
+    monkeypatch.setattr("market_data.rh_fundamentals", lambda s: None, raising=False)  # force yfinance fallback
     monkeypatch.setattr("fundamental_agent._fetch_fundamentals_batch",
                         lambda syms: [{"symbol": syms[0], "momentum_gap": "LOW", "score": 62}],
                         raising=False)
@@ -61,10 +62,42 @@ def test_fundamentals_symbol_returns_single_row(monkeypatch):
 
 
 def test_fundamentals_symbol_error_row_is_404(monkeypatch):
+    monkeypatch.setattr("market_data.rh_fundamentals", lambda s: None, raising=False)
     monkeypatch.setattr("fundamental_agent._fetch_fundamentals_batch",
                         lambda syms: [{"symbol": syms[0], "error": "no data"}], raising=False)
     r = _client(monkeypatch).get("/api/fundamentals/AAPL")
     assert r.status_code == 404
+
+
+def test_fundamentals_prefers_robinhood(monkeypatch):
+    """Robinhood is primary — when it returns data, yfinance is not consulted."""
+    monkeypatch.setattr("market_data.rh_fundamentals",
+                        lambda s: {"pe_ratio": 30.5, "market_cap": 1.2e12, "sector": "Tech"},
+                        raising=False)
+    r = _client(monkeypatch).get("/api/fundamentals/NVDA")
+    assert r.status_code == 200
+    assert r.json()["data"]["pe_ratio"] == 30.5
+    assert r.json()["data"]["sector"] == "Tech"
+
+
+def test_rh_fundamentals_maps_robinhood_fields(monkeypatch):
+    import market_data
+    fake = [{"pe_ratio": "30.50", "pb_ratio": "12.0", "market_cap": "1200000000000",
+             "high_52_weeks": "200.00", "low_52_weeks": "90.00", "dividend_yield": "0.03",
+             "sector": "Technology", "industry": "Semiconductors"}]
+    monkeypatch.setattr("robin_stocks.robinhood.stocks.get_fundamentals",
+                        lambda s: fake, raising=False)
+    out = market_data.rh_fundamentals("NVDA")
+    assert out["pe_ratio"] == 30.5 and out["high_52"] == 200.0 and out["sector"] == "Technology"
+
+
+def test_rh_fundamentals_none_on_failure(monkeypatch):
+    import market_data
+
+    def _boom(s):
+        raise RuntimeError("rh down")
+    monkeypatch.setattr("robin_stocks.robinhood.stocks.get_fundamentals", _boom, raising=False)
+    assert market_data.rh_fundamentals("NVDA") is None
 
 
 # ── Task 2: /api/me role ─────────────────────────────────────────────────────
@@ -119,7 +152,19 @@ def test_intraday_5m_no_keys_returns_none(monkeypatch):
 
 # ── analyst targets + news headlines per-ticker (v1.1 enrichment) ─────────────
 
+def test_analyst_prefers_robinhood(monkeypatch):
+    """Robinhood is primary — buy/hold/sell consensus, no yfinance needed."""
+    monkeypatch.setattr("market_data.rh_analyst",
+                        lambda s: {"recommendation": "Buy", "num_buy": 62, "num_hold": 3,
+                                   "num_sell": 1, "num_analysts": 66}, raising=False)
+    r = _client(monkeypatch).get("/api/analyst/nvda")
+    assert r.status_code == 200
+    assert r.json()["data"]["recommendation"] == "Buy"
+    assert r.json()["data"]["num_analysts"] == 66
+
+
 def test_analyst_symbol_returns_targets(monkeypatch):
+    monkeypatch.setattr("market_data.rh_analyst", lambda s: None, raising=False)  # force yfinance fallback
     monkeypatch.setattr(
         "market_data.get_analyst_targets",
         lambda syms: {syms[0]: {"target_mean": 200.0, "num_analysts": 40,
@@ -132,6 +177,7 @@ def test_analyst_symbol_returns_targets(monkeypatch):
 
 
 def test_analyst_symbol_no_data_404(monkeypatch):
+    monkeypatch.setattr("market_data.rh_analyst", lambda s: None, raising=False)
     monkeypatch.setattr("market_data.get_analyst_targets", lambda syms: {}, raising=False)
     r = _client(monkeypatch).get("/api/analyst/NVDA")
     assert r.status_code == 404
@@ -139,12 +185,30 @@ def test_analyst_symbol_no_data_404(monkeypatch):
 
 def test_analyst_symbol_error_row_404_not_leaked(monkeypatch):
     # yfinance failure returns {sym: {"error": "..."}} — must 404, never 200-with-error
+    monkeypatch.setattr("market_data.rh_analyst", lambda s: None, raising=False)
     monkeypatch.setattr("market_data.get_analyst_targets",
                         lambda syms: {syms[0]: {"error": "curl (35) Connection reset by peer"}},
                         raising=False)
     r = _client(monkeypatch).get("/api/analyst/NVDA")
     assert r.status_code == 404
     assert "Connection reset" not in r.text   # internal error never reaches the client
+
+
+def test_rh_analyst_maps_ratings(monkeypatch):
+    import market_data
+    monkeypatch.setattr("robin_stocks.robinhood.stocks.get_ratings",
+                        lambda s: {"summary": {"num_buy_ratings": 62, "num_hold_ratings": 3,
+                                               "num_sell_ratings": 1}}, raising=False)
+    out = market_data.rh_analyst("NVDA")
+    assert out == {"recommendation": "Buy", "num_buy": 62, "num_hold": 3,
+                   "num_sell": 1, "num_analysts": 66}
+
+
+def test_rh_analyst_none_when_no_ratings(monkeypatch):
+    import market_data
+    monkeypatch.setattr("robin_stocks.robinhood.stocks.get_ratings",
+                        lambda s: {"summary": {}}, raising=False)
+    assert market_data.rh_analyst("NVDA") is None
 
 
 def test_news_symbol_returns_trimmed_headlines(monkeypatch):
