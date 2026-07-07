@@ -2439,18 +2439,43 @@ async function analyzeTicker(raw){
     const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data;
     if(!d && !rg && !fc && !fu){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">No data for '+daEsc(sym)+' — check the ticker and try again.</div></div>'; return; }
     const periods=['1d','5d','1mo','3mo','6mo','1y'];
-    box.innerHTML=`
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
-        <div class="card"><div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:8px">Consensus — ${daEsc(sym)}</div>
-          ${buildRow('Verdict', d?d.verdict:'n/a')}${buildRow('Confidence', d&&d.confidence!=null?daEsc(d.confidence)+'%':'—')}</div>
-        <div class="card"><div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:8px">Market Regime</div>
-          ${buildRow('Regime', rg?rg.regime:'n/a')}${buildRow('ADX', rg&&rg.adx!=null?daEsc(rg.adx):'—')}${buildRow('RSI', rg&&rg.rsi!=null?daEsc(rg.rsi):'—')}</div>
-        <div class="card"><div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:8px">Cycle &amp; Fundamentals</div>
-          ${buildRow('Dominant cycle', fc&&fc.period_days!=null?daEsc(fc.period_days)+'d':'n/a')}${buildRow('Cycle signal', fc?fc.signal:'n/a')}${buildRow('Fundamental momentum', fu?fu.momentum_gap:'n/a')}</div>
+    const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
+    // Rich consensus card — mirrors the owner Signals card: 11-node vote chips +
+    // score bar + bull/bear/neutral counts (voteChip/scoreBar are audited builders).
+    let consHtml='';
+    if(d){
+      const vc=d.verdict_color, chipClass=vc==='green'?'cv-green':vc==='red'?'cv-red':vc==='cyan'?'cv-cyan':'cv-muted';
+      const voteChips=Object.entries(d.votes||{}).map(([n,v])=>voteChip(n,v)).join('');
+      consHtml=`<div class="card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span class="kelly-sym" style="font-size:24px">${daEsc(sym)}</span>
+          <span class="cons-verdict ${chipClass}">${daEsc(d.verdict)}</span>
+        </div>
+        <div style="display:flex;gap:16px;font-size:15px;color:var(--muted2);margin-bottom:10px;flex-wrap:wrap">
+          <span style="color:var(--green);font-weight:700">🟢 ${daEsc(d.bullish)} bull</span>
+          <span style="color:var(--red);font-weight:700">🔴 ${daEsc(d.bearish)} bear</span>
+          <span>⚪ ${daEsc(d.neutral)} neutral</span>
+          <span style="color:var(--muted)">✗ ${daEsc(d.abstains)} no-data</span>
+          <span style="margin-left:auto;color:var(--accent);font-weight:700">conf ${daEsc(d.confidence)}%</span>
+        </div>
+        ${scoreBar(d.raw_score)}
+        <div class="vote-row" style="margin-top:8px">${voteChips}</div>
+      </div>`;
+    }
+    const cyc=(fc&&fc.primary_cycle)||{};
+    box.innerHTML=`${consHtml}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+        <div class="card"><div style="${T}">Market Regime</div>
+          ${buildRow('Regime', rg?((rg.icon?rg.icon+' ':'')+rg.regime):'n/a')}${buildRow('ADX', rg&&rg.adx!=null?daEsc(rg.adx):'—')}${buildRow('RSI', rg&&rg.rsi!=null?daEsc(rg.rsi):'—')}
+          ${rg&&rg.description?`<div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.5">${daEsc(rg.description)}</div>`:''}</div>
+        <div class="card"><div style="${T}">Price Cycle (FFT)</div>
+          ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
+        <div class="card"><div style="${T}">Fundamentals</div>
+          ${buildRow('Momentum gap', fu&&fu.momentum_gap?fu.momentum_gap:'n/a')}${buildRow('Score', fu&&fu.score!=null?daEsc(fu.score):'n/a')}</div>
       </div>
       <div class="card" style="margin-top:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-          <div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px">Price — ${daEsc(sym)}</div>
+          <div style="${T}">Price — ${daEsc(sym)}</div>
           <div>${periods.map(p=>`<button class="per-btn" onclick="analyzeChart('${daEsc(sym)}','${daEsc(p)}')">${daEsc(p.toUpperCase())}</button>`).join('')}</div>
         </div>
         <div id="analyze-chart" style="min-height:220px"></div>
