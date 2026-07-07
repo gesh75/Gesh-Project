@@ -2430,13 +2430,15 @@ async function analyzeTicker(raw){
   if(!sym){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">Enter a ticker.</div></div>'; return; }
   box.innerHTML='<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Analyzing '+daEsc(sym)+' — 11-node consensus, regime, cycle &amp; fundamentals…</div></div>';
   try{
-    const [cons,reg,fft,fund]=await Promise.all([
+    const [cons,reg,fft,fund,anl,news]=await Promise.all([
       fetch(`/api/consensus/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(`/api/regime/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(`/api/fft-cycles/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(`/api/fundamentals/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/analyst/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/news/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
     ]);
-    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data;
+    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[];
     if(!d && !rg && !fc && !fu){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">No data for '+daEsc(sym)+' — check the ticker and try again.</div></div>'; return; }
     const periods=['1d','5d','1mo','3mo','6mo','1y'];
     const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
@@ -2463,6 +2465,7 @@ async function analyzeTicker(raw){
       </div>`;
     }
     const cyc=(fc&&fc.primary_cycle)||{};
+    const safeUrl=u=>(String(u||'').startsWith('http'))?u:'#';   // block javascript:/data: hrefs
     box.innerHTML=`${consHtml}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
         <div class="card"><div style="${T}">Market Regime</div>
@@ -2472,6 +2475,8 @@ async function analyzeTicker(raw){
           ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
         <div class="card"><div style="${T}">Fundamentals</div>
           ${buildRow('Momentum gap', fu&&fu.momentum_gap?fu.momentum_gap:'n/a')}${buildRow('Score', fu&&fu.score!=null?daEsc(fu.score):'n/a')}</div>
+        <div class="card"><div style="${T}">Analyst Targets</div>
+          ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${buildRow('Mean target', an&&an.target_mean!=null?'$'+daEsc(an.target_mean):'n/a')}${buildRow('Range', an&&an.target_low!=null&&an.target_high!=null?'$'+daEsc(an.target_low)+' – $'+daEsc(an.target_high):'—')}${buildRow('Upside', an&&an.upside_pct!=null?daEsc(an.upside_pct)+'%':'—')}${buildRow('# analysts', an&&an.num_analysts!=null?daEsc(an.num_analysts):'—')}</div>
       </div>
       <div class="card" style="margin-top:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
@@ -2479,11 +2484,16 @@ async function analyzeTicker(raw){
           <div>${periods.map(p=>`<button class="per-btn" onclick="analyzeChart('${daEsc(sym)}','${daEsc(p)}')">${daEsc(p.toUpperCase())}</button>`).join('')}</div>
         </div>
         <div id="analyze-chart" style="min-height:220px"></div>
-      </div>`;
+      </div>
+      <div class="card" style="margin-top:16px"><div style="${T}">Recent News</div>
+        ${nw.length?nw.map(n=>`<a href="${daEsc(safeUrl(n.url))}" target="_blank" rel="noopener noreferrer" style="display:block;padding:9px 0;border-bottom:1px solid var(--border);text-decoration:none">
+          <div style="font-size:14px;color:var(--text)">${daEsc(n.title)}</div>
+          <div style="font-size:12px;color:var(--muted)">${daEsc(n.source)}${n.published?' · '+daEsc(n.published):''}</div></a>`).join(''):'<div class="deep-ph-text" style="padding:20px 0;text-align:center">No recent news for this ticker.</div>'}</div>`;
     analyzeChart(sym,'1mo');
   }catch(e){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">'+daEsc('Could not analyze '+sym)+'</div></div>'; }
 }
 
+let analyzePriceChart=null;
 async function analyzeChart(sym,period){
   const el=document.getElementById('analyze-chart'); if(!el) return;
   el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Loading '+daEsc(String(period).toUpperCase())+'…</div>';
@@ -2491,11 +2501,22 @@ async function analyzeChart(sym,period){
     const j=await fetch(`/api/chart/${sym}?period=${period}`).then(r=>r.json());
     if(j.intraday_unavailable){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Intraday data unavailable right now — try a daily range (1M–1Y).</div>'; return; }
     const p=j.prices||[]; if(p.length<2){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">No price data.</div>'; return; }
-    const w=800,h=220,pad=8, mn=Math.min(...p), mx=Math.max(...p), rng=(mx-mn)||1;
-    const pts=p.map((v,i)=>`${(pad+i*(w-2*pad)/(p.length-1)).toFixed(1)},${(h-pad-(v-mn)/rng*(h-2*pad)).toFixed(1)}`).join(' ');
-    const col=(p[p.length-1]>=p[0])?'#00e87a':'#ff3c5a';
-    el.innerHTML=`<svg viewBox="0 0 800 220" preserveAspectRatio="none" style="width:100%;height:220px"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2"/></svg>`
-      +`<div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span>${daEsc(j.pct_change)}%</span><span>${daEsc(j.current)}</span></div>`;
+    const isPos=(j.pct_change||0)>=0, lineColor=isPos?'#00e676':'#ff4444';
+    // current price + change header (escaped) + a Chart.js canvas (data goes to
+    // the canvas API, not innerHTML — no XSS surface in the chart itself).
+    el.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <span style="font-size:22px;font-weight:800">$${daEsc(j.current)}</span>
+        <span style="font-weight:700;color:${isPos?'var(--green)':'var(--red)'}">${isPos?'+':''}${daEsc(j.pct_change)}%</span></div>
+      <div style="position:relative;height:240px"><canvas id="analyze-canvas"></canvas></div>`;
+    const ctx=document.getElementById('analyze-canvas').getContext('2d');
+    const grad=ctx.createLinearGradient(0,0,0,240);
+    grad.addColorStop(0,isPos?'rgba(0,230,118,.18)':'rgba(255,68,68,.18)'); grad.addColorStop(1,'rgba(0,0,0,0)');
+    if(analyzePriceChart){analyzePriceChart.destroy();analyzePriceChart=null;}
+    analyzePriceChart=new Chart(ctx,{type:'line',
+      data:{labels:j.dates,datasets:[{data:p,borderColor:lineColor,borderWidth:2,backgroundColor:grad,fill:true,pointRadius:0,pointHoverRadius:4,pointHoverBackgroundColor:lineColor,tension:.3}]},
+      options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' $'+Number(c.raw).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}}},
+        scales:{x:{ticks:{color:'#5b7290',maxTicksLimit:6},grid:{display:false}},y:{ticks:{color:'#5b7290',callback:v=>'$'+v},grid:{color:'rgba(255,255,255,.04)'}}}}});
   }catch(e){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Chart unavailable.</div>'; }
 }
 

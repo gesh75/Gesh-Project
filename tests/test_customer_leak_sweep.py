@@ -149,6 +149,14 @@ def client(monkeypatch):
     monkeypatch.setattr("fundamental_agent._fetch_fundamentals_batch",
                         lambda syms: [{"symbol": syms[0], "momentum_gap": "LOW", "score": 50}],
                         raising=False)
+    monkeypatch.setattr("market_data.get_analyst_targets",
+                        lambda syms: {syms[0]: {"target_mean": 200.0, "num_analysts": 40,
+                                     "recommendation": "buy", "upside_pct": 12.0, "current": 178.0}},
+                        raising=False)
+    monkeypatch.setattr("news_agent._fetch_all_news",
+                        lambda sym, days_back=7: [{"title": "headline", "url": "http://x",
+                                                   "source": "Yahoo", "published": "2026-07-06"}],
+                        raising=False)
     monkeypatch.setattr("benchmarks.batch_alpha", lambda *a, **k: [], raising=False)
     monkeypatch.setattr("crypto_correlation.crypto_risk_summary", lambda *a, **k: {"crypto_pct": 0.0}, raising=False)
     monkeypatch.setattr("defi_yield.get_yield_landscape", lambda *a, **k: {"options": []}, raising=False)
@@ -194,6 +202,8 @@ COVERED: dict[str, str] = {
     "/api/fft-cycles/{symbol}": "/api/fft-cycles/NVDA",
     "/api/regime/{symbol}": "/api/regime/NVDA",
     "/api/fundamentals/{symbol}": "/api/fundamentals/NVDA",
+    "/api/analyst/{symbol}": "/api/analyst/NVDA",
+    "/api/news/{symbol}": "/api/news/NVDA",
     "/api/gemini/status": "/api/gemini/status",
     "/api/config": "/api/config",
     "/api/scanner/consolidation/{symbol}": "/api/scanner/consolidation/NVDA",
