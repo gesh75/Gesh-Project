@@ -417,18 +417,30 @@ share counts or a holder's dollar amounts."""
 
 def deep_analyze_ticker(
     symbol: str,
+    current_price: float | None = None,
     regime_context: str | None = None,
 ) -> dict[str, Any]:
     """Single-ticker deep AI research card — the money-free per-ticker subset of
     deep_analyze_portfolio (VAL/GRO/HLT/MOM/DIV scores, fair value, 3M/12M
     prediction, risks/rewards, verdict). Takes only a ticker (no portfolio, no
     positions, no dollars), so it is safe on the customer 'Analyze any ticker'
-    surface. Returns one holdings_analysis-shaped dict. Optional regime_context
-    is injected verbatim when the caller has it (reserved; v1 passes None)."""
+    surface. Returns one holdings_analysis-shaped dict.
+
+    current_price is the REAL latest quote the caller fetched — it grounds
+    fair_value.current so the model can't fabricate a stale price (the schema
+    forces a number). Optional regime_context is injected verbatim when the caller
+    has it."""
     _budget_guard("deep_analyze_ticker")
     client = _client()
     today = __import__('datetime').date.today().isoformat()
     regime_block = f"\n\n{regime_context}" if regime_context else ""
+    # Ground the valuation on the caller's real quote — never let the model invent
+    # a current price (it would derive status/pct_diff/verdict off a stale base).
+    price_block = (
+        f" The latest share price is ${current_price:,.2f} — use EXACTLY this value "
+        f"as fair_value.current and derive status/pct_diff from it; do not invent a price."
+        if current_price is not None else ""
+    )
     message = client.messages.create(
         model=MODEL,
         max_tokens=2000,
@@ -443,7 +455,7 @@ def deep_analyze_ticker(
             "role": "user",
             "content": (
                 f"Provide a deep single-stock research analysis of {symbol}. "
-                f"Today is {today}.{regime_block}"
+                f"Today is {today}.{price_block}{regime_block}"
             ),
         }],
     )

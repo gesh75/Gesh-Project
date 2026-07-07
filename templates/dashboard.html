@@ -2537,10 +2537,10 @@ function renderAICard(h){
         </div>
       </div>
       <div class="da-sbars">
-        ${skeys.map(k=>{const v=sc[k]||0;return `<div class="da-sbar">
+        ${skeys.map(k=>{const v=Math.max(0,Math.min(100,Number(sc[k])||0));return `<div class="da-sbar">
           <span class="nm">${daEsc(k.slice(0,3).toUpperCase())}</span>
-          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${daEsc(v)}</span>
-          <div class="tr"><div class="fl" style="width:${daEsc(v)}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
+          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${daEsc(String(v))}</span>
+          <div class="tr"><div class="fl" style="width:${daEsc(String(v))}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
         </div>`;}).join('')}
       </div>
       <div style="font-size:13px;color:var(--muted2);margin-bottom:8px;font-style:italic">${daEsc(h.snowflake_summary||'')}</div>
@@ -2548,11 +2548,11 @@ function renderAICard(h){
         <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">3M: <b style="color:var(--accent)">${daEsc(h.prediction['3m']||'')}</b></span>
         <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">12M: <b style="color:var(--accent)">${daEsc(h.prediction['12m']||'')}</b></span>
       </div>`:''}
-      ${(h.risks||[]).slice(0,4).map(r=>{
+      ${(h.risks||[]).filter(Boolean).slice(0,4).map(r=>{
         const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
         return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;font-size:13px">
           <span class="da-dot" style="background:${dot}"></span>
-          <span style="color:var(--muted2)">${daEsc(r.text||'')}</span>
+          <span style="color:var(--muted2)">${daEsc((r&&r.text)||'')}</span>
         </div>`;
       }).join('')}
       ${(h.rewards||[]).slice(0,3).map(r=>`<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;font-size:13px">

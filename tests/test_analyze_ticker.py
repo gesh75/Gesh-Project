@@ -16,10 +16,21 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from starlette.testclient import TestClient
 
 import ai_analyzer
 import server
+
+
+@pytest.fixture(autouse=True)
+def _clear_ticker_cache():
+    """The per-symbol card cache is process-wide — clear it so one test's stub
+    result never leaks into the next."""
+    server._ticker_card_cache.clear()
+    yield
+    server._ticker_card_cache.clear()
+
 
 # ─── Fakes (mirror tests/test_ai_analyzer_caching.py) ────────────────────────
 
@@ -121,14 +132,16 @@ def test_ticker_schema_matches_internal_holding_card(monkeypatch):
 
 # ─── Route: POST /api/analyze-ticker ─────────────────────────────────────────
 
-def _customer_client(monkeypatch, card=None, boom=None):
+def _customer_client(monkeypatch, card=None, boom=None, price=195.0):
     """A TestClient with the auth wall ON and the session bound to a CUSTOMER
-    (non-owner) email, with deep_analyze_ticker stubbed (no LLM)."""
+    (non-owner) email, with the live-price fetch and deep_analyze_ticker stubbed
+    (no network, no LLM)."""
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    monkeypatch.setattr(server, "_latest_close", lambda sym: price, raising=True)
 
-    def _fake(sym, regime_context=None):
+    def _fake(sym, current_price=None, regime_context=None):
         if boom:
             raise boom
         return {**(card or _CARD), "symbol": sym}
@@ -169,3 +182,52 @@ def test_route_llm_error_is_500_not_leak(monkeypatch):
     r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     assert r.status_code == 500
     assert "sk-secret" not in r.text                  # _server_error hides internals
+
+
+def test_route_rejects_anonymous_when_wall_on(monkeypatch):
+    """Never an open LLM-spend surface: wall ON + no session → 401, and the model
+    is never invoked (no spend)."""
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
+    spent = {"llm": False}
+    monkeypatch.setattr(server, "deep_analyze_ticker",
+                        lambda *a, **k: spent.__setitem__("llm", True) or _CARD, raising=True)
+    c = TestClient(server.app, raise_server_exceptions=False)
+    r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
+    assert r.status_code == 401
+    assert spent["llm"] is False
+
+
+def test_route_unknown_ticker_is_404_no_spend(monkeypatch):
+    """No live price = unknown ticker/outage → 404 BEFORE any LLM call, so the
+    model can't fabricate a card for a nonexistent symbol."""
+    spent = {"llm": False}
+    c = _customer_client(monkeypatch, price=None)
+    monkeypatch.setattr(server, "deep_analyze_ticker",
+                        lambda *a, **k: spent.__setitem__("llm", True) or _CARD, raising=True)
+    r = c.post("/api/analyze-ticker", json={"symbol": "ZZZZ9"})
+    assert r.status_code == 404
+    assert spent["llm"] is False
+
+
+def test_route_caches_repeat_symbol(monkeypatch):
+    """A hot ticker is served from cache on the second call — one LLM spend, not two."""
+    calls = {"n": 0}
+    c = _customer_client(monkeypatch)
+
+    def _counting(sym, current_price=None, regime_context=None):
+        calls["n"] += 1
+        return {**_CARD, "symbol": sym}
+    monkeypatch.setattr(server, "deep_analyze_ticker", _counting, raising=True)
+    c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
+    c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
+    assert calls["n"] == 1
+
+
+def test_prompt_grounds_current_price(monkeypatch):
+    """A caller-supplied price is injected so fair_value.current is never invented."""
+    sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(_CARD)]))
+    ai_analyzer.deep_analyze_ticker("AAPL", 195.0)
+    user_msg = sink["messages"][0]["content"]
+    assert "195" in user_msg
+    assert "fair_value.current" in user_msg

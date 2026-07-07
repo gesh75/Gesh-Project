@@ -65,6 +65,30 @@ def require_api_key(
     return True
 
 
+def require_customer_or_owner(
+    request: Request,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> bool:
+    """Auth gate for the on-demand per-ticker LLM research card. Unlike
+    require_api_key (owner-only), this ALSO admits any authenticated CUSTOMER
+    session — the feature exists for customers to run on their own book of tickers.
+    It still rejects ANONYMOUS callers so the endpoint is never an open, uncapped
+    LLM-spend surface: with the login wall ON a valid session (customer or owner) is
+    required; with the wall OFF (no customer concept) it falls back to the owner
+    X-API-Key. Fails closed."""
+    if auth_users.auth_enabled():
+        email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+        if email:
+            return True
+        raise HTTPException(status_code=401, detail="Authentication required")
+    expected = os.getenv("GESH_API_KEY", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Endpoint disabled: GESH_API_KEY not configured")
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return True
+
+
 logger = logging.getLogger("gesh.server")
 
 
@@ -1605,23 +1629,66 @@ def news_symbol(symbol: str):
         raise _server_error(e)
 
 
-@app.post("/api/analyze-ticker")
+def _latest_close(sym: str) -> float | None:
+    """VPN-safe latest daily close for grounding the single-ticker research card —
+    reuses the chart's RH-fallback-backed price_source path (not raw yfinance).
+    Returns None when the ticker has no data, so the caller 404s rather than let
+    the model fabricate a price."""
+    try:
+        import price_source
+        raw = price_source.yf_download(sym, period="1mo", interval="1d",
+                                       auto_adjust=True, progress=False)
+        if raw is None or getattr(raw, "empty", True):
+            return None
+        closes = raw["Close"].squeeze().dropna()
+        if len(closes) == 0:
+            return None
+        import numpy as np
+        return round(float(np.array(closes).flatten()[-1]), 2)
+    except Exception:
+        return None
+
+
+# Short-TTL shared cache for the single-ticker AI card. The card is PUBLIC per-ticker
+# research (no per-customer data), so a process-wide cache is correct and stops a hot
+# ticker from re-spending on Claude every request.
+_TICKER_CARD_TTL = 900  # 15 min
+_ticker_card_cache: dict[str, tuple[float, dict]] = {}
+_ticker_card_lock = threading.Lock()
+
+
+@app.post("/api/analyze-ticker", dependencies=[Depends(require_customer_or_owner)])
 async def analyze_ticker_endpoint(request: Request):
     """Rich single-ticker AI research card for ANY ticker — the customer-facing,
     money-free subset of the deep portfolio analysis (VAL/GRO/HLT/MOM/DIV scores,
     fair-value pill, 3M/12M prediction, risks/rewards, AI verdict). PUBLIC
-    single-name research: no portfolio, no positions, no owner dollars — so it is
-    NOT owner-gated (customers may run it) and is exempt from money-masking (its
-    prose is public per-share pricing the mask would wrongly redact). Rate-limited
-    via _HEAVY_PREFIXES; the LLM daily budget is enforced inside deep_analyze_ticker.
-    Body: {"symbol": "AAPL"}."""
+    single-name research: no portfolio, no positions, no owner dollars — exempt from
+    money-masking (its public per-share prose must reach the customer raw).
+
+    Gated to authenticated callers (require_customer_or_owner) so it is never an
+    anonymous, uncapped LLM-spend surface; rate-limited via _HEAVY_PREFIXES; the
+    optional LLM_DAILY_BUDGET_USD cap applies inside deep_analyze_ticker; results are
+    cached per symbol for _TICKER_CARD_TTL. The blocking Anthropic call is offloaded
+    to a thread so the single event loop is never frozen. Body: {"symbol": "AAPL"}."""
     try:
         body = await request.json()
     except Exception:
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
+    now = time.monotonic()
+    with _ticker_card_lock:
+        hit = _ticker_card_cache.get(sym)
+        if hit and (now - hit[0]) < _TICKER_CARD_TTL:
+            return {"status": "ok", "data": hit[1]}
     try:
-        card = deep_analyze_ticker(sym)
+        # Ground the valuation on a REAL quote: no price = unknown ticker / data
+        # outage → 404 rather than let the model fabricate a price and card.
+        price = await asyncio.to_thread(_latest_close, sym)
+        if price is None:
+            raise HTTPException(status_code=404, detail="No market data for this ticker")
+        card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
+        with _ticker_card_lock:
+            _ticker_card_cache[sym] = (time.monotonic(), card)
         return {"status": "ok", "data": card}
     except HTTPException:
         raise
