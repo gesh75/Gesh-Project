@@ -2486,6 +2486,7 @@ async function analyzeTicker(raw){
     }
     const cyc=(fc&&fc.primary_cycle)||{};
     const safeUrl=u=>(String(u||'').startsWith('http'))?u:'#';   // block javascript:/data: hrefs
+    const capStr=(fu&&fu.market_cap!=null)?(fu.market_cap>=1e12?'$'+(fu.market_cap/1e12).toFixed(2)+'T':fu.market_cap>=1e9?'$'+(fu.market_cap/1e9).toFixed(1)+'B':'$'+(fu.market_cap/1e6).toFixed(0)+'M'):null;
     box.innerHTML=`${consHtml}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
         <div class="card"><div style="${T}">Market Regime</div>
@@ -2494,9 +2495,9 @@ async function analyzeTicker(raw){
         <div class="card"><div style="${T}">Price Cycle (FFT)</div>
           ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
         <div class="card"><div style="${T}">Fundamentals</div>
-          ${buildRow('Momentum gap', fu&&fu.momentum_gap?fu.momentum_gap:'n/a')}${buildRow('Score', fu&&fu.score!=null?daEsc(fu.score):'n/a')}</div>
-        <div class="card"><div style="${T}">Analyst Targets</div>
-          ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${buildRow('Mean target', an&&an.target_mean!=null?'$'+daEsc(an.target_mean):'n/a')}${buildRow('Range', an&&an.target_low!=null&&an.target_high!=null?'$'+daEsc(an.target_low)+' – $'+daEsc(an.target_high):'—')}${buildRow('Upside', an&&an.upside_pct!=null?daEsc(an.upside_pct)+'%':'—')}${buildRow('# analysts', an&&an.num_analysts!=null?daEsc(an.num_analysts):'—')}</div>
+          ${fu&&fu.pe_ratio!=null?buildRow('P/E ratio', daEsc(fu.pe_ratio)):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', daEsc(fu.pb_ratio)):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu&&fu.high_52!=null&&fu.low_52!=null?buildRow('52-wk range', '$'+daEsc(fu.low_52)+' – $'+daEsc(fu.high_52)):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', daEsc(fu.dividend_yield)+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
+        <div class="card"><div style="${T}">Analyst Ratings</div>
+          ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', daEsc(an.num_buy)+' / '+daEsc(an.num_hold)+' / '+daEsc(an.num_sell)):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+daEsc(an.target_mean)):''}${an&&an.upside_pct!=null?buildRow('Upside', daEsc(an.upside_pct)+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?daEsc(an.num_analysts):'—')}</div>
       </div>
       <div class="card" style="margin-top:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">

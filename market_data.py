@@ -435,3 +435,55 @@ def screen_market(top_n: int = 40) -> list[dict]:
         executor.map(_fetch_info, top)
 
     return top
+
+
+# ── Robinhood-backed company data (VPN-safe) ───────────────────────────────────
+# yfinance's .info is category-blocked under the owner's VPN (curl 35 reset), so
+# the analyst/fundamentals cards on the customer Analyze view came back empty.
+# Robinhood's authed reads (ratings + fundamentals) survive the block, so these are
+# the primary source for those cards; the yfinance path stays as a fallback. Both
+# return None on any failure — never raise.
+
+def rh_analyst(symbol: str) -> dict[str, Any] | None:
+    """Analyst ratings for `symbol` from Robinhood: buy/hold/sell counts + a derived
+    consensus. Returns None if unavailable."""
+    try:
+        import robin_stocks.robinhood as rh  # noqa: PLC0415 — optional, lazy
+        s = (rh.stocks.get_ratings(symbol) or {}).get("summary") or {}
+        b = int(s.get("num_buy_ratings", 0) or 0)
+        h = int(s.get("num_hold_ratings", 0) or 0)
+        sl = int(s.get("num_sell_ratings", 0) or 0)
+        total = b + h + sl
+        if total == 0:
+            return None
+        reco = "Buy" if (b >= h and b >= sl) else ("Sell" if (sl > b and sl > h) else "Hold")
+        return {"recommendation": reco, "num_buy": b, "num_hold": h,
+                "num_sell": sl, "num_analysts": total}
+    except Exception:
+        return None
+
+
+def rh_fundamentals(symbol: str) -> dict[str, Any] | None:
+    """Company fundamentals for `symbol` from Robinhood (PE, P/B, market cap, 52-week
+    range, dividend yield, sector). Returns None if unavailable."""
+    try:
+        import robin_stocks.robinhood as rh  # noqa: PLC0415 — optional, lazy
+        rows = rh.stocks.get_fundamentals(symbol) or []
+        f = rows[0] if rows else None
+        if not f:
+            return None
+
+        def _num(key: str):
+            v = f.get(key)
+            try:
+                return round(float(v), 2) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        out = {"pe_ratio": _num("pe_ratio"), "pb_ratio": _num("pb_ratio"),
+               "market_cap": _num("market_cap"), "high_52": _num("high_52_weeks"),
+               "low_52": _num("low_52_weeks"), "dividend_yield": _num("dividend_yield"),
+               "sector": (f.get("sector") or None), "industry": (f.get("industry") or None)}
+        return out if any(v is not None for v in out.values()) else None
+    except Exception:
+        return None
