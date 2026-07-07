@@ -108,8 +108,8 @@ def _safe_symbol(symbol: str) -> str:
 _RATE_LOCK = threading.Lock()
 _RATE_HITS: dict[tuple, deque] = defaultdict(deque)
 _HEAVY_PREFIXES = (
-    "/api/deep-analysis", "/api/screener", "/api/consensus", "/api/monte-carlo",
-    "/api/agents/", "/api/gemini/", "/api/trading/deep-debate",
+    "/api/deep-analysis", "/api/analyze-ticker", "/api/screener", "/api/consensus",
+    "/api/monte-carlo", "/api/agents/", "/api/gemini/", "/api/trading/deep-debate",
 )
 
 
@@ -143,7 +143,7 @@ def _bucket_ok(ip: str, bucket: str, limit: int, window: int) -> bool:
         return True
 
 
-from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, analyze_screener
+from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
 from auth import login, logout
 from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
@@ -257,6 +257,12 @@ async def _auth_gate_middleware(request: Request, call_next):
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
 # /watch is the INTERNAL cockpit (raw paper P&L, provisional win rate) — owner only.
 _OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch")
+# Customer research endpoints whose bodies carry NO owner dollars — single-ticker AI
+# research cards (public per-share fair value / price forecasts, not the owner's book).
+# Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
+# gut the customer analysis surface, so they are served RAW. ONLY add paths here that
+# provably contain no owner position/cash data.
+_MASK_EXEMPT_PREFIXES = ("/api/analyze-ticker",)
 _MONEY_KEYS = {
     "equity", "cash", "deployable", "settled_cash", "buying_power",
     "buying_power_leveraged", "margin_buying_power", "withdrawable_amount",
@@ -389,6 +395,11 @@ async def _customer_view_middleware(request: Request, call_next):
     path = request.url.path
     if path == "/report" or any(path == p or path.startswith(p + "/") for p in _OWNER_ONLY_PATHS):
         return JSONResponse(status_code=403, content={"detail": "Owner-only view"})
+
+    # Public single-ticker research cards carry no owner dollars — serve RAW so their
+    # per-share price prose is not redacted into uselessness for the customer.
+    if any(path == p or path.startswith(p + "/") for p in _MASK_EXEMPT_PREFIXES):
+        return await call_next(request)
 
     resp = await call_next(request)
     if not path.startswith("/api/") or "application/json" not in resp.headers.get("content-type", ""):
@@ -1588,6 +1599,30 @@ def news_symbol(symbol: str):
                     "source": it.get("source", ""), "published": it.get("published", "")}
                    for it in items[:8]]
         return {"status": "ok", "data": trimmed}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.post("/api/analyze-ticker")
+async def analyze_ticker_endpoint(request: Request):
+    """Rich single-ticker AI research card for ANY ticker — the customer-facing,
+    money-free subset of the deep portfolio analysis (VAL/GRO/HLT/MOM/DIV scores,
+    fair-value pill, 3M/12M prediction, risks/rewards, AI verdict). PUBLIC
+    single-name research: no portfolio, no positions, no owner dollars — so it is
+    NOT owner-gated (customers may run it) and is exempt from money-masking (its
+    prose is public per-share pricing the mask would wrongly redact). Rate-limited
+    via _HEAVY_PREFIXES; the LLM daily budget is enforced inside deep_analyze_ticker.
+    Body: {"symbol": "AAPL"}."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    sym = _safe_symbol((body or {}).get("symbol", ""))
+    try:
+        card = deep_analyze_ticker(sym)
+        return {"status": "ok", "data": card}
     except HTTPException:
         raise
     except Exception as e:
