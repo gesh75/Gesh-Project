@@ -1507,6 +1507,42 @@ def fundamentals_symbol(symbol: str):
         raise _server_error(e)
 
 
+@app.get("/api/analyst/{symbol}")
+def analyst_symbol(symbol: str):
+    """Wall-Street analyst targets for ANY ticker (public yfinance data)."""
+    sym = _safe_symbol(symbol)
+    try:
+        import market_data
+        data = market_data.get_analyst_targets([sym]) or {}
+        row = data.get(sym)
+        if not row or row.get("error"):   # yfinance failure returns an error row — don't leak it
+            raise HTTPException(status_code=404, detail="No analyst data")
+        return {"status": "ok", "data": row}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/news/{symbol}")
+def news_symbol(symbol: str):
+    """Recent news HEADLINES for ANY ticker (RSS, NO LLM — the sentiment *score*
+    stays owner-only so the customer analyze path stays zero-cost). Returns the
+    trimmed top-8 items (title/url/source/published); [] when none."""
+    sym = _safe_symbol(symbol)
+    try:
+        import news_agent
+        items = news_agent._fetch_all_news(sym) or []
+        trimmed = [{"title": it.get("title", ""), "url": it.get("url", ""),
+                    "source": it.get("source", ""), "published": it.get("published", "")}
+                   for it in items[:8]]
+        return {"status": "ok", "data": trimmed}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
 # ─── Ollama Local LLM — REMOVED ─────────────────────────────────────────────
 # Ollama (llama3.2:3b) was removed: a 3B local model cannot challenge Sonnet.
 # "Second opinion" from a weaker model is random disagreement, not independent signal.

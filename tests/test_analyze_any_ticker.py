@@ -115,3 +115,54 @@ def test_intraday_5m_no_keys_returns_none(monkeypatch):
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     assert price_source.intraday_5m("NVDA", "1d") is None
+
+
+# ── analyst targets + news headlines per-ticker (v1.1 enrichment) ─────────────
+
+def test_analyst_symbol_returns_targets(monkeypatch):
+    monkeypatch.setattr(
+        "market_data.get_analyst_targets",
+        lambda syms: {syms[0]: {"target_mean": 200.0, "num_analysts": 40,
+                                "recommendation": "buy", "upside_pct": 12.5, "current": 178.0}},
+        raising=False)
+    r = _client(monkeypatch).get("/api/analyst/nvda")
+    assert r.status_code == 200
+    assert r.json()["data"]["target_mean"] == 200.0
+    assert r.json()["data"]["num_analysts"] == 40
+
+
+def test_analyst_symbol_no_data_404(monkeypatch):
+    monkeypatch.setattr("market_data.get_analyst_targets", lambda syms: {}, raising=False)
+    r = _client(monkeypatch).get("/api/analyst/NVDA")
+    assert r.status_code == 404
+
+
+def test_analyst_symbol_error_row_404_not_leaked(monkeypatch):
+    # yfinance failure returns {sym: {"error": "..."}} — must 404, never 200-with-error
+    monkeypatch.setattr("market_data.get_analyst_targets",
+                        lambda syms: {syms[0]: {"error": "curl (35) Connection reset by peer"}},
+                        raising=False)
+    r = _client(monkeypatch).get("/api/analyst/NVDA")
+    assert r.status_code == 404
+    assert "Connection reset" not in r.text   # internal error never reaches the client
+
+
+def test_news_symbol_returns_trimmed_headlines(monkeypatch):
+    monkeypatch.setattr(
+        "news_agent._fetch_all_news",
+        lambda sym, days_back=7: [{"title": "NVDA soars", "url": "http://x", "source": "Yahoo",
+                                   "published": "2026-07-06", "description": "long body"}],
+        raising=False)
+    r = _client(monkeypatch).get("/api/news/NVDA")
+    assert r.status_code == 200
+    items = r.json()["data"]
+    assert items[0]["title"] == "NVDA soars"
+    assert items[0]["source"] == "Yahoo"
+    assert "description" not in items[0]   # headlines only — no heavy body, no LLM
+
+
+def test_news_symbol_empty_is_ok_not_404(monkeypatch):
+    monkeypatch.setattr("news_agent._fetch_all_news", lambda sym, days_back=7: [], raising=False)
+    r = _client(monkeypatch).get("/api/news/NVDA")
+    assert r.status_code == 200
+    assert r.json()["data"] == []
