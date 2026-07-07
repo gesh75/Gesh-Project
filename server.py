@@ -503,6 +503,46 @@ def whoami(request: Request):
     return {"role": "owner" if auth_users.is_owner(email) else "customer"}
 
 
+def _session_email(request: Request) -> str | None:
+    """The requesting user's identity for per-user data (watchlist). In dev/solo
+    mode (auth off) everything is the owner bucket; in production it's the session."""
+    if not auth_users.auth_enabled():
+        return os.getenv("GESH_OWNER_EMAIL", "georgy75@gmail.com").strip().lower()
+    return auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+
+
+@app.get("/api/watchlist")
+def watchlist_get(request: Request):
+    """The current user's saved tickers (per-user, session-scoped)."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"status": "ok", "data": auth_users.get_watch(email)}
+
+
+@app.post("/api/watchlist")
+async def watchlist_add(request: Request):
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    sym = _safe_symbol(body.get("symbol", ""))
+    ok = auth_users.add_watch(email, sym)
+    return {"status": "ok" if ok else "full", "data": auth_users.get_watch(email)}
+
+
+@app.delete("/api/watchlist/{symbol}")
+def watchlist_remove(symbol: str, request: Request):
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth_users.remove_watch(email, _safe_symbol(symbol))
+    return {"status": "ok", "data": auth_users.get_watch(email)}
+
+
 def _cookie_secure() -> bool:
     """Whether to set the Secure flag on the session cookie. Defaults to True (production
     is HTTPS); set GESH_COOKIE_SECURE=0 ONLY for local plain-HTTP dev. This prevents the

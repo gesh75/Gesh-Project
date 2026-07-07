@@ -172,6 +172,12 @@ CREATE TABLE IF NOT EXISTS used_magic_tokens (
     token_hash TEXT PRIMARY KEY,
     used_at    TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watchlist (
+    email    TEXT NOT NULL,
+    symbol   TEXT NOT NULL,
+    added_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (email, symbol)
+);
 """
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
@@ -512,6 +518,46 @@ def _cli(argv: list[str]) -> int:
         return 0
     print(__doc__)
     return 1
+
+
+# ── per-user watchlist (customer analyze-any-ticker: saved symbols) ────────────
+
+_MAX_WATCH = 50   # per-user cap — abuse guard
+
+
+def add_watch(email: str, symbol: str) -> bool:
+    """Add a symbol to the user's watchlist. Idempotent (dup → True, no duplicate);
+    returns False only when the per-user cap is hit. Symbols stored UPPER."""
+    em, sym = _norm(email), (symbol or "").strip().upper()
+    if not em or not sym:
+        return False
+    with _conn() as con:
+        if con.execute("SELECT 1 FROM watchlist WHERE email=? AND symbol=?", (em, sym)).fetchone():
+            return True
+        n = con.execute("SELECT COUNT(*) AS c FROM watchlist WHERE email=?", (em,)).fetchone()["c"]
+        if n >= _MAX_WATCH:
+            return False
+        con.execute("INSERT INTO watchlist (email, symbol, added_at) VALUES (?,?,?)",
+                    (em, sym, datetime.now(timezone.utc).isoformat()))
+    return True
+
+
+def remove_watch(email: str, symbol: str) -> None:
+    em, sym = _norm(email), (symbol or "").strip().upper()
+    with _conn() as con:
+        con.execute("DELETE FROM watchlist WHERE email=? AND symbol=?", (em, sym))
+
+
+def get_watch(email: str) -> list[str]:
+    """The user's saved symbols, oldest-first. Empty list for an unknown user."""
+    em = _norm(email)
+    if not em:
+        return []
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT symbol FROM watchlist WHERE email=? ORDER BY added_at, symbol", (em,)
+        ).fetchall()
+    return [r["symbol"] for r in rows]
 
 
 if __name__ == "__main__":

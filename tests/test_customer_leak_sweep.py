@@ -157,6 +157,7 @@ def client(monkeypatch):
                         lambda sym, days_back=7: [{"title": "headline", "url": "http://x",
                                                    "source": "Yahoo", "published": "2026-07-06"}],
                         raising=False)
+    monkeypatch.setattr("auth_users.get_watch", lambda email: ["NVDA", "TSLA"], raising=False)
     monkeypatch.setattr("benchmarks.batch_alpha", lambda *a, **k: [], raising=False)
     monkeypatch.setattr("crypto_correlation.crypto_risk_summary", lambda *a, **k: {"crypto_pct": 0.0}, raising=False)
     monkeypatch.setattr("defi_yield.get_yield_landscape", lambda *a, **k: {"options": []}, raising=False)
@@ -204,6 +205,7 @@ COVERED: dict[str, str] = {
     "/api/fundamentals/{symbol}": "/api/fundamentals/NVDA",
     "/api/analyst/{symbol}": "/api/analyst/NVDA",
     "/api/news/{symbol}": "/api/news/NVDA",
+    "/api/watchlist": "/api/watchlist",
     "/api/gemini/status": "/api/gemini/status",
     "/api/config": "/api/config",
     "/api/scanner/consolidation/{symbol}": "/api/scanner/consolidation/NVDA",
