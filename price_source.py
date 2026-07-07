@@ -512,3 +512,43 @@ def _yf_download_uncached(
     except Exception as e:  # noqa: BLE001 — merge failure must not break the run
         logger.debug("price_source: RH/Yahoo merge failed (%s) — returning Yahoo frame", e)
         return raw
+
+
+def intraday_5m(symbol: str, span: str) -> "pd.DataFrame | None":
+    """5-minute intraday bars for ``symbol`` via Alpaca.
+
+    Yahoo intraday is blocked in this environment (VPN finance-block) and the
+    unauthed Robinhood fallback only serves daily bars, so 1D/5D charts went
+    blank. Alpaca serves free intraday stock bars. Returns a DataFrame with a
+    ``Close`` column, or ``None`` on any failure / missing keys (never raises).
+    Key-gated: dormant when ``ALPACA_API_KEY``/``ALPACA_SECRET_KEY`` are unset.
+    ``span`` is ``'1d'`` or ``'5d'``.
+    """
+    key = os.getenv("ALPACA_API_KEY")
+    sec = os.getenv("ALPACA_SECRET_KEY")
+    if not key or not sec:
+        return None
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+        days = 5 if span == "5d" else 1
+        client = StockHistoricalDataClient(key, sec)
+        req = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame(5, TimeFrameUnit.Minute),
+            start=datetime.now(timezone.utc) - timedelta(days=days + 2),
+        )
+        bars = client.get_stock_bars(req).df
+        if bars is None or bars.empty:
+            return None
+        # Alpaca returns a (symbol, timestamp) MultiIndex — drop the symbol level.
+        if getattr(bars.index, "nlevels", 1) > 1:
+            bars = bars.xs(symbol, level=0)
+        return bars.rename(columns={"close": "Close"})[["Close"]]
+    except Exception as e:  # noqa: BLE001 — intraday is best-effort; fall back cleanly
+        logger.debug("price_source: Alpaca intraday failed for %s (%s)", symbol, e)
+        return None

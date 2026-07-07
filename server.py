@@ -490,6 +490,19 @@ def healthz():
     return {"status": "ok", "auth": auth_users.auth_enabled()}
 
 
+@app.get("/api/me")
+def whoami(request: Request):
+    """Session role for the frontend nav (owner vs customer). No PII, no secrets —
+    lets the customer UI render Analyze/Track-Record and hide the owner's book on
+    load without racing the portfolio fetch."""
+    if not auth_users.auth_enabled():
+        return {"role": "owner"}
+    email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"role": "owner" if auth_users.is_owner(email) else "customer"}
+
+
 def _cookie_secure() -> bool:
     """Whether to set the Secure flag on the session cookie. Defaults to True (production
     is HTTPS); set GESH_COOKIE_SECURE=0 ONLY for local plain-HTTP dev. This prevents the
@@ -1251,17 +1264,30 @@ def price_chart(symbol: str, period: str = "1mo"):
 
     try:
         # price_source, not raw yfinance: under the VPN finance-block Yahoo
-        # returns nothing and the dashboard chart rendered BLANK. The unauth
-        # Robinhood fallback serves daily bars with no session (intraday 1d/5d
-        # still needs Yahoo or an authed RH session — daily ranges always work).
+        # returns nothing and the dashboard chart rendered BLANK. Daily ranges use
+        # the RH-fallback-backed yf_download; intraday 1d/5d needs 5-minute bars,
+        # which Yahoo/RH-unauth can't serve here — route those to Alpaca via
+        # price_source.intraday_5m (key-gated; honest fallback when unconfigured).
         import price_source
         period_map = {"1d":"1d","5d":"5d","1w":"5d","1mo":"1mo","3mo":"3mo","6mo":"6mo","1y":"1y"}
         yf_period = period_map.get(period, "1mo")
         interval  = "5m" if period in ("1d","5d") else "1d"
-        raw = price_source.yf_download(sym, period=yf_period, interval=interval,
-                                       auto_adjust=True, progress=False)
-        if raw is None or raw.empty:
-            raise HTTPException(status_code=404, detail="No data")
+        if period in ("1d", "5d"):
+            raw = price_source.intraday_5m(sym, period)
+            if raw is None or getattr(raw, "empty", True):
+                # No intraday provider configured / no data → honest empty state;
+                # the frontend renders "try a daily range". Cache it briefly too.
+                result = {"symbol": sym, "period": period, "intraday_unavailable": True,
+                          "dates": [], "prices": [], "pct_change": 0,
+                          "current": None, "start": None}
+                with _chart_cache_lock:
+                    _chart_cache[key] = (now, result)
+                return result
+        else:
+            raw = price_source.yf_download(sym, period=yf_period, interval=interval,
+                                           auto_adjust=True, progress=False)
+            if raw is None or raw.empty:
+                raise HTTPException(status_code=404, detail="No data")
         closes = raw["Close"].squeeze().dropna()
         dates  = [str(d)[:16] if interval=="5m" else str(d)[:10] for d in closes.index]
         # .flatten() ensures 1D array if yf returns MultiIndex dataframe,
@@ -1443,6 +1469,40 @@ def fft_cycles_single(symbol: str):
         from fft_cycles import detect_fft_cycles
         result = detect_fft_cycles(_safe_symbol(symbol))
         return {"status": "ok", "data": result}
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/regime/{symbol}")
+def regime_symbol(symbol: str):
+    """Market regime (ADX/BB/RSI + FRED macro) for ANY ticker — the customer
+    'analyse any share' regime surface. Public data; no owner/position context."""
+    sym = _safe_symbol(symbol)
+    try:
+        import regime as _regime
+        out = _regime.detect_regimes([sym])
+        rows = out.get("regimes") or []
+        if not rows:
+            raise HTTPException(status_code=404, detail="No regime data")
+        return {"status": "ok", "data": rows[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/fundamentals/{symbol}")
+def fundamentals_symbol(symbol: str):
+    """Fundamental momentum for ANY ticker (public yfinance data)."""
+    sym = _safe_symbol(symbol)
+    try:
+        import fundamental_agent
+        rows = fundamental_agent._fetch_fundamentals_batch([sym])
+        if not rows or rows[0].get("error"):
+            raise HTTPException(status_code=404, detail="No fundamentals")
+        return {"status": "ok", "data": rows[0]}
+    except HTTPException:
+        raise
     except Exception as e:
         raise _server_error(e)
 

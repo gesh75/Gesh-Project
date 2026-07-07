@@ -412,6 +412,9 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
 .nav-item:hover{background:var(--hover);color:var(--text)}
 .nav-item.active{background:var(--card2);color:var(--accent);border-left-color:var(--accent)}
 .nav-item.active svg{opacity:1}
+/* Customer role: the whole owner book (portfolio tabs, watch/invest, book sections)
+   is hidden — customers get the Analyze + Track Record research surface only. */
+body.customer .owner-only{display:none!important}
 .nav-badge{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:transparent;border:1px solid var(--border2);transition:all var(--t-fast)}
 .nav-badge.fresh{background:var(--green);border-color:var(--green);box-shadow:0 0 6px rgba(0,230,118,.5)}
 .nav-badge.stale{background:var(--amber);border-color:var(--amber)}
@@ -474,6 +477,16 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
   <div class="sb-brand"><span class="dot"></span><span class="brand-txt">Gesh</span></div>
 
   <div class="sb-group">
+    <div class="sb-group-title">Research</div>
+    <button class="nav-item" data-tab="analyze" onclick="switchTab('analyze')" title="Analyze any ticker">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <span class="nav-label">Analyze</span></button>
+    <a class="nav-item" href="/track-record" title="Public signal track record" style="text-decoration:none">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+      <span class="nav-label">Track Record</span></a>
+  </div>
+
+  <div class="sb-group owner-only">
     <div class="sb-group-title">Monitor</div>
     <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Overview">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
@@ -486,7 +499,7 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
       <span class="nav-label">Scanner</span><span class="nav-badge" id="navb-scanner"></span></button>
   </div>
 
-  <div class="sb-group">
+  <div class="sb-group owner-only">
     <div class="sb-group-title">Intelligence</div>
     <button class="nav-item" data-tab="analysis" onclick="switchTab('analysis')" title="AI Analysis">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3A3.5 3.5 0 0 0 9 19a3 3 0 0 0 3 0 3 3 0 0 0 3 0 3.5 3.5 0 0 0 3-5.7A3.5 3.5 0 0 0 16 7a4 4 0 0 0-4-4z"/><line x1="12" y1="3" x2="12" y2="19"/></svg>
@@ -502,7 +515,7 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
       <span class="nav-label">Daily Analysis</span><span class="nav-badge" id="navb-daily"></span></button>
   </div>
 
-  <div class="sb-group">
+  <div class="sb-group owner-only">
     <div class="sb-group-title">Execution</div>
     <button class="nav-item" data-tab="signals" onclick="switchTab('signals')" title="Signals">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
@@ -521,13 +534,13 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
   <span class="badge b-cyan" id="model-badge">{{ model }}</span>
   <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
   <span class="ts" id="ts">—</span>
-  <a href="/watch" id="watch-link" class="badge b-cyan" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
-  <a href="/invest" class="badge b-cyan" style="text-decoration:none" title="Diversification radar — where new cash should go (advisory)">💎 Invest</a>
+  <a href="/watch" id="watch-link" class="badge b-cyan owner-only" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
+  <a href="/invest" class="badge b-cyan owner-only" style="text-decoration:none" title="Diversification radar — where new cash should go (advisory)">💎 Invest</a>
   <button class="btn-ref" onclick="loadPortfolio()">↻ Refresh</button>
 </header>
 
 <!-- Persistent stats bar -->
-<div style="background:var(--card);border-bottom:1px solid var(--border);padding:14px 24px">
+<div class="owner-only" style="background:var(--card);border-bottom:1px solid var(--border);padding:14px 24px">
   <div style="max-width:1700px;margin:0 auto">
     <div class="stats">
       <div class="scard" id="kpi-equity"><span class="kpi-bar"></span><div class="slabel">Portfolio Value</div><div class="sval" id="s-equity">—</div><div class="ssub" id="s-equity-sub">—</div><canvas class="kpi-spark" id="spark-equity"></canvas></div>
@@ -560,6 +573,26 @@ body{padding-left:var(--sidebar-w);transition:padding-left var(--t-base) var(--e
 <div class="toast-wrap" id="toast-wrap"></div>
 
 <div class="main">
+
+  <!-- ═══ TAB: ANALYZE (customer research — any ticker, live) ═══ -->
+  <div class="tab-pane" id="tab-analyze">
+    <div class="card" style="margin-bottom:18px">
+      <div class="ch" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Analyze Any Ticker</div>
+        <span class="badge b-cyan">LIVE · 11-node consensus · regime · cycle · fundamentals</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 4px">
+        <input id="analyze-input" placeholder="Enter a ticker — e.g. AAPL, TSLA, NVDA" autocomplete="off"
+               style="flex:1;min-width:220px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:16px;letter-spacing:.04em"
+               onkeydown="if(event.key==='Enter')analyzeTicker(this.value)">
+        <button class="btn-analyze" onclick="analyzeTicker(document.getElementById('analyze-input').value)">▶ Analyze</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Not financial advice — research/observability only. Signals are live on public market data; you trade your own account.</div>
+      <div id="analyze-results">
+        <div class="deep-placeholder"><div class="deep-ph-text">Enter a ticker to get a live read — consensus verdict, market regime, dominant price cycle, and fundamental momentum, on any US-listed stock.</div></div>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══ TAB: OVERVIEW ═══ -->
   <div class="tab-pane active" id="tab-overview">
@@ -1250,6 +1283,7 @@ window.__isCustomer=false;
 function applyViewDisclosure(body){
   if(!body || body.view!=='model_book') return;
   window.__isCustomer=true;
+  document.body.classList.add('customer');   // backstop: hide the owner book via CSS
   const mb=$('modelbook-badge');if(mb)mb.style.display='inline-flex';
   const wl=$('watch-link');if(wl)wl.style.display='none';   // internal cockpit — owner only
   const iv=document.querySelector('a[href="/invest"]');if(iv)iv.style.display='none';
@@ -2367,11 +2401,85 @@ async function tryLoadCachedAnalysis(){
   }catch(e){/* silent — user can run manually */}
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// CUSTOMER "ANALYZE ANY TICKER" — role gate + live per-ticker research
+// ══════════════════════════════════════════════════════════════════════
+// Authoritative role check on load: customers land on Analyze and the whole
+// owner book (portfolio tabs, KPI header, watch/invest) is hidden via the
+// body.customer CSS class. applyViewDisclosure (response-driven) is the backstop.
+async function applyRoleNav(){
+  let role='owner';
+  try{ const r=await fetch('/api/me'); if(r.ok) role=(await r.json()).role||'owner'; }catch(e){}
+  if(role==='customer'){
+    document.body.classList.add('customer');
+    window.__isCustomer=true;
+    switchTab('analyze');
+  }
+}
+
+// buildRow: named to match the XSS guard's audited build* builder pattern — its
+// body escapes both leaves, so the guard trusts ${buildRow(...)} and walks this.
+function buildRow(label,val){
+  return `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">`
+    +`<span style="color:var(--muted)">${daEsc(label)}</span><b>${daEsc(val)}</b></div>`;
+}
+
+async function analyzeTicker(raw){
+  const sym=(raw||'').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,'');
+  const box=document.getElementById('analyze-results'); if(!box) return;
+  if(!sym){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">Enter a ticker.</div></div>'; return; }
+  box.innerHTML='<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Analyzing '+daEsc(sym)+' — 11-node consensus, regime, cycle &amp; fundamentals…</div></div>';
+  try{
+    const [cons,reg,fft,fund]=await Promise.all([
+      fetch(`/api/consensus/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/regime/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/fft-cycles/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/fundamentals/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
+    ]);
+    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data;
+    if(!d && !rg && !fc && !fu){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">No data for '+daEsc(sym)+' — check the ticker and try again.</div></div>'; return; }
+    const periods=['1d','5d','1mo','3mo','6mo','1y'];
+    box.innerHTML=`
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
+        <div class="card"><div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:8px">Consensus — ${daEsc(sym)}</div>
+          ${buildRow('Verdict', d?d.verdict:'n/a')}${buildRow('Confidence', d&&d.confidence!=null?daEsc(d.confidence)+'%':'—')}</div>
+        <div class="card"><div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:8px">Market Regime</div>
+          ${buildRow('Regime', rg?rg.regime:'n/a')}${buildRow('ADX', rg&&rg.adx!=null?daEsc(rg.adx):'—')}${buildRow('RSI', rg&&rg.rsi!=null?daEsc(rg.rsi):'—')}</div>
+        <div class="card"><div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:8px">Cycle &amp; Fundamentals</div>
+          ${buildRow('Dominant cycle', fc&&fc.period_days!=null?daEsc(fc.period_days)+'d':'n/a')}${buildRow('Cycle signal', fc?fc.signal:'n/a')}${buildRow('Fundamental momentum', fu?fu.momentum_gap:'n/a')}</div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          <div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px">Price — ${daEsc(sym)}</div>
+          <div>${periods.map(p=>`<button class="per-btn" onclick="analyzeChart('${daEsc(sym)}','${daEsc(p)}')">${daEsc(p.toUpperCase())}</button>`).join('')}</div>
+        </div>
+        <div id="analyze-chart" style="min-height:220px"></div>
+      </div>`;
+    analyzeChart(sym,'1mo');
+  }catch(e){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">'+daEsc('Could not analyze '+sym)+'</div></div>'; }
+}
+
+async function analyzeChart(sym,period){
+  const el=document.getElementById('analyze-chart'); if(!el) return;
+  el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Loading '+daEsc(String(period).toUpperCase())+'…</div>';
+  try{
+    const j=await fetch(`/api/chart/${sym}?period=${period}`).then(r=>r.json());
+    if(j.intraday_unavailable){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Intraday data unavailable right now — try a daily range (1M–1Y).</div>'; return; }
+    const p=j.prices||[]; if(p.length<2){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">No price data.</div>'; return; }
+    const w=800,h=220,pad=8, mn=Math.min(...p), mx=Math.max(...p), rng=(mx-mn)||1;
+    const pts=p.map((v,i)=>`${(pad+i*(w-2*pad)/(p.length-1)).toFixed(1)},${(h-pad-(v-mn)/rng*(h-2*pad)).toFixed(1)}`).join(' ');
+    const col=(p[p.length-1]>=p[0])?'#00e87a':'#ff3c5a';
+    el.innerHTML=`<svg viewBox="0 0 800 220" preserveAspectRatio="none" style="width:100%;height:220px"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2"/></svg>`
+      +`<div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span>${daEsc(j.pct_change)}%</span><span>${daEsc(j.current)}</span></div>`;
+  }catch(e){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Chart unavailable.</div>'; }
+}
+
 loadPortfolioWithECG();
 setInterval(loadPortfolioWithECG,REFRESH);
 // Load ECG + regime on init so alert bar and macro bar populate immediately
 loadECG();
 loadRegime();
+applyRoleNav();
 
 // ══════════════════════════════════════════════════════════════════════
 // GESH DAILY PORTFOLIO ANALYSIS TAB
