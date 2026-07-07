@@ -1582,7 +1582,8 @@ def news_symbol(symbol: str):
     sym = _safe_symbol(symbol)
     try:
         import news_agent
-        items = news_agent._fetch_all_news(sym) or []
+        # Alpaca first (VPN-safe, key-gated); RSS fallback (blocked on the owner's VPN).
+        items = news_agent._fetch_alpaca_news(sym) or news_agent._fetch_all_news(sym) or []
         trimmed = [{"title": it.get("title", ""), "url": it.get("url", ""),
                     "source": it.get("source", ""), "published": it.get("published", "")}
                    for it in items[:8]]

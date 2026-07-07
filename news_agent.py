@@ -24,7 +24,6 @@ import os
 import re
 import sqlite3
 import xml.etree.ElementTree as ET
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -84,7 +83,7 @@ def _fetch_marketwatch_rss(symbol: str, max_items: int = 5) -> list[dict]:
     """MarketWatch RSS feed — no key needed."""
     items = []
     try:
-        url = f"https://feeds.marketwatch.com/marketwatch/realtimeheadlines/"
+        url = "https://feeds.marketwatch.com/marketwatch/realtimeheadlines/"
         r = requests.get(url, headers=HEADERS, timeout=10)
         if r.status_code == 200 and "<item>" in r.text:
             root = ET.fromstring(r.text)
@@ -103,6 +102,38 @@ def _fetch_marketwatch_rss(symbol: str, max_items: int = 5) -> list[dict]:
     except Exception:
         pass
     return items
+
+
+def _fetch_alpaca_news(symbol: str, limit: int = 8) -> list[dict]:
+    """Recent news for `symbol` via Alpaca (VPN-safe, unlike the RSS feeds; key-gated
+    on ALPACA_API_KEY/ALPACA_SECRET_KEY). Returns [{title,url,source,published}] or []
+    on missing keys / any failure — never raises."""
+    key, sec = os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY")
+    if not key or not sec:
+        return []
+    try:
+        from alpaca.data.historical.news import NewsClient  # noqa: PLC0415
+        from alpaca.data.requests import NewsRequest  # noqa: PLC0415
+        res = NewsClient(key, sec).get_news(NewsRequest(symbols=symbol, limit=limit))
+        # The articles live under res.data['news']; res has no .news attribute. Items
+        # may be dicts or objects — read either. (res.news kept as a defensive fallback.)
+        data = getattr(res, "data", None)
+        items = (data.get("news") if isinstance(data, dict) else None) or getattr(res, "news", None) or []
+
+        def _g(a, k):
+            v = a.get(k) if isinstance(a, dict) else getattr(a, k, None)
+            return v if v is not None else ""
+        out = []
+        for a in items[:limit]:
+            out.append({
+                "title":     _g(a, "headline"),
+                "url":       _g(a, "url"),
+                "source":    _g(a, "source"),
+                "published": str(_g(a, "created_at"))[:16],
+            })
+        return out
+    except Exception:
+        return []
 
 
 def _fetch_finnhub_news(symbol: str, days_back: int = 7) -> list[dict]:
