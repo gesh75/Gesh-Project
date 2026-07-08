@@ -1832,6 +1832,15 @@ def _customer_book_payload(positions: list[dict]) -> dict:
     """Value the customer's positions live and shape them EXACTLY like the owner
     payload (build_data_payload) so the existing engines run unchanged. Symbols
     with no price data are excluded from the engines and reported in `unpriced`."""
+    # Warm the close cache in parallel: a cold 30-position book valued serially is
+    # 30 sequential upstream fetches (~1-2s each) on every GET — parallel it's one
+    # round-trip's worth. _cached_close is lock-guarded, so concurrent warms are safe.
+    uncached = [p["symbol"] for p in positions
+                if _ticker_get_cached("close", p["symbol"]) is None]
+    if len(uncached) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as ex:
+            list(ex.map(_cached_close, uncached))
     holdings, unpriced, total = [], [], 0.0
     for p in positions:
         price = _cached_close(p["symbol"])

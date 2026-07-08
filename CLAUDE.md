@@ -655,6 +655,30 @@ New modules + routes on :9000 (full writeups: `../gesh-project-trading/docs/SYST
 Public routes are exempt from the login wall (`auth_users.PUBLIC_PREFIXES`); `/progress` is **not** (internal).
 The product is single-tenant (one Robinhood account); the alpha model is "10 users view the owner's research."
 
+## Customer Surface — 2026-07-08 ★★ (PRs #18–#24: research → book → report → quotas)
+
+The customer product beyond "view the owner's research": self-serve research and
+portfolio analysis, fully isolated per user. Full runbook: `docs/CUSTOMER_SURFACE.md`.
+Live smoke after any deploy: `./venv/bin/python3 smoke_customer_surface.py [--with-llm]`.
+
+| Surface | Routes | Notes |
+|---|---|---|
+| Analyze any ticker | `GET /api/{regime,fundamentals,analyst,news}/{symbol}` | Mechanical cards, no LLM. 5-min TTL cache + heavy rate bucket (trailing-slash prefixes — exact `/api/regime` stays normal). RH primary / yfinance fallback (VPN) |
+| AI research card | `POST /api/analyze-ticker` | One Claude call/symbol/15min (cache + per-symbol single-flight). `require_customer_or_owner` — fail-closed 503 when wall OFF without `GESH_API_KEY`. Price-grounded; 404-before-spend on unknown tickers. **Mask-exempt** (public per-share prose) |
+| Watchlist | `GET/POST /api/watchlist`, `DELETE /api/watchlist/{sym}` | Per-user, 50 cap, `watchlist` table in gesh_auth.db |
+| My Portfolio (book) | `GET/POST /api/mybook`, `DELETE /api/mybook/{sym}`, `POST /api/mybook/import-watchlist` | Customer's OWN positions (30 cap), valued live via cached closes. **Mask-exempt** — their own dollars |
+| Book analysis | `POST /api/mybook/analyze` | Owner engine suite on their book: regime-injected deep analysis → **verdict-aware Kelly** (same ai_verdicts map as /api/kelly) + Monte Carlo. Cached per (user, book fingerprint) 15 min, single-flight per user, Kelly/MC best-effort. Persisted to `customer_analyses` (newest 5) |
+| Report | `GET /mybook/report` | Print-friendly (→PDF) book + last analysis; server-rendered, ALL strings escaped; links `/track-record`. Session-gated, never spends LLM |
+| Metering | `usage_events` table | `ticker_card[_cached]`, `book_analysis[_cached]`, `book_report` — `log_usage` NEVER raises |
+| Quotas | `_check_customer_quota` (server.py) | Rolling-24h caps on LIVE LLM calls only (cached free, checked before any spend). Env base × tier multiplier: observer 1× / trader 2× / **desk 5×** (`users.tier`, set by the billing webhook). Owner exempt; 0 disables; fail-open |
+| Owner metering view | `GET /usage` (owner-only) + `GET /api/usage/summary` | In `_OWNER_ONLY_PATHS`; customers 403 |
+
+Frontend: the **Analyze** tab (dashboard.html) is the whole customer UI — role-gated nav
+(`body.customer` hides `.owner-only`), watchlist chips, book table, progressive AI card.
+XSS guard: HTML builders must be `build*`-named (audited) and callers pass RAW values to
+`buildRow` (it escapes internally). Test isolation: conftest clears server caches,
+`_RATE_HITS`, flight locks, and points `AUTH_DB_PATH` at a throwaway per test.
+
 ## Daily Analysis Chain — 2026-06-10 ★★★ (the system's heartbeat)
 
 The daily portfolio analysis is fully deterministic — a scheduled Claude agent's only
