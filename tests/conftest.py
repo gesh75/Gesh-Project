@@ -48,6 +48,17 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_auth_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point auth_users at a per-test throwaway DB. Product endpoints now write
+    usage_events on every hit (metering), so a test that doesn't stub the auth DB
+    would otherwise pollute the developer's REAL gesh_auth.db. Tests that need
+    their own DB (the `au` fixtures) still override this — fixture order puts
+    autouse first, so their setattr wins."""
+    import auth_users
+    monkeypatch.setattr(auth_users, "AUTH_DB_PATH", tmp_path / "auth_test_isolated.db")
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_response_caches() -> None:
     """server.py keeps process-wide TTL caches (/api/chart + the per-ticker analyze
     GETs) and the per-IP rate-limit ledger. Every TestClient shares the constant

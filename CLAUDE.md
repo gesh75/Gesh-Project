@@ -235,6 +235,11 @@ MIN_CASH_BUFFER_USD=500   # minimum cash floor
 MIN_CONFIDENCE=0.75       # minimum consensus confidence to trade
 MAX_PRICE_AGE_SECONDS=300 # reject stale quotes > 5 min old
 
+# Customer LLM quotas (rolling 24h, LIVE Claude calls only — cached hits are
+# free and never consume quota; the OWNER is exempt; 0 disables a cap)
+QUOTA_DAILY_TICKER_CARD=25    # /api/analyze-ticker AI research cards per customer
+QUOTA_DAILY_BOOK_ANALYSIS=10  # /api/mybook/analyze runs per customer
+
 # Telegram alerts
 TELEGRAM_BOT_TOKEN=       # @gesh755bot token
 TELEGRAM_CHAT_ID=5015900830

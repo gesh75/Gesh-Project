@@ -1696,6 +1696,33 @@ def _latest_close(sym: str) -> float | None:
         return None
 
 
+# ── Per-customer daily quotas on the LLM-spend surfaces ────────────────────────
+# Metering (#22) counts; this enforces. Rolling-24h caps on LIVE Claude calls only
+# — cached hits are free and never consume quota. The OWNER is exempt. 0 disables
+# a cap. These are the enforcement half of the billing tiers: raise per tier.
+_QUOTA_DEFAULTS = {"ticker_card": 25, "book_analysis": 10}
+
+
+def _check_customer_quota(email: str | None, event: str) -> None:
+    """Raise 429 when the user's rolling-24h count of `event` has hit the cap.
+    Fail-open on metering errors — quota must never take the product down."""
+    if not email or auth_users.is_owner(email):
+        return
+    try:
+        limit = int(os.getenv(f"QUOTA_DAILY_{event.upper()}", _QUOTA_DEFAULTS.get(event, 0)))
+        if limit <= 0:
+            return
+        if auth_users.usage_count_24h(email, event) >= limit:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results "
+                       f"remain free; the limit resets on a rolling 24-hour window.")
+    except HTTPException:
+        raise
+    except Exception:
+        return
+
+
 # Short-TTL shared cache for the single-ticker AI card. The card is PUBLIC per-ticker
 # research (no per-customer data), so a process-wide cache is correct and stops a hot
 # ticker from re-spending on Claude every request.
@@ -1759,6 +1786,9 @@ async def analyze_ticker_endpoint(request: Request):
             if card is not None:
                 auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
                 return {"status": "ok", "data": card}
+            # Quota gate sits AFTER the cache re-check (cached hits are free) and
+            # BEFORE any spend — a capped user costs nothing, not even the quote.
+            _check_customer_quota(_session_email(request), "ticker_card")
             # Ground the valuation on a REAL quote: no price = unknown ticker / data
             # outage → 404 rather than let the model fabricate a price and card.
             price = await asyncio.to_thread(_latest_close, sym)
@@ -1950,6 +1980,9 @@ async def mybook_analyze(request: Request):
             if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
                 auth_users.log_usage(email, "book_analysis_cached")
                 return {"status": "ok", "cached": True, "data": hit[2]}
+            # Quota gate after the cache re-check (cached hits are free), before
+            # any engine work — a capped user costs nothing.
+            _check_customer_quota(email, "book_analysis")
             payload = await asyncio.to_thread(_customer_book_payload, positions)
             if not payload["holdings"]:
                 raise HTTPException(status_code=404,
