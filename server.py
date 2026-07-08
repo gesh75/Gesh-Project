@@ -140,6 +140,9 @@ _HEAVY_PREFIXES = (
     # the exact "/api/regime" (dashboard-polled, chain-cached) stays in the normal
     # bucket — only the /{symbol} variants are heavy.
     "/api/regime/", "/api/fundamentals/", "/api/analyst/", "/api/news/",
+    # Customer-book analysis = regime + Monte Carlo + Kelly + one Claude call.
+    # Book CRUD (/api/mybook without /analyze) stays in the normal bucket.
+    "/api/mybook/analyze",
 )
 
 
@@ -292,7 +295,13 @@ _OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch")
 # Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
 # gut the customer analysis surface, so they are served RAW. ONLY add paths here that
 # provably contain no owner position/cash data.
-_MASK_EXEMPT_PREFIXES = ("/api/analyze-ticker",)
+_MASK_EXEMPT_PREFIXES = (
+    "/api/analyze-ticker",
+    # The customer's OWN book — positions THEY entered, valued from public quotes.
+    # Masking would redact the customer's own dollars back at them. Responses are
+    # built exclusively from customer_positions + live prices: zero owner data.
+    "/api/mybook",
+)
 _MONEY_KEYS = {
     "equity", "cash", "deployable", "settled_cash", "buying_power",
     "buying_power_leveraged", "margin_buying_power", "withdrawable_amount",
@@ -1756,6 +1765,184 @@ async def analyze_ticker_endpoint(request: Request):
             card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
             _ticker_card_store(sym, card)
             return {"status": "ok", "data": card}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+# ─── Customer book — "Analyze MY portfolio" (v2 of the customer surface) ─────
+# The customer enters their OWN positions (symbol + shares [+ avg cost]) and gets
+# the full engine suite on THEIR book: deep AI analysis, Kelly sizing, Monte Carlo.
+# Everything here is derived from customer_positions + public quotes — zero owner
+# data — which is why /api/mybook is mask-exempt (masking would redact the
+# customer's own dollars back at them).
+
+def _cached_close(sym: str) -> float | None:
+    """_latest_close with the shared 5-min per-ticker cache in front — valuing a
+    book re-reads every symbol, so repeat views must not re-fetch upstream."""
+    hit = _ticker_get_cached("close", sym)
+    if hit:
+        return hit.get("price")
+    price = _latest_close(sym)
+    if price is not None:
+        _ticker_get_store("close", sym, {"price": price})
+    return price
+
+
+def _customer_book_payload(positions: list[dict]) -> dict:
+    """Value the customer's positions live and shape them EXACTLY like the owner
+    payload (build_data_payload) so the existing engines run unchanged. Symbols
+    with no price data are excluded from the engines and reported in `unpriced`."""
+    holdings, unpriced, total = [], [], 0.0
+    for p in positions:
+        price = _cached_close(p["symbol"])
+        if price is None or price <= 0:
+            unpriced.append(p["symbol"])
+            continue
+        equity = round(p["shares"] * price, 2)
+        ac = p.get("avg_cost")
+        pct_chg = round((price - ac) / ac * 100, 2) if ac else 0.0
+        holdings.append({
+            "symbol": p["symbol"], "quantity": p["shares"], "average_buy_price": ac or 0.0,
+            "equity": equity, "percent_change": pct_chg,
+            "equity_change": round(equity - (ac or price) * p["shares"], 2),
+            "current_price": price, "type": "stock", "pe_ratio": None,
+            "portfolio_percentage": 0.0,
+        })
+        total += equity
+    for h in holdings:
+        h["portfolio_percentage"] = round(h["equity"] / total * 100, 1) if total else 0.0
+    equity_summary = {"portfolio_equity": round(total, 2), "cash": 0.0, "buying_power": 0.0,
+                      "day_change": 0.0, "day_change_pct": 0.0}
+    return {"as_of": _dt.now(_tz.utc).isoformat(), "equity_summary": equity_summary,
+            "holdings": holdings, "watchlist": [], "unpriced": unpriced}
+
+
+@app.get("/api/mybook")
+def mybook_get(request: Request):
+    """The current user's book, valued live (per-user, session-scoped)."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        payload = _customer_book_payload(auth_users.get_positions(email))
+        return {"status": "ok", "data": {
+            "positions": payload["holdings"],
+            "total_equity": payload["equity_summary"]["portfolio_equity"],
+            "unpriced": payload["unpriced"],
+        }}
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.post("/api/mybook")
+async def mybook_set(request: Request):
+    """Upsert one position: {"symbol", "shares", "avg_cost"?}. Returns the whole
+    valued book; status "full" when the per-user position cap refuses a NEW symbol."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    sym = _safe_symbol((body or {}).get("symbol", ""))
+    ok = auth_users.set_position(email, sym, (body or {}).get("shares"),
+                                 (body or {}).get("avg_cost"))
+    if not ok and len(auth_users.get_positions(email)) < auth_users._MAX_POSITIONS:
+        raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
+    return {"status": "ok" if ok else "full", "data": mybook_get(request)["data"]}
+
+
+@app.delete("/api/mybook/{symbol}")
+def mybook_remove(symbol: str, request: Request):
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth_users.remove_position(email, _safe_symbol(symbol))
+    return mybook_get(request)
+
+
+# Per-user cache + single-flight for the book analysis. Keyed by (email) with the
+# book fingerprint in the value: same book within the TTL = cached result; any
+# position change = new fingerprint = fresh run. Same eviction/loop-affinity rules
+# as the ticker card (see conftest note on _ticker_card_flight).
+_MYBOOK_TTL = 900  # 15 min
+_mybook_cache: dict[str, tuple[float, str, dict]] = {}
+_mybook_lock = threading.Lock()
+_mybook_flight: dict[str, asyncio.Lock] = {}
+
+
+def _book_fingerprint(positions: list[dict]) -> str:
+    return _json.dumps(sorted([(p["symbol"], p["shares"], p.get("avg_cost")) for p in positions]))
+
+
+def _run_book_engines(payload: dict) -> dict:
+    """Blocking engine suite on a customer payload — runs in a worker thread.
+    Regime/Kelly/Monte-Carlo are best-effort (partial results beat a 500); the
+    Claude deep analysis is the core deliverable and failures propagate."""
+    symbols = [h["symbol"] for h in payload["holdings"]]
+    regime_context = None
+    try:
+        regime_context = detect_regimes(symbols).get("regime_summary")
+    except Exception:
+        pass
+    try:
+        mc = run_monte_carlo(payload["holdings"], payload["equity_summary"])
+    except Exception as e:
+        mc = {"error": f"monte carlo unavailable: {type(e).__name__}"}
+    try:
+        analyst = get_analyst_targets(symbols) or {}
+        upside = {s: {"upside_pct": analyst[s].get("upside_pct")} for s in analyst
+                  if not analyst[s].get("error")}
+        kelly = run_kelly_analysis(payload["holdings"],
+                                   payload["equity_summary"]["portfolio_equity"], upside, {})
+    except Exception as e:
+        kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
+    analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
+    return {"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
+            "book": {"positions": payload["holdings"],
+                     "total_equity": payload["equity_summary"]["portfolio_equity"],
+                     "unpriced": payload["unpriced"]}}
+
+
+@app.post("/api/mybook/analyze", dependencies=[Depends(require_customer_or_owner)])
+async def mybook_analyze(request: Request):
+    """Full engine suite on the CUSTOMER's own book — deep AI analysis + Kelly +
+    Monte Carlo, exactly the owner pipeline but fed from their entered positions.
+    Auth-gated (LLM spend), heavy rate bucket, cached per (user, book fingerprint)
+    for _MYBOOK_TTL, single-flight per user, engines offloaded to a thread. NOT
+    logged to the owner's analysis history — this is the customer's data."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    positions = auth_users.get_positions(email)
+    if not positions:
+        raise HTTPException(status_code=400, detail="Your book is empty — add positions first")
+    fp = _book_fingerprint(positions)
+    with _mybook_lock:
+        hit = _mybook_cache.get(email)
+    if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
+        return {"status": "ok", "cached": True, "data": hit[2]}
+    try:
+        flight = _mybook_flight.setdefault(email, asyncio.Lock())
+        async with flight:
+            with _mybook_lock:
+                hit = _mybook_cache.get(email)
+            if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
+                return {"status": "ok", "cached": True, "data": hit[2]}
+            payload = await asyncio.to_thread(_customer_book_payload, positions)
+            if not payload["holdings"]:
+                raise HTTPException(status_code=404,
+                                    detail="No market data for any symbol on your book")
+            result = await asyncio.to_thread(_run_book_engines, payload)
+            with _mybook_lock:
+                _mybook_cache[email] = (time.monotonic(), fp, result)
+                for k in [k for k, (ts, _, _) in _mybook_cache.items()
+                          if (time.monotonic() - ts) >= _MYBOOK_TTL]:
+                    del _mybook_cache[k]
+            return {"status": "ok", "cached": False, "data": result}
     except HTTPException:
         raise
     except Exception as e:

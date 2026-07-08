@@ -225,6 +225,10 @@ COVERED: dict[str, str] = {
 EXCLUDED: dict[str, str] = {
     "/api/ollama/status": "410 Gone — endpoint permanently removed; carries no data",
     "/api/me": "returns only a session role string (owner|customer) — no owner financial data",
+    "/api/mybook": "the CUSTOMER's own entered positions valued from public quotes — zero "
+                   "owner data, mask-EXEMPT by design (masking would redact the customer's "
+                   "own dollars back at them); per-user isolation + raw-dollar contract "
+                   "locked by tests/test_mybook.py",
 }
 
 
