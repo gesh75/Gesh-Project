@@ -289,7 +289,7 @@ async def _auth_gate_middleware(request: Request, call_next):
 
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
 # /watch is the INTERNAL cockpit (raw paper P&L, provisional win rate) — owner only.
-_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch")
+_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage")
 # Customer research endpoints whose bodies carry NO owner dollars — single-ticker AI
 # research cards (public per-share fair value / price forecasts, not the owner's book).
 # Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
@@ -1699,19 +1699,24 @@ def _latest_close(sym: str) -> float | None:
 # ── Per-customer daily quotas on the LLM-spend surfaces ────────────────────────
 # Metering (#22) counts; this enforces. Rolling-24h caps on LIVE Claude calls only
 # — cached hits are free and never consume quota. The OWNER is exempt. 0 disables
-# a cap. These are the enforcement half of the billing tiers: raise per tier.
+# a cap. The base caps are env-tunable; the billing tier (set on provision by the
+# Lemon Squeezy webhook) multiplies them — the $399 Trading Desk tier gets 5×
+# without touching env or code. Unknown/NULL tier = base (the alpha default).
 _QUOTA_DEFAULTS = {"ticker_card": 25, "book_analysis": 10}
+_TIER_QUOTA_MULT = {"observer": 1, "trader": 2, "desk": 5}
 
 
 def _check_customer_quota(email: str | None, event: str) -> None:
-    """Raise 429 when the user's rolling-24h count of `event` has hit the cap.
-    Fail-open on metering errors — quota must never take the product down."""
+    """Raise 429 when the user's rolling-24h count of `event` has hit their
+    tier-scaled cap. Fail-open on metering errors — quota must never take the
+    product down."""
     if not email or auth_users.is_owner(email):
         return
     try:
-        limit = int(os.getenv(f"QUOTA_DAILY_{event.upper()}", _QUOTA_DEFAULTS.get(event, 0)))
-        if limit <= 0:
+        base = int(os.getenv(f"QUOTA_DAILY_{event.upper()}", _QUOTA_DEFAULTS.get(event, 0)))
+        if base <= 0:
             return
+        limit = base * _TIER_QUOTA_MULT.get(auth_users.get_tier(email), 1)
         if auth_users.usage_count_24h(email, event) >= limit:
             raise HTTPException(
                 status_code=429,
@@ -2068,12 +2073,19 @@ def _render_book_report(email: str) -> str:
             row(f"{k.get('symbol', '')} · {k.get('action', '')}",
                 f"{k.get('current_pct', 0):.1f}% → {k.get('optimal_pct', 0):.1f}%")
             for k in (ky.get("holdings") or [])[:15])
+        sectors = "".join(
+            f"<tr><td style='padding:6px 12px'>{e(s.get('sector', ''))}</td>"
+            f"<td style='padding:6px 12px;text-align:right;font-weight:600'>{float(s.get('allocation_pct', 0) or 0):.1f}%</td>"
+            f"<td style='padding:6px 12px;color:#555'>{e(s.get('assessment', ''))}</td></tr>"
+            for s in (d.get("sector_breakdown") or []))
+        sector_block = (f"<h2>Sector breakdown</h2><table>{sectors}</table>") if sectors else ""
         body = f"""
   <h2>AI Verdict: {e(str(d.get('portfolio_verdict', '—')))}</h2>
   <table>{row('Portfolio score', d.get('portfolio_score', '—'))}{row('Risk score', d.get('risk_score', '—'))}
   {row('Diversification', d.get('diversification_score', '—'))}{row('Portfolio type', d.get('portfolio_type', '—'))}</table>
   <p style='color:#444;line-height:1.6'>{e(str(d.get('market_context', '')))}</p>
   {('<h2>Key risks</h2><ul>' + risks + '</ul>') if risks else ''}
+  {sector_block}
   <h2>Monte Carlo (1yr)</h2>
   <table>{row('Median outcome', '$' + format(mc.get('median', 0) or 0, ',.0f'))}
   {row('P5 – P95', '$' + format(mc.get('p5', 0) or 0, ',.0f') + ' – $' + format(mc.get('p95', 0) or 0, ',.0f'))}
@@ -2086,9 +2098,11 @@ def _render_book_report(email: str) -> str:
 
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>GESH — Portfolio Report</title>
 <style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:860px;margin:32px auto;padding:0 20px;color:#111}}
-h1{{border-bottom:2px solid #111;padding-bottom:8px}}h2{{margin-top:28px}}table{{border-collapse:collapse}}
+h1{{margin:0}}h2{{margin-top:28px}}table{{border-collapse:collapse}}
 tr:nth-child(even){{background:#f6f6f6}}@media print{{a{{display:none}}}}</style></head><body>
-<h1>GESH Portfolio Report</h1>
+<div style='border-bottom:3px solid #111;padding-bottom:10px;display:flex;justify-content:space-between;align-items:baseline'>
+<h1>GESH <span style='font-weight:300'>Portfolio Report</span></h1>
+<span style='color:#666;font-size:13px'>AI portfolio intelligence · 11-node consensus · verified signals</span></div>
 <p style='color:#666'>Prepared for {e(email)} · {_dt.now(_tz.utc).strftime('%Y-%m-%d %H:%M')} UTC</p>
 <h2>Positions</h2>
 <table><tr style='border-bottom:1px solid #ccc'><th style='padding:6px 12px;text-align:left'>Symbol</th>
@@ -2097,7 +2111,8 @@ tr:nth-child(even){{background:#f6f6f6}}@media print{{a{{display:none}}}}</style
 <p><b>Total: ${total:,.2f}</b>{(' · No price data: ' + e(', '.join(book['unpriced']))) if book['unpriced'] else ''}</p>
 {body}
 <hr><p style='color:#888;font-size:12px'>Informational and educational only — not financial advice.
-All trading decisions remain your responsibility. Generated by GESH Financial Observability.</p>
+All trading decisions remain your responsibility. Generated by GESH Financial Observability ·
+<a href='/track-record'>see our verified signal track record</a>.</p>
 </body></html>"""
 
 
@@ -2117,6 +2132,47 @@ def mybook_report(request: Request):
         raise
     except Exception as e:
         raise _server_error(e)
+
+
+@app.get("/usage", response_class=HTMLResponse)
+def usage_page(request: Request, days: int = 30):
+    """Owner cockpit: per-customer usage counters as a page instead of raw JSON.
+    In _OWNER_ONLY_PATHS (customer sessions 403 at the middleware) plus a
+    defense-in-depth owner check here. Server-rendered, everything escaped."""
+    import html as _h
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not auth_users.is_owner(email):
+        raise HTTPException(status_code=403, detail="Owner-only view")
+    try:
+        days = max(1, min(days, 365))
+        rows = auth_users.usage_summary(days=days)
+        e = _h.escape
+        tiers: dict[str, str] = {}
+        body = "".join(
+            f"<tr><td style='padding:6px 12px'>{e(r['email'])}</td>"
+            f"<td style='padding:6px 12px'>{e(tiers.setdefault(r['email'], auth_users.get_tier(r['email']) or '—'))}</td>"
+            f"<td style='padding:6px 12px'>{e(r['event'])}</td>"
+            f"<td style='padding:6px 12px;text-align:right;font-weight:600'>{r['count']}</td>"
+            f"<td style='padding:6px 12px;color:#666'>{e(str(r['last_at'])[:16])}</td></tr>"
+            for r in rows)
+        live_llm = sum(r["count"] for r in rows if r["event"] in ("ticker_card", "book_analysis"))
+        return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>GESH — Usage</title><style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:900px;
+margin:32px auto;padding:0 20px;color:#111}}table{{border-collapse:collapse;width:100%}}
+th{{text-align:left;padding:6px 12px;border-bottom:2px solid #111;font-size:12px;letter-spacing:.06em}}
+tr:nth-child(even){{background:#f6f6f6}}</style></head><body>
+<h1>Customer Usage — last {days} days</h1>
+<p style='color:#666'>{live_llm} live LLM calls billed across all customers ·
+window <a href='/usage?days=7'>7d</a> · <a href='/usage?days=30'>30d</a> · <a href='/usage?days=90'>90d</a></p>
+<table><tr><th>EMAIL</th><th>TIER</th><th>EVENT</th><th>COUNT</th><th>LAST</th></tr>
+{body or "<tr><td colspan='5' style='padding:16px;color:#888'><em>No usage recorded yet.</em></td></tr>"}</table>
+</body></html>""")
+    except HTTPException:
+        raise
+    except Exception as e2:
+        raise _server_error(e2)
 
 
 @app.get("/api/usage/summary")
