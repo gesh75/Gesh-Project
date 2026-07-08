@@ -272,3 +272,66 @@ def test_fetch_alpaca_news_no_keys_empty(monkeypatch):
     monkeypatch.delenv("ALPACA_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
     assert news_agent._fetch_alpaca_news("NVDA") == []
+
+
+# ── inspection fixes 2026-07-08: intraday span trim, GET caching, rate bucket ──
+
+def test_last_sessions_trims_1d_to_single_session():
+    """The Alpaca fetch starts days+2 back (weekend buffer) — a '1d' chart must
+    still render ONLY the most recent session, not 3 days of bars."""
+    idx = (list(pd.date_range("2026-07-06 09:30", periods=3, freq="5min", tz="UTC"))
+           + list(pd.date_range("2026-07-07 09:30", periods=3, freq="5min", tz="UTC"))
+           + list(pd.date_range("2026-07-08 09:30", periods=3, freq="5min", tz="UTC")))
+    df = pd.DataFrame({"Close": range(9)}, index=pd.DatetimeIndex(idx))
+    out = price_source._last_sessions(df, 1)
+    assert len(out) == 3
+    assert out.index.normalize().unique().tolist() == [pd.Timestamp("2026-07-08", tz="UTC")]
+
+
+def test_last_sessions_keeps_up_to_n_sessions():
+    idx = (list(pd.date_range("2026-07-07 09:30", periods=2, freq="5min", tz="UTC"))
+           + list(pd.date_range("2026-07-08 09:30", periods=2, freq="5min", tz="UTC")))
+    df = pd.DataFrame({"Close": range(4)}, index=pd.DatetimeIndex(idx))
+    assert len(price_source._last_sessions(df, 5)) == 4   # fewer sessions than asked → all kept
+    assert len(price_source._last_sessions(df, 1)) == 2
+
+
+def test_regime_symbol_second_hit_served_from_cache(monkeypatch):
+    """Watchlist chips make repeat clicks common — the per-ticker GETs must not
+    re-fetch upstream (yfinance+FRED) within the TTL."""
+    calls = {"n": 0}
+
+    def _fake(syms):
+        calls["n"] += 1
+        return {"regimes": [{"symbol": syms[0], "regime": "TRENDING", "adx": 30.0,
+                             "rsi": 55.0, "pct_b": 0.5, "bb_width": 0.1,
+                             "icon": "📈", "description": "up"}], "regime_summary": "x"}
+    monkeypatch.setattr("regime.detect_regimes", _fake, raising=False)
+    c = _client(monkeypatch)
+    assert c.get("/api/regime/NVDA").status_code == 200
+    assert c.get("/api/regime/NVDA").status_code == 200
+    assert calls["n"] == 1
+
+
+def test_regime_symbol_404_is_not_cached(monkeypatch):
+    """A transient upstream outage must not stick for the whole TTL."""
+    calls = {"n": 0}
+
+    def _fake(syms):
+        calls["n"] += 1
+        return {"regimes": [], "regime_summary": "none"}
+    monkeypatch.setattr("regime.detect_regimes", _fake, raising=False)
+    c = _client(monkeypatch)
+    assert c.get("/api/regime/NVDA").status_code == 404
+    assert c.get("/api/regime/NVDA").status_code == 404
+    assert calls["n"] == 2                                # miss → re-query, no negative cache
+
+
+def test_per_ticker_gets_are_heavy_rate_limited():
+    """The per-symbol variants sit in the 30/min heavy bucket (each miss is a live
+    upstream fetch) — but the exact '/api/regime' (dashboard-polled, chain-cached)
+    must stay in the normal bucket."""
+    for path in ("/api/regime/NVDA", "/api/fundamentals/NVDA",
+                 "/api/analyst/NVDA", "/api/news/NVDA"):
+        assert path.startswith(server._HEAVY_PREFIXES), path
+    assert not "/api/regime".startswith(server._HEAVY_PREFIXES)

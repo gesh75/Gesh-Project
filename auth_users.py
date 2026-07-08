@@ -534,12 +534,18 @@ def add_watch(email: str, symbol: str) -> bool:
     with _conn() as con:
         if con.execute("SELECT 1 FROM watchlist WHERE email=? AND symbol=?", (em, sym)).fetchone():
             return True
-        n = con.execute("SELECT COUNT(*) AS c FROM watchlist WHERE email=?", (em,)).fetchone()["c"]
-        if n >= _MAX_WATCH:
-            return False
-        con.execute("INSERT INTO watchlist (email, symbol, added_at) VALUES (?,?,?)",
-                    (em, sym, datetime.now(timezone.utc).isoformat()))
-    return True
+        # Single-statement cap check: a separate count-then-insert could exceed the
+        # cap under concurrent adds. OR IGNORE absorbs a concurrent duplicate insert.
+        cur = con.execute(
+            "INSERT OR IGNORE INTO watchlist (email, symbol, added_at) "
+            "SELECT ?,?,? WHERE (SELECT COUNT(*) FROM watchlist WHERE email=?) < ?",
+            (em, sym, datetime.now(timezone.utc).isoformat(), em, _MAX_WATCH))
+        if cur.rowcount:
+            return True
+        # rowcount 0 = cap hit, or a concurrent add of the same symbol won the
+        # race — the latter is still a success (the symbol IS on the list).
+        return con.execute("SELECT 1 FROM watchlist WHERE email=? AND symbol=?",
+                           (em, sym)).fetchone() is not None
 
 
 def remove_watch(email: str, symbol: str) -> None:

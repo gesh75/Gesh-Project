@@ -514,6 +514,16 @@ def _yf_download_uncached(
         return raw
 
 
+def _last_sessions(bars: pd.DataFrame, days: int) -> pd.DataFrame:
+    """Trim an intraday frame to its last ``days`` TRADING sessions. The Alpaca
+    fetch starts ``days + 2`` calendar days back as a weekend/holiday buffer, so
+    without this a '1d' chart rendered up to 3 sessions of bars — and the
+    pct_change shown for '1D' actually spanned the whole multi-day window."""
+    sessions = bars.index.normalize()
+    keep = sessions.unique().sort_values()[-days:]
+    return bars[sessions.isin(keep)]
+
+
 def intraday_5m(symbol: str, span: str) -> "pd.DataFrame | None":
     """5-minute intraday bars for ``symbol`` via Alpaca.
 
@@ -548,7 +558,7 @@ def intraday_5m(symbol: str, span: str) -> "pd.DataFrame | None":
         # Alpaca returns a (symbol, timestamp) MultiIndex — drop the symbol level.
         if getattr(bars.index, "nlevels", 1) > 1:
             bars = bars.xs(symbol, level=0)
-        return bars.rename(columns={"close": "Close"})[["Close"]]
+        return _last_sessions(bars.rename(columns={"close": "Close"})[["Close"]], days)
     except Exception as e:  # noqa: BLE001 — intraday is best-effort; fall back cleanly
         logger.debug("price_source: Alpaca intraday failed for %s (%s)", symbol, e)
         return None

@@ -53,6 +53,16 @@ def test_add_capped(au):
     assert len(got) == au._MAX_WATCH                    # cap enforced
 
 
+def test_add_at_cap_new_false_dup_still_true(au):
+    """At the cap a NEW symbol is refused, but re-adding an existing one stays
+    idempotent-True (it IS on the list — nothing was refused)."""
+    for i in range(au._MAX_WATCH):
+        assert au.add_watch("a@x.com", f"SYM{i}") is True
+    assert au.add_watch("a@x.com", "NEWSYM") is False
+    assert au.add_watch("a@x.com", "SYM0") is True
+    assert len(au.get_watch("a@x.com")) == au._MAX_WATCH
+
+
 # ── endpoints (session-scoped) ───────────────────────────────────────────────
 
 @pytest.fixture

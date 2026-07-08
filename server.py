@@ -134,6 +134,12 @@ _RATE_HITS: dict[tuple, deque] = defaultdict(deque)
 _HEAVY_PREFIXES = (
     "/api/deep-analysis", "/api/analyze-ticker", "/api/screener", "/api/consensus",
     "/api/monte-carlo", "/api/agents/", "/api/gemini/", "/api/trading/deep-debate",
+    # Per-ticker analyze GETs: each cache miss is 1-2 live upstream fetches
+    # (yfinance+FRED / Robinhood / RSS), so an authed customer cycling symbols at
+    # the normal 300/min cap could hammer the providers. Trailing slash on purpose:
+    # the exact "/api/regime" (dashboard-polled, chain-cached) stays in the normal
+    # bucket — only the /{symbol} variants are heavy.
+    "/api/regime/", "/api/fundamentals/", "/api/analyst/", "/api/news/",
 )
 
 
@@ -956,6 +962,26 @@ _chart_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 _chart_cache_lock = threading.Lock()
 CHART_TTL_SEC = 30
 
+# Per-ticker analyze GETs (regime/fundamentals/analyst/news) cache. Watchlist
+# chips make repeat clicks on the same symbol the common pattern, and every miss
+# is a live upstream fetch. Successful responses only — a transient upstream 404
+# must not stick for 5 minutes.
+_ticker_get_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+_ticker_get_lock = threading.Lock()
+TICKER_GET_TTL_SEC = 300
+
+
+def _ticker_get_cached(bucket: str, sym: str) -> dict | None:
+    with _ticker_get_lock:
+        hit = _ticker_get_cache.get((bucket, sym))
+    return hit[1] if hit and (time.monotonic() - hit[0]) < TICKER_GET_TTL_SEC else None
+
+
+def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
+    with _ticker_get_lock:
+        _ticker_get_cache[(bucket, sym)] = (time.monotonic(), resp)
+    return resp
+
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
@@ -1553,13 +1579,16 @@ def regime_symbol(symbol: str):
     """Market regime (ADX/BB/RSI + FRED macro) for ANY ticker — the customer
     'analyse any share' regime surface. Public data; no owner/position context."""
     sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("regime", sym)
+    if cached:
+        return cached
     try:
         import regime as _regime
         out = _regime.detect_regimes([sym])
         rows = out.get("regimes") or []
         if not rows:
             raise HTTPException(status_code=404, detail="No regime data")
-        return {"status": "ok", "data": rows[0]}
+        return _ticker_get_store("regime", sym, {"status": "ok", "data": rows[0]})
     except HTTPException:
         raise
     except Exception as e:
@@ -1572,6 +1601,9 @@ def fundamentals_symbol(symbol: str):
     / market-cap / 52-week range / dividend-yield / sector); yfinance momentum row is
     the fallback (its .info is category-blocked under the owner's VPN)."""
     sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("fundamentals", sym)
+    if cached:
+        return cached
     try:
         import market_data
         row = market_data.rh_fundamentals(sym)
@@ -1581,7 +1613,7 @@ def fundamentals_symbol(symbol: str):
             row = rows[0] if rows and not rows[0].get("error") else None
         if not row:
             raise HTTPException(status_code=404, detail="No fundamentals")
-        return {"status": "ok", "data": row}
+        return _ticker_get_store("fundamentals", sym, {"status": "ok", "data": row})
     except HTTPException:
         raise
     except Exception as e:
@@ -1593,6 +1625,9 @@ def analyst_symbol(symbol: str):
     """Analyst ratings for ANY ticker. Robinhood is PRIMARY (VPN-safe buy/hold/sell
     consensus + # analysts); yfinance price-targets are the fallback."""
     sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("analyst", sym)
+    if cached:
+        return cached
     try:
         import market_data
         row = market_data.rh_analyst(sym)
@@ -1602,7 +1637,7 @@ def analyst_symbol(symbol: str):
             row = yf_row if (yf_row and not yf_row.get("error")) else None
         if not row:
             raise HTTPException(status_code=404, detail="No analyst data")
-        return {"status": "ok", "data": row}
+        return _ticker_get_store("analyst", sym, {"status": "ok", "data": row})
     except HTTPException:
         raise
     except Exception as e:
@@ -1615,6 +1650,9 @@ def news_symbol(symbol: str):
     stays owner-only so the customer analyze path stays zero-cost). Returns the
     trimmed top-8 items (title/url/source/published); [] when none."""
     sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("news", sym)
+    if cached:
+        return cached
     try:
         import news_agent
         # Alpaca first (VPN-safe, key-gated); RSS fallback (blocked on the owner's VPN).
@@ -1622,7 +1660,7 @@ def news_symbol(symbol: str):
         trimmed = [{"title": it.get("title", ""), "url": it.get("url", ""),
                     "source": it.get("source", ""), "published": it.get("published", "")}
                    for it in items[:8]]
-        return {"status": "ok", "data": trimmed}
+        return _ticker_get_store("news", sym, {"status": "ok", "data": trimmed})
     except HTTPException:
         raise
     except Exception as e:
@@ -1655,6 +1693,28 @@ def _latest_close(sym: str) -> float | None:
 _TICKER_CARD_TTL = 900  # 15 min
 _ticker_card_cache: dict[str, tuple[float, dict]] = {}
 _ticker_card_lock = threading.Lock()
+# Single-flight: per-symbol asyncio locks so N concurrent first requests for a hot
+# ticker spend ONE Claude call, not N — the waiters find the cache filled. Also the
+# eviction hook: expired cache entries (and their locks) are purged on every store,
+# so neither dict grows past the set of symbols queried in the last TTL window.
+_ticker_card_flight: dict[str, asyncio.Lock] = {}
+
+
+def _ticker_card_get(sym: str) -> dict | None:
+    with _ticker_card_lock:
+        hit = _ticker_card_cache.get(sym)
+    return hit[1] if hit and (time.monotonic() - hit[0]) < _TICKER_CARD_TTL else None
+
+
+def _ticker_card_store(sym: str, card: dict) -> None:
+    now = time.monotonic()
+    with _ticker_card_lock:
+        _ticker_card_cache[sym] = (now, card)
+        for k in [k for k, (ts, _) in _ticker_card_cache.items() if (now - ts) >= _TICKER_CARD_TTL]:
+            del _ticker_card_cache[k]
+            lock = _ticker_card_flight.get(k)
+            if lock is not None and not lock.locked():
+                del _ticker_card_flight[k]
 
 
 @app.post("/api/analyze-ticker", dependencies=[Depends(require_customer_or_owner)])
@@ -1675,21 +1735,27 @@ async def analyze_ticker_endpoint(request: Request):
     except Exception:
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
-    now = time.monotonic()
-    with _ticker_card_lock:
-        hit = _ticker_card_cache.get(sym)
-        if hit and (now - hit[0]) < _TICKER_CARD_TTL:
-            return {"status": "ok", "data": hit[1]}
-    try:
-        # Ground the valuation on a REAL quote: no price = unknown ticker / data
-        # outage → 404 rather than let the model fabricate a price and card.
-        price = await asyncio.to_thread(_latest_close, sym)
-        if price is None:
-            raise HTTPException(status_code=404, detail="No market data for this ticker")
-        card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
-        with _ticker_card_lock:
-            _ticker_card_cache[sym] = (time.monotonic(), card)
+    card = _ticker_card_get(sym)
+    if card is not None:
         return {"status": "ok", "data": card}
+    try:
+        # Single-flight per symbol: the ~15s LLM call means concurrent first
+        # requests are the norm for a hot ticker — followers wait on the leader's
+        # lock, then re-check the cache instead of spending again. setdefault is
+        # safe here: this coroutine runs on the single event loop, unawaited.
+        flight = _ticker_card_flight.setdefault(sym, asyncio.Lock())
+        async with flight:
+            card = _ticker_card_get(sym)
+            if card is not None:
+                return {"status": "ok", "data": card}
+            # Ground the valuation on a REAL quote: no price = unknown ticker / data
+            # outage → 404 rather than let the model fabricate a price and card.
+            price = await asyncio.to_thread(_latest_close, sym)
+            if price is None:
+                raise HTTPException(status_code=404, detail="No market data for this ticker")
+            card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
+            _ticker_card_store(sym, card)
+            return {"status": "ok", "data": card}
     except HTTPException:
         raise
     except Exception as e:

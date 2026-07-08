@@ -45,3 +45,25 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(socket.socket, "connect", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def _clear_server_response_caches() -> None:
+    """server.py keeps process-wide TTL caches (/api/chart + the per-ticker analyze
+    GETs) and the per-IP rate-limit ledger. Every TestClient shares the constant
+    "testclient" IP, so without clearing, one test's cached response (or accumulated
+    heavy-bucket hits → spurious 429s) leaks into the next."""
+    def _clear() -> None:
+        srv = sys.modules.get("server")
+        # _ticker_card_flight holds asyncio.Locks bound to one test's event loop —
+        # every TestClient spins a fresh loop, so a leaked lock raises
+        # "bound to a different event loop" in the next test.
+        for name in ("_chart_cache", "_ticker_get_cache", "_RATE_HITS",
+                     "_ticker_card_cache", "_ticker_card_flight"):
+            state = getattr(srv, name, None)
+            if state is not None:
+                state.clear()
+
+    _clear()
+    yield
+    _clear()
