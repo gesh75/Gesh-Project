@@ -2492,7 +2492,7 @@ async function analyzeTicker(raw){
     const cyc=(fc&&fc.primary_cycle)||{};
     const safeUrl=u=>(String(u||'').startsWith('http'))?u:'#';   // block javascript:/data: hrefs
     const capStr=(fu&&fu.market_cap!=null)?(fu.market_cap>=1e12?'$'+(fu.market_cap/1e12).toFixed(2)+'T':fu.market_cap>=1e9?'$'+(fu.market_cap/1e9).toFixed(1)+'B':'$'+(fu.market_cap/1e6).toFixed(0)+'M'):null;
-    box.innerHTML=`${consHtml}
+    box.innerHTML=`${consHtml}<div id="analyze-ai"></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
         <div class="card"><div style="${T}">Market Regime</div>
           ${buildRow('Regime', rg?((rg.icon?rg.icon+' ':'')+rg.regime):'n/a')}${buildRow('ADX', rg&&rg.adx!=null?rg.adx:'—')}${buildRow('RSI', rg&&rg.rsi!=null?rg.rsi:'—')}
@@ -2516,7 +2516,70 @@ async function analyzeTicker(raw){
           <div style="font-size:14px;color:var(--text)">${daEsc(n.title)}</div>
           <div style="font-size:12px;color:var(--muted)">${daEsc(n.source)}${n.published?' · '+daEsc(n.published):''}</div></a>`).join(''):'<div class="deep-ph-text" style="padding:20px 0;text-align:center">No recent news for this ticker.</div>'}</div>`;
     analyzeChart(sym,'1mo');
+    analyzeAI(sym);
   }catch(e){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">'+daEsc('Could not analyze '+sym)+'</div></div>'; }
+}
+
+// Rich Claude research card — the money-free per-ticker subset of the internal
+// deep analysis. POSTed separately (LLM ~15s) so the fast mechanical cards render
+// first; fills #analyze-ai on arrival, degrades silently if the model is unavailable.
+function renderAICard(h){
+  const sc=h.scores||{}, fv=h.fair_value||{};
+  const skeys=['valuation','growth','health','momentum','dividend'];
+  const fvPct=fv.pct_diff!=null?((fv.pct_diff>=0?'+':'')+Number(fv.pct_diff).toFixed(1)+'%'):'';
+  const fvColor=fv.pct_diff>5?'var(--green)':fv.pct_diff<-5?'var(--red)':'var(--yellow)';
+  const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
+  return `<div class="card" style="margin-bottom:16px">
+    <div style="${T}">🧠 AI Research — ${daEsc(h.symbol||'')}</div>
+    <div class="da-holding" style="border:none;padding:0;margin:0">
+      <div class="hdr">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="da-holding vrd" style="${daVerdictStyle(h.verdict)}">${daEsc(h.verdict||'—')}</span>
+          <span style="font-size:12px;color:var(--muted)">${daEsc(h.company_type||'')}</span>
+        </div>
+        <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
+          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fv.status||'')} ${daEsc(fvPct)}</span>
+        </div>
+      </div>
+      <div class="da-sbars">
+        ${skeys.map(k=>{const v=Math.max(0,Math.min(100,Number(sc[k])||0));return `<div class="da-sbar">
+          <span class="nm">${daEsc(k.slice(0,3).toUpperCase())}</span>
+          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${daEsc(String(v))}</span>
+          <div class="tr"><div class="fl" style="width:${daEsc(String(v))}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
+        </div>`;}).join('')}
+      </div>
+      <div style="font-size:13px;color:var(--muted2);margin-bottom:8px;font-style:italic">${daEsc(h.snowflake_summary||'')}</div>
+      ${h.prediction?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">3M: <b style="color:var(--accent)">${daEsc(h.prediction['3m']||'')}</b></span>
+        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">12M: <b style="color:var(--accent)">${daEsc(h.prediction['12m']||'')}</b></span>
+      </div>`:''}
+      ${(h.risks||[]).filter(Boolean).slice(0,4).map(r=>{
+        const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
+        return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;font-size:13px">
+          <span class="da-dot" style="background:${dot}"></span>
+          <span style="color:var(--muted2)">${daEsc((r&&r.text)||'')}</span>
+        </div>`;
+      }).join('')}
+      ${(h.rewards||[]).slice(0,3).map(r=>`<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;font-size:13px">
+        <span class="da-dot" style="background:var(--green)"></span>
+        <span style="color:var(--muted2)">${daEsc((r&&r.text)||'')}</span>
+      </div>`).join('')}
+      ${h.analyst_note?`<div style="font-size:13px;color:var(--accent);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">💡 ${daEsc(h.analyst_note)}</div>`:''}
+    </div>
+  </div>`;
+}
+
+async function analyzeAI(sym){
+  const el=document.getElementById('analyze-ai'); if(!el) return;
+  const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
+  el.innerHTML=`<div class="card" style="margin-bottom:16px"><div style="${T}">🧠 AI Research — ${daEsc(sym)}</div>
+    <div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:20px;height:20px;border-width:3px;margin:0 auto 10px"></div>Generating deep AI analysis…</div></div>`;
+  try{
+    const j=await fetch('/api/analyze-ticker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})}).then(r=>r.ok?r.json():null).catch(()=>null);
+    const h=j&&j.data;
+    if(!h||!h.scores){ el.innerHTML=''; return; }   // degrade silently — mechanical cards remain
+    el.innerHTML=renderAICard(h);
+  }catch(e){ el.innerHTML=''; }
 }
 
 let analyzePriceChart=null;
