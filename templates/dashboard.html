@@ -2529,7 +2529,7 @@ async function analyzeTicker(raw){
       <div class="card" style="margin-top:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
           <div style="${T}">Price — ${daEsc(sym)}</div>
-          <div><button class="per-btn" style="background:rgba(0,212,255,.12);border-color:var(--accent);color:var(--accent);margin-right:6px" onclick="addToWatch('${daEsc(sym)}')" title="Save to watchlist">★ Save</button>${periods.map(p=>`<button class="per-btn" onclick="analyzeChart('${daEsc(sym)}','${daEsc(p)}')">${daEsc(p.toUpperCase())}</button>`).join('')}</div>
+          <div><button class="per-btn" style="background:rgba(0,212,255,.12);border-color:var(--accent);color:var(--accent);margin-right:6px" onclick="addToWatch('${daEsc(sym)}')" title="Save to watchlist">★ Save</button><button class="per-btn" style="margin-right:6px" onclick="mybookPrefill('${daEsc(sym)}')" title="Add to My Portfolio">📌 Add to book</button>${periods.map(p=>`<button class="per-btn" onclick="analyzeChart('${daEsc(sym)}','${daEsc(p)}')">${daEsc(p.toUpperCase())}</button>`).join('')}</div>
         </div>
         <div id="analyze-chart" style="min-height:220px"></div>
       </div>
@@ -2622,7 +2622,7 @@ async function loadMyBook(){
     el.innerHTML=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
       <tbody>${pos.map(p=>`<tr style="border-bottom:1px dashed var(--border)">
-        <td style="padding:8px 10px;font-weight:700;color:var(--accent)">${daEsc(p.symbol)}</td>
+        <td style="padding:8px 10px;font-weight:700;color:var(--accent)"><span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer" title="Analyze this ticker">${daEsc(p.symbol)}</span></td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${daEsc(p.quantity)}</td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
         <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">$${daFmt(p.equity,2)}</td>
@@ -2648,6 +2648,14 @@ async function mybookAdd(){
 }
 async function mybookRemove(sym){
   try{ await fetch('/api/mybook/'+encodeURIComponent(sym),{method:'DELETE'}); loadMyBook(); }catch(e){}
+}
+function mybookPrefill(sym){
+  // "📌 Add to book" from the single-ticker view: prefill the entry row and put
+  // the cursor on shares — the user completes the add, no hidden writes.
+  const s=document.getElementById('mybook-sym'), sh=document.getElementById('mybook-shares');
+  if(!s||!sh) return;
+  s.value=sym; sh.focus();
+  s.scrollIntoView({behavior:'smooth',block:'center'});
 }
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;

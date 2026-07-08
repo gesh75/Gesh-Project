@@ -1881,13 +1881,26 @@ def _book_fingerprint(positions: list[dict]) -> str:
 def _run_book_engines(payload: dict) -> dict:
     """Blocking engine suite on a customer payload — runs in a worker thread.
     Regime/Kelly/Monte-Carlo are best-effort (partial results beat a 500); the
-    Claude deep analysis is the core deliverable and failures propagate."""
+    Claude deep analysis is the core deliverable and failures propagate.
+
+    Order matters: the deep analysis runs BEFORE Kelly so its per-holding verdicts
+    (verdict + fair-value gap) feed run_kelly_analysis exactly like the owner
+    pipeline does (/api/kelly builds the same map from the latest analysis run) —
+    without them Kelly sizes verdict-blind."""
     symbols = [h["symbol"] for h in payload["holdings"]]
     regime_context = None
     try:
         regime_context = detect_regimes(symbols).get("regime_summary")
     except Exception:
         pass
+    analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
+    ai_verdicts = {}
+    for ha in analysis.get("holdings_analysis") or []:
+        if ha.get("symbol"):
+            ai_verdicts[ha["symbol"]] = {
+                "verdict": ha.get("verdict"),
+                "pct_diff": (ha.get("fair_value") or {}).get("pct_diff", 0),
+            }
     try:
         mc = run_monte_carlo(payload["holdings"], payload["equity_summary"])
     except Exception as e:
@@ -1897,10 +1910,10 @@ def _run_book_engines(payload: dict) -> dict:
         upside = {s: {"upside_pct": analyst[s].get("upside_pct")} for s in analyst
                   if not analyst[s].get("error")}
         kelly = run_kelly_analysis(payload["holdings"],
-                                   payload["equity_summary"]["portfolio_equity"], upside, {})
+                                   payload["equity_summary"]["portfolio_equity"],
+                                   upside, ai_verdicts)
     except Exception as e:
         kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
-    analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
     return {"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
             "book": {"positions": payload["holdings"],
                      "total_equity": payload["equity_summary"]["portfolio_equity"],
