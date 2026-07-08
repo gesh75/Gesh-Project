@@ -231,3 +231,47 @@ def test_prompt_grounds_current_price(monkeypatch):
     user_msg = sink["messages"][0]["content"]
     assert "195" in user_msg
     assert "fair_value.current" in user_msg
+
+
+# ── inspection fixes 2026-07-08: cache eviction + single-flight dedup ─────────
+
+def test_ticker_card_store_evicts_expired():
+    """The card cache is process-wide and long-lived — expired entries must be
+    purged on store, not accumulate for the life of the process."""
+    import time as _time
+    server._ticker_card_cache["OLD"] = (_time.monotonic() - server._TICKER_CARD_TTL - 1,
+                                        {"symbol": "OLD"})
+    server._ticker_card_store("NEW", {"symbol": "NEW"})
+    assert "OLD" not in server._ticker_card_cache
+    assert "NEW" in server._ticker_card_cache
+
+
+def test_concurrent_same_symbol_spends_one_llm_call(monkeypatch):
+    """Single-flight: the ~15s LLM call makes concurrent first requests the norm
+    for a hot ticker — followers must wait for the leader and hit the cache, not
+    spend a second Claude call."""
+    import asyncio
+
+    calls = {"n": 0}
+
+    def _slow(sym, current_price=None, regime_context=None):
+        calls["n"] += 1
+        import time as _time
+        _time.sleep(0.05)                     # long enough for the follower to queue
+        return {**_CARD, "symbol": sym}
+    monkeypatch.setattr(server, "deep_analyze_ticker", _slow, raising=True)
+    monkeypatch.setattr(server, "_latest_close", lambda s: 195.0, raising=True)
+
+    # Call the endpoint function directly (its Depends auth gate is route-level and
+    # covered by the route tests above) so both coroutines share one event loop.
+    class _Req:                               # endpoint only reads .json()
+        async def json(self):
+            return {"symbol": "AAPL"}
+
+    async def _go():
+        return await asyncio.gather(server.analyze_ticker_endpoint(_Req()),
+                                    server.analyze_ticker_endpoint(_Req()))
+
+    r1, r2 = asyncio.run(_go())
+    assert r1["data"]["symbol"] == "AAPL" and r2["data"]["symbol"] == "AAPL"
+    assert calls["n"] == 1

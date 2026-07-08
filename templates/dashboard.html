@@ -2575,7 +2575,15 @@ async function analyzeAI(sym){
   el.innerHTML=`<div class="card" style="margin-bottom:16px"><div style="${T}">🧠 AI Research — ${daEsc(sym)}</div>
     <div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:20px;height:20px;border-width:3px;margin:0 auto 10px"></div>Generating deep AI analysis…</div></div>`;
   try{
-    const j=await fetch('/api/analyze-ticker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})}).then(r=>r.ok?r.json():null).catch(()=>null);
+    const res=await fetch('/api/analyze-ticker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})}).catch(()=>null);
+    if(res&&(res.status===401||res.status===503)){
+      // Gate is fail-closed (anonymous caller, or wall off with no API key) — say
+      // so instead of vanishing, so the dark state is legible rather than a bug.
+      el.innerHTML=`<div class="card" style="margin-bottom:16px"><div style="${T}">🧠 AI Research — ${daEsc(sym)}</div>
+        <div class="deep-ph-text" style="padding:16px 0;text-align:center">🔒 Sign in to unlock the AI research card — scores, fair value, and a 3M/12M outlook.</div></div>`;
+      return;
+    }
+    const j=res&&res.ok?await res.json().catch(()=>null):null;
     const h=j&&j.data;
     if(!h||!h.scores){ el.innerHTML=''; return; }   // degrade silently — mechanical cards remain
     el.innerHTML=renderAICard(h);

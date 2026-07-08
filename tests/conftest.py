@@ -55,7 +55,11 @@ def _clear_server_response_caches() -> None:
     heavy-bucket hits → spurious 429s) leaks into the next."""
     def _clear() -> None:
         srv = sys.modules.get("server")
-        for name in ("_chart_cache", "_ticker_get_cache", "_RATE_HITS"):
+        # _ticker_card_flight holds asyncio.Locks bound to one test's event loop —
+        # every TestClient spins a fresh loop, so a leaked lock raises
+        # "bound to a different event loop" in the next test.
+        for name in ("_chart_cache", "_ticker_get_cache", "_RATE_HITS",
+                     "_ticker_card_cache", "_ticker_card_flight"):
             state = getattr(srv, name, None)
             if state is not None:
                 state.clear()

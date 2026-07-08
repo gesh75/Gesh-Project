@@ -1693,6 +1693,28 @@ def _latest_close(sym: str) -> float | None:
 _TICKER_CARD_TTL = 900  # 15 min
 _ticker_card_cache: dict[str, tuple[float, dict]] = {}
 _ticker_card_lock = threading.Lock()
+# Single-flight: per-symbol asyncio locks so N concurrent first requests for a hot
+# ticker spend ONE Claude call, not N — the waiters find the cache filled. Also the
+# eviction hook: expired cache entries (and their locks) are purged on every store,
+# so neither dict grows past the set of symbols queried in the last TTL window.
+_ticker_card_flight: dict[str, asyncio.Lock] = {}
+
+
+def _ticker_card_get(sym: str) -> dict | None:
+    with _ticker_card_lock:
+        hit = _ticker_card_cache.get(sym)
+    return hit[1] if hit and (time.monotonic() - hit[0]) < _TICKER_CARD_TTL else None
+
+
+def _ticker_card_store(sym: str, card: dict) -> None:
+    now = time.monotonic()
+    with _ticker_card_lock:
+        _ticker_card_cache[sym] = (now, card)
+        for k in [k for k, (ts, _) in _ticker_card_cache.items() if (now - ts) >= _TICKER_CARD_TTL]:
+            del _ticker_card_cache[k]
+            lock = _ticker_card_flight.get(k)
+            if lock is not None and not lock.locked():
+                del _ticker_card_flight[k]
 
 
 @app.post("/api/analyze-ticker", dependencies=[Depends(require_customer_or_owner)])
@@ -1713,21 +1735,27 @@ async def analyze_ticker_endpoint(request: Request):
     except Exception:
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
-    now = time.monotonic()
-    with _ticker_card_lock:
-        hit = _ticker_card_cache.get(sym)
-        if hit and (now - hit[0]) < _TICKER_CARD_TTL:
-            return {"status": "ok", "data": hit[1]}
-    try:
-        # Ground the valuation on a REAL quote: no price = unknown ticker / data
-        # outage → 404 rather than let the model fabricate a price and card.
-        price = await asyncio.to_thread(_latest_close, sym)
-        if price is None:
-            raise HTTPException(status_code=404, detail="No market data for this ticker")
-        card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
-        with _ticker_card_lock:
-            _ticker_card_cache[sym] = (time.monotonic(), card)
+    card = _ticker_card_get(sym)
+    if card is not None:
         return {"status": "ok", "data": card}
+    try:
+        # Single-flight per symbol: the ~15s LLM call means concurrent first
+        # requests are the norm for a hot ticker — followers wait on the leader's
+        # lock, then re-check the cache instead of spending again. setdefault is
+        # safe here: this coroutine runs on the single event loop, unawaited.
+        flight = _ticker_card_flight.setdefault(sym, asyncio.Lock())
+        async with flight:
+            card = _ticker_card_get(sym)
+            if card is not None:
+                return {"status": "ok", "data": card}
+            # Ground the valuation on a REAL quote: no price = unknown ticker / data
+            # outage → 404 rather than let the model fabricate a price and card.
+            price = await asyncio.to_thread(_latest_close, sym)
+            if price is None:
+                raise HTTPException(status_code=404, detail="No market data for this ticker")
+            card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
+            _ticker_card_store(sym, card)
+            return {"status": "ok", "data": card}
     except HTTPException:
         raise
     except Exception as e:
