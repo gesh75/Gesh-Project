@@ -2439,24 +2439,29 @@ async function removeFromWatch(sym){
 
 // buildRow: named to match the XSS guard's audited build* builder pattern — its
 // body escapes both leaves, so the guard trusts ${buildRow(...)} and walks this.
+// Convention: callers pass RAW values — do NOT pre-daEsc them (double-escaping
+// renders "&amp;" literally the moment a string value contains an entity char).
 function buildRow(label,val){
   return `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">`
     +`<span style="color:var(--muted)">${daEsc(label)}</span><b>${daEsc(val)}</b></div>`;
 }
 
 async function analyzeTicker(raw){
-  const sym=(raw||'').trim().toUpperCase().replace(/[^A-Z0-9.\-]/g,'');
+  // Charset mirrors the server's _SYMBOL_RE (^indices, forex =X, BRK.B, BTC-USD)
+  // so a saved ^GSPC watchlist chip round-trips instead of collapsing to "GSPC".
+  const sym=(raw||'').trim().toUpperCase().replace(/[^A-Z0-9.\-^=]/g,'');
   const box=document.getElementById('analyze-results'); if(!box) return;
   if(!sym){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">Enter a ticker.</div></div>'; return; }
+  const enc=encodeURIComponent(sym);
   box.innerHTML='<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Analyzing '+daEsc(sym)+' — 11-node consensus, regime, cycle &amp; fundamentals…</div></div>';
   try{
     const [cons,reg,fft,fund,anl,news]=await Promise.all([
-      fetch(`/api/consensus/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
-      fetch(`/api/regime/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
-      fetch(`/api/fft-cycles/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
-      fetch(`/api/fundamentals/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
-      fetch(`/api/analyst/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
-      fetch(`/api/news/${sym}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/consensus/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/regime/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/fft-cycles/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/fundamentals/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/analyst/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/news/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
     ]);
     const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[];
     if(!d && !rg && !fc && !fu){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">No data for '+daEsc(sym)+' — check the ticker and try again.</div></div>'; return; }
@@ -2490,14 +2495,14 @@ async function analyzeTicker(raw){
     box.innerHTML=`${consHtml}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
         <div class="card"><div style="${T}">Market Regime</div>
-          ${buildRow('Regime', rg?((rg.icon?rg.icon+' ':'')+rg.regime):'n/a')}${buildRow('ADX', rg&&rg.adx!=null?daEsc(rg.adx):'—')}${buildRow('RSI', rg&&rg.rsi!=null?daEsc(rg.rsi):'—')}
+          ${buildRow('Regime', rg?((rg.icon?rg.icon+' ':'')+rg.regime):'n/a')}${buildRow('ADX', rg&&rg.adx!=null?rg.adx:'—')}${buildRow('RSI', rg&&rg.rsi!=null?rg.rsi:'—')}
           ${rg&&rg.description?`<div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.5">${daEsc(rg.description)}</div>`:''}</div>
         <div class="card"><div style="${T}">Price Cycle (FFT)</div>
           ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
         <div class="card"><div style="${T}">Fundamentals</div>
-          ${fu&&fu.pe_ratio!=null?buildRow('P/E ratio', daEsc(fu.pe_ratio)):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', daEsc(fu.pb_ratio)):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu&&fu.high_52!=null&&fu.low_52!=null?buildRow('52-wk range', '$'+daEsc(fu.low_52)+' – $'+daEsc(fu.high_52)):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', daEsc(fu.dividend_yield)+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
+          ${fu&&fu.pe_ratio!=null?buildRow('P/E ratio', fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu&&fu.high_52!=null&&fu.low_52!=null?buildRow('52-wk range', '$'+fu.low_52+' – $'+fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
         <div class="card"><div style="${T}">Analyst Ratings</div>
-          ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', daEsc(an.num_buy)+' / '+daEsc(an.num_hold)+' / '+daEsc(an.num_sell)):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+daEsc(an.target_mean)):''}${an&&an.upside_pct!=null?buildRow('Upside', daEsc(an.upside_pct)+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?daEsc(an.num_analysts):'—')}</div>
+          ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', an.num_buy+' / '+an.num_hold+' / '+an.num_sell):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+an.target_mean):''}${an&&an.upside_pct!=null?buildRow('Upside', an.upside_pct+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?an.num_analysts:'—')}</div>
       </div>
       <div class="card" style="margin-top:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
@@ -2519,7 +2524,7 @@ async function analyzeChart(sym,period){
   const el=document.getElementById('analyze-chart'); if(!el) return;
   el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Loading '+daEsc(String(period).toUpperCase())+'…</div>';
   try{
-    const j=await fetch(`/api/chart/${sym}?period=${period}`).then(r=>r.json());
+    const j=await fetch(`/api/chart/${encodeURIComponent(sym)}?period=${encodeURIComponent(period)}`).then(r=>r.json());
     if(j.intraday_unavailable){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Intraday data unavailable right now — try a daily range (1M–1Y).</div>'; return; }
     const p=j.prices||[]; if(p.length<2){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">No price data.</div>'; return; }
     const isPos=(j.pct_change||0)>=0, lineColor=isPos?'#00e676':'#ff4444';
