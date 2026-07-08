@@ -708,6 +708,13 @@ def log_usage(email: str | None, event: str, detail: str = "") -> None:
         pass
 
 
+def get_tier(email: str) -> str | None:
+    """The user's billing tier ('observer' | 'trader' | 'desk'), set by the Lemon
+    Squeezy webhook on provision. None for unknown users or pre-billing rows."""
+    u = get_user(email)
+    return (u or {}).get("tier") or None
+
+
 def usage_count_24h(email: str, event: str) -> int:
     """Rolling-24h count of one event for one user — the quota denominator.
     Counts LIVE events only by design: callers meter cached hits under a

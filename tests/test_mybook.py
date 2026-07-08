@@ -456,6 +456,76 @@ def test_ticker_card_quota_blocks_live(client, monkeypatch, au):
     assert calls["n"] == 1
 
 
+def test_desk_tier_multiplies_quota(client, monkeypatch, au):
+    """Billing tier scales the cap without env/code changes: base 1 × desk 5 = 5
+    live runs allowed; the 6th 429s. Tier comes from users.tier (set on provision
+    by the billing webhook)."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    counters = _stub_engines(server, monkeypatch)
+    monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
+    au.create_magic_link_user("cust@x.com", tier="desk")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    for i in range(5):                                    # 5 distinct books, 5 live runs
+        c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10 + i})
+        assert c.post("/api/mybook/analyze", json={}).status_code == 200, i
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 99})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 429   # 6th capped
+    assert counters["llm"] == 5
+
+
+def test_unknown_tier_gets_base_quota(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")               # no users row at all
+    counters = _stub_engines(server, monkeypatch)
+    monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 200
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 429
+    assert counters["llm"] == 1
+
+
+# ─── /usage owner page ────────────────────────────────────────────────────────
+
+def test_usage_page_owner_renders_counters(client, monkeypatch, au):
+    server, c = client
+    au.log_usage("cust@x.com", "ticker_card", "NVDA")
+    au.create_magic_link_user("cust@x.com", tier="trader")
+    _as(server, monkeypatch, "georgy75@gmail.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    r = c.get("/usage")
+    assert r.status_code == 200
+    assert "cust@x.com" in r.text and "ticker_card" in r.text and "trader" in r.text
+
+
+def test_usage_page_customer_403(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.get("/usage").status_code == 403
+
+
+# ─── report polish ───────────────────────────────────────────────────────────
+
+def test_report_includes_sector_breakdown_and_track_record_link(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": [],
+                     "sector_breakdown": [{"sector": "Technology", "allocation_pct": 87.5,
+                                           "assessment": "concentrated"}]},
+        "monte_carlo": {}, "kelly": {}})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "Technology" in r.text and "87.5%" in r.text and "concentrated" in r.text
+    assert 'href=\'/track-record\'' in r.text
+
+
 def test_usage_summary_endpoint_owner_only(client, monkeypatch):
     server, c = client
     _as(server, monkeypatch, "cust@x.com")          # customer session
