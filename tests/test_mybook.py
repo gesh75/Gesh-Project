@@ -84,7 +84,9 @@ def _as(server, monkeypatch, email):
 
 _ANALYSIS = {"portfolio_score": 71, "portfolio_verdict": "HOLD", "portfolio_type": "Growth",
              "risk_score": 55, "diversification_score": 40, "market_context": "test",
-             "holdings_analysis": [], "portfolio_risks": []}
+             "holdings_analysis": [{"symbol": "NVDA", "verdict": "TRIM",
+                                    "fair_value": {"pct_diff": -8.2}}],
+             "portfolio_risks": []}
 
 
 def _stub_engines(server, monkeypatch, counters=None):
@@ -100,13 +102,14 @@ def _stub_engines(server, monkeypatch, counters=None):
                                                    "var_95": 300.0, "var_95_pct": 15.0,
                                                    "prob_profit_pct": 60.0, "regime": "NEUTRAL"},
                         raising=True)
-    monkeypatch.setattr(server, "run_kelly_analysis",
-                        lambda holdings, total, upside, verdicts: {
-                            "holdings": [{"symbol": h["symbol"], "action": "HOLD",
-                                          "current_pct": 50.0, "optimal_pct": 40.0,
-                                          "delta_usd": -100.0} for h in holdings],
-                            "total_optimal_allocated_pct": 80.0, "cash_recommended_pct": 20.0},
-                        raising=True)
+
+    def _kelly(holdings, total, upside, verdicts):
+        c["kelly_verdicts"] = verdicts
+        return {"holdings": [{"symbol": h["symbol"], "action": "HOLD",
+                              "current_pct": 50.0, "optimal_pct": 40.0,
+                              "delta_usd": -100.0} for h in holdings],
+                "total_optimal_allocated_pct": 80.0, "cash_recommended_pct": 20.0}
+    monkeypatch.setattr(server, "run_kelly_analysis", _kelly, raising=True)
     monkeypatch.setattr(server, "detect_regimes",
                         lambda syms: {"regimes": [], "regime_summary": "NEUTRAL macro"},
                         raising=True)
@@ -184,6 +187,19 @@ def test_analyze_book_runs_engines_and_is_not_masked(client, monkeypatch):
     assert d["book"]["total_equity"] == 1000.0            # raw dollars, not "•••"
     assert "•••" not in r.text
     assert counters["llm"] == 1
+
+
+def test_analyze_book_kelly_receives_ai_verdicts(client, monkeypatch):
+    """Parity with the owner pipeline: Kelly must receive the deep analysis's
+    per-holding verdicts (verdict + fair-value gap), not an empty map — the
+    verdict steers TRIM/ADD sizing."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    counters = _stub_engines(server, monkeypatch)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 200
+    assert counters["kelly_verdicts"] == {"NVDA": {"verdict": "TRIM", "pct_diff": -8.2}}
 
 
 def test_analyze_book_anonymous_is_401_no_spend(client, monkeypatch):
