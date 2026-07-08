@@ -708,6 +708,21 @@ def log_usage(email: str | None, event: str, detail: str = "") -> None:
         pass
 
 
+def usage_count_24h(email: str, event: str) -> int:
+    """Rolling-24h count of one event for one user — the quota denominator.
+    Counts LIVE events only by design: callers meter cached hits under a
+    separate `*_cached` event name, which never consumes quota."""
+    em = _norm(email)
+    if not em:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM usage_events WHERE email=? AND event=? AND at >= ?",
+            (em, event, cutoff)).fetchone()
+    return int(row["n"])
+
+
 def usage_summary(days: int = 30) -> list[dict]:
     """Per-user, per-event counts over the trailing window — the owner's metering
     view (billing-tier groundwork). Newest-heaviest first."""

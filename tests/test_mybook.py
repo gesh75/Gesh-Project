@@ -386,6 +386,76 @@ def test_analyze_book_meters_live_vs_cached(client, monkeypatch, au):
     assert by.get("book_analysis_cached") == 1
 
 
+def test_usage_count_24h_counts_only_named_event(au):
+    au.log_usage("a@x.com", "book_analysis")
+    au.log_usage("a@x.com", "book_analysis_cached")   # cached is a SEPARATE event
+    au.log_usage("b@x.com", "book_analysis")
+    assert au.usage_count_24h("a@x.com", "book_analysis") == 1
+
+
+# ─── daily quota enforcement (billing-tier groundwork) ────────────────────────
+
+def test_book_analysis_quota_blocks_live_but_never_cached(client, monkeypatch, au):
+    """At the cap: cached results stay free; a NEW live run 429s before any
+    engine/LLM work."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    counters = _stub_engines(server, monkeypatch)
+    monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 200   # live #1 = at cap
+    r = c.post("/api/mybook/analyze", json={})
+    assert r.status_code == 200 and r.json()["cached"] is True         # cached = free
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})       # new fingerprint
+    r = c.post("/api/mybook/analyze", json={})
+    assert r.status_code == 429                                        # capped
+    assert counters["llm"] == 1                                        # no spend past cap
+
+
+def test_quota_owner_exempt(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "georgy75@gmail.com")                     # owner session
+    counters = _stub_engines(server, monkeypatch)
+    monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 200
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 200   # over cap, owner OK
+    assert counters["llm"] == 2
+
+
+def test_quota_zero_disables_cap(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    counters = _stub_engines(server, monkeypatch)
+    monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "0")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    for shares in (10, 20, 30):
+        c.post("/api/mybook", json={"symbol": "NVDA", "shares": shares})
+        assert c.post("/api/mybook/analyze", json={}).status_code == 200
+    assert counters["llm"] == 3
+
+
+def test_ticker_card_quota_blocks_live(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    monkeypatch.setenv("QUOTA_DAILY_TICKER_CARD", "1")
+    calls = {"n": 0}
+
+    def _card(sym, current_price=None, regime_context=None):
+        calls["n"] += 1
+        return {"symbol": sym, "scores": {}}
+    monkeypatch.setattr(server, "deep_analyze_ticker", _card, raising=True)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post("/api/analyze-ticker", json={"symbol": "NVDA"}).status_code == 200
+    assert c.post("/api/analyze-ticker", json={"symbol": "NVDA"}).status_code == 200  # cached, free
+    r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})                        # new live
+    assert r.status_code == 429
+    assert calls["n"] == 1
+
+
 def test_usage_summary_endpoint_owner_only(client, monkeypatch):
     server, c = client
     _as(server, monkeypatch, "cust@x.com")          # customer session

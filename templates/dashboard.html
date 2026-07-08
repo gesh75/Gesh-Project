@@ -2607,6 +2607,11 @@ async function analyzeAI(sym){
         <div class="deep-ph-text" style="padding:16px 0;text-align:center">🔒 Sign in to unlock the AI research card — scores, fair value, and a 3M/12M outlook.</div></div>`;
       return;
     }
+    if(res&&res.status===429){
+      el.innerHTML=`<div class="card" style="margin-bottom:16px"><div style="${T}">🧠 AI Research — ${daEsc(sym)}</div>
+        <div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily AI analysis limit reached — recently analyzed tickers stay available, and the limit resets on a rolling 24-hour window.</div></div>`;
+      return;
+    }
     const j=res&&res.ok?await res.json().catch(()=>null):null;
     const h=j&&j.data;
     if(!h||!h.scores){ el.innerHTML=''; return; }   // degrade silently — mechanical cards remain
@@ -2679,6 +2684,7 @@ async function mybookAnalyze(){
       box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">🔒 Sign in to unlock portfolio analysis — deep AI scores, Kelly sizing, and Monte Carlo on your own book.</div></div>`; return;
     }
     if(res&&res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
+    if(res&&res.status===429){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily portfolio-analysis limit reached — your last analysis stays available (🖨 Report), and the limit resets on a rolling 24-hour window.</div></div>'; return; }
     const j=res&&res.ok?await res.json().catch(()=>null):null;
     const d=j&&j.data;
     if(!d||!d.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now — try again in a minute.</div></div>'; return; }
