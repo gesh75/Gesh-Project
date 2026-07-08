@@ -59,7 +59,8 @@ def _clear_server_response_caches() -> None:
         # every TestClient spins a fresh loop, so a leaked lock raises
         # "bound to a different event loop" in the next test.
         for name in ("_chart_cache", "_ticker_get_cache", "_RATE_HITS",
-                     "_ticker_card_cache", "_ticker_card_flight"):
+                     "_ticker_card_cache", "_ticker_card_flight",
+                     "_mybook_cache", "_mybook_flight"):
             state = getattr(srv, name, None)
             if state is not None:
                 state.clear()

@@ -178,6 +178,14 @@ CREATE TABLE IF NOT EXISTS watchlist (
     added_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (email, symbol)
 );
+CREATE TABLE IF NOT EXISTS customer_positions (
+    email      TEXT NOT NULL,
+    symbol     TEXT NOT NULL,
+    shares     REAL NOT NULL,
+    avg_cost   REAL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (email, symbol)
+);
 """
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
@@ -564,6 +572,66 @@ def get_watch(email: str) -> list[str]:
             "SELECT symbol FROM watchlist WHERE email=? ORDER BY added_at, symbol", (em,)
         ).fetchall()
     return [r["symbol"] for r in rows]
+
+
+# ── per-user portfolio book (customer analyze-MY-portfolio: their own positions) ──
+# The customer's OWN book — symbol + share count (+ optional avg cost), entered by
+# them, valued live at read time. Contains ZERO owner data. Same isolation contract
+# as the watchlist: every read/write is scoped to the session email.
+
+_MAX_POSITIONS = 30   # per-user cap — abuse guard (also bounds analyze-engine cost)
+
+
+def set_position(email: str, symbol: str, shares: float, avg_cost: float | None = None) -> bool:
+    """Upsert one position on the user's book. Returns False on invalid input or
+    when adding a NEW symbol would exceed the cap (updating an existing one is
+    always allowed). Symbols stored UPPER; shares must be > 0 (use
+    remove_position to delete)."""
+    em, sym = _norm(email), (symbol or "").strip().upper()
+    try:
+        sh = float(shares)
+        ac = None if avg_cost in (None, "") else float(avg_cost)
+    except (TypeError, ValueError):
+        return False
+    if not em or not sym or not (0 < sh < 1e9) or (ac is not None and not (0 <= ac < 1e9)):
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        if con.execute("SELECT 1 FROM customer_positions WHERE email=? AND symbol=?",
+                       (em, sym)).fetchone():
+            con.execute("UPDATE customer_positions SET shares=?, avg_cost=?, updated_at=? "
+                        "WHERE email=? AND symbol=?", (sh, ac, now, em, sym))
+            return True
+        # Single-statement cap check (same concurrency shape as add_watch).
+        cur = con.execute(
+            "INSERT OR IGNORE INTO customer_positions (email, symbol, shares, avg_cost, updated_at) "
+            "SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM customer_positions WHERE email=?) < ?",
+            (em, sym, sh, ac, now, em, _MAX_POSITIONS))
+        if cur.rowcount:
+            return True
+        return con.execute("SELECT 1 FROM customer_positions WHERE email=? AND symbol=?",
+                           (em, sym)).fetchone() is not None
+
+
+def remove_position(email: str, symbol: str) -> None:
+    em, sym = _norm(email), (symbol or "").strip().upper()
+    with _conn() as con:
+        con.execute("DELETE FROM customer_positions WHERE email=? AND symbol=?", (em, sym))
+
+
+def get_positions(email: str) -> list[dict]:
+    """The user's book, oldest-first: [{symbol, shares, avg_cost}]. Empty list for
+    an unknown user."""
+    em = _norm(email)
+    if not em:
+        return []
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT symbol, shares, avg_cost FROM customer_positions "
+            "WHERE email=? ORDER BY updated_at, symbol", (em,)
+        ).fetchall()
+    return [{"symbol": r["symbol"], "shares": r["shares"], "avg_cost": r["avg_cost"]}
+            for r in rows]
 
 
 if __name__ == "__main__":

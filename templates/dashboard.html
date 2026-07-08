@@ -593,6 +593,27 @@ body.customer .owner-only{display:none!important}
         <div class="deep-placeholder"><div class="deep-ph-text">Enter a ticker to get a live read — consensus verdict, market regime, dominant price cycle, and fundamental momentum, on any US-listed stock.</div></div>
       </div>
     </div>
+
+    <!-- My Portfolio — the customer's OWN book: positions they enter, engines on top -->
+    <div class="card" style="margin-bottom:18px">
+      <div class="ch" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">My Portfolio</div>
+        <span class="badge b-cyan">YOUR BOOK · deep AI · Kelly sizing · Monte Carlo</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 10px">
+        <input id="mybook-sym" placeholder="Ticker" autocomplete="off"
+               style="width:110px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px;letter-spacing:.04em">
+        <input id="mybook-shares" placeholder="Shares" type="number" min="0" step="any"
+               style="width:110px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
+        <input id="mybook-cost" placeholder="Avg cost (opt.)" type="number" min="0" step="any"
+               style="width:140px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
+        <button class="btn-analyze" onclick="mybookAdd()">＋ Add</button>
+        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()">🧠 Analyze My Portfolio</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Your positions stay private to your account. Valued from public quotes; nothing here connects to a broker.</div>
+      <div id="mybook-list" style="margin-bottom:12px"></div>
+      <div id="mybook-results"></div>
+    </div>
   </div>
 
   <!-- ═══ TAB: OVERVIEW ═══ -->
@@ -2417,6 +2438,7 @@ async function applyRoleNav(){
     switchTab('analyze');
   }
   loadWatchlist();
+  loadMyBook();
 }
 
 // ── per-user watchlist (saved tickers on the Analyze tab) ─────────────────────
@@ -2523,7 +2545,7 @@ async function analyzeTicker(raw){
 // Rich Claude research card — the money-free per-ticker subset of the internal
 // deep analysis. POSTed separately (LLM ~15s) so the fast mechanical cards render
 // first; fills #analyze-ai on arrival, degrades silently if the model is unavailable.
-function renderAICard(h){
+function buildAICard(h){
   const sc=h.scores||{}, fv=h.fair_value||{};
   const skeys=['valuation','growth','health','momentum','dividend'];
   const fvPct=fv.pct_diff!=null?((fv.pct_diff>=0?'+':'')+Number(fv.pct_diff).toFixed(1)+'%'):'';
@@ -2586,8 +2608,81 @@ async function analyzeAI(sym){
     const j=res&&res.ok?await res.json().catch(()=>null):null;
     const h=j&&j.data;
     if(!h||!h.scores){ el.innerHTML=''; return; }   // degrade silently — mechanical cards remain
-    el.innerHTML=renderAICard(h);
+    el.innerHTML=buildAICard(h);
   }catch(e){ el.innerHTML=''; }
+}
+
+// ── My Portfolio: the customer's OWN book → deep AI + Kelly + Monte Carlo ─────
+async function loadMyBook(){
+  const el=document.getElementById('mybook-list'); if(!el) return;
+  try{
+    const j=await fetch('/api/mybook').then(r=>r.ok?r.json():null).catch(()=>null);
+    const d=(j&&j.data)||{}; const pos=d.positions||[];
+    if(!pos.length&&!(d.unpriced||[]).length){ el.innerHTML='<span style="color:var(--muted);font-size:12px">No positions yet — add a ticker and share count above.</span>'; return; }
+    el.innerHTML=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+      <tbody>${pos.map(p=>`<tr style="border-bottom:1px dashed var(--border)">
+        <td style="padding:8px 10px;font-weight:700;color:var(--accent)">${daEsc(p.symbol)}</td>
+        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${daEsc(p.quantity)}</td>
+        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">$${daFmt(p.equity,2)}</td>
+        <td style="padding:8px 10px;text-align:right;color:var(--muted2)">${daFmt(p.portfolio_percentage,1)}%</td>
+        <td style="padding:8px 10px;text-align:right"><span onclick="mybookRemove('${daEsc(p.symbol)}')" style="cursor:pointer;color:var(--muted)" title="Remove">✕</span></td>
+      </tr>`).join('')}</tbody></table></div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:13px">
+        <span style="color:var(--muted)">${(d.unpriced||[]).length?('No price data: '+d.unpriced.map(daEsc).join(', ')):''}</span>
+        <span>Total: <b style="color:var(--accent)">$${daFmt(d.total_equity,2)}</b></span></div>`;
+  }catch(e){ el.innerHTML=''; }
+}
+async function mybookAdd(){
+  const sym=(document.getElementById('mybook-sym').value||'').trim();
+  const shares=document.getElementById('mybook-shares').value;
+  const cost=document.getElementById('mybook-cost').value;
+  if(!sym||!shares) return;
+  try{
+    const r=await fetch('/api/mybook',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({symbol:sym,shares:Number(shares),avg_cost:cost?Number(cost):null})});
+    if(r.ok){ ['mybook-sym','mybook-shares','mybook-cost'].forEach(id=>document.getElementById(id).value=''); }
+    loadMyBook();
+  }catch(e){}
+}
+async function mybookRemove(sym){
+  try{ await fetch('/api/mybook/'+encodeURIComponent(sym),{method:'DELETE'}); loadMyBook(); }catch(e){}
+}
+async function mybookAnalyze(){
+  const box=document.getElementById('mybook-results'); if(!box) return;
+  const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
+  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite on your book — deep AI analysis, Kelly sizing, Monte Carlo (~20s)…</div></div>`;
+  try{
+    const res=await fetch('/api/mybook/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>null);
+    if(res&&(res.status===401||res.status===503)){
+      box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">🔒 Sign in to unlock portfolio analysis — deep AI scores, Kelly sizing, and Monte Carlo on your own book.</div></div>`; return;
+    }
+    if(res&&res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
+    const j=res&&res.ok?await res.json().catch(()=>null):null;
+    const d=j&&j.data;
+    if(!d||!d.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now — try again in a minute.</div></div>'; return; }
+    const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[];
+    const risks=(a.portfolio_risks||[]).map(r=>{
+      const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
+      return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;
+    }).join('');
+    box.innerHTML=`
+      <div class="card" style="margin-bottom:16px"><div style="${T}">🧠 Portfolio Verdict</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <span class="da-holding vrd" style="${daVerdictStyle(a.portfolio_verdict)}">${daEsc(a.portfolio_verdict||'—')}</span>
+          <span style="font-size:13px;color:var(--muted)">${daEsc(a.portfolio_type||'')}</span></div>
+        ${buildRow('Portfolio score', a.portfolio_score!=null?a.portfolio_score+' / 100':'—')}${buildRow('Risk score', a.risk_score!=null?a.risk_score+' / 100':'—')}${buildRow('Diversification', a.diversification_score!=null?a.diversification_score+' / 100':'—')}
+        ${a.market_context?`<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55">${daEsc(a.market_context)}</div>`:''}
+        ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">
+        <div class="card"><div style="${T}">Monte Carlo (1yr, 1000 sims)</div>
+          ${mc.error?buildRow('Status','unavailable'):buildRow('Median outcome','$'+daFmt(mc.median,0))+buildRow('P5 – P95','$'+daFmt(mc.p5,0)+' – $'+daFmt(mc.p95,0))+buildRow('VaR 95%','$'+daFmt(mc.var_95,0)+' ('+daFmt(mc.var_95_pct,1)+'%)')+buildRow('Prob. of profit',daFmt(mc.prob_profit_pct,0)+'%')+buildRow('Regime',mc.regime||'—')}</div>
+        <div class="card"><div style="${T}">Kelly Sizing</div>
+          ${ky.error||!kh.length?buildRow('Status','unavailable'):buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div>
+      </div>
+      ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
+  }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
 }
 
 let analyzePriceChart=null;
