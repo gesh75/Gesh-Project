@@ -240,6 +240,163 @@ def test_analyze_book_cached_until_book_changes(client, monkeypatch):
     assert counters["llm"] == 2
 
 
+# ─── watchlist → book bulk import ─────────────────────────────────────────────
+
+def test_import_watchlist_adds_missing_skips_existing(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.add_watch("cust@x.com", "NVDA")
+    au.add_watch("cust@x.com", "AAPL")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})   # already held
+    r = c.post("/api/mybook/import-watchlist")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["imported"] == ["AAPL"]                            # only the missing one
+    nvda = [p for p in body["data"]["positions"] if p["symbol"] == "NVDA"][0]
+    assert nvda["quantity"] == 10                                  # existing untouched
+    aapl = [p for p in body["data"]["positions"] if p["symbol"] == "AAPL"][0]
+    assert aapl["quantity"] == 1                                   # placeholder share
+
+
+def test_import_watchlist_reports_cap_refusals(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    for i in range(au._MAX_POSITIONS):
+        au.set_position("cust@x.com", f"S{i}", 1)
+    au.add_watch("cust@x.com", "NVDA")
+    body = c.post("/api/mybook/import-watchlist").json()
+    assert body["imported"] == [] and body["skipped_cap"] == ["NVDA"]
+
+
+def test_import_watchlist_requires_session(client, monkeypatch):
+    server, c = client
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
+    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    assert c.post("/api/mybook/import-watchlist").status_code == 401
+
+
+# ─── persisted analyses + /mybook/report ─────────────────────────────────────
+
+def test_save_and_get_latest_analysis_roundtrip(au):
+    au.save_book_analysis("a@x.com", {"analysis": {"portfolio_verdict": "HOLD"}})
+    au.save_book_analysis("a@x.com", {"analysis": {"portfolio_verdict": "BUY"}})
+    got = au.get_latest_book_analysis("a@x.com")
+    assert got["analysis"]["portfolio_verdict"] == "BUY"           # newest wins
+    assert got["_saved_at"]
+    assert au.get_latest_book_analysis("other@x.com") is None      # per-user
+
+
+def test_saved_analyses_pruned(au):
+    for i in range(10):
+        au.save_book_analysis("a@x.com", {"n": i})
+    import sqlite3
+    con = sqlite3.connect(au.AUTH_DB_PATH)
+    n = con.execute("SELECT COUNT(*) FROM customer_analyses WHERE email='a@x.com'").fetchone()[0]
+    con.close()
+    assert n == au._MAX_ANALYSES_PER_USER
+    assert au.get_latest_book_analysis("a@x.com")["n"] == 9
+
+
+def test_report_page_renders_book_and_saved_analysis(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    counters = _stub_engines(server, monkeypatch)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    assert c.post("/api/mybook/analyze", json={}).status_code == 200   # persists a copy
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "NVDA" in r.text and "$1,000.00" in r.text                  # own dollars, raw
+    assert "HOLD" in r.text                                            # portfolio verdict
+    assert "not financial advice" in r.text.lower()
+    assert counters["llm"] == 1                                        # report itself never spends
+
+
+def test_report_page_without_analysis_prompts_run(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "No analysis yet" in r.text
+
+
+def test_report_page_requires_session_and_is_isolated(client, monkeypatch, au):
+    server, c = client
+    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
+    assert c.get("/mybook/report").status_code == 401
+    # user B's report never shows user A's book/analysis
+    au.set_position("a@x.com", "NVDA", 10)
+    au.save_book_analysis("a@x.com", {"analysis": {"portfolio_verdict": "SECRETVERDICT"}})
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "b@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "SECRETVERDICT" not in r.text and "NVDA" not in r.text
+
+
+def test_report_escapes_llm_strings(client, monkeypatch, au):
+    """The report is server-rendered HTML outside the dashboard's audited JS
+    builders — LLM-originated strings must be escaped."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "<script>alert(1)</script>",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {}, "kelly": {}})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "<script>alert(1)</script>" not in r.text
+    assert "&lt;script&gt;" in r.text
+
+
+# ─── usage metering ──────────────────────────────────────────────────────────
+
+def test_log_usage_and_summary(au):
+    au.log_usage("a@x.com", "ticker_card", "NVDA")
+    au.log_usage("a@x.com", "ticker_card", "AAPL")
+    au.log_usage("b@x.com", "book_analysis")
+    rows = au.usage_summary(days=30)
+    by = {(r["email"], r["event"]): r["count"] for r in rows}
+    assert by[("a@x.com", "ticker_card")] == 2
+    assert by[("b@x.com", "book_analysis")] == 1
+
+
+def test_log_usage_never_raises(au, monkeypatch):
+    monkeypatch.setattr(au, "_conn", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
+    au.log_usage("a@x.com", "ticker_card")           # must not raise
+
+
+def test_analyze_book_meters_live_vs_cached(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    _stub_engines(server, monkeypatch)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    c.post("/api/mybook/analyze", json={})
+    c.post("/api/mybook/analyze", json={})           # cache hit
+    by = {r["event"]: r["count"] for r in au.usage_summary() if r["email"] == "cust@x.com"}
+    assert by.get("book_analysis") == 1
+    assert by.get("book_analysis_cached") == 1
+
+
+def test_usage_summary_endpoint_owner_only(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")          # customer session
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.get("/api/usage/summary").status_code == 403
+    _as(server, monkeypatch, "georgy75@gmail.com")  # owner session
+    r = c.get("/api/usage/summary")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+
+
 def test_analyze_book_partial_engine_failure_still_returns(client, monkeypatch):
     """Kelly/MC are best-effort — an engine exploding degrades to an error field,
     it does not 500 the whole analysis."""

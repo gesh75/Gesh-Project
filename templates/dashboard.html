@@ -608,6 +608,8 @@ body.customer .owner-only{display:none!important}
         <input id="mybook-cost" placeholder="Avg cost (opt.)" type="number" min="0" step="any"
                style="width:140px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
         <button class="btn-analyze" onclick="mybookAdd()">＋ Add</button>
+        <button class="btn-analyze" onclick="mybookImportWatchlist()" title="Add every saved watchlist ticker (1 share each — edit after)">⬇ Import watchlist</button>
+        <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
         <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()">🧠 Analyze My Portfolio</button>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Your positions stay private to your account. Valued from public quotes; nothing here connects to a broker.</div>
@@ -2648,6 +2650,16 @@ async function mybookAdd(){
 }
 async function mybookRemove(sym){
   try{ await fetch('/api/mybook/'+encodeURIComponent(sym),{method:'DELETE'}); loadMyBook(); }catch(e){}
+}
+async function mybookImportWatchlist(){
+  try{
+    const j=await fetch('/api/mybook/import-watchlist',{method:'POST'}).then(r=>r.ok?r.json():null).catch(()=>null);
+    if(j&&window.toast){
+      const n=(j.imported||[]).length;
+      toast(n?('Imported '+n+' ticker'+(n>1?'s':'')+' at 1 share — edit the counts'):'Nothing new to import','success');
+    }
+    loadMyBook();
+  }catch(e){}
 }
 function mybookPrefill(sym){
   // "📌 Add to book" from the single-ticker view: prefill the entry row and put

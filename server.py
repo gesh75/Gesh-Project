@@ -1746,6 +1746,7 @@ async def analyze_ticker_endpoint(request: Request):
     sym = _safe_symbol((body or {}).get("symbol", ""))
     card = _ticker_card_get(sym)
     if card is not None:
+        auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
         return {"status": "ok", "data": card}
     try:
         # Single-flight per symbol: the ~15s LLM call means concurrent first
@@ -1756,6 +1757,7 @@ async def analyze_ticker_endpoint(request: Request):
         async with flight:
             card = _ticker_card_get(sym)
             if card is not None:
+                auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
                 return {"status": "ok", "data": card}
             # Ground the valuation on a REAL quote: no price = unknown ticker / data
             # outage → 404 rather than let the model fabricate a price and card.
@@ -1764,6 +1766,7 @@ async def analyze_ticker_endpoint(request: Request):
                 raise HTTPException(status_code=404, detail="No market data for this ticker")
             card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
             _ticker_card_store(sym, card)
+            auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card}
     except HTTPException:
         raise
@@ -1937,6 +1940,7 @@ async def mybook_analyze(request: Request):
     with _mybook_lock:
         hit = _mybook_cache.get(email)
     if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
+        auth_users.log_usage(email, "book_analysis_cached")
         return {"status": "ok", "cached": True, "data": hit[2]}
     try:
         flight = _mybook_flight.setdefault(email, asyncio.Lock())
@@ -1944,6 +1948,7 @@ async def mybook_analyze(request: Request):
             with _mybook_lock:
                 hit = _mybook_cache.get(email)
             if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
+                auth_users.log_usage(email, "book_analysis_cached")
                 return {"status": "ok", "cached": True, "data": hit[2]}
             payload = await asyncio.to_thread(_customer_book_payload, positions)
             if not payload["holdings"]:
@@ -1955,9 +1960,144 @@ async def mybook_analyze(request: Request):
                 for k in [k for k, (ts, _, _) in _mybook_cache.items()
                           if (time.monotonic() - ts) >= _MYBOOK_TTL]:
                     del _mybook_cache[k]
+            # Durable copy powers GET /mybook/report after the in-memory TTL/restart;
+            # metering counts the live LLM run. Both best-effort by contract.
+            try:
+                auth_users.save_book_analysis(email, result)
+            except Exception:
+                pass
+            auth_users.log_usage(email, "book_analysis")
             return {"status": "ok", "cached": False, "data": result}
     except HTTPException:
         raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.post("/api/mybook/import-watchlist")
+def mybook_import_watchlist(request: Request):
+    """Seed the book from the user's saved watchlist: every watchlist symbol not
+    already on the book is added with shares=1 (a placeholder the user edits —
+    we cannot guess their position size). Existing positions are never touched."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        held = {p["symbol"] for p in auth_users.get_positions(email)}
+        imported, skipped_cap = [], []
+        for sym in auth_users.get_watch(email):
+            if sym in held:
+                continue
+            (imported if auth_users.set_position(email, sym, 1.0) else skipped_cap).append(sym)
+        book = mybook_get(request)["data"]
+        return {"status": "ok", "imported": imported, "skipped_cap": skipped_cap, "data": book}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+def _render_book_report(email: str) -> str:
+    """Standalone, print-friendly HTML report of the customer's book + their LAST
+    persisted analysis. Server-side rendered with every dynamic string escaped —
+    this page bypasses the dashboard's audited JS builders."""
+    import html as _h
+    book = _customer_book_payload(auth_users.get_positions(email))
+    saved = auth_users.get_latest_book_analysis(email)
+    e = _h.escape
+
+    def row(label, val):
+        return (f"<tr><td style='padding:6px 12px;color:#555'>{e(str(label))}</td>"
+                f"<td style='padding:6px 12px;font-weight:600'>{e(str(val))}</td></tr>")
+
+    pos_rows = "".join(
+        f"<tr><td style='padding:6px 12px;font-weight:600'>{e(h['symbol'])}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{h['quantity']:g}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>${h['current_price']:,.2f}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>${h['equity']:,.2f}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{h['portfolio_percentage']:.1f}%</td></tr>"
+        for h in book["holdings"])
+    total = book["equity_summary"]["portfolio_equity"]
+
+    body = ""
+    if saved:
+        d = saved.get("analysis") or {}
+        mc, ky = saved.get("monte_carlo") or {}, saved.get("kelly") or {}
+        risks = "".join(f"<li>{e(r.get('text', ''))} <em>({e(r.get('severity', ''))})</em></li>"
+                        for r in (d.get("portfolio_risks") or []))
+        cards = "".join(
+            f"<h3 style='margin:18px 0 4px'>{e(h.get('symbol', ''))} — {e(h.get('verdict', ''))}</h3>"
+            f"<p style='margin:4px 0;color:#444'>{e(h.get('snowflake_summary', ''))}</p>"
+            f"<p style='margin:4px 0;color:#666;font-size:13px'>3M: {e((h.get('prediction') or {}).get('3m', ''))} · "
+            f"12M: {e((h.get('prediction') or {}).get('12m', ''))}</p>"
+            for h in (d.get("holdings_analysis") or []))
+        kelly_rows = "".join(
+            row(f"{k.get('symbol', '')} · {k.get('action', '')}",
+                f"{k.get('current_pct', 0):.1f}% → {k.get('optimal_pct', 0):.1f}%")
+            for k in (ky.get("holdings") or [])[:15])
+        body = f"""
+  <h2>AI Verdict: {e(str(d.get('portfolio_verdict', '—')))}</h2>
+  <table>{row('Portfolio score', d.get('portfolio_score', '—'))}{row('Risk score', d.get('risk_score', '—'))}
+  {row('Diversification', d.get('diversification_score', '—'))}{row('Portfolio type', d.get('portfolio_type', '—'))}</table>
+  <p style='color:#444;line-height:1.6'>{e(str(d.get('market_context', '')))}</p>
+  {('<h2>Key risks</h2><ul>' + risks + '</ul>') if risks else ''}
+  <h2>Monte Carlo (1yr)</h2>
+  <table>{row('Median outcome', '$' + format(mc.get('median', 0) or 0, ',.0f'))}
+  {row('P5 – P95', '$' + format(mc.get('p5', 0) or 0, ',.0f') + ' – $' + format(mc.get('p95', 0) or 0, ',.0f'))}
+  {row('VaR 95%', '$' + format(mc.get('var_95', 0) or 0, ',.0f'))}</table>
+  <h2>Kelly sizing</h2><table>{kelly_rows or row('Status', 'unavailable')}</table>
+  <h2>Per-holding research</h2>{cards}
+  <p style='color:#888;font-size:12px'>Analysis generated {e(str(saved.get('_saved_at', ''))[:16])} UTC.</p>"""
+    else:
+        body = "<p><em>No analysis yet — run <b>Analyze My Portfolio</b> on the dashboard, then reload this report.</em></p>"
+
+    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>GESH — Portfolio Report</title>
+<style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:860px;margin:32px auto;padding:0 20px;color:#111}}
+h1{{border-bottom:2px solid #111;padding-bottom:8px}}h2{{margin-top:28px}}table{{border-collapse:collapse}}
+tr:nth-child(even){{background:#f6f6f6}}@media print{{a{{display:none}}}}</style></head><body>
+<h1>GESH Portfolio Report</h1>
+<p style='color:#666'>Prepared for {e(email)} · {_dt.now(_tz.utc).strftime('%Y-%m-%d %H:%M')} UTC</p>
+<h2>Positions</h2>
+<table><tr style='border-bottom:1px solid #ccc'><th style='padding:6px 12px;text-align:left'>Symbol</th>
+<th style='padding:6px 12px'>Shares</th><th style='padding:6px 12px'>Price</th>
+<th style='padding:6px 12px'>Value</th><th style='padding:6px 12px'>Weight</th></tr>{pos_rows}</table>
+<p><b>Total: ${total:,.2f}</b>{(' · No price data: ' + e(', '.join(book['unpriced']))) if book['unpriced'] else ''}</p>
+{body}
+<hr><p style='color:#888;font-size:12px'>Informational and educational only — not financial advice.
+All trading decisions remain your responsibility. Generated by GESH Financial Observability.</p>
+</body></html>"""
+
+
+@app.get("/mybook/report", response_class=HTMLResponse)
+def mybook_report(request: Request):
+    """Print-friendly (browser print → PDF) report of the customer's OWN book and
+    their last persisted analysis. Session-gated; NOT a public route (the login
+    wall covers it when enabled). Not under /api so the masking middleware never
+    touches it — correct, since it carries only the customer's own data."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        auth_users.log_usage(email, "book_report")
+        return HTMLResponse(_render_book_report(email))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/usage/summary")
+def usage_summary_endpoint(request: Request, days: int = 30):
+    """Per-customer usage counters (LLM cards, book analyses, reports) — the
+    metering groundwork for billing tiers. OWNER-ONLY: 403 for customer sessions."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not auth_users.is_owner(email):
+        raise HTTPException(status_code=403, detail="Owner-only view")
+    try:
+        return {"status": "ok", "days": max(1, min(days, 365)),
+                "data": auth_users.usage_summary(days=max(1, min(days, 365)))}
     except Exception as e:
         raise _server_error(e)
 

@@ -186,6 +186,20 @@ CREATE TABLE IF NOT EXISTS customer_positions (
     updated_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (email, symbol)
 );
+CREATE TABLE IF NOT EXISTS customer_analyses (
+    email       TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_customer_analyses_email
+    ON customer_analyses (email, created_at);
+CREATE TABLE IF NOT EXISTS usage_events (
+    email  TEXT NOT NULL,
+    event  TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_at ON usage_events (at);
 """
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
@@ -631,6 +645,78 @@ def get_positions(email: str) -> list[dict]:
             "WHERE email=? ORDER BY updated_at, symbol", (em,)
         ).fetchall()
     return [{"symbol": r["symbol"], "shares": r["shares"], "avg_cost": r["avg_cost"]}
+            for r in rows]
+
+
+# ── persisted book analyses (customer report page) ─────────────────────────────
+# The in-memory analyze cache dies with the process; the /mybook/report page needs
+# the customer's LAST analysis durably. Keep a short per-user history (latest wins).
+
+_MAX_ANALYSES_PER_USER = 5
+
+
+def save_book_analysis(email: str, result: dict) -> None:
+    em = _norm(email)
+    if not em or not isinstance(result, dict):
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("INSERT INTO customer_analyses (email, result_json, created_at) VALUES (?,?,?)",
+                    (em, json.dumps(result), now))
+        # prune: keep only the newest _MAX_ANALYSES_PER_USER rows per user
+        con.execute(
+            "DELETE FROM customer_analyses WHERE email=? AND rowid NOT IN ("
+            "  SELECT rowid FROM customer_analyses WHERE email=?"
+            "  ORDER BY created_at DESC, rowid DESC LIMIT ?)",
+            (em, em, _MAX_ANALYSES_PER_USER))
+
+
+def get_latest_book_analysis(email: str) -> dict | None:
+    """Newest persisted analysis for the user, with its timestamp under `_saved_at`.
+    Corruption-tolerant: an unparseable row returns None rather than raising."""
+    em = _norm(email)
+    if not em:
+        return None
+    with _conn() as con:
+        row = con.execute(
+            "SELECT result_json, created_at FROM customer_analyses WHERE email=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (em,)).fetchone()
+    if not row:
+        return None
+    try:
+        out = json.loads(row["result_json"])
+        out["_saved_at"] = row["created_at"]
+        return out
+    except Exception:
+        return None
+
+
+# ── usage metering (per-customer event counters — tier/billing groundwork) ─────
+
+def log_usage(email: str | None, event: str, detail: str = "") -> None:
+    """Fire-and-forget usage counter. NEVER raises — metering must not be able to
+    break a product endpoint."""
+    try:
+        em = _norm(email or "")
+        if not em or not event:
+            return
+        with _conn() as con:
+            con.execute("INSERT INTO usage_events (email, event, detail, at) VALUES (?,?,?,?)",
+                        (em, event, (detail or "")[:64],
+                         datetime.now(timezone.utc).isoformat()))
+    except Exception:
+        pass
+
+
+def usage_summary(days: int = 30) -> list[dict]:
+    """Per-user, per-event counts over the trailing window — the owner's metering
+    view (billing-tier groundwork). Newest-heaviest first."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT email, event, COUNT(*) AS n, MAX(at) AS last_at FROM usage_events "
+            "WHERE at >= ? GROUP BY email, event ORDER BY n DESC", (cutoff,)).fetchall()
+    return [{"email": r["email"], "event": r["event"], "count": r["n"], "last_at": r["last_at"]}
             for r in rows]
 
 
