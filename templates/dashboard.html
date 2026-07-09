@@ -3372,10 +3372,9 @@ async function checkPaperCloses(){
 async function runPaperSession(){
   const btn=$('btn-pt-run');
   btn.disabled=true; btn.textContent='⏳ Simulating…';
-  $('pt-container').innerHTML='<div class="empty"><span class="spin"></span> Running paper simulation through risk gate…</div>';
+  const setProgress=(msg)=>{$('pt-container').innerHTML=`<div class="empty"><span class="spin"></span> ${daEsc(msg)}</div>`;};
+  setProgress('Running paper simulation through risk gate…');
   try{
-    // Pull latest action plan from a recent deep analysis if available,
-    // otherwise run a consensus-order for each holding
     const pj=await fetch('/api/portfolio').then(r=>r.json());
     const holdings=pj.data.holdings||[];
     if(!holdings.length){
@@ -3384,14 +3383,33 @@ async function runPaperSession(){
       return;
     }
 
-    // Run consensus-order (signal→gate→paper) for each holding
-    const results=[];
-    for(const h of holdings){
-      try{
-        const r=await fetch('/api/trading/consensus-order',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbol:h.symbol})});
-        const d=await r.json();
-        results.push({symbol:h.symbol,...d});
-      }catch(e){results.push({symbol:h.symbol,error:e.message});}
+    const gate=await fetch('/api/trading/gate-status').then(r=>r.json()).catch(()=>({}));
+    if(gate.cap_reached){
+      setProgress(`Daily order cap already reached (${gate.orders_today}/${gate.max_orders_per_day}) — running HOLD checks only…`);
+    } else {
+      setProgress(`Simulating ${holdings.length} holdings (cached consensus)…`);
+    }
+
+    const r=await fetch('/api/trading/simulate-session',{
+      method:'POST',
+      headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({use_cached:true})
+    });
+    const d=await r.json();
+    if(!r.ok){
+      throw new Error(d.detail||d.error||`HTTP ${r.status}`);
+    }
+    const results=(d.results||[]).map(row=>({
+      symbol:row.symbol,
+      verdict:row.verdict,
+      order:row.order,
+      consensus_verdict:row.consensus_verdict,
+      skipped:row.skipped,
+      reason:row.reason||row.error,
+      error:row.error
+    }));
+    if(d.cap_reached){
+      results._capNote=d.cap_reason;
     }
     renderPaperSessionResults(results);
     await loadTradeStats();
@@ -3402,28 +3420,49 @@ async function runPaperSession(){
 }
 
 function renderPaperSessionResults(results){
-  let approved=0, rejected=0, errors=0;
+  let approved=0, rejected=0, errors=0, skipped=0;
   let html=`<div style="padding:12px 16px">`;
+  if(results._capNote){
+    html=`<div style="padding:8px 12px;margin-bottom:8px;background:var(--rdim);border:1px solid var(--red);border-radius:6px;font-size:13px;color:var(--red)">${daEsc(results._capNote)}</div>`+html;
+  }
   results.forEach(r=>{
-    if(r.error){ errors++; return; }
-    // /api/trading/consensus-order returns the gate verdict under r.verdict
+    if(r.error){ errors++;
+      html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--accent);font-weight:700;min-width:60px">${daEsc(r.symbol)}</span>
+        <span class="badge b-red" style="font-size:11px">ERROR</span>
+        <span style="color:var(--muted);font-size:13px">${daEsc(r.error)}</span>
+      </div>`;
+      return;
+    }
+    if(r.skipped){ skipped++;
+      html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--accent);font-weight:700;min-width:60px">${daEsc(r.symbol)}</span>
+        <span class="badge" style="font-size:11px">SKIPPED</span>
+        <span style="color:var(--muted);font-size:13px">${daEsc(r.reason||'cap reached')}</span>
+      </div>`;
+      return;
+    }
     const approved_flag=r.verdict?.approved||r.gate?.approved||r.approved||false;
     const status=r.order?.status||r.status||'—';
+    const isHold=(r.consensus_verdict||'').toUpperCase()==='HOLD'||r.verdict?.reason==='HOLD requires no execution';
     if(approved_flag) approved++; else rejected++;
     const color=approved_flag?'var(--green)':'var(--red)';
+    const badge=isHold?'b-yellow':approved_flag?'b-green':'b-red';
+    const label=isHold?'HOLD':approved_flag?'APPROVED':'REJECTED';
     html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
       <span style="color:var(--accent);font-weight:700;min-width:60px">${daEsc(r.symbol)}</span>
-      <span class="badge ${approved_flag?'b-green':'b-red'}" style="font-size:11px">${approved_flag?'APPROVED':'REJECTED'}</span>
+      <span class="badge ${badge}" style="font-size:11px">${label}</span>
       <span style="color:var(--muted);font-size:13px">${daEsc(r.verdict?.reason||r.gate?.reason||r.reason||status)}</span>
       ${r.order?.fill_qty?`<span style="color:${color};font-size:13px">${daEsc(r.order.fill_qty)} shares @ $${(r.order.fill_price||0).toFixed(2)}</span>`:''}
     </div>`;
   });
   const total=results.length;
-  html=`<div style="padding:8px 16px;background:var(--hover);display:flex;gap:16px;font-size:13px">
-    <span>${total} symbols processed</span>
+  html=`<div style="padding:8px 16px;background:var(--hover);display:flex;gap:16px;font-size:13px;flex-wrap:wrap">
+    <span>${daEsc(total)} symbols processed</span>
     <span style="color:var(--green)">${daEsc(approved)} approved</span>
-    <span style="color:var(--red)">${rejected} rejected</span>
-    ${errors?`<span style="color:var(--muted)">${errors} errors</span>`:''}
+    <span style="color:var(--red)">${daEsc(rejected)} rejected</span>
+    ${skipped?`<span style="color:var(--muted)">${daEsc(skipped)} skipped (cap)</span>`:''}
+    ${errors?`<span style="color:var(--muted)">${daEsc(errors)} errors</span>`:''}
   </div>`+html+`</div>`;
   $('pt-container').innerHTML=html;
 }

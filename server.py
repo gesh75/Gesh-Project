@@ -936,6 +936,90 @@ def _is_fresh(ran_at: str | None, max_age_h: float = 24.0) -> bool:
     except Exception:
         return False
 
+
+def _holding_consensus_args(symbol: str, payload: dict) -> dict[str, float]:
+    """Derive run_consensus_holding() kwargs from a portfolio snapshot."""
+    symbol = symbol.upper()
+    total_portfolio = float(
+        (payload.get("equity_summary") or {}).get("portfolio_equity", 0) or 0
+    ) or 1.0
+    holding = next(
+        (h for h in payload.get("holdings", [])
+         if (h.get("symbol") or "").upper() == symbol),
+        None,
+    )
+    if holding is not None:
+        return {
+            "equity": float(holding.get("equity", 0) or 0),
+            "total_portfolio": total_portfolio,
+            "avg_cost": float(holding.get("average_buy_price", 0) or 0),
+            "current_price": float(holding.get("current_price", 0) or 0),
+        }
+    quote = next(
+        (w for w in payload.get("watchlist", [])
+         if (w.get("symbol") or "").upper() == symbol),
+        None,
+    )
+    current_price = float((quote or {}).get("last_trade_price", 0) or 0)
+    return {
+        "equity": 0.0,
+        "total_portfolio": total_portfolio,
+        "avg_cost": 0.0,
+        "current_price": current_price,
+    }
+
+
+def _cached_consensus_row(symbol: str) -> dict | None:
+    """Return a fresh cached consensus row for one symbol, if available."""
+    symbol = symbol.upper()
+    data = _load_engine_results()
+    raw = data.get("consensus")
+    if not raw or not _is_fresh(data.get("consensus_ran_at")):
+        return None
+
+    def _match(rows: list) -> dict | None:
+        for row in rows:
+            if isinstance(row, dict) and (row.get("symbol") or "").upper() == symbol:
+                out = dict(row)
+                out.setdefault("symbol", symbol)
+                return out
+        return None
+
+    if isinstance(raw, dict):
+        if "data" in raw and isinstance(raw["data"], dict):
+            inner = raw["data"]
+            if "holdings" in inner and isinstance(inner["holdings"], list):
+                hit = _match(inner["holdings"])
+                if hit:
+                    return hit
+            if symbol in inner and isinstance(inner[symbol], dict):
+                out = dict(inner[symbol])
+                out.setdefault("symbol", symbol)
+                return out
+        if "holdings" in raw and isinstance(raw["holdings"], list):
+            hit = _match(raw["holdings"])
+            if hit:
+                return hit
+        if symbol in raw and isinstance(raw[symbol], dict):
+            out = dict(raw[symbol])
+            out.setdefault("symbol", symbol)
+            return out
+    return None
+
+
+def _resolve_consensus_row(symbol: str, payload: dict, *, use_cached: bool = True) -> dict:
+    """Use cached daily consensus when fresh; otherwise run the full engine."""
+    symbol = symbol.upper()
+    if use_cached:
+        cached = _cached_consensus_row(symbol)
+        if cached:
+            return cached
+    from consensus import run_consensus_holding
+    args = _holding_consensus_args(symbol, payload)
+    row = run_consensus_holding(symbol, **args)
+    row.setdefault("symbol", symbol)
+    return row
+
 # ─── In-process throttles / caches (FD-leak mitigation) ──────────────────────
 # Dashboard polls /api/portfolio every few seconds. Logging an equity snapshot
 # on *every* poll is pointless for ECG (which only needs minute-level cadence)
@@ -2665,31 +2749,29 @@ async def trading_paper_order(request: Request):
 @app.post("/api/trading/consensus-order", dependencies=[Depends(require_api_key)])
 async def trading_consensus_order(request: Request):
     """
-    Run full consensus for a symbol, build TradeIntent, push through risk gate, paper-execute.
-    Body: {symbol: str}
+    Run consensus for a symbol, build TradeIntent, push through risk gate, paper-execute.
+    Body: {symbol: str, use_cached?: bool}
     Full signal→gate→order pipeline in one call.
     """
     try:
         body = await request.json()
         symbol = body["symbol"].upper()
+        use_cached = bool(body.get("use_cached", True))
         payload = _resolved_payload()
 
-        # Run consensus for symbol
-        from consensus import run_consensus_holding
-        consensus_row = run_consensus_holding(symbol, payload)
+        consensus_row = _resolve_consensus_row(symbol, payload, use_cached=use_cached)
 
-        # Build intent from consensus
         from trading.config import load_risk_config
         cfg = load_risk_config()
         intent = from_consensus(consensus_row, max_position_pct=cfg.max_position_pct)
 
-        # Gate + execute
         verdict = risk_gate_evaluate(intent, payload)
         result = execution_place(intent, verdict, payload)
 
         return _sanitize({
             "status":    "ok",
             "symbol":    symbol,
+            "cached":    use_cached and _cached_consensus_row(symbol) is not None,
             "consensus": consensus_row,
             "intent":    intent.to_dict(),
             "verdict":   verdict.to_dict(),
@@ -2697,6 +2779,95 @@ async def trading_consensus_order(request: Request):
         })
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/trading/gate-status", dependencies=[Depends(require_api_key)])
+def trading_gate_status():
+    """Orders used today vs daily cap — for paper-sim UI early-stop."""
+    try:
+        from trading.config import load_risk_config
+        from trading.state import count_orders_today
+        cfg = load_risk_config()
+        used = count_orders_today()
+        return _sanitize({
+            "status": "ok",
+            "orders_today": used,
+            "max_orders_per_day": cfg.max_orders_per_day,
+            "cap_reached": used >= cfg.max_orders_per_day,
+        })
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.post("/api/trading/simulate-session", dependencies=[Depends(require_api_key)])
+async def trading_simulate_session(request: Request):
+    """
+    Batch paper simulation for all holdings: cached consensus → gate → paper execute.
+    Body: {use_cached?: bool, symbols?: [str]}
+    One round-trip instead of N sequential consensus-order calls.
+    """
+    try:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        use_cached = bool((body or {}).get("use_cached", True))
+        only = {(s or "").upper() for s in (body or {}).get("symbols") or []}
+        payload = _resolved_payload()
+        holdings = payload.get("holdings", [])
+        if only:
+            holdings = [h for h in holdings if (h.get("symbol") or "").upper() in only]
+
+        from trading.config import load_risk_config
+        cfg = load_risk_config()
+        results: list[dict] = []
+        cap_hit = False
+        cap_reason = ""
+
+        for h in holdings:
+            sym = (h.get("symbol") or "").upper()
+            if not sym:
+                continue
+            if cap_hit:
+                results.append({
+                    "symbol": sym,
+                    "skipped": True,
+                    "reason": cap_reason or "Daily order cap already reached",
+                })
+                continue
+            try:
+                consensus_row = _resolve_consensus_row(sym, payload, use_cached=use_cached)
+                intent = from_consensus(consensus_row, max_position_pct=cfg.max_position_pct)
+                verdict = risk_gate_evaluate(intent, payload)
+                result = execution_place(intent, verdict, payload)
+                vd = verdict.to_dict()
+                results.append({
+                    "symbol": sym,
+                    "cached": use_cached and _cached_consensus_row(sym) is not None,
+                    "consensus_verdict": consensus_row.get("verdict"),
+                    "intent": intent.to_dict(),
+                    "verdict": vd,
+                    "order": result.to_dict(),
+                })
+                reason = vd.get("reason") or ""
+                if not vd.get("approved") and "Daily order cap" in reason:
+                    cap_hit = True
+                    cap_reason = reason
+            except Exception as exc:
+                results.append({"symbol": sym, "error": str(exc)})
+
+        return _sanitize({
+            "status": "ok",
+            "count": len(results),
+            "cap_reached": cap_hit,
+            "cap_reason": cap_reason or None,
+            "use_cached": use_cached,
+            "results": results,
+        })
     except Exception as e:
         raise _server_error(e)
 
