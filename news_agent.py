@@ -35,6 +35,10 @@ load_dotenv()
 
 HEADERS = {"User-Agent": "GeshFinancial/2.0 georgy75@gmail.com"}
 
+# Re-use DB sentiment younger than this — avoids N sequential Haiku calls every click.
+NEWS_CACHE_HOURS = int(os.getenv("GESH_NEWS_CACHE_HOURS", "12"))
+MAX_NEWS_SYMBOLS = int(os.getenv("GESH_NEWS_MAX_SYMBOLS", "12"))
+
 # ─── Free news sources ────────────────────────────────────────────────────────
 
 def _fetch_yahoo_news(symbol: str, max_items: int = 8) -> list[dict]:
@@ -269,6 +273,47 @@ def _save_sentiment(symbol: str, result: dict) -> None:
         conn.close()
 
 
+def _fresh_sentiment(symbol: str, max_age_hours: int = NEWS_CACHE_HOURS) -> dict | None:
+    """Return the latest cached sentiment row if younger than max_age_hours."""
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
+    if not os.path.exists(db_path):
+        return None
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            """SELECT overall_sentiment, sentiment_score, impact_level, analysis_json, created_at
+               FROM news_sentiment WHERE symbol = ? ORDER BY created_at DESC LIMIT 1""",
+            (symbol.upper(),),
+        ).fetchone()
+        if not row:
+            return None
+        created = row[4]
+        try:
+            ts = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+            if age_h > max_age_hours:
+                return None
+        except Exception:
+            return None
+        analysis = json.loads(row[3]) if row[3] else {}
+        rolling = _compute_rolling_score(symbol, days=7)
+        return {
+            "symbol": symbol.upper(),
+            "overall_sentiment": row[0],
+            "sentiment_score": row[1],
+            "rolling_score": rolling,
+            "impact_level": row[2],
+            "article_count": analysis.get("article_count", 0),
+            "analysis": analysis,
+            "cached": True,
+        }
+    finally:
+        conn.close()
+
+
 def _get_sentiment_history(symbols: list[str], days: int = 7) -> list[dict]:
     from agent_db import agent_db_path
     db_path = str(agent_db_path())
@@ -347,9 +392,17 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
     }
     """
     results = []
+    skipped_cached = 0
+    sym_list = list(dict.fromkeys(s.upper() for s in symbols))[:MAX_NEWS_SYMBOLS]
 
-    for symbol in symbols:
+    for symbol in sym_list:
         print(f"  NEWS: scanning {symbol}...")
+        cached = _fresh_sentiment(symbol)
+        if cached:
+            results.append(cached)
+            skipped_cached += 1
+            continue
+
         articles = _fetch_all_news(symbol, days_back=days_back)
         if not articles:
             results.append({"symbol": symbol, "overall_sentiment": "NEUTRAL", "sentiment_score": 0, "article_count": 0})
@@ -396,6 +449,7 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
 
     return {
         "results":        results,
+        "skipped_cached": skipped_cached,
         "market_mood":    combined_mood,
         "news_mood":      mood,
         "avg_score":      round(avg, 1),

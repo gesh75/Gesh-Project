@@ -34,6 +34,10 @@ HEADERS      = {"User-Agent": "GeshFinancial/1.0 georgy75@gmail.com"}
 
 FILING_TYPES = ["10-K", "10-Q", "8-K"]
 
+# Cap fresh Claude analyses per dashboard run — without this, 10 holdings × 3 forms × 2
+# filings can queue 60+ sequential Haiku calls (~15-30 min) while the UI shows no progress.
+MAX_ANALYSES_PER_RUN = int(os.getenv("GESH_SEC_MAX_ANALYSES", "6"))
+
 SEC_ANALYSIS_PROMPT = """You are an expert SEC filing analyst. Analyze this filing excerpt and extract key financial intelligence.
 
 Return ONLY valid JSON — no markdown. Use double-quotes only. No apostrophes inside strings.
@@ -213,6 +217,25 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
         conn.close()
 
 
+def _filing_already_in_db(filing_url: str) -> bool:
+    """True when this filing URL was already analyzed — skip redundant Claude calls."""
+    if not filing_url:
+        return False
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
+    if not os.path.exists(db_path):
+        return False
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sec_filings WHERE filing_url = ? LIMIT 1",
+            (filing_url,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def _get_recent_from_db(symbols: list[str], days: int = 30) -> list[dict]:
     """Retrieve recent SEC analyses from DB."""
     from agent_db import agent_db_path
@@ -264,10 +287,14 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
       "as_of": str
     }
     """
-    results = []
+    results: list[dict] = []
     new_count = 0
+    skipped_cached = 0
+    analyses_done = 0
 
     for symbol in symbols:
+        if analyses_done >= MAX_ANALYSES_PER_RUN:
+            break
         print(f"  SEC: checking {symbol}...")
         cik = _get_cik(symbol)
         if not cik:
@@ -275,8 +302,15 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
             continue
 
         for form_type in FILING_TYPES:
+            if analyses_done >= MAX_ANALYSES_PER_RUN:
+                break
             filings = _fetch_recent_filings(cik, form_type, days_back=days_back)
-            for filing in filings[:2]:  # max 2 per type per symbol
+            for filing in filings[:1]:  # newest filing per type — enough for the dashboard
+                if analyses_done >= MAX_ANALYSES_PER_RUN:
+                    break
+                if _filing_already_in_db(filing["url"]):
+                    skipped_cached += 1
+                    continue
                 text = _fetch_filing_text(filing["url"])
                 if not text:
                     continue
@@ -292,10 +326,16 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
                     "analysis":      analysis,
                 })
                 new_count += 1
+                analyses_done += 1
+
+    # When everything was cached (or no new EDGAR hits), still return DB rows so the
+    # dashboard renders immediately instead of looking like a failed run.
+    display = results if results else _get_recent_from_db(symbols, days=days_back)
 
     return {
         "new_filings": new_count,
-        "results": results,
+        "skipped_cached": skipped_cached,
+        "results": display,
         "as_of": datetime.now(timezone.utc).isoformat() + "Z",
     }
 

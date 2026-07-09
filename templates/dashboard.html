@@ -2171,26 +2171,52 @@ async function loadIntelHistory(){
   }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;}
 }
 
+function intelSetProgress(step, detailHtml){
+  const cont=$('intel-container');
+  const extra=detailHtml?('<br>'+detailHtml):'';
+  cont.innerHTML='<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div>'+
+    '<div class="deep-ph-text"><strong style="color:var(--text)">'+daEsc(step)+'</strong>'+extra+
+    '<span style="font-size:14px;color:var(--muted);display:block;margin-top:10px">Results save to DB — use ↻ Load Cached for instant reload next time.</span>'+
+    '</div></div>';
+}
+
+async function agentPost(path, label){
+  const r=await fetch(path,{method:'POST',headers:authHeaders()});
+  if(r.status===401){ const err=new Error('auth'); err.authRequired=true; throw err; }
+  if(!r.ok) throw new Error(`${label}: ${await r.text()}`);
+  const j=await r.json();
+  return (j&&j.data!==undefined)?j.data:j;
+}
+
 async function runAllAgents(){
-  const btn=$('btn-intel'),cont=$('intel-container');
+  const btn=$('btn-intel');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Running agents...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div>
-    <div class="deep-ph-text">
-      <strong style="color:var(--text)">Running 3 autonomous agents in sequence…</strong><br>
-      1. SEC EDGAR filing watcher<br>2. News sentiment scanner<br>3. Fundamental momentum detector (~3 min)<br>
-      <span style="font-size:14px;color:var(--muted)">All results are saved to DB — use "Load Cached" next time for instant load.</span>
-    </div></div>`;
+  const t0=Date.now();
+  let secR=null, newsR=null, fundR=null;
   try{
-    // Run SEC + News in parallel, then Fundamentals
-    const [secR,newsR]=await Promise.all([
-      fetch('/api/agents/sec',{method:'POST'}).then(r=>r.json()),
-      fetch('/api/agents/news',{method:'POST'}).then(r=>r.json()),
-    ]);
-    cont.innerHTML=cont.innerHTML.replace('Running 3 autonomous agents','✓ SEC + News done · Running fundamentals…');
-    const fundR=await fetch('/api/agents/fundamentals',{method:'POST'}).then(r=>r.json());
-    renderIntelligence(secR.data?.results||[], newsR.data, fundR.data);
+    intelSetProgress('Step 1/3 — SEC EDGAR filing watcher',
+      'Checking recent 10-K / 10-Q / 8-K filings · skips already-analyzed · max 6 new Claude reads');
+    secR=await agentPost('/api/agents/sec','SEC agent');
+
+    intelSetProgress('Step 2/3 — News sentiment scanner',
+      '✓ SEC done ('+daEsc(String(secR.new_filings||0))+' new, '+daEsc(String(secR.skipped_cached||0))+' cached skipped)<br>Scanning holdings + watchlist news…');
+    newsR=await agentPost('/api/agents/news','News agent');
+
+    intelSetProgress('Step 3/3 — Fundamental momentum detector',
+      '✓ SEC + News done ('+daEsc(String(newsR.skipped_cached||0))+' news rows from cache)<br>Running 80-stock universe pre-score → Claude deep scan (~2-4 min)…');
+    fundR=await agentPost('/api/agents/fundamentals','Fundamentals agent');
+
+    const elapsed=Math.round((Date.now()-t0)/1000);
+    renderIntelligence(secR.results||[], newsR, fundR);
+    $('intel-ts').textContent=`Updated ${new Date().toLocaleTimeString()} · ${elapsed}s`;
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;
+    if(e&&e.authRequired){
+      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required</strong> to run live agents.</div></div>`;
+    }else{
+      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>
+        <div style="margin-top:12px;font-size:14px;color:var(--muted)">Partial results may exist — try <button class="btn-ref" onclick="loadIntelHistory()">↻ Load Cached</button></div></div>`;
+    }
+    if(secR||newsR) try{ renderIntelligence((secR&&secR.results)||[], newsR||{}, fundR||null); }catch(_){}
     console.error(e);
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-run Agents';}
 }
