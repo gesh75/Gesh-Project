@@ -1329,8 +1329,13 @@ def agent_news_history(days: int = 7):
     try:
         payload = _resolved_payload()
         symbols = list({h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]})
-        result  = get_news_history(symbols, days=days)
-        return {"status": "ok", "data": result}
+        rows    = get_news_history(symbols, days=days)
+        scores  = [r["sentiment_score"] for r in rows if isinstance(r.get("sentiment_score"), (int, float))]
+        avg     = round(sum(scores) / len(scores), 1) if scores else 0.0
+        mood    = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
+        return {"status": "ok", "data": {
+            "results": rows, "avg_score": avg, "market_mood": mood, "cached": True,
+        }}
     except Exception as e:
         raise _server_error(e)
 

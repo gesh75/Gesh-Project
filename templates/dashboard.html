@@ -2048,7 +2048,19 @@ const sigCls=s=>({'BULLISH':'sp-bullish','VERY_POSITIVE':'sp-bullish','POSITIVE'
 const urgCls=u=>({'HIGH':'sp-high','MEDIUM':'sp-medium','LOW':'sp-low'}[u]||'sp-low');
 const sentCls=s=>s.includes('POSITIVE')||s==='BULLISH'?'sp-bullish':s.includes('NEGATIVE')||s==='BEARISH'?'sp-bearish':'sp-neutral';
 
+function normalizeNewsIntel(news){
+  if(!news) return {results:[], avg_score:0, market_mood:'NEUTRAL'};
+  if(Array.isArray(news)){
+    const results=news;
+    const scores=results.map(n=>n.sentiment_score).filter(v=>typeof v==='number');
+    const avg=scores.length?Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*10)/10:0;
+    return {results, avg_score:avg, market_mood:avg>20?'RISK_ON':avg<-20?'RISK_OFF':'NEUTRAL', cached:true};
+  }
+  return news;
+}
+
 function renderIntelligence(sec, news, fund){
+  news=normalizeNewsIntel(news);
   // Honest empty state: SEC/news/fundamental agents publish on a schedule; before
   // the first run there's no cached data. Three dead "0 filings" panels read as
   // broken — show one clear "not yet published" message instead.
@@ -2112,7 +2124,8 @@ function renderIntelligence(sec, news, fund){
   }).join('') || '<div class="empty" style="padding:20px">No news data</div>';
 
   // ── Fundamental Panel
-  const fundItems=((fund?.top_opportunities)||[]).slice(0,6).map(s=>{
+  const fundOpps=((fund?.top_opportunities)||[]).filter(s=>s&&s.symbol&&s.symbol!=='NO_DATA');
+  const fundItems=fundOpps.slice(0,6).map(s=>{
     const mgap=s.momentum_gap;
     const mgapCls=mgap==='HIGH'?'sp-bullish':mgap==='MEDIUM'?'sp-medium':'sp-low';
     return `<div class="fund-card">
@@ -2132,7 +2145,11 @@ function renderIntelligence(sec, news, fund){
       </div>
       <div style="font-size:13px;color:var(--muted)">Horizon: ${daEsc(s.investment_horizon||'?')}</div>
     </div>`;
-  }).join('') || '<div class="empty" style="padding:20px">No scan data yet</div>';
+  }).join('') || ('<div class="empty" style="padding:20px">'+
+    (fund&&fund.error?daEsc('Scan error: '+fund.error):'No scan data yet — click ▶ Run All Agents')+
+    '</div>');
+
+  const fundFallback=fund&&fund.fallback?'<div style="font-size:11px;color:var(--yellow);margin-bottom:6px">⚡ Pre-score fallback (Claude scan unavailable)</div>':'';
 
   // Label cached narratives with the SCAN date — 'Updated <load time>' made a
   // two-month-old market summary read as current.
@@ -2151,7 +2168,7 @@ function renderIntelligence(sec, news, fund){
       </div>
       <div class="agent-panel">
         <div class="agent-panel-head"><span class="agent-panel-title">📈 Fundamental Momentum</span><span class="ts">${daEsc(fund?.stocks_analyzed||0)} stocks scanned</span></div>
-        ${fundMacro}
+        ${fundFallback}${fundMacro}
         <div class="agent-panel-body">${fundItems}</div>
       </div>
     </div>`;
