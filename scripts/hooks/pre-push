@@ -16,6 +16,24 @@ cd "$ROOT"
 PY="./venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
+# ── ruff gate on tests/ (mirrors the CI `test` job, which runs `ruff check tests/`
+#    BEFORE pytest). Three separate pushes have failed CI on a stray unused import /
+#    unsorted block in a test file; catch it here in <1s instead of a 30s CI round-trip.
+RUFF="./venv/bin/ruff"
+[ -x "$RUFF" ] || RUFF="$(command -v ruff || true)"
+if [ -n "$RUFF" ]; then
+  echo "pre-push: running ruff gate (tests/)…"
+  if ! "$RUFF" check tests/; then
+    echo ""
+    echo "✗ pre-push BLOCKED: ruff found lint errors in tests/ — CI runs the same gate and will fail."
+    echo "  Fix with:  ${RUFF} check tests/ --fix   (then re-commit and push)"
+    exit 1
+  fi
+  echo "✓ pre-push: ruff (tests/) clean."
+else
+  echo "⚠ pre-push: ruff not found — skipping ruff gate (pip install ruff to enable)."
+fi
+
 echo "pre-push: running customer-isolation + XSS gate…"
 if ! "$PY" -m pytest -q \
       tests/test_customer_leak_sweep.py \
