@@ -200,7 +200,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
 </head>
 <body>
 <h1>GESH Financial</h1>
-<p class="subtitle"><span class="live-pulse"></span>Architecture &amp; Commercial Map — Updated 2026-06-10</p>
+<p class="subtitle"><span class="live-pulse"></span>Architecture &amp; Commercial Map — Updated 2026-07-09</p>
 
 <div class="diagram">
 
@@ -214,14 +214,14 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
     <div class="com-card-label label-product">★ THE PRODUCT</div>
     <div class="com-card-title" style="color:var(--green)">GESH Intelligence</div>
     <div class="com-card-port">Port 9000 · gesh-project</div>
-    <div class="com-card-desc">What paying customers see and use. AI-powered portfolio intelligence dashboard — signals, risk analysis, regime detection, SEC alerts.</div>
+    <div class="com-card-desc">What paying customers see and use. Self-serve AI research — analyze <em>any</em> ticker or your <em>own</em> portfolio: signals, fair value, risk, regime, SEC/news alerts.</div>
     <div class="com-card-items">
-      <span>8-tab web dashboard (FastAPI + Chart.js)</span>
-      <span>11-node consensus signal feed</span>
-      <span>Monte Carlo risk + Kelly sizing</span>
-      <span>SEC/news alerts + fundamental scans</span>
+      <span>Analyze ANY ticker — live Claude research card</span>
+      <span>Analyze MY portfolio — deep AI + Kelly + Monte-Carlo on your own book</span>
+      <span>11-node consensus · regime · fair value · risk</span>
+      <span>SEC / news / fundamental-momentum intelligence</span>
+      <span>Per-customer quotas + tiers · money-masking · isolation</span>
       <span>Crypto signal add-on (premium tier)</span>
-      <span>Per-user Alpaca broker connection (Phase 2)</span>
     </div>
     <div class="com-price com-price-product">$49 / $149 / $399 per month</div>
   </div>
@@ -275,23 +275,22 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
         <span class="tag t-green">9000</span>
         <span class="tag t-muted">FastAPI</span>
         <span class="tag t-muted">Uvicorn</span>
-        <span class="tag t-green">Multi-user (Phase 2)</span><br><br>
-        Primary entry point. Serves the 8-tab dashboard, all API endpoints, and AI analysis results.
-        In commercial version: Auth0 JWT middleware guards every route. Stripe webhooks manage subscriptions.
-        Per-user Alpaca keys stored encrypted in DB.
+        <span class="tag t-green">Multi-tenant ✓</span><br><br>
+        Primary entry point. Serves the dashboard, all API endpoints, and AI analysis results.
+        Login wall (auth_users.py — stdlib PBKDF2 + HMAC cookie) guards every route; Lemon Squeezy
+        merchant-of-record webhook provisions/revokes per-customer access. Per-customer data isolated in gesh_auth.db.
       </div>
     </div>
     <div class="box c-accent w2">
       <div class="box-title">Phase 2 Additions</div>
       <div class="box-body">
-        <span class="tag t-green">Login wall ✓</span>
-        <span class="tag t-accent">Stripe</span>
-        <span class="tag t-yellow">Rate limiting</span>
-        <span class="tag t-purple">API keys</span>
-        <span class="tag t-muted">DigitalOcean</span><br><br>
-        Login wall SHIPPED (auth_users.py, stdlib PBKDF2 + HMAC cookie, env-gated off until alpha).<br>
-        Stripe webhooks → subscription table.<br>
-        DigitalOcean Droplet $24/mo.
+        <span class="tag t-green">Login wall ON ✓</span>
+        <span class="tag t-green">Lemon Squeezy ✓</span>
+        <span class="tag t-green">Quotas + tiers ✓</span>
+        <span class="tag t-yellow">Rate limiting ✓</span>
+        <span class="tag t-muted">Cloudflare tunnel</span><br><br>
+        Login wall LIVE (auth_users.py). Lemon Squeezy webhook → provision/revoke on auth_users
+        (observer/trader/desk tiers). Rolling-24h per-customer LLM quotas + usage metering. SHIPPED.
       </div>
     </div>
     <div class="box c-lime w1">
@@ -314,8 +313,31 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
     </div>
   </div>
 
+  <!-- Customer self-serve surface (2026-07) -->
+  <div style="font-size:10px;color:var(--muted);margin:4px 0 8px;letter-spacing:.08em;text-transform:uppercase">Customer self-serve surface <span class="new-badge">★★★ 2026-07 · LIVE</span></div>
+  <div class="row" style="margin-bottom:12px">
+    <div class="box c-green w2">
+      <div class="box-title">🔎 Analyze Any Ticker</div>
+      <div class="box-body"><span class="tag t-green">/api/analyze-ticker</span><br><br>
+        Type any stock → 11-node consensus + regime + cycle + fundamentals + analyst + live news, plus a
+        <strong>Claude research card</strong> (fair value, VAL/GRO/HLT/MOM/DIV, 3M/12M, risks) grounded on a real quote.</div>
+    </div>
+    <div class="box c-green w2">
+      <div class="box-title">📊 Analyze My Portfolio</div>
+      <div class="box-body"><span class="tag t-green">/api/mybook · /mybook/report</span><br><br>
+        Customer enters their <em>own</em> holdings → the full owner engine suite on <em>their</em> book:
+        deep AI + verdict-aware Kelly + Monte-Carlo + sector/concentration risk. Print-friendly report.</div>
+    </div>
+    <div class="box c-accent w2">
+      <div class="box-title">🔐 Multi-Tenant Controls</div>
+      <div class="box-body"><span class="tag t-accent">quotas</span> <span class="tag t-accent">tiers</span> <span class="tag t-yellow">masking</span> <span class="tag t-purple">isolation</span><br><br>
+        Rolling-24h LLM quotas × tier (observer 1× / trader 2× / desk 5×) · money-masking hides owner $ ·
+        per-customer data isolated in gesh_auth.db · usage metering.</div>
+    </div>
+  </div>
+
   <!-- Dashboard tabs -->
-  <div style="font-size:10px;color:var(--muted);margin-bottom:8px;letter-spacing:.08em;text-transform:uppercase">Dashboard — 8 tabs (templates/dashboard.html)</div>
+  <div style="font-size:10px;color:var(--muted);margin-bottom:8px;letter-spacing:.08em;text-transform:uppercase">Owner dashboard — 8 tabs (role-gated; customers see Analyze + Track Record)</div>
   <div class="tab-grid">
     <div class="tab-box">
       <div class="tab-name"><span class="tab-icon">📊</span>Overview</div>
@@ -368,7 +390,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
   </div>
 </div>
 
-<div class="connector"><span class="connector-label">consensus engine · Claude API · yfinance · OpenBB · FRED</span></div>
+<div class="connector"><span class="connector-label">consensus · Claude + Gemini · Robinhood MCP · yfinance · OpenBB · FRED</span></div>
 
 <!-- ══════════════════════════════════════════════════════════════════
      INTELLIGENCE LAYER — Shared Core (both ports use this)
@@ -400,23 +422,23 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
       <div class="box-title">AI Models</div>
       <div class="box-body">
         <span class="tag t-accent">Claude Sonnet 4.6</span> Deep analysis, synthesis<br>
-        <span class="tag t-yellow">Claude Haiku 4.5</span> Bull/Bear debate<br>
+        <span class="tag t-yellow">Claude Haiku 4.5</span> Fast batch / debate<br>
         <span class="tag t-green">Gemini 2.5 Flash</span> Batch sentiment<br>
-        <span class="tag t-purple">Gemini 2.5 Pro</span> Contrarian review<br>
-        <span class="tag t-muted">Ollama llama3.2</span> Local fallback<br><br>
-        Bull/Bear Debate: 3-call engine (haiku→haiku→sonnet). $0.01–0.03 per debate.
+        <span class="tag t-purple">Gemini 2.5 Pro</span> Contrarian review<br><br>
+        Cost-routed: cheap batch → Haiku/Flash, hardest reasoning → Sonnet; cross-checked before a call.
+        <em style="color:var(--muted)">(Ollama local model removed — no signal value vs Sonnet.)</em>
       </div>
     </div>
     <div class="box c-yellow w1">
       <div class="box-title">Data Sources</div>
       <div class="box-body">
+        <span class="tag t-yellow">Robinhood MCP</span> portfolio (snapshot-first)<br>
+        <span class="tag t-yellow">Alpaca</span> intraday + news<br>
         <span class="tag t-yellow">yfinance</span> prices<br>
         <span class="tag t-yellow">OpenBB</span> fundamentals<br>
         <span class="tag t-yellow">FRED</span> macro<br>
-        <span class="tag t-yellow">Reddit</span> sentiment<br>
-        <span class="tag t-yellow">EDGAR</span> SEC<br>
-        <span class="tag t-yellow">Robinhood</span> portfolio<br>
-        <span class="tag t-yellow">Alpaca</span> paper exec
+        <span class="tag t-yellow">Finnhub</span> news<br>
+        <span class="tag t-yellow">EDGAR</span> SEC · <span class="tag t-yellow">Polymarket</span> macro
       </div>
     </div>
   </div>
@@ -445,10 +467,10 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
         <span class="tag t-orange">paper_outcomes</span>
         <span class="tag t-orange">signal_overrides</span><br><br>
         <strong style="color:var(--orange)">Autonomy Gate:</strong> ≥30 closed trades · win_rate ≥55% · Sharpe ≥0.50 · drawdown ≤10%<br>
-        <strong>Status (2026-06-10):</strong> 6/30 closed · win rate 17% / Sharpe -8.02 / DD 21% — gate FAILING; live source: /track-record
+        <strong>Status (2026-07-09):</strong> 16/30 closed · win rate ~19% — gate FAILING. Audit: the <em>consensus</em> engine is 0/7 (buys tops into a falling tape); Tier-1 fix plan queued. Live: /track-record
         <div class="gate-bar-wrap">
-          <div class="gate-bar-label"><span>Closed trades</span><span>6 / 30</span></div>
-          <div class="gate-bar-track"><div class="gate-bar-fill red" style="width:20%"></div></div>
+          <div class="gate-bar-label"><span>Closed trades</span><span>16 / 30</span></div>
+          <div class="gate-bar-track"><div class="gate-bar-fill yellow" style="width:53%"></div></div>
         </div>
         <div class="gate-bar-wrap">
           <div class="gate-bar-label"><span>Win rate target</span><span>≥55%</span></div>
@@ -519,7 +541,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
       <div class="phase-status status-active">● ACTIVE</div>
       <div class="phase-title">Phase 1 — Proof</div>
       <div class="phase-date">May – July 2026</div>
-      <div class="phase-item">30 closed paper trades</div>
+      <div class="phase-item">30 closed paper trades (16/30 · consensus 0/7 — fix queued)</div>
       <div class="phase-item">Win rate ≥55%, Sharpe ≥0.5</div>
       <div class="phase-item">Public proof page ✓ (/track-record)</div>
       <div class="phase-item">Discord + Substack (June)</div>
@@ -527,14 +549,14 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
       <div class="phase-mrr">Gate: autonomy pass</div>
     </div>
     <div class="phase-box phase-2">
-      <div class="phase-status status-next">NEXT</div>
+      <div class="phase-status status-active">◐ SHIPPING</div>
       <div class="phase-title">Phase 2 — SaaS</div>
-      <div class="phase-date">Aug – Oct 2026</div>
-      <div class="phase-item">Login wall ✓ (enable + Stripe)</div>
-      <div class="phase-item">Stripe subscriptions</div>
-      <div class="phase-item">Per-user Alpaca keys</div>
-      <div class="phase-item">DigitalOcean deploy</div>
-      <div class="phase-item">Landing page + beta launch</div>
+      <div class="phase-date">Jun – Oct 2026</div>
+      <div class="phase-item">Login wall ON ✓</div>
+      <div class="phase-item">Lemon Squeezy subscriptions ✓</div>
+      <div class="phase-item">Self-serve analyze + my-portfolio ✓</div>
+      <div class="phase-item">Per-customer quotas + tiers ✓</div>
+      <div class="phase-item">Landing page + founder invites</div>
       <div class="phase-mrr">Target: $745 MRR</div>
     </div>
     <div class="phase-box phase-3">
