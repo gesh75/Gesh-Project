@@ -29,9 +29,13 @@ _Last updated: 2026-07-09_
 
 - 3 CRITICAL / 11 HIGH remediated; API-key auth, fail-closed risk gate, generic 500s.
 
+## Done — daily chain refresh (2026-07-09 09:30 EEST)
+- `run_daily_analysis.sh` **CHAIN DONE** fail=0 in 492s; snapshot fresh via MCP ($37,151).
+- Regime step hit None ADX/RSI TypeError → fixed in `1c4b55a`; re-run engines on next schedule.
+- `com.gesh.main` restarted on `a3ab8e3`/`1c4b55a`; PR #26 merged on GitHub.
+
 ## Pending / known
-- Push `main` + close PR #26 on GitHub after this commit.
-- Run `run_daily_analysis.sh` to refresh stale snapshot (was 2026-07-07).
-- Prune stale remote feature branches (security/*, feat/* merged).
+- Re-run `run_engines2.py` once to populate regime after format fix (or wait for tomorrow 10:30).
+- Prune remaining stale remote branches (security/*, docs/*) if no longer needed.
 - Trading repo doc drift (`GESH_COMMERCIAL_ROADMAP.md`, `PROGRESS_LOG.md`) — commit separately.
 - `server.py` monolith split — next architecture sprint.
