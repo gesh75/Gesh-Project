@@ -1,0 +1,29 @@
+# CODEOWNERS — deliberate review on the paths where a bug moves money or exposes data.
+#
+# GitHub auto-requests review from the owner(s) below when a PR touches a matching
+# path. On this repo it pairs with branch protection on `main`: enable
+# "Require review from Code Owners" in Settings → Branches to make that review
+# mandatory before merge. (Solo note: GitHub never requires you to review your OWN
+# PR, so today this mainly DOCUMENTS the danger zones and auto-requests review the
+# moment a collaborator opens a PR against them. It costs nothing and is correct now.)
+#
+# Everyday product/UI/docs changes are intentionally NOT listed — keep the fast path fast.
+
+# ── Money & order execution ────────────────────────────────────────────────────
+/trading/risk_gate.py   @gesh75
+/trading/execution.py   @gesh75
+/trading/contract.py    @gesh75
+/trading/state.py       @gesh75
+/trading/config.py      @gesh75
+/kelly.py               @gesh75
+/monte_carlo.py         @gesh75
+
+# ── Billing & provisioning (real customer money in / access out) ───────────────
+/billing.py             @gesh75
+/email_sender.py        @gesh75
+
+# ── Auth wall, sessions, per-user isolation & spend gates ──────────────────────
+/auth_users.py          @gesh75
+
+# ── CI definition & this ownership map itself ──────────────────────────────────
+/.github/               @gesh75
