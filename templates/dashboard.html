@@ -1523,7 +1523,7 @@ function buildAnalystStrip(sym, mkt){
   const perfChip=(label,val)=>{
     if(val==null) return '';
     const c=val>=0?'var(--green)':'var(--red)';
-    return `<span class="perf-chip" style="color:${daEsc(c)}">${label}: ${val>=0?'+':''}${val.toFixed(1)}%</span>`;
+    return `<span class="perf-chip" style="color:${daEsc(c)}">${daEsc(label)}: ${val>=0?'+':''}${val.toFixed(1)}%</span>`;
   };
   const insiderHtml=ins.length?ins.map(t=>{
     const ic=t.is_buy?'🟢':'🔴';
@@ -2048,7 +2048,19 @@ const sigCls=s=>({'BULLISH':'sp-bullish','VERY_POSITIVE':'sp-bullish','POSITIVE'
 const urgCls=u=>({'HIGH':'sp-high','MEDIUM':'sp-medium','LOW':'sp-low'}[u]||'sp-low');
 const sentCls=s=>s.includes('POSITIVE')||s==='BULLISH'?'sp-bullish':s.includes('NEGATIVE')||s==='BEARISH'?'sp-bearish':'sp-neutral';
 
+function normalizeNewsIntel(news){
+  if(!news) return {results:[], avg_score:0, market_mood:'NEUTRAL'};
+  if(Array.isArray(news)){
+    const results=news;
+    const scores=results.map(n=>n.sentiment_score).filter(v=>typeof v==='number');
+    const avg=scores.length?Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*10)/10:0;
+    return {results, avg_score:avg, market_mood:avg>20?'RISK_ON':avg<-20?'RISK_OFF':'NEUTRAL', cached:true};
+  }
+  return news;
+}
+
 function renderIntelligence(sec, news, fund){
+  news=normalizeNewsIntel(news);
   // Honest empty state: SEC/news/fundamental agents publish on a schedule; before
   // the first run there's no cached data. Three dead "0 filings" panels read as
   // broken — show one clear "not yet published" message instead.
@@ -2112,7 +2124,8 @@ function renderIntelligence(sec, news, fund){
   }).join('') || '<div class="empty" style="padding:20px">No news data</div>';
 
   // ── Fundamental Panel
-  const fundItems=((fund?.top_opportunities)||[]).slice(0,6).map(s=>{
+  const fundOpps=((fund?.top_opportunities)||[]).filter(s=>s&&s.symbol&&s.symbol!=='NO_DATA');
+  const fundItems=fundOpps.slice(0,6).map(s=>{
     const mgap=s.momentum_gap;
     const mgapCls=mgap==='HIGH'?'sp-bullish':mgap==='MEDIUM'?'sp-medium':'sp-low';
     return `<div class="fund-card">
@@ -2132,7 +2145,11 @@ function renderIntelligence(sec, news, fund){
       </div>
       <div style="font-size:13px;color:var(--muted)">Horizon: ${daEsc(s.investment_horizon||'?')}</div>
     </div>`;
-  }).join('') || '<div class="empty" style="padding:20px">No scan data yet</div>';
+  }).join('') || ('<div class="empty" style="padding:20px">'+
+    (fund&&fund.error?daEsc('Scan error: '+fund.error):'No scan data yet — click ▶ Run All Agents')+
+    '</div>');
+
+  const fundFallback=fund&&fund.fallback?'<div style="font-size:11px;color:var(--yellow);margin-bottom:6px">⚡ Pre-score fallback (Claude scan unavailable)</div>':'';
 
   // Label cached narratives with the SCAN date — 'Updated <load time>' made a
   // two-month-old market summary read as current.
@@ -2151,7 +2168,7 @@ function renderIntelligence(sec, news, fund){
       </div>
       <div class="agent-panel">
         <div class="agent-panel-head"><span class="agent-panel-title">📈 Fundamental Momentum</span><span class="ts">${daEsc(fund?.stocks_analyzed||0)} stocks scanned</span></div>
-        ${fundMacro}
+        ${fundFallback}${fundMacro}
         <div class="agent-panel-body">${fundItems}</div>
       </div>
     </div>`;
@@ -2171,26 +2188,52 @@ async function loadIntelHistory(){
   }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;}
 }
 
+function intelSetProgress(step, detailHtml){
+  const cont=$('intel-container');
+  const extra=detailHtml?('<br>'+detailHtml):'';
+  cont.innerHTML='<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div>'+
+    '<div class="deep-ph-text"><strong style="color:var(--text)">'+daEsc(step)+'</strong>'+extra+
+    '<span style="font-size:14px;color:var(--muted);display:block;margin-top:10px">Results save to DB — use ↻ Load Cached for instant reload next time.</span>'+
+    '</div></div>';
+}
+
+async function agentPost(path, label){
+  const r=await fetch(path,{method:'POST',headers:authHeaders()});
+  if(r.status===401){ const err=new Error('auth'); err.authRequired=true; throw err; }
+  if(!r.ok) throw new Error(`${label}: ${await r.text()}`);
+  const j=await r.json();
+  return (j&&j.data!==undefined)?j.data:j;
+}
+
 async function runAllAgents(){
-  const btn=$('btn-intel'),cont=$('intel-container');
+  const btn=$('btn-intel');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Running agents...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div>
-    <div class="deep-ph-text">
-      <strong style="color:var(--text)">Running 3 autonomous agents in sequence…</strong><br>
-      1. SEC EDGAR filing watcher<br>2. News sentiment scanner<br>3. Fundamental momentum detector (~3 min)<br>
-      <span style="font-size:14px;color:var(--muted)">All results are saved to DB — use "Load Cached" next time for instant load.</span>
-    </div></div>`;
+  const t0=Date.now();
+  let secR=null, newsR=null, fundR=null;
   try{
-    // Run SEC + News in parallel, then Fundamentals
-    const [secR,newsR]=await Promise.all([
-      fetch('/api/agents/sec',{method:'POST'}).then(r=>r.json()),
-      fetch('/api/agents/news',{method:'POST'}).then(r=>r.json()),
-    ]);
-    cont.innerHTML=cont.innerHTML.replace('Running 3 autonomous agents','✓ SEC + News done · Running fundamentals…');
-    const fundR=await fetch('/api/agents/fundamentals',{method:'POST'}).then(r=>r.json());
-    renderIntelligence(secR.data?.results||[], newsR.data, fundR.data);
+    intelSetProgress('Step 1/3 — SEC EDGAR filing watcher',
+      'Checking recent 10-K / 10-Q / 8-K filings · skips already-analyzed · max 6 new Claude reads');
+    secR=await agentPost('/api/agents/sec','SEC agent');
+
+    intelSetProgress('Step 2/3 — News sentiment scanner',
+      '✓ SEC done ('+daEsc(String(secR.new_filings||0))+' new, '+daEsc(String(secR.skipped_cached||0))+' cached skipped)<br>Scanning holdings + watchlist news…');
+    newsR=await agentPost('/api/agents/news','News agent');
+
+    intelSetProgress('Step 3/3 — Fundamental momentum detector',
+      '✓ SEC + News done ('+daEsc(String(newsR.skipped_cached||0))+' news rows from cache)<br>Running 80-stock universe pre-score → Claude deep scan (~2-4 min)…');
+    fundR=await agentPost('/api/agents/fundamentals','Fundamentals agent');
+
+    const elapsed=Math.round((Date.now()-t0)/1000);
+    renderIntelligence(secR.results||[], newsR, fundR);
+    $('intel-ts').textContent=`Updated ${new Date().toLocaleTimeString()} · ${elapsed}s`;
   }catch(e){
-    cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;
+    if(e&&e.authRequired){
+      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required</strong> to run live agents.</div></div>`;
+    }else{
+      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>
+        <div style="margin-top:12px;font-size:14px;color:var(--muted)">Partial results may exist — try <button class="btn-ref" onclick="loadIntelHistory()">↻ Load Cached</button></div></div>`;
+    }
+    if(secR||newsR) try{ renderIntelligence((secR&&secR.results)||[], newsR||{}, fundR||null); }catch(_){}
     console.error(e);
   }finally{btn.disabled=false;btn.innerHTML='↻ Re-run Agents';}
 }
@@ -3329,10 +3372,9 @@ async function checkPaperCloses(){
 async function runPaperSession(){
   const btn=$('btn-pt-run');
   btn.disabled=true; btn.textContent='⏳ Simulating…';
-  $('pt-container').innerHTML='<div class="empty"><span class="spin"></span> Running paper simulation through risk gate…</div>';
+  const setProgress=(msg)=>{$('pt-container').innerHTML=`<div class="empty"><span class="spin"></span> ${daEsc(msg)}</div>`;};
+  setProgress('Running paper simulation through risk gate…');
   try{
-    // Pull latest action plan from a recent deep analysis if available,
-    // otherwise run a consensus-order for each holding
     const pj=await fetch('/api/portfolio').then(r=>r.json());
     const holdings=pj.data.holdings||[];
     if(!holdings.length){
@@ -3341,14 +3383,33 @@ async function runPaperSession(){
       return;
     }
 
-    // Run consensus-order (signal→gate→paper) for each holding
-    const results=[];
-    for(const h of holdings){
-      try{
-        const r=await fetch('/api/trading/consensus-order',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbol:h.symbol})});
-        const d=await r.json();
-        results.push({symbol:h.symbol,...d});
-      }catch(e){results.push({symbol:h.symbol,error:e.message});}
+    const gate=await fetch('/api/trading/gate-status').then(r=>r.json()).catch(()=>({}));
+    if(gate.cap_reached){
+      setProgress(`Daily order cap already reached (${gate.orders_today}/${gate.max_orders_per_day}) — running HOLD checks only…`);
+    } else {
+      setProgress(`Simulating ${holdings.length} holdings (cached consensus)…`);
+    }
+
+    const r=await fetch('/api/trading/simulate-session',{
+      method:'POST',
+      headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({use_cached:true})
+    });
+    const d=await r.json();
+    if(!r.ok){
+      throw new Error(d.detail||d.error||`HTTP ${r.status}`);
+    }
+    const results=(d.results||[]).map(row=>({
+      symbol:row.symbol,
+      verdict:row.verdict,
+      order:row.order,
+      consensus_verdict:row.consensus_verdict,
+      skipped:row.skipped,
+      reason:row.reason||row.error,
+      error:row.error
+    }));
+    if(d.cap_reached){
+      results._capNote=d.cap_reason;
     }
     renderPaperSessionResults(results);
     await loadTradeStats();
@@ -3359,28 +3420,49 @@ async function runPaperSession(){
 }
 
 function renderPaperSessionResults(results){
-  let approved=0, rejected=0, errors=0;
+  let approved=0, rejected=0, errors=0, skipped=0;
   let html=`<div style="padding:12px 16px">`;
+  if(results._capNote){
+    html=`<div style="padding:8px 12px;margin-bottom:8px;background:var(--rdim);border:1px solid var(--red);border-radius:6px;font-size:13px;color:var(--red)">${daEsc(results._capNote)}</div>`+html;
+  }
   results.forEach(r=>{
-    if(r.error){ errors++; return; }
-    // /api/trading/consensus-order returns the gate verdict under r.verdict
+    if(r.error){ errors++;
+      html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--accent);font-weight:700;min-width:60px">${daEsc(r.symbol)}</span>
+        <span class="badge b-red" style="font-size:11px">ERROR</span>
+        <span style="color:var(--muted);font-size:13px">${daEsc(r.error)}</span>
+      </div>`;
+      return;
+    }
+    if(r.skipped){ skipped++;
+      html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--accent);font-weight:700;min-width:60px">${daEsc(r.symbol)}</span>
+        <span class="badge" style="font-size:11px">SKIPPED</span>
+        <span style="color:var(--muted);font-size:13px">${daEsc(r.reason||'cap reached')}</span>
+      </div>`;
+      return;
+    }
     const approved_flag=r.verdict?.approved||r.gate?.approved||r.approved||false;
     const status=r.order?.status||r.status||'—';
+    const isHold=(r.consensus_verdict||'').toUpperCase()==='HOLD'||r.verdict?.reason==='HOLD requires no execution';
     if(approved_flag) approved++; else rejected++;
     const color=approved_flag?'var(--green)':'var(--red)';
+    const badge=isHold?'b-yellow':approved_flag?'b-green':'b-red';
+    const label=isHold?'HOLD':approved_flag?'APPROVED':'REJECTED';
     html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
       <span style="color:var(--accent);font-weight:700;min-width:60px">${daEsc(r.symbol)}</span>
-      <span class="badge ${approved_flag?'b-green':'b-red'}" style="font-size:11px">${approved_flag?'APPROVED':'REJECTED'}</span>
+      <span class="badge ${badge}" style="font-size:11px">${daEsc(label)}</span>
       <span style="color:var(--muted);font-size:13px">${daEsc(r.verdict?.reason||r.gate?.reason||r.reason||status)}</span>
       ${r.order?.fill_qty?`<span style="color:${color};font-size:13px">${daEsc(r.order.fill_qty)} shares @ $${(r.order.fill_price||0).toFixed(2)}</span>`:''}
     </div>`;
   });
   const total=results.length;
-  html=`<div style="padding:8px 16px;background:var(--hover);display:flex;gap:16px;font-size:13px">
-    <span>${total} symbols processed</span>
+  html=`<div style="padding:8px 16px;background:var(--hover);display:flex;gap:16px;font-size:13px;flex-wrap:wrap">
+    <span>${daEsc(total)} symbols processed</span>
     <span style="color:var(--green)">${daEsc(approved)} approved</span>
-    <span style="color:var(--red)">${rejected} rejected</span>
-    ${errors?`<span style="color:var(--muted)">${errors} errors</span>`:''}
+    <span style="color:var(--red)">${daEsc(rejected)} rejected</span>
+    ${skipped?`<span style="color:var(--muted)">${daEsc(skipped)} skipped (cap)</span>`:''}
+    ${errors?`<span style="color:var(--muted)">${daEsc(errors)} errors</span>`:''}
   </div>`+html+`</div>`;
   $('pt-container').innerHTML=html;
 }
@@ -3413,6 +3495,13 @@ function renderGateVerdict(resp, sym, action){
   const gates=d.gates||{};
   const gateNames=['KILL_SWITCH','MARKET_HOURS','CONFIDENCE_FLOOR','POSITION_CAP','ORDER_RATE','CASH_FLOOR','DAILY_LOSS','DATA_FRESH'];
   const color=approved?'var(--green)':'var(--red)';
+  let failedAt=-1;
+  if(!approved){
+    for(let i=0;i<gateNames.length;i++){
+      const g=gateNames[i];
+      if(g in gates&&gates[g]===false){ failedAt=i; break; }
+    }
+  }
 
   let html=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
     <span style="font-size:28px;font-weight:700;color:${color}">${approved?'✅ APPROVED':'❌ REJECTED'}</span>
@@ -3422,13 +3511,15 @@ function renderGateVerdict(resp, sym, action){
     html+=`<div style="background:var(--rdim);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:14px;color:var(--red)">${daEsc(d.reason)}</div>`;
   }
   html+=`<div style="display:flex;flex-wrap:wrap;gap:8px">`;
-  gateNames.forEach(g=>{
+  gateNames.forEach((g,i)=>{
     const pass=gates[g];
     const known=g in gates;
-    const bg=!known?'var(--border)':pass?'var(--gdim)':'var(--rdim)';
-    const col=!known?'var(--muted)':pass?'var(--green)':'var(--red)';
-    const icon=!known?'⊘':pass?'✓':'✗';
-    html+=`<div style="background:${bg};border:1px solid ${col};border-radius:4px;padding:4px 10px;font-size:12px;color:${col}">${icon} ${daEsc(g.replace(/_/g,' '))}</div>`;
+    const skipped=!approved&&failedAt>=0&&i>failedAt&&known&&pass===false;
+    const bg=!known?'var(--border)':skipped?'var(--border)':pass?'var(--gdim)':'var(--rdim)';
+    const col=!known?'var(--muted)':skipped?'var(--muted)':pass?'var(--green)':'var(--red)';
+    const icon=!known?'⊘':skipped?'–':pass?'✓':'✗';
+    const gateLbl=g.replace(/_/g,' ')+(skipped?' (skipped)':'');
+    html+=`<div style="background:${bg};border:1px solid ${col};border-radius:4px;padding:4px 10px;font-size:12px;color:${col}">${icon} ${daEsc(gateLbl)}</div>`;
   });
   html+=`</div>`;
   $('gate-container').innerHTML=html;
@@ -3449,11 +3540,15 @@ async function runMainDebate(){
   btn.disabled=true; btn.textContent='⏳ Debating…';
   document.getElementById('main-debate-loading').style.display='block';
   document.getElementById('main-debate-result').style.display='none';
-  document.getElementById('main-debate-meta').textContent='calling Claude — ~15s…';
+  document.getElementById('main-debate-meta').textContent='calling Claude (cached consensus) — ~15s…';
   try {
-    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{method:'POST',headers:authHeaders()});
+    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{
+      method:'POST',
+      headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({use_cached:true})
+    });
     const r=await resp.json();
-    if(!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
+    if(!resp.ok||!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
     const dec=r.debate.decision, bull=r.debate.bull, bear=r.debate.bear;
     const aCol=aColors[dec.action]||'#e8eaf0';
     document.getElementById('main-debate-decision').innerHTML=

@@ -34,6 +34,17 @@ HEADERS      = {"User-Agent": "GeshFinancial/1.0 georgy75@gmail.com"}
 
 FILING_TYPES = ["10-K", "10-Q", "8-K"]
 
+# ETFs / funds have no issuer-level 10-K/10-Q — skip quietly instead of a failed CIK lookup.
+SEC_SKIP_SYMBOLS: frozenset[str] = frozenset({
+    "QQQ", "SPY", "IWM", "DIA", "VTI", "VOO", "EEM", "EFA", "SPCX", "ARKK", "SMH", "XLK",
+})
+
+_TICKER_CIK_CACHE: dict[str, str] | None = None
+
+# Cap fresh Claude analyses per dashboard run — without this, 10 holdings × 3 forms × 2
+# filings can queue 60+ sequential Haiku calls (~15-30 min) while the UI shows no progress.
+MAX_ANALYSES_PER_RUN = int(os.getenv("GESH_SEC_MAX_ANALYSES", "6"))
+
 SEC_ANALYSIS_PROMPT = """You are an expert SEC filing analyst. Analyze this filing excerpt and extract key financial intelligence.
 
 Return ONLY valid JSON — no markdown. Use double-quotes only. No apostrophes inside strings.
@@ -64,24 +75,68 @@ Be specific — reference actual numbers, percentages, dollar amounts from the f
 HIGH urgency = earnings miss/beat >10%, major guidance change, unexpected executive departure, regulatory action."""
 
 
+def _load_ticker_cik_map() -> dict[str, str]:
+    """SEC company_tickers.json — fallback when the atom company-info shape changes."""
+    global _TICKER_CIK_CACHE
+    if _TICKER_CIK_CACHE is not None:
+        return _TICKER_CIK_CACHE
+    mapping: dict[str, str] = {}
+    try:
+        r = requests.get("https://www.sec.gov/files/company_tickers.json", headers=HEADERS, timeout=15)
+        if r.status_code == 200:
+            for row in r.json().values():
+                ticker = str(row.get("ticker", "")).upper()
+                cik = str(row.get("cik_str", "")).strip()
+                if ticker and cik:
+                    mapping[ticker] = cik.zfill(10)
+    except Exception:
+        pass
+    _TICKER_CIK_CACHE = mapping
+    return mapping
+
+
 def _get_cik(symbol: str) -> str | None:
     """Resolve a ticker symbol to an SEC CIK number."""
+    sym = symbol.upper()
+    if sym in SEC_SKIP_SYMBOLS:
+        return None
     try:
-        # Use EDGAR's company search API
-        url = f"https://www.sec.gov/cgi-bin/browse-edgar?company=&CIK={symbol}&type=10-Q&dateb=&owner=include&count=1&search_text=&action=getcompany&output=atom"
+        url = (
+            f"https://www.sec.gov/cgi-bin/browse-edgar?company=&CIK={sym}"
+            f"&type=10-Q&dateb=&owner=include&count=1&search_text=&action=getcompany&output=atom"
+        )
         r = requests.get(url, headers=HEADERS, timeout=10)
-        if r.status_code != 200:
-            return None
-        root = ET.fromstring(r.text)
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
-        # Extract CIK from the first entry id
-        for entry in root.findall("atom:entry", ns):
-            link = entry.find("atom:id", ns)
-            if link is not None:
-                m = re.search(r'CIK=(\d+)', link.text or "")
+        if r.status_code == 200:
+            root = ET.fromstring(r.text)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            # 2025+ feed: <atom:cik> sits directly under <feed>, not inside <entry>.
+            cik_el = root.find("atom:cik", ns)
+            if cik_el is not None and cik_el.text:
+                return re.sub(r"\D", "", cik_el.text).zfill(10)
+            feed_id = root.find("atom:id", ns)
+            if feed_id is not None and feed_id.text:
+                m = re.search(r"CIK=(\d+)", feed_id.text)
                 if m:
                     return m.group(1).zfill(10)
-        return None
+            for entry in root.findall("atom:entry", ns):
+                link = entry.find("atom:id", ns)
+                if link is not None:
+                    m = re.search(r"CIK=(\d+)", link.text or "")
+                    if m:
+                        return m.group(1).zfill(10)
+    except Exception:
+        pass
+    return _load_ticker_cik_map().get(sym)
+
+
+def _parse_edgar_dt(raw: str) -> datetime | None:
+    """Normalize EDGAR atom timestamps (UTC, -04:00, etc.) to naive UTC for comparison."""
+    try:
+        text = raw.strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
     except Exception:
         return None
 
@@ -101,13 +156,10 @@ def _fetch_recent_filings(cik: str, form_type: str, days_back: int = 7) -> list[
 
         for entry in root.findall("atom:entry", ns):
             updated_el = entry.find("atom:updated", ns)
-            if updated_el is None:
+            if updated_el is None or not updated_el.text:
                 continue
-            try:
-                updated = datetime.fromisoformat(updated_el.text.replace("Z", "+00:00").replace("+00:00", ""))
-            except Exception:
-                continue
-            if updated < cutoff:
+            updated = _parse_edgar_dt(updated_el.text)
+            if updated is None or updated < cutoff:
                 continue
 
             title_el = entry.find("atom:title", ns)
@@ -213,6 +265,25 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
         conn.close()
 
 
+def _filing_already_in_db(filing_url: str) -> bool:
+    """True when this filing URL was already analyzed — skip redundant Claude calls."""
+    if not filing_url:
+        return False
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
+    if not os.path.exists(db_path):
+        return False
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sec_filings WHERE filing_url = ? LIMIT 1",
+            (filing_url,),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
 def _get_recent_from_db(symbols: list[str], days: int = 30) -> list[dict]:
     """Retrieve recent SEC analyses from DB."""
     from agent_db import agent_db_path
@@ -264,10 +335,14 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
       "as_of": str
     }
     """
-    results = []
+    results: list[dict] = []
     new_count = 0
+    skipped_cached = 0
+    analyses_done = 0
 
     for symbol in symbols:
+        if analyses_done >= MAX_ANALYSES_PER_RUN:
+            break
         print(f"  SEC: checking {symbol}...")
         cik = _get_cik(symbol)
         if not cik:
@@ -275,10 +350,31 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
             continue
 
         for form_type in FILING_TYPES:
+            if analyses_done >= MAX_ANALYSES_PER_RUN:
+                break
             filings = _fetch_recent_filings(cik, form_type, days_back=days_back)
-            for filing in filings[:2]:  # max 2 per type per symbol
+            for filing in filings[:1]:  # newest filing per type — enough for the dashboard
+                if analyses_done >= MAX_ANALYSES_PER_RUN:
+                    break
+                if _filing_already_in_db(filing["url"]):
+                    skipped_cached += 1
+                    continue
                 text = _fetch_filing_text(filing["url"])
                 if not text:
+                    # Still surface the filing so the dashboard isn't blank — metadata only.
+                    results.append({
+                        "symbol":        symbol.upper(),
+                        "form_type":     form_type,
+                        "filing_date":   filing["date"],
+                        "filing_url":    filing["url"],
+                        "action_signal": "NEUTRAL",
+                        "urgency":       "LOW",
+                        "analysis":      {
+                            "summary": f"{form_type} filed — full text unavailable for auto-analysis.",
+                            "action_signal": "NEUTRAL",
+                            "urgency": "LOW",
+                        },
+                    })
                     continue
                 analysis = _analyze_filing(symbol, filing, text)
                 _save_to_db(symbol, filing, analysis)
@@ -292,14 +388,55 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
                     "analysis":      analysis,
                 })
                 new_count += 1
+                analyses_done += 1
+
+    # When everything was cached (or no new EDGAR hits), still return DB rows so the
+    # dashboard renders immediately instead of looking like a failed run.
+    display = results if results else _get_recent_from_db(symbols, days=days_back)
 
     return {
         "new_filings": new_count,
-        "results": results,
+        "skipped_cached": skipped_cached,
+        "results": display,
         "as_of": datetime.now(timezone.utc).isoformat() + "Z",
     }
 
 
+def discover_filing_cards(symbols: list[str], days_back: int = 30) -> list[dict]:
+    """Lightweight EDGAR discovery (no Claude) — fills the SEC panel when DB is empty."""
+    cards: list[dict] = []
+    seen_urls: set[str] = set()
+    for symbol in symbols:
+        if symbol.upper() in SEC_SKIP_SYMBOLS:
+            continue
+        cik = _get_cik(symbol)
+        if not cik:
+            continue
+        for form_type in FILING_TYPES:
+            for filing in _fetch_recent_filings(cik, form_type, days_back=days_back)[:1]:
+                url = filing.get("url") or ""
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                cards.append({
+                    "symbol":        symbol.upper(),
+                    "form_type":     form_type,
+                    "filing_date":   filing["date"],
+                    "filing_url":    url,
+                    "action_signal": "NEUTRAL",
+                    "urgency":       "LOW",
+                    "analysis":      {
+                        "summary": f"Recent {form_type} on EDGAR — run agents for Claude analysis.",
+                        "action_signal": "NEUTRAL",
+                    },
+                })
+    cards.sort(key=lambda x: x.get("filing_date") or "", reverse=True)
+    return cards[:20]
+
+
 def get_filing_history(symbols: list[str], days: int = 30) -> list[dict]:
-    """Return stored filing analyses from DB without hitting EDGAR."""
-    return _get_recent_from_db(symbols, days=days)
+    """Return stored filing analyses from DB; fall back to EDGAR metadata when empty."""
+    rows = _get_recent_from_db(symbols, days=days)
+    if rows:
+        return rows
+    return discover_filing_cards(symbols, days_back=max(days, 30))

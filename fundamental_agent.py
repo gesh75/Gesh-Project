@@ -242,6 +242,63 @@ def _pre_score(stock: dict) -> float:
     return round(score, 1)
 
 
+def _is_valid_opportunity(row: dict) -> bool:
+    sym = str(row.get("symbol") or "").strip().upper()
+    return bool(sym) and sym not in {"NO_DATA", "N/A", "NONE", "UNKNOWN"}
+
+
+def _build_fallback_opportunities(valid: list[dict], n: int = 15) -> list[dict]:
+    """Deterministic top picks when Claude JSON fails — keeps the right panel populated."""
+    ranked = sorted(valid, key=_pre_score, reverse=True)[:n]
+    opps: list[dict] = []
+    for s in ranked:
+        score = _pre_score(s)
+        rev = s.get("revenue_growth")
+        earn = s.get("earnings_growth")
+        upside = s.get("analyst_upside")
+        ins = s.get("insider_signal", "NEUTRAL")
+        opps.append({
+            "symbol":              s["symbol"],
+            "company_name":        s.get("name") or s["symbol"],
+            "sector":              s.get("sector") or "",
+            "fundamental_score":   min(100, max(0, int(score))),
+            "momentum_gap":        "HIGH" if score >= 50 else "MEDIUM" if score >= 25 else "LOW",
+            "revenue_trend":       "ACCELERATING" if rev and rev > 15 else "STABLE",
+            "margin_trend":        "STABLE",
+            "balance_sheet":       "STABLE",
+            "valuation_vs_growth": "FAIR",
+            "insider_activity":    ins,
+            "key_catalyst":        "Pre-score rank from yfinance fundamentals",
+            "investment_horizon":  "3-6 months",
+            "thesis": (
+                f"Ranked #{len(opps)+1} by deterministic pre-score ({score:.0f}/100): "
+                f"rev {rev or 'n/a'}%, analyst upside {upside or 'n/a'}%."
+            ),
+            "risk":                "Claude deep scan unavailable — verify thesis manually.",
+            "pe_ratio":            s.get("forward_pe") or s.get("trailing_pe"),
+            "revenue_growth":      rev,
+            "earnings_growth":     earn,
+            "analyst_upside":      upside,
+            "source":              "pre_score_fallback",
+        })
+    return opps
+
+
+def _finalize_fundamental_result(result: dict, valid: list[dict]) -> dict:
+    """Ensure top_opportunities is non-empty and strip junk rows."""
+    opps = [o for o in (result.get("top_opportunities") or []) if _is_valid_opportunity(o)]
+    if not opps and valid:
+        opps = _build_fallback_opportunities(valid)
+        result["fallback"] = True
+        result.setdefault(
+            "market_summary",
+            "Claude scan unavailable — showing top names from the deterministic pre-score rank.",
+        )
+    result["top_opportunities"] = opps
+    result["stocks_analyzed"] = result.get("stocks_analyzed") or len(valid)
+    return result
+
+
 def _save_fundamental_scan(results: dict) -> None:
     from agent_db import agent_db_path
     db_path = str(agent_db_path())
@@ -274,11 +331,16 @@ def get_latest_fundamental_scan() -> dict | None:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        row = conn.execute("SELECT scan_json, created_at FROM fundamental_scans ORDER BY created_at DESC LIMIT 1").fetchone()
-        if row:
+        rows = conn.execute(
+            "SELECT scan_json, created_at FROM fundamental_scans ORDER BY created_at DESC LIMIT 8"
+        ).fetchall()
+        for row in rows:
             data = json.loads(row[0])
-            data["cached_at"] = row[1]
-            return data
+            opps = [o for o in (data.get("top_opportunities") or []) if _is_valid_opportunity(o)]
+            if opps:
+                data["top_opportunities"] = opps
+                data["cached_at"] = row[1]
+                return data
         return None
     finally:
         conn.close()
@@ -310,7 +372,10 @@ def run_fundamental_scan(universe: list[str] | None = None, top_n_for_ai: int = 
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        return {"error": "No ANTHROPIC_API_KEY"}
+        result = _finalize_fundamental_result({"error": "No ANTHROPIC_API_KEY"}, valid)
+        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        _save_fundamental_scan(result)
+        return result
 
     client = anthropic.Anthropic(api_key=api_key)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -343,8 +408,12 @@ def run_fundamental_scan(universe: list[str] | None = None, top_n_for_ai: int = 
 
         result["stocks_analyzed"] = len(valid)
         result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        result = _finalize_fundamental_result(result, valid)
         _save_fundamental_scan(result)
         return result
 
     except Exception as e:
-        return {"error": str(e), "stocks_analyzed": len(valid), "as_of": datetime.now(timezone.utc).isoformat() + "Z"}
+        result = _finalize_fundamental_result({"error": str(e)}, valid)
+        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        _save_fundamental_scan(result)
+        return result
