@@ -94,9 +94,11 @@ try:
     for rd in (regime_data.get('regimes') or []):
         if not isinstance(rd, dict):
             continue
+        _adx = float(rd.get('adx') or 0)
+        _rsi = float(rd.get('rsi') or 0)
         regime_summary_lines.append(
             f"  {rd.get('symbol','?')}: {rd.get('regime','UNKNOWN')}  "
-            f"ADX={rd.get('adx',0):.1f}  RSI={rd.get('rsi',0):.1f}")
+            f"ADX={_adx:.1f}  RSI={_rsi:.1f}")
     regime_summary = "MARKET REGIME CONTEXT:\n" + "\n".join(regime_summary_lines)
     print(regime_summary)
     # FRED macro layer lives only in gesh-project/regime.py (the trading copy
