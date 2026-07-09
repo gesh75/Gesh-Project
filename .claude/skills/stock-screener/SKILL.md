@@ -1,3 +1,9 @@
+---
+name: stock-screener
+description: Multi-factor AI stock screener — weekly picks and market opportunities.
+model: grok-build
+---
+
 # Skill: AI Stock Screener
 
 ## Trigger phrases

@@ -1035,6 +1035,19 @@ def get_portfolio():
         eq["day_change"]     = round(curr - prev, 2)
         eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0, 2)
 
+        # Surface snapshot age for the dashboard staleness badge (>24h → amber banner).
+        raw_as_of = (payload.get("as_of") or "").strip()
+        if raw_as_of:
+            try:
+                ts = _dt.fromisoformat(raw_as_of.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
+                age_s = (_dt.now(_tz.utc) - ts).total_seconds()
+                payload.setdefault("snapshot_age_seconds", round(age_s))
+                payload["stale_snapshot"] = age_s > 86400
+            except Exception:
+                pass
+
         # Log the equity snapshot for ECG only for LIVE data — never persist stale snapshot
         # values as if they were a fresh tick (would corrupt the equity curve).
         if not payload.get("offline"):
@@ -1543,12 +1556,17 @@ def sections_status():
         newest = max(stamps, key=lambda s: s["ran_at"] or "")
         sig = {"ran_at": newest["ran_at"], "fresh": any(s["fresh"] for s in stamps)}
 
+    snap = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else {}
+    snap_at = snap.get("fetched_at")
+    overview = {"ran_at": snap_at, "fresh": _is_fresh(snap_at)} if snap_at else {"ran_at": None, "fresh": False}
+
     out = {
-        "overview":     {"ran_at": None, "fresh": True},   # always live
+        "overview":     overview,
         "analysis":     _stamp("ai_result"),
         "daily":        _stamp("ai_result"),
         "risk":         _stamp("monte_carlo"),
         "radar":        _stamp("screener"),
+        "intelligence": _stamp("regime"),
         "signals":      sig,
     }
     return {k: v for k, v in out.items() if v is not None}

@@ -1,3 +1,9 @@
+---
+name: sec-watcher
+description: SEC EDGAR filing watch — 10-K, 10-Q, 8-K alerts and filing analysis.
+model: grok-build
+---
+
 # Skill: SEC Filing Watcher Agent
 
 ## Trigger phrases

@@ -1,3 +1,9 @@
+---
+name: fundamental-scanner
+description: Fundamental momentum scanner — earnings acceleration, PEG, insider buying, undervalued stocks.
+model: grok-build
+---
+
 # Skill: Fundamental Momentum Scanner
 
 ## Trigger phrases

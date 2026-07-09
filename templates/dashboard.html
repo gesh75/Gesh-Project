@@ -1295,9 +1295,23 @@ function setTs(asOf,ageS){
 // Single source of truth for the connection badge/timestamp from an /api/portfolio payload —
 // both loaders MUST call this so a cached (offline) snapshot is never shown as green "Live"
 // (Codex MEDIUM-1). Snapshot fallback → amber "Cached · as of …"; live → green "Live".
+function updateSnapshotStalenessBanner(stale,ageS,asOf){
+  const bar=$('alert-bar'),inner=$('alert-bar-inner'); if(!bar||!inner) return;
+  inner.querySelectorAll('.snap-stale-banner').forEach(e=>e.remove());
+  if(!stale) return;
+  const h=ageS!=null?Math.floor(ageS/3600):null;
+  const ageTxt=h!=null?(h>=24?Math.floor(h/24)+'d':h+'h'):'';
+  const when=asOf?new Date(asOf).toLocaleString():'';
+  inner.insertAdjacentHTML('beforeend',
+    `<div class="snap-stale-banner" style="flex:1 1 100%;padding:8px 12px;border-radius:5px;background:rgba(255,152,0,.12);border:1px solid rgba(255,152,0,.35);color:var(--amber);font-size:12px">⚠ Portfolio snapshot is stale${ageTxt?(' · '+daEsc(ageTxt)+' old'):''}${when?(' · as of '+daEsc(when)):''} — run the daily chain or refresh live Robinhood data.</div>`);
+  bar.style.display='block';
+}
 function applyPortfolioConn(d){
-  setConn(true, !!(d&&d.offline));
-  setTs(d&&d.offline?d.as_of:null, d&&d.offline?d.snapshot_age_seconds:null);
+  const ageS=d&&d.snapshot_age_seconds;
+  const stale=!!(d&&d.stale_snapshot)||(ageS!=null&&ageS>86400);
+  setConn(true, !!(d&&d.offline)||stale);
+  setTs(d&&(d.offline||stale)?d.as_of:null, ageS!=null?ageS:null);
+  updateSnapshotStalenessBanner(stale, ageS, d&&d.as_of);
 }
 
 // Customer sessions: the server masks dollars to a $100k model book and tags the

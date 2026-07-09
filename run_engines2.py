@@ -121,6 +121,8 @@ except Exception as e:
     print(f"  ERROR: {e}")
     traceback.print_exc()
     results['regime'] = {}
+    results.pop('regime_ran_at', None)   # don't leave a stale freshness stamp from MERGE
+    results.pop('macro', None)
     regime_summary = "MARKET REGIME CONTEXT: unavailable"
 
 # ── 2. Consensus (per holding) ────────────────────────────────────────────────

@@ -172,7 +172,8 @@ def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
 
 def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
     """Save filing analysis to SQLite."""
-    db_path = os.path.join(os.path.dirname(__file__), "gesh.db")
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("""
@@ -214,7 +215,8 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
 
 def _get_recent_from_db(symbols: list[str], days: int = 30) -> list[dict]:
     """Retrieve recent SEC analyses from DB."""
-    db_path = os.path.join(os.path.dirname(__file__), "gesh.db")
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
     if not os.path.exists(db_path):
         return []
     conn = sqlite3.connect(db_path)

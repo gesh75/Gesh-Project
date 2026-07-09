@@ -6,6 +6,7 @@ description: >
   snapshot, all engines, Claude deep analysis, paper/risk-gate audit, and the
   HTML report. Use whenever the user says "run analysis", "daily analysis",
   "check my portfolio", "what should I do today", or "run the GESH report".
+model: grok-build
 ---
 
 # GESH Daily Portfolio Analysis

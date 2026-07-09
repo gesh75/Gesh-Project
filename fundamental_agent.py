@@ -243,7 +243,8 @@ def _pre_score(stock: dict) -> float:
 
 
 def _save_fundamental_scan(results: dict) -> None:
-    db_path = os.path.join(os.path.dirname(__file__), "gesh.db")
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("""
@@ -260,7 +261,8 @@ def _save_fundamental_scan(results: dict) -> None:
 
 
 def get_latest_fundamental_scan() -> dict | None:
-    db_path = os.path.join(os.path.dirname(__file__), "gesh.db")
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
     if not os.path.exists(db_path):
         return None
     conn = sqlite3.connect(db_path)

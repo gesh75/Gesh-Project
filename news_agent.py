@@ -245,7 +245,8 @@ def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
 # ─── DB persistence ───────────────────────────────────────────────────────────
 
 def _save_sentiment(symbol: str, result: dict) -> None:
-    db_path = os.path.join(os.path.dirname(__file__), "gesh.db")
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("""
@@ -269,7 +270,8 @@ def _save_sentiment(symbol: str, result: dict) -> None:
 
 
 def _get_sentiment_history(symbols: list[str], days: int = 7) -> list[dict]:
-    db_path = os.path.join(os.path.dirname(__file__), "gesh.db")
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
     if not os.path.exists(db_path):
         return []
     conn = sqlite3.connect(db_path)
@@ -312,7 +314,8 @@ def _get_sentiment_history(symbols: list[str], days: int = 7) -> list[dict]:
 
 def _compute_rolling_score(symbol: str, days: int = 7) -> float | None:
     """Compute average sentiment score over the last N days from DB."""
-    db_path = os.path.join(os.path.dirname(__file__), "gesh.db")
+    from agent_db import agent_db_path
+    db_path = str(agent_db_path())
     if not os.path.exists(db_path):
         return None
     conn = sqlite3.connect(db_path)

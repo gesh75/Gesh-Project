@@ -1,3 +1,9 @@
+---
+name: news-sentiment
+description: News sentiment scan for holdings and symbols — Yahoo, Finnhub, Polymarket mood.
+model: grok-build
+---
+
 # Skill: News Sentiment AI Agent
 
 ## Trigger phrases

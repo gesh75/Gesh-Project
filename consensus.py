@@ -23,11 +23,11 @@ Final: score = sum(votes) / len(voting nodes)
 from __future__ import annotations
 import sqlite3, json, numpy as np
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 import yfinance as yf
 import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
+from agent_db import agent_db_path
 
-DB_PATH = Path(__file__).parent / "gesh.db"
+DB_PATH = agent_db_path()
 VOTE_BULLISH  =  1
 VOTE_NEUTRAL  =  0
 VOTE_BEARISH  = -1

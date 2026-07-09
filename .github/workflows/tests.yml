@@ -88,7 +88,7 @@ jobs:
           # untested app modules are VISIBLE in the CI log instead of hidden behind a
           # 4-module allowlist. No --cov-fail-under yet — this establishes the real
           # baseline first; a floor can be added once the number is known.
-          pytest tests/ -q --cov=. --cov-report=term-missing
+          pytest tests/ -q --cov=. --cov-report=term-missing --cov-fail-under=45
 
   # Separate REQUIRED gate for customer data-isolation (Codex 4th-pass P1): the
   # leak sweep + XSS-wiring guard run in-process against a deterministic seeded

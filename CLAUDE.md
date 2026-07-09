@@ -200,6 +200,23 @@ prompt += "\n" + cz_report["summary"]
 
 ---
 
+## Continuous Improvement
+See the living `GAPS_AND_IMPROVEMENTS_2026-07-09.md` (created by deep Grok analysis 2026-07-09). It ranks gaps and contains the prioritized roadmap to make GESH the best product. Update it after major milestones.
+
+## Agent harness model (Grok / Cursor)
+
+**GESH coding agent:** use **Grok 4.5** — model id `grok-build` (alias `grok-4.5`). Do not use `grok-composer-2.5-fast` for analysis or implementation in this repo.
+
+| Harness | How |
+|---------|-----|
+| Cursor | Model picker → **grok-build** or **grok-4.5** |
+| Grok CLI | `grok --agent gesh` or `grok -m grok-build` |
+| Project rules | `AGENTS.md`, `.grok/agents/gesh.md`, `.grok/rules/grok-model.md` |
+
+Analysis skills under `.claude/skills/` pin `model: grok-build` in frontmatter.
+
+---
+
 ## AI models in use
 | Model | Provider | Used for | Why |
 |-------|----------|----------|-----|

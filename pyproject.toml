@@ -48,4 +48,8 @@ omit = [
 
 [tool.coverage.report]
 skip_empty = true
+fail_under = 55
 exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:"]
+# Target: raise to 70 then 80%+ as more pure logic (consensus/kelly/risk/engines)
+# moves to or is covered via gesh-core. See GAPS_AND_IMPROVEMENTS_*.md
+# Whole-repo view intentionally exposes gaps in server.py, agents, etc.

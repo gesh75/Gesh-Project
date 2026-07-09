@@ -1,0 +1,14 @@
+---
+description: GESH project uses Grok 4.5 (grok-build) for analysis and implementation
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+## Model
+
+For all work in `gesh-project`, use **Grok 4.5** via model id **grok-build** (alias **grok-4.5**).
+
+Do not use `grok-composer-2.5-fast` for GESH financial analysis or code changes in this repo.
+
+Product LLMs (Claude Sonnet/Haiku, Gemini) inside Python scripts are separate — this rule is for the IDE agent only.
