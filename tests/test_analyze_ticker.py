@@ -264,7 +264,8 @@ def test_concurrent_same_symbol_spends_one_llm_call(monkeypatch):
 
     # Call the endpoint function directly (its Depends auth gate is route-level and
     # covered by the route tests above) so both coroutines share one event loop.
-    class _Req:                               # endpoint only reads .json()
+    class _Req:                               # endpoint reads .json() + (usage-log) .cookies
+        cookies: dict = {}                    # empty → _session_email resolves without error
         async def json(self):
             return {"symbol": "AAPL"}
 

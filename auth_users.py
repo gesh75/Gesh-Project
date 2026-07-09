@@ -710,9 +710,14 @@ def log_usage(email: str | None, event: str, detail: str = "") -> None:
 
 def get_tier(email: str) -> str | None:
     """The user's billing tier ('observer' | 'trader' | 'desk'), set by the Lemon
-    Squeezy webhook on provision. None for unknown users or pre-billing rows."""
+    Squeezy webhook on provision. None for unknown/pre-billing rows AND for
+    INACTIVE users — revoke clears is_active but NOT tier, so a churned/revoked
+    account must not keep a scaled quota multiplier via a stale tier. Gating the
+    lookup on is_active makes tier-scaling authoritative on active accounts only."""
     u = get_user(email)
-    return (u or {}).get("tier") or None
+    if not u or not u.get("is_active"):
+        return None
+    return u.get("tier") or None
 
 
 def usage_count_24h(email: str, event: str) -> int:

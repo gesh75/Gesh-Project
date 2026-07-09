@@ -1708,8 +1708,13 @@ _TIER_QUOTA_MULT = {"observer": 1, "trader": 2, "desk": 5}
 
 def _check_customer_quota(email: str | None, event: str) -> None:
     """Raise 429 when the user's rolling-24h count of `event` has hit their
-    tier-scaled cap. Fail-open on metering errors — quota must never take the
-    product down."""
+    tier-scaled cap.
+
+    FAILS CLOSED (503) on a metering read error: this gates PAID Claude spend, so
+    an unverifiable quota must DENY the spend, never grant an uncapped one — the
+    old fail-open let a locked/corrupt usage table turn into unbounded API cost
+    (the only other backstop, LLM_DAILY_BUDGET_USD, is off by default). Cached
+    results still serve free, so a transient 503 does not blank the product."""
     if not email or auth_users.is_owner(email):
         return
     try:
@@ -1717,15 +1722,16 @@ def _check_customer_quota(email: str | None, event: str) -> None:
         if base <= 0:
             return
         limit = base * _TIER_QUOTA_MULT.get(auth_users.get_tier(email), 1)
-        if auth_users.usage_count_24h(email, event) >= limit:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results "
-                       f"remain free; the limit resets on a rolling 24-hour window.")
-    except HTTPException:
-        raise
+        used = auth_users.usage_count_24h(email, event)
     except Exception:
-        return
+        logger.warning("quota metering unavailable (%s/%s) — denying spend (fail-closed)", email, event)
+        raise HTTPException(status_code=503,
+                            detail="Usage metering temporarily unavailable — please retry shortly.")
+    if used >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results "
+                   f"remain free; the limit resets on a rolling 24-hour window.")
 
 
 # Short-TTL shared cache for the single-ticker AI card. The card is PUBLIC per-ticker
