@@ -1016,11 +1016,41 @@ def _resolved_payload(_watchlist=None) -> dict:
         return load_snapshot_payload()   # re-raises RobinhoodOfflineError only if NO snapshot exists
 
 
+def _regime_for_symbols(symbols: list[str], *, offline: bool = False) -> dict:
+    """Regime bundle for analysis endpoints. Prefers engine_results cache when the
+    portfolio payload is offline or when a fresh (<4h) cache exists."""
+    cached, ran = None, None
+    try:
+        eng = _load_engine_results()
+        cached = eng.get("regime")
+        ran = eng.get("regime_ran_at")
+    except Exception:
+        pass
+
+    if offline and cached and cached.get("regimes"):
+        return cached
+
+    if not offline and cached and cached.get("regimes") and ran:
+        try:
+            age_s = (_dt.now(_tz.utc) - _dt.fromisoformat(str(ran))).total_seconds()
+            if age_s < 4 * 3600:
+                return cached
+        except Exception:
+            pass
+
+    try:
+        return detect_regimes(symbols)
+    except Exception:
+        if cached and cached.get("regimes"):
+            return cached
+        return {"regimes": [], "regime_summary": "Live regime unavailable."}
+
+
 @app.get("/api/portfolio")
 def get_portfolio():
     try:
         try:
-            payload = build_data_payload(DEFAULT_WATCHLIST)
+            payload = _resolved_payload()
         except RobinhoodOfflineError as live_err:
             # ONLY a confirmed-offline session degrades to the MCP-built snapshot (Option A).
             # Any OTHER exception is a real bug — it must NOT be masked by serving stale data;
@@ -1063,9 +1093,12 @@ def get_portfolio():
 @app.post("/api/analyze", dependencies=[Depends(require_api_key)])
 def run_analysis():
     try:
-        payload  = build_data_payload(DEFAULT_WATCHLIST)
+        payload  = _resolved_payload()
         analysis = analyze_portfolio(payload)
-        return {"status": "ok", "analysis": analysis, "model": MODEL}
+        resp = {"status": "ok", "analysis": analysis, "model": MODEL}
+        if payload.get("offline"):
+            resp["offline"] = True
+        return resp
     except Exception as e:
         raise _server_error(e)
 
@@ -1075,7 +1108,8 @@ def run_analysis():
 @app.post("/api/deep-analysis", dependencies=[Depends(require_api_key)])
 def run_deep_analysis():
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
+        offline = bool(payload.get("offline"))
         eq      = payload["equity_summary"]
         prev    = eq.get("adjusted_equity_previous_close", 0)
         curr    = eq.get("portfolio_equity", 0)
@@ -1084,8 +1118,8 @@ def run_deep_analysis():
 
         symbols = [h["symbol"] for h in payload["holdings"]]
 
-        # Regime detection injected into prompt
-        regime_data    = detect_regimes(symbols)
+        # Regime detection injected into prompt (cached when portfolio is offline)
+        regime_data    = _regime_for_symbols(symbols, offline=offline)
         regime_context = regime_data.get("regime_summary")
 
         # Market intelligence (analyst targets, performance, insiders, ownership)
@@ -1110,6 +1144,9 @@ def run_deep_analysis():
             "market":   mkt,
             "run_id":   run_id,
         }
+        if offline:
+            resp["offline"] = True
+            resp["degraded"] = True
         _save_engine_result("ai_result", resp)
         return resp
     except Exception as e:
@@ -1121,11 +1158,13 @@ def run_deep_analysis():
 @app.post("/api/monte-carlo", dependencies=[Depends(require_api_key)])
 def monte_carlo():
     try:
-        payload  = build_data_payload(DEFAULT_WATCHLIST)
+        payload  = _resolved_payload()
         holdings = payload["holdings"]
         eq_sum   = payload["equity_summary"]
         result   = run_monte_carlo(holdings, eq_sum)
         resp = {"status": "ok", "data": result}
+        if payload.get("offline"):
+            resp["offline"] = True
         _save_engine_result("monte_carlo", resp)
         return resp
     except Exception as e:
@@ -1235,7 +1274,7 @@ def analysis_detail(run_id: int):
 @app.get("/api/market-data")
 def market_data_endpoint():
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         symbols = [h["symbol"] for h in payload["holdings"]]
         result  = get_all_market_data(symbols)
         return {"status": "ok", "data": result}
@@ -1249,7 +1288,7 @@ def market_data_endpoint():
 def agent_sec():
     """Watch SEC filings for current holdings (last 7 days)."""
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         symbols = [h["symbol"] for h in payload["holdings"]]
         result  = watch_filings(symbols, days_back=7)
         return {"status": "ok", "data": result}
@@ -1261,7 +1300,7 @@ def agent_sec():
 def agent_sec_history(days: int = 30):
     """Return cached SEC filing analyses from DB."""
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         symbols = [h["symbol"] for h in payload["holdings"]]
         result  = get_filing_history(symbols, days=days)
         return {"status": "ok", "data": result}
@@ -1273,7 +1312,7 @@ def agent_sec_history(days: int = 30):
 def agent_news():
     """Scan news sentiment for current holdings + watchlist."""
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         symbols = list({h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]})
         result  = scan_news(symbols, days_back=7)
         return {"status": "ok", "data": result}
@@ -1285,7 +1324,7 @@ def agent_news():
 def agent_news_history(days: int = 7):
     """Return cached news sentiment from DB."""
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         symbols = list({h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]})
         result  = get_news_history(symbols, days=days)
         return {"status": "ok", "data": result}
@@ -1339,7 +1378,7 @@ def run_screener():
 @app.post("/api/kelly", dependencies=[Depends(require_api_key)])
 def kelly_endpoint():
     try:
-        payload        = build_data_payload(DEFAULT_WATCHLIST)
+        payload        = _resolved_payload()
         holdings       = payload["holdings"]
         total_equity   = payload["equity_summary"].get("portfolio_equity", 0)
         symbols        = [h["symbol"] for h in holdings]
@@ -1364,6 +1403,8 @@ def kelly_endpoint():
 
         result         = run_kelly_analysis(holdings, total_equity, analyst_upside, ai_verdicts)
         resp = {"status": "ok", "data": result, "total_equity": total_equity}
+        if payload.get("offline"):
+            resp["offline"] = True
         _save_engine_result("kelly", resp)
         return resp
     except Exception as e:
@@ -1434,7 +1475,7 @@ def price_chart(symbol: str, period: str = "1mo"):
 @app.post("/api/consensus", dependencies=[Depends(require_api_key)])
 def consensus_endpoint():
     try:
-        payload      = build_data_payload(DEFAULT_WATCHLIST)
+        payload      = _resolved_payload()
         holdings     = payload["holdings"]
         total_equity = payload["equity_summary"].get("portfolio_equity", 0)
         result       = run_consensus_portfolio(holdings, total_equity)
@@ -1582,7 +1623,7 @@ def fft_cycles_endpoint():
     per holding. Zero extra cost — pure math on yfinance price data.
     """
     try:
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         symbols = [h["symbol"] for h in payload["holdings"]]
         result  = batch_fft_cycles(symbols)
         return {"status": "ok", "data": result}
@@ -2263,7 +2304,7 @@ def gemini_analyze_endpoint():
     holdings, equity_summary = [], {}
     data_error: str | None = None
     try:
-        payload        = build_data_payload(DEFAULT_WATCHLIST)
+        payload        = _resolved_payload()
         holdings       = payload.get("holdings", [])
         equity_summary = payload.get("equity_summary", {})
     except Exception as de:
@@ -2396,7 +2437,7 @@ async def consolidation_zone_batch(request: Request):
         body = await request.json()
         symbols = body.get("symbols", [])
         if not symbols:
-            payload = build_data_payload(DEFAULT_WATCHLIST)
+            payload = _resolved_payload()
             symbols = list({h["symbol"] for h in payload["holdings"]} |
                            {w["symbol"] for w in payload["watchlist"]})
         _interval = body.get("interval", "5m")
@@ -2433,7 +2474,7 @@ async def sector_hot_batch(request: Request):
         body = await request.json()
         symbols = body.get("symbols", [])
         if not symbols:
-            payload = build_data_payload(DEFAULT_WATCHLIST)
+            payload = _resolved_payload()
             symbols = list({h["symbol"] for h in payload["holdings"]} |
                            {w["symbol"] for w in payload["watchlist"]})
         result = batch_sector_check(symbols)
@@ -2519,7 +2560,7 @@ async def paper_run_endpoint(request: Request):
     """
     try:
         body = await request.json()
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         total = payload["equity_summary"].get("portfolio_equity", 0)
         results = run_paper_session(
             action_plan=body.get("action_plan", []),
@@ -2572,7 +2613,7 @@ async def trading_dry_run(request: Request):
             take_profit=body.get("take_profit"),
             rationale=body.get("rationale"),
         )
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         verdict = risk_gate_evaluate(intent, payload)
         return {"status": "ok", "data": verdict.to_dict()}
     except KeyError as e:
@@ -2599,7 +2640,7 @@ async def trading_paper_order(request: Request):
             take_profit=body.get("take_profit"),
             rationale=body.get("rationale"),
         )
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
         verdict = risk_gate_evaluate(intent, payload)
         result = execution_place(intent, verdict, payload)
         return {
@@ -2623,7 +2664,7 @@ async def trading_consensus_order(request: Request):
     try:
         body = await request.json()
         symbol = body["symbol"].upper()
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
 
         # Run consensus for symbol
         from consensus import run_consensus_holding
@@ -2660,7 +2701,7 @@ async def trading_deep_debate(symbol: str):
     """
     try:
         symbol = _safe_symbol(symbol)
-        payload = build_data_payload(DEFAULT_WATCHLIST)
+        payload = _resolved_payload()
 
         eq = cost = price = 0.0
         total_eq = float((payload.get("equity_summary") or {}).get("portfolio_equity") or 1.0)
