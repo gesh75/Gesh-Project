@@ -1523,7 +1523,7 @@ function buildAnalystStrip(sym, mkt){
   const perfChip=(label,val)=>{
     if(val==null) return '';
     const c=val>=0?'var(--green)':'var(--red)';
-    return `<span class="perf-chip" style="color:${daEsc(c)}">${label}: ${val>=0?'+':''}${val.toFixed(1)}%</span>`;
+    return `<span class="perf-chip" style="color:${daEsc(c)}">${daEsc(label)}: ${val>=0?'+':''}${val.toFixed(1)}%</span>`;
   };
   const insiderHtml=ins.length?ins.map(t=>{
     const ic=t.is_buy?'🟢':'🔴';
@@ -3451,7 +3451,7 @@ function renderPaperSessionResults(results){
     const label=isHold?'HOLD':approved_flag?'APPROVED':'REJECTED';
     html+=`<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)">
       <span style="color:var(--accent);font-weight:700;min-width:60px">${daEsc(r.symbol)}</span>
-      <span class="badge ${badge}" style="font-size:11px">${label}</span>
+      <span class="badge ${badge}" style="font-size:11px">${daEsc(label)}</span>
       <span style="color:var(--muted);font-size:13px">${daEsc(r.verdict?.reason||r.gate?.reason||r.reason||status)}</span>
       ${r.order?.fill_qty?`<span style="color:${color};font-size:13px">${daEsc(r.order.fill_qty)} shares @ $${(r.order.fill_price||0).toFixed(2)}</span>`:''}
     </div>`;
@@ -3495,6 +3495,13 @@ function renderGateVerdict(resp, sym, action){
   const gates=d.gates||{};
   const gateNames=['KILL_SWITCH','MARKET_HOURS','CONFIDENCE_FLOOR','POSITION_CAP','ORDER_RATE','CASH_FLOOR','DAILY_LOSS','DATA_FRESH'];
   const color=approved?'var(--green)':'var(--red)';
+  let failedAt=-1;
+  if(!approved){
+    for(let i=0;i<gateNames.length;i++){
+      const g=gateNames[i];
+      if(g in gates&&gates[g]===false){ failedAt=i; break; }
+    }
+  }
 
   let html=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
     <span style="font-size:28px;font-weight:700;color:${color}">${approved?'✅ APPROVED':'❌ REJECTED'}</span>
@@ -3504,13 +3511,15 @@ function renderGateVerdict(resp, sym, action){
     html+=`<div style="background:var(--rdim);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:14px;color:var(--red)">${daEsc(d.reason)}</div>`;
   }
   html+=`<div style="display:flex;flex-wrap:wrap;gap:8px">`;
-  gateNames.forEach(g=>{
+  gateNames.forEach((g,i)=>{
     const pass=gates[g];
     const known=g in gates;
-    const bg=!known?'var(--border)':pass?'var(--gdim)':'var(--rdim)';
-    const col=!known?'var(--muted)':pass?'var(--green)':'var(--red)';
-    const icon=!known?'⊘':pass?'✓':'✗';
-    html+=`<div style="background:${bg};border:1px solid ${col};border-radius:4px;padding:4px 10px;font-size:12px;color:${col}">${icon} ${daEsc(g.replace(/_/g,' '))}</div>`;
+    const skipped=!approved&&failedAt>=0&&i>failedAt&&known&&pass===false;
+    const bg=!known?'var(--border)':skipped?'var(--border)':pass?'var(--gdim)':'var(--rdim)';
+    const col=!known?'var(--muted)':skipped?'var(--muted)':pass?'var(--green)':'var(--red)';
+    const icon=!known?'⊘':skipped?'–':pass?'✓':'✗';
+    const gateLbl=g.replace(/_/g,' ')+(skipped?' (skipped)':'');
+    html+=`<div style="background:${bg};border:1px solid ${col};border-radius:4px;padding:4px 10px;font-size:12px;color:${col}">${icon} ${daEsc(gateLbl)}</div>`;
   });
   html+=`</div>`;
   $('gate-container').innerHTML=html;
@@ -3531,11 +3540,15 @@ async function runMainDebate(){
   btn.disabled=true; btn.textContent='⏳ Debating…';
   document.getElementById('main-debate-loading').style.display='block';
   document.getElementById('main-debate-result').style.display='none';
-  document.getElementById('main-debate-meta').textContent='calling Claude — ~15s…';
+  document.getElementById('main-debate-meta').textContent='calling Claude (cached consensus) — ~15s…';
   try {
-    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{method:'POST',headers:authHeaders()});
+    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{
+      method:'POST',
+      headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({use_cached:true})
+    });
     const r=await resp.json();
-    if(!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
+    if(!resp.ok||!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
     const dec=r.debate.decision, bull=r.debate.bull, bear=r.debate.bear;
     const aCol=aColors[dec.action]||'#e8eaf0';
     document.getElementById('main-debate-decision').innerHTML=

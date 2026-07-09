@@ -69,6 +69,18 @@ def test_holding_consensus_args_from_holdings():
     assert args["current_price"] == 95
 
 
+def test_upstream_unavailable_maps_to_503():
+    try:
+        import anthropic
+        err = anthropic.APIConnectionError(request=None)  # type: ignore[arg-type]
+    except Exception:
+        pytest.skip("anthropic SDK not installed")
+    resp = server._upstream_unavailable_error(err)
+    assert resp is not None
+    assert resp.status_code == 503
+    assert "Claude API unreachable" in resp.detail
+
+
 def test_gate_status_endpoint(monkeypatch):
     from fastapi.testclient import TestClient
 

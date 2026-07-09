@@ -103,8 +103,44 @@ def _server_error(exc: Exception) -> HTTPException:
         # clean 503 (frontend renders this as "Offline") instead of a 500 + traceback.
         logger.warning("Robinhood offline: %s", exc)
         return HTTPException(status_code=503, detail=str(exc))
+    upstream = _upstream_unavailable_error(exc)
+    if upstream is not None:
+        logger.warning("Upstream unavailable: %s", exc)
+        return upstream
     logger.exception("Unhandled server error: %s", exc)
     return HTTPException(status_code=500, detail="Internal server error")
+
+
+def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
+    """Map known network / LLM-provider outages to a user-actionable 503."""
+    try:
+        import anthropic
+        if isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError)):
+            return HTTPException(
+                status_code=503,
+                detail="Claude API unreachable — check network connection and retry",
+            )
+        if isinstance(exc, anthropic.RateLimitError):
+            return HTTPException(
+                status_code=503,
+                detail="Claude API rate limit — wait a minute and retry",
+            )
+    except ImportError:
+        pass
+    if isinstance(exc, EnvironmentError) and "ANTHROPIC" in str(exc).upper():
+        return HTTPException(status_code=503, detail=str(exc))
+    cause = exc.__cause__ or exc.__context__
+    if cause is not exc:
+        nested = _upstream_unavailable_error(cause)
+        if nested is not None:
+            return nested
+    err_name = type(exc).__name__
+    if err_name in ("ConnectError", "ConnectionError", "TimeoutError", "gaierror"):
+        return HTTPException(
+            status_code=503,
+            detail="Network unreachable — check connection and retry",
+        )
+    return None
 
 
 _ALLOWED_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
@@ -2873,26 +2909,24 @@ async def trading_simulate_session(request: Request):
 
 
 @app.post("/api/trading/deep-debate/{symbol}", dependencies=[Depends(require_api_key)])
-async def trading_deep_debate(symbol: str):
+async def trading_deep_debate(symbol: str, request: Request):
     """
     Bull / Bear debate engine: haiku x2 (bull + bear) → sonnet x1 (PM synthesis).
+    Body: {use_cached?: bool} — default true, uses today's engine_results consensus.
     Returns structured decision with price target, conviction, and catalysts.
     """
     try:
         symbol = _safe_symbol(symbol)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        use_cached = bool(body.get("use_cached", True))
         payload = _resolved_payload()
 
-        eq = cost = price = 0.0
-        total_eq = float((payload.get("equity_summary") or {}).get("portfolio_equity") or 1.0)
-        for h in payload.get("holdings", []):
-            if h.get("symbol") == symbol:
-                eq    = float(h.get("equity", 0) or 0)
-                cost  = float(h.get("average_buy_price", 0) or 0)
-                price = float(h.get("current_price", 0) or 0)
-                break
-
-        from consensus import run_consensus_holding
-        consensus = run_consensus_holding(symbol, eq, total_eq, cost, price)
+        consensus = _resolve_consensus_row(symbol, payload, use_cached=use_cached)
 
         from fundamentals_openbb import get_fundamentals_openbb
         fundamentals = get_fundamentals_openbb(symbol) or {}
@@ -2903,6 +2937,7 @@ async def trading_deep_debate(symbol: str):
         return _sanitize({
             "status":            "ok",
             "symbol":            symbol,
+            "cached_consensus":  use_cached and _cached_consensus_row(symbol) is not None,
             "debate":            result,
             "consensus_verdict": consensus.get("verdict"),
             "consensus_score":   consensus.get("raw_score"),
