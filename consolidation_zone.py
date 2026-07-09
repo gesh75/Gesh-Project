@@ -155,9 +155,9 @@ def detect_consolidation(
             "reason": f"Insufficient data ({len(df) if df is not None else 0} candles, need {MIN_CANDLES})",
         }
 
-    closes = df["Close"].values.astype(float)
-    highs  = df["High"].values.astype(float)
-    lows   = df["Low"].values.astype(float)
+    closes = df["Close"].squeeze().values.astype(float)
+    highs  = df["High"].squeeze().values.astype(float)
+    lows   = df["Low"].squeeze().values.astype(float)
 
     # Remove NaNs
     mask   = ~(np.isnan(closes) | np.isnan(highs) | np.isnan(lows))

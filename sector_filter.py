@@ -144,10 +144,15 @@ def _get_volume_ratio(etf: str) -> tuple[float, float, float]:
     except Exception:
         return 0.0, 0.0, 0.0
 
-    if df is None or "Volume" not in df.columns or len(df) < 5:
+    if df is None or len(df) < 5:
         return 0.0, 0.0, 0.0
 
-    vol = df["Volume"].dropna().values.astype(float)
+    try:
+        vol_s = df["Volume"].squeeze()
+    except (KeyError, TypeError):
+        return 0.0, 0.0, 0.0
+
+    vol = vol_s.dropna().values.astype(float)
     if len(vol) < 2:
         return 0.0, 0.0, 0.0
 

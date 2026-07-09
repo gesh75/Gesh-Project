@@ -3126,8 +3126,10 @@ async function runScanner(){
 
   // Step 1 — sector filter
   try{
-    const sr=await fetch('/api/scanner/sector',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols})});
-    const sd=await sr.json();
+    const sr=await fetch('/api/scanner/sector',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbols})});
+    if(!sr.ok) throw new Error(await sr.text());
+    const sdRaw=await sr.json();
+    const sd=(sdRaw&&sdRaw.data)||sdRaw||{};
     renderSectorResults(sd, symbols.length);
 
     // Step 2 — consolidation zones (hot symbols, or all if none are hot)
@@ -3144,9 +3146,11 @@ async function runScanner(){
     const tfParams={daily:{interval:'1d',period:'60d'},'1HR':{interval:'1h',period:'5d'},'5MIN':{interval:'5m',period:'1d'},premarket:{interval:'5m',period:'1d'},stock:{interval:'1d',period:'30d'}};
     const params=tfParams[tf]||tfParams.daily;
 
-    const czr=await fetch('/api/scanner/consolidation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:scanSyms,interval:params.interval,period:params.period,min_rr:rr})});
-    const czd=await czr.json();
-    renderCZResults(czd, scanSyms.length);
+    const czr=await fetch('/api/scanner/consolidation',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbols:scanSyms,interval:params.interval,period:params.period,min_rr:rr})});
+    if(!czr.ok) throw new Error(await czr.text());
+    const czdRaw=await czr.json();
+    const czd=(czdRaw&&czdRaw.data)||czdRaw||{};
+    renderCZResults(czd, scanSyms.length, fallback);
   }catch(e){
     $('sector-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
     $('cz-container').innerHTML='';
@@ -3168,7 +3172,7 @@ function renderSectorResults(d, total){
       const ratio=(s.volume_ratio||1).toFixed(1);
       html+=`<div style="background:var(--gdim);border:1px solid var(--green);border-radius:6px;padding:8px 14px;display:flex;align-items:center;gap:8px">
         <span style="color:var(--accent);font-weight:700">${daEsc(s.symbol)}</span>
-        <span style="color:var(--muted);font-size:13px">${daEsc(s.sector_etf||'')}</span>
+        <span style="color:var(--muted);font-size:13px">${daEsc(s.etf_name||s.etf||'')}</span>
         <span style="color:var(--green);font-weight:700">${ratio}×</span>
       </div>`;
     });
@@ -3187,10 +3191,11 @@ function renderSectorResults(d, total){
   $('sector-container').innerHTML=html;
 }
 
-function renderCZResults(d, total){
-  const found=d.found||[], skipped=d.skipped||[];
+function renderCZResults(d, total, scannedAll){
+  const found=d.found||[], skipped=d.no_zone||d.skipped||[];
   if(!found.length){
-    $('cz-container').innerHTML=`<div class="empty" style="color:var(--yellow)">⚠️ No consolidation zones found in ${total} hot-sector symbols. Try a different timeframe or wait for tighter price action.</div>`;
+    const scope=scannedAll?'symbols':'hot-sector symbols';
+    $('cz-container').innerHTML=`<div class="empty" style="color:var(--yellow)">⚠️ No consolidation zones found in ${total} ${scope}. Try a different timeframe or wait for tighter price action.</div>`;
     return;
   }
   let html=`<div style="padding:12px 16px">`;
@@ -3201,7 +3206,7 @@ function renderCZResults(d, total){
     <th>R/R</th><th>Candles</th><th>Source</th>
   </tr></thead><tbody>`;
   found.forEach(z=>{
-    const rr=(z.risk_reward||0).toFixed(1);
+    const rr=(z.rr_ratio||z.risk_reward||0).toFixed(1);
     const rrColor=parseFloat(rr)>=3?'var(--green)':parseFloat(rr)>=2?'var(--yellow)':'var(--muted)';
     html+=`<tr>
       <td style="text-align:left"><span class="sym">${daEsc(z.symbol)}</span></td>
@@ -3210,8 +3215,8 @@ function renderCZResults(d, total){
       <td style="color:var(--red)">${z.stop?'$'+z.stop.toFixed(2):'—'}</td>
       <td style="color:var(--green)">${z.target?'$'+z.target.toFixed(2):'—'}</td>
       <td style="color:${rrColor};font-weight:700">${rr}×</td>
-      <td>${daEsc(z.candle_count||'—')}</td>
-      <td style="color:var(--muted);font-size:13px">${daEsc(z.source||'')}</td>
+      <td>${daEsc(z.zone_candles||z.candle_count||'—')}</td>
+      <td style="color:var(--muted);font-size:13px">${daEsc(z.target_source||z.source||'')}</td>
     </tr>`;
   });
   html+=`</tbody></table></div></div>`;
