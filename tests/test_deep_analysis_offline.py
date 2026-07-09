@@ -1,9 +1,10 @@
 """Deep analysis + Kelly must degrade to MCP snapshot when Robinhood is offline."""
 from __future__ import annotations
 
+from starlette.testclient import TestClient
+
 import data_fetcher
 import server
-from starlette.testclient import TestClient
 
 
 def _owner_session(monkeypatch):
