@@ -1050,7 +1050,7 @@ def _regime_for_symbols(symbols: list[str], *, offline: bool = False) -> dict:
 def get_portfolio():
     try:
         try:
-            payload = _resolved_payload()
+            payload = build_data_payload(DEFAULT_WATCHLIST)
         except RobinhoodOfflineError as live_err:
             # ONLY a confirmed-offline session degrades to the MCP-built snapshot (Option A).
             # Any OTHER exception is a real bug — it must NOT be masked by serving stale data;
@@ -1128,10 +1128,13 @@ def run_deep_analysis():
         analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
 
         # Log to SQLite. Deep analysis is user-triggered (not a poll), so we
-        # always write the snapshot here regardless of the throttle.
+        # always write the analysis here regardless of the throttle. But NEVER
+        # persist a snapshot-sourced (offline) equity value as a live tick — that
+        # would corrupt the equity curve / ECG with stale data (mirrors /api/portfolio).
         try:
             run_id = log_analysis(MODEL, payload, analysis)
-            log_equity_snapshot(payload["holdings"])
+            if not payload.get("offline"):
+                log_equity_snapshot(payload["holdings"])
         except Exception as db_err:
             print(f"⚠  DB log failed: {db_err}")
             run_id = None
@@ -2739,7 +2742,7 @@ async def api_tax_harvest():
     """Tax-loss harvesting candidates + wash-sale window status."""
     try:
         from tax_harvester import get_harvest_summary
-        payload = build_data_payload()
+        payload = _resolved_payload()
         positions = {h["symbol"]: h for h in payload.get("holdings", [])}
         cost_basis = {h["symbol"]: h.get("average_buy_price") for h in payload.get("holdings", [])}
         result = get_harvest_summary(positions, cost_basis)
@@ -2753,7 +2756,7 @@ async def api_benchmarks(period: str = "1mo"):
     """Thematic alpha benchmarking vs sector ETFs."""
     try:
         from benchmarks import batch_alpha
-        payload = build_data_payload()
+        payload = _resolved_payload()
         tickers = [h["symbol"] for h in payload.get("holdings", [])]
         result  = batch_alpha(tickers, period)
         return _sanitize({"status": "ok", "period": period, "alpha_table": result})
@@ -2780,7 +2783,7 @@ async def api_crypto_correlation():
     """Crypto-equity correlation risk summary for portfolio."""
     try:
         from crypto_correlation import crypto_risk_summary
-        payload  = build_data_payload()
+        payload  = _resolved_payload()
         holdings = payload.get("holdings", [])
         result   = crypto_risk_summary(holdings)
         return _sanitize({"status": "ok", **result})
@@ -2793,7 +2796,7 @@ async def api_yield_landscape():
     """DeFi & cash yield landscape for idle cash (informational)."""
     try:
         from defi_yield import get_yield_landscape
-        payload  = build_data_payload()
+        payload  = _resolved_payload()
         cash_usd = float(payload.get("equity_summary", {}).get("cash", 0) or 0)
         result   = get_yield_landscape(cash_usd)
         return _sanitize({"status": "ok", **result})

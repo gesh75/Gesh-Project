@@ -124,9 +124,15 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
         "snapshot_age_seconds": round(age_s),
         "equity_summary": {
             "portfolio_equity":               headline,   # account-level (positions + cash)
+            # Parity with the live build_data_payload: Kelly / consensus size against
+            # `total` — without these the offline (snapshot) path fed them None and
+            # every position looked 0%-allocated. Account-level total = headline.
+            "total":                          headline,
+            "total_equity":                   headline,
             "extended_hours_equity":          float(eqs.get("extended_hours_equity") or 0),
             "adjusted_equity_previous_close": float(eqs.get("adjusted_equity_previous_close") or 0),
             "cash":                           float(eqs.get("cash") or 0),
+            "deployable":                     float(eqs.get("deployable") or eqs.get("cash") or 0),
             "buying_power":                   float(eqs.get("buying_power") or eqs.get("deployable") or 0),
         },
         "holdings":  holdings,
