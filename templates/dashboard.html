@@ -2769,7 +2769,7 @@ function mybookPrefill(sym){
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
-  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite on your book — deep AI analysis, Kelly sizing, Monte Carlo (~20s)…</div></div>`;
+  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo. A large book can take 1–2 min; if it times out, click Analyze again and it loads from cache…</div></div>`;
   try{
     const res=await fetch('/api/mybook/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>null);
     if(res&&(res.status===401||res.status===503)){
@@ -2777,7 +2777,11 @@ async function mybookAnalyze(){
     }
     if(res&&res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
     if(res&&res.status===429){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily portfolio-analysis limit reached — your last analysis stays available (🖨 Report), and the limit resets on a rolling 24-hour window.</div></div>'; return; }
-    const j=res&&res.ok?await res.json().catch(()=>null):null;
+    const j=res?await res.json().catch(()=>null):null;
+    if(res&&!res.ok){
+      const msg=(j&&j.detail)||(res.status===503?'Claude API unreachable — check network and retry.':'Analysis failed — try again in a minute.');
+      box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">${daEsc(String(msg))}</div></div>`; return;
+    }
     const d=j&&j.data;
     if(!d||!d.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now — try again in a minute.</div></div>'; return; }
     const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[];
@@ -2791,6 +2795,7 @@ async function mybookAnalyze(){
           <span class="da-holding vrd" style="${daVerdictStyle(a.portfolio_verdict)}">${daEsc(a.portfolio_verdict||'—')}</span>
           <span style="font-size:13px;color:var(--muted)">${daEsc(a.portfolio_type||'')}</span></div>
         ${buildRow('Portfolio score', a.portfolio_score!=null?a.portfolio_score+' / 100':'—')}${buildRow('Risk score', a.risk_score!=null?a.risk_score+' / 100':'—')}${buildRow('Diversification', a.diversification_score!=null?a.diversification_score+' / 100':'—')}
+        ${a.holdings_truncated?`<div style="font-size:12px;color:var(--muted);margin-top:10px">ℹ️ Detailed AI cards cover your ${daEsc(a.holdings_truncated.analyzed)} largest holdings; all ${daEsc(a.holdings_truncated.total)} feed the risk &amp; Kelly math.</div>`:''}
         ${a.market_context?`<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55">${daEsc(a.market_context)}</div>`:''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">

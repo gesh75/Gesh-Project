@@ -2184,13 +2184,14 @@ def _book_fingerprint(positions: list[dict]) -> str:
     return _json.dumps(sorted([(p["symbol"], p["shares"], p.get("avg_cost")) for p in positions]))
 
 
-# The deep analysis emits one detailed card per holding, so its JSON grows with the
-# book; past ~30 names it overflows the LLM's max_tokens and returns truncated,
-# unusable output (a big equal-weight import used to fail here). Cap the DETAILED
-# per-holding analysis to the largest-weight names — Monte Carlo and Kelly still run
-# on the FULL book (they have no token limit). Keep in step with ai_analyzer's
-# deep_analyze_portfolio max_tokens.
-_BOOK_ANALYSIS_MAX_HOLDINGS = 40
+# The deep analysis emits one detailed prose card per holding, so the LLM's OUTPUT
+# (and thus its runtime, ~70 tok/s) grows with the book: 35 cards generated ~24k
+# tokens over 4+ minutes — past every request/tunnel timeout — and a bigger book
+# truncated outright. So cap the DETAILED analysis (and its regime + analyst
+# enrichment) to the largest-weight names; Monte Carlo + Kelly still cover the FULL
+# book. ~12 keeps a cold run near ~2 min so it completes and warms the per-book
+# cache (a retry then returns instantly).
+_BOOK_ANALYSIS_MAX_HOLDINGS = 12
 
 
 def _run_book_engines(payload: dict) -> dict:
@@ -2202,20 +2203,34 @@ def _run_book_engines(payload: dict) -> dict:
     (verdict + fair-value gap) feed run_kelly_analysis exactly like the owner
     pipeline does (/api/kelly builds the same map from the latest analysis run) —
     without them Kelly sizes verdict-blind."""
-    symbols = [h["symbol"] for h in payload["holdings"]]
-    regime_context = None
-    try:
-        regime_context = detect_regimes(symbols).get("regime_summary")
-    except Exception:
-        pass
-    # Bound the per-holding analysis so a large book can't truncate the LLM output.
+    # Cap the DETAILED analysis first; its regime + analyst enrichment then runs only
+    # over the analyzed names (the yfinance pulls scale with symbol count too).
     holdings = payload["holdings"]
     analysis_payload, truncated = payload, None
     if len(holdings) > _BOOK_ANALYSIS_MAX_HOLDINGS:
         top = sorted(holdings, key=lambda h: h.get("equity") or 0,
                      reverse=True)[:_BOOK_ANALYSIS_MAX_HOLDINGS]
-        analysis_payload = {**payload, "holdings": top}
+        analysis_payload = {
+            **payload,
+            "holdings": top,
+            "book_meta": {
+                "total_holdings": len(holdings),
+                "all_symbols": [h["symbol"] for h in holdings],
+                "analyzed_symbols": [h["symbol"] for h in top],
+                "note": (
+                    f"Emit detailed per-holding cards for analyzed_symbols only "
+                    f"({len(top)} of {len(holdings)}). Portfolio verdict, sector mix, "
+                    f"and diversification must reflect all_symbols."
+                ),
+            },
+        }
         truncated = {"analyzed": len(top), "total": len(holdings)}
+    analyzed_symbols = [h["symbol"] for h in analysis_payload["holdings"]]
+    regime_context = None
+    try:
+        regime_context = detect_regimes(analyzed_symbols).get("regime_summary")
+    except Exception:
+        pass
     analysis = deep_analyze_portfolio(analysis_payload, regime_context=regime_context)
     if truncated:
         analysis["holdings_truncated"] = truncated
@@ -2231,7 +2246,7 @@ def _run_book_engines(payload: dict) -> dict:
     except Exception as e:
         mc = {"error": f"monte carlo unavailable: {type(e).__name__}"}
     try:
-        analyst = get_analyst_targets(symbols) or {}
+        analyst = get_analyst_targets(analyzed_symbols) or {}
         upside = {s: {"upside_pct": analyst[s].get("upside_pct")} for s in analyst
                   if not analyst[s].get("error")}
         kelly = run_kelly_analysis(payload["holdings"],
