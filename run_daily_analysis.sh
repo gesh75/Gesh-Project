@@ -70,35 +70,34 @@ step() { echo ""; echo "=== $1 — $(date '+%H:%M:%S') (t+$(($(date +%s)-T0))s) 
 echo ""
 echo "### FULL 10:30 CHAIN — $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
-# ── 1/5 live snapshot (fatal on failure or staleness — never analyze stale data)
-# MCP-first: the robin_stocks pickle login dies on every RH password change, so the
-# primary path is now the robinhood-trading MCP (fetch_snapshot_mcp.sh). The legacy
-# pickle fetch remains as fallback. Either way the staleness gate below validates it.
+# ── 1/5 live snapshot — MCP-first (robin_stocks pickle login dies on every RH
+# password change), legacy pickle fetch as fallback. Tiered freshness gate
+# (snapshot_state.py): FRESH (<=30 min) runs normally; if BOTH fetch paths fail
+# but the last snapshot is still SERVICEABLE (<= GESH_SNAPSHOT_SERVICEABLE_MIN,
+# default 24h) the chain runs DEGRADED on last-known holdings so engines + GESH
+# signals still refresh (only cash/sizing is stale) instead of aborting and
+# letting engine_results.json rot (which starves the agentic-rh reader into
+# advisory-only). A missing/too-old snapshot is still fatal.
+SERVICEABLE_MAX_MIN=${GESH_SNAPSHOT_SERVICEABLE_MIN:-1440}
+DEGRADED=0
 step "1/5 fetch snapshot (MCP-first)"
 if GESH_PY="$PY" /bin/bash "$GP/fetch_snapshot_mcp.sh"; then
-    :  # source is asserted from the file below, not assumed from this exit code
+    :  # source is asserted from the gate below, not assumed from this exit code
 else
     echo "MCP snapshot path failed — falling back to legacy robin_stocks pickle fetch"
-    "$PY" fetch_live_snapshot.py || { echo "FATAL: snapshot fetch failed (MCP + legacy both failed)"; exit 1; }
+    "$PY" fetch_live_snapshot.py || echo "WARN: live fetch failed (MCP + legacy) — will try the last serviceable snapshot"
 fi
-"$PY" - <<'PYEOF' || { echo "FATAL: snapshot stale (>30 min) — aborting"; exit 1; }
-import json, sys
-from datetime import datetime, timezone
-d = json.load(open('live_portfolio_snapshot.json'))
-age = (datetime.now(timezone.utc) - datetime.fromisoformat(d['fetched_at'])).total_seconds() / 60
-src = d.get('source', 'UNKNOWN')
-print(f"snapshot age: {age:.1f} min  holdings: {len(d['holdings'])}  source: {src}")
-# Source assertion (non-fatal): the MCP path returns only settled buying_power, so the
-# leveraged Gold-margin figure (~$21k) can never be sized against. The legacy robin_stocks
-# path ('robinhood_live') repopulates that figure — sizing-safe by code, but worth flagging
-# loudly so any silent fallback is visible in the log + briefing. See CLAUDE.md "Snapshot
-# source assertion". Stays non-fatal because the legacy fallback is a legitimate degraded path.
-if src != 'robinhood_mcp':
-    print(f"WARNING: snapshot source is '{src}', expected 'robinhood_mcp' — "
-          f"ran the legacy robin_stocks fallback; cash fields reflect that path. "
-          f"Verify deployable before trusting any sizing.")
-sys.exit(0 if age <= 30 else 1)
-PYEOF
+# stdout = the single state token; human detail (age/source/WARNING) goes to stderr -> the log.
+SNAP_STATE=$("$PY" snapshot_state.py "$SERVICEABLE_MAX_MIN")
+echo "snapshot state: $SNAP_STATE (serviceable limit ${SERVICEABLE_MAX_MIN} min)"
+case "$SNAP_STATE" in
+    FRESH) : ;;                                    # normal, up-to-date run
+    SERVICEABLE)
+        DEGRADED=1
+        echo "WARNING: DEGRADED RUN — live fetch failed; running on the last serviceable snapshot. Engines + GESH signals refresh on last-known holdings; cash/sizing figures are stale and the customer-report publish is skipped." ;;
+    *)  echo "FATAL: no serviceable snapshot (state='${SNAP_STATE:-none}', limit ${SERVICEABLE_MAX_MIN} min) — aborting"
+        exit 1 ;;
+esac
 
 # ── 2/5 engines (fatal — everything downstream needs engine_results.json)
 step "2/5 run_engines2"
@@ -138,12 +137,12 @@ PYEOF
 
 # ── Publish report copy for the trading repo (skill contract) — only on clean
 # runs, so a failed/degraded run never overwrites the last good published copy.
-if [ "$FAIL" -eq 0 ]; then
+if [ "$FAIL" -eq 0 ] && [ "$DEGRADED" -eq 0 ]; then
     cp -f gesh_report.html "$GPT/gesh_report.html" 2>/dev/null || true
 else
-    echo "publish skipped (fail=$FAIL) — keeping previous report copy in $GPT"
+    echo "publish skipped (fail=$FAIL degraded=$DEGRADED) — keeping previous report copy in $GPT"
 fi
 
 echo ""
-echo "### CHAIN DONE — $(date '+%Y-%m-%d %H:%M:%S %Z') (total $(($(date +%s)-T0))s, fail=$FAIL)"
+echo "### CHAIN DONE — $(date '+%Y-%m-%d %H:%M:%S %Z') (total $(($(date +%s)-T0))s, fail=$FAIL degraded=$DEGRADED)"
 exit "$FAIL"
