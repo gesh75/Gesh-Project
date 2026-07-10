@@ -130,7 +130,7 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
     if isinstance(exc, EnvironmentError) and "ANTHROPIC" in str(exc).upper():
         return HTTPException(status_code=503, detail=str(exc))
     cause = exc.__cause__ or exc.__context__
-    if cause is not exc:
+    if cause is not None and cause is not exc:
         nested = _upstream_unavailable_error(cause)
         if nested is not None:
             return nested
@@ -2184,6 +2184,15 @@ def _book_fingerprint(positions: list[dict]) -> str:
     return _json.dumps(sorted([(p["symbol"], p["shares"], p.get("avg_cost")) for p in positions]))
 
 
+# The deep analysis emits one detailed card per holding, so its JSON grows with the
+# book; past ~30 names it overflows the LLM's max_tokens and returns truncated,
+# unusable output (a big equal-weight import used to fail here). Cap the DETAILED
+# per-holding analysis to the largest-weight names — Monte Carlo and Kelly still run
+# on the FULL book (they have no token limit). Keep in step with ai_analyzer's
+# deep_analyze_portfolio max_tokens.
+_BOOK_ANALYSIS_MAX_HOLDINGS = 40
+
+
 def _run_book_engines(payload: dict) -> dict:
     """Blocking engine suite on a customer payload — runs in a worker thread.
     Regime/Kelly/Monte-Carlo are best-effort (partial results beat a 500); the
@@ -2199,7 +2208,17 @@ def _run_book_engines(payload: dict) -> dict:
         regime_context = detect_regimes(symbols).get("regime_summary")
     except Exception:
         pass
-    analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
+    # Bound the per-holding analysis so a large book can't truncate the LLM output.
+    holdings = payload["holdings"]
+    analysis_payload, truncated = payload, None
+    if len(holdings) > _BOOK_ANALYSIS_MAX_HOLDINGS:
+        top = sorted(holdings, key=lambda h: h.get("equity") or 0,
+                     reverse=True)[:_BOOK_ANALYSIS_MAX_HOLDINGS]
+        analysis_payload = {**payload, "holdings": top}
+        truncated = {"analyzed": len(top), "total": len(holdings)}
+    analysis = deep_analyze_portfolio(analysis_payload, regime_context=regime_context)
+    if truncated:
+        analysis["holdings_truncated"] = truncated
     ai_verdicts = {}
     for ha in analysis.get("holdings_analysis") or []:
         if ha.get("symbol"):

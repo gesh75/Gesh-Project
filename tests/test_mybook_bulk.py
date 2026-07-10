@@ -166,3 +166,58 @@ def test_bulk_reports_invalid_lines(client, monkeypatch):
     body = c.post("/api/mybook/bulk", json={"text": "AAA\n@@@bad\nBBB"}).json()
     assert body["imported"] == ["AAA", "BBB"]
     assert any("bad" in x for x in body["invalid"])
+
+
+# ─── large-book analysis: cap detailed holdings so the LLM can't truncate ──────
+
+def _fake_engines(server, monkeypatch):
+    captured = {}
+
+    def _deep(payload, regime_context=None):
+        captured["holdings_seen"] = len(payload["holdings"])
+        return {"holdings_analysis": [], "portfolio_score": 50}
+    monkeypatch.setattr(server, "deep_analyze_portfolio", _deep, raising=True)
+    monkeypatch.setattr(server, "detect_regimes",
+                        lambda s: {"regime_summary": "x"}, raising=True)
+    monkeypatch.setattr(server, "run_monte_carlo", lambda h, e, **k: {"ok": 1}, raising=True)
+    monkeypatch.setattr(server, "run_kelly_analysis", lambda *a, **k: {"ok": 1}, raising=True)
+    monkeypatch.setattr(server, "get_analyst_targets", lambda s: {}, raising=True)
+    return captured
+
+
+def _book_payload(n):
+    holdings = [{"symbol": f"S{i}", "equity": 100.0 + i, "quantity": 1.0,
+                 "average_buy_price": 0.0, "current_price": 1.0,
+                 "portfolio_percentage": 1.0} for i in range(n)]
+    return {"holdings": holdings, "unpriced": [],
+            "equity_summary": {"portfolio_equity": sum(h["equity"] for h in holdings)}}
+
+
+def test_deep_analysis_holdings_are_capped_for_large_book(monkeypatch):
+    import server
+    captured = _fake_engines(server, monkeypatch)
+    result = server._run_book_engines(_book_payload(60))
+    assert captured["holdings_seen"] == server._BOOK_ANALYSIS_MAX_HOLDINGS   # capped
+    assert result["analysis"]["holdings_truncated"] == {
+        "analyzed": server._BOOK_ANALYSIS_MAX_HOLDINGS, "total": 60}
+    assert len(result["book"]["positions"]) == 60                            # MC/Kelly saw ALL
+
+
+def test_small_book_is_not_capped(monkeypatch):
+    import server
+    captured = _fake_engines(server, monkeypatch)
+    result = server._run_book_engines(_book_payload(10))
+    assert captured["holdings_seen"] == 10
+    assert "holdings_truncated" not in result["analysis"]
+
+
+# ─── error classifier must not crash on a cause-less exception ─────────────────
+
+def test_upstream_classifier_handles_exception_without_cause():
+    """Regression: a RuntimeError with no __cause__/__context__ must classify to
+    None, not crash on None.__cause__ (which turned every analysis error into a
+    confusing AttributeError 500)."""
+    import server
+    assert server._upstream_unavailable_error(RuntimeError("truncated")) is None
+    he = server._server_error(RuntimeError("truncated"))
+    assert he.status_code == 500                                             # clean 500
