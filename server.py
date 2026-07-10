@@ -130,7 +130,7 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
     if isinstance(exc, EnvironmentError) and "ANTHROPIC" in str(exc).upper():
         return HTTPException(status_code=503, detail=str(exc))
     cause = exc.__cause__ or exc.__context__
-    if cause is not exc:
+    if cause is not None and cause is not exc:
         nested = _upstream_unavailable_error(cause)
         if nested is not None:
             return nested
@@ -162,6 +162,58 @@ def _safe_symbol(symbol: str) -> str:
     if not _SYMBOL_RE.match(s):
         raise HTTPException(status_code=400, detail="Invalid symbol")
     return s
+
+
+# Equal-weight (privacy) book: when a customer imports symbols only, every name is
+# valued at an equal slice of this notional so weights are 1/N and no real size is
+# needed or faked into the weighting. The absolute figure is illustrative only.
+_EQUAL_WEIGHT_NOTIONAL = 100_000.0
+
+_BULK_HEADER_WORDS = {"SYMBOL", "TICKER", "SHARES", "QTY", "QUANTITY",
+                      "COST", "PRICE", "AVGCOST", "TOTAL"}
+
+
+def _parse_pos_float(tok: str | None) -> float | None:
+    """A positive float from a token, tolerating $ and thousands commas; else None."""
+    try:
+        v = float(str(tok).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
+    """Parse a pasted block of positions — one per line — for bulk book import.
+
+    Accepts ``SYMBOL`` (privacy path — no size), ``SYMBOL shares``, or
+    ``SYMBOL shares avg_cost`` with comma / whitespace / tab delimiters. A leading
+    header row and unparseable-symbol lines are collected in ``invalid`` (never
+    raises). Symbols are uppercased and de-duplicated (first occurrence wins).
+    Returns ``(items, invalid)`` where each item is
+    ``{"symbol", "shares"|None, "avg_cost"|None}``."""
+    items: list[dict] = []
+    invalid: list[str] = []
+    seen: set[str] = set()
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [t for t in re.split(r"[\s,]+", line) if t]
+        if not parts:
+            continue
+        sym = parts[0].strip().upper()
+        if sym in _BULK_HEADER_WORDS or not _SYMBOL_RE.match(sym):
+            invalid.append(line[:40])
+            continue
+        if sym in seen:
+            continue
+        seen.add(sym)
+        items.append({
+            "symbol": sym,
+            "shares": _parse_pos_float(parts[1]) if len(parts) > 1 else None,
+            "avg_cost": _parse_pos_float(parts[2]) if len(parts) > 2 else None,
+        })
+    return items, invalid
 
 
 # ── Lightweight per-IP rate limiting (dependency-free, single-process) ────────
@@ -2021,12 +2073,17 @@ def _cached_close(sym: str) -> float | None:
     return price
 
 
-def _customer_book_payload(positions: list[dict]) -> dict:
+def _customer_book_payload(positions: list[dict], equal_weight: bool = False) -> dict:
     """Value the customer's positions live and shape them EXACTLY like the owner
     payload (build_data_payload) so the existing engines run unchanged. Symbols
-    with no price data are excluded from the engines and reported in `unpriced`."""
-    # Warm the close cache in parallel: a cold 30-position book valued serially is
-    # 30 sequential upstream fetches (~1-2s each) on every GET — parallel it's one
+    with no price data are excluded from the engines and reported in `unpriced`.
+
+    When ``equal_weight`` is set (the sizes-private path), stored share counts are
+    ignored and every priced name is given an equal slice of a fixed notional — so
+    weights are 1/N and the customer's real position sizes are never needed nor
+    faked into the weighting. The absolute dollar figures are illustrative only."""
+    # Warm the close cache in parallel: a cold 100-position book valued serially is
+    # 100 sequential upstream fetches (~1-2s each) on every GET — parallel it's one
     # round-trip's worth. _cached_close is lock-guarded, so concurrent warms are safe.
     uncached = [p["symbol"] for p in positions
                 if _ticker_get_cached("close", p["symbol"]) is None]
@@ -2034,19 +2091,25 @@ def _customer_book_payload(positions: list[dict]) -> dict:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as ex:
             list(ex.map(_cached_close, uncached))
-    holdings, unpriced, total = [], [], 0.0
+    priced, unpriced = [], []
     for p in positions:
         price = _cached_close(p["symbol"])
-        if price is None or price <= 0:
-            unpriced.append(p["symbol"])
-            continue
-        equity = round(p["shares"] * price, 2)
-        ac = p.get("avg_cost")
-        pct_chg = round((price - ac) / ac * 100, 2) if ac else 0.0
+        (unpriced.append(p["symbol"]) if price is None or price <= 0
+         else priced.append((p, price)))
+    eq_each = (_EQUAL_WEIGHT_NOTIONAL / len(priced)) if (equal_weight and priced) else None
+    holdings, total = [], 0.0
+    for p, price in priced:
+        if equal_weight:
+            equity, qty, ac, pct_chg = round(eq_each, 2), round(eq_each / price, 6), None, 0.0
+        else:
+            qty = p["shares"]
+            ac = p.get("avg_cost")
+            equity = round(qty * price, 2)
+            pct_chg = round((price - ac) / ac * 100, 2) if ac else 0.0
         holdings.append({
-            "symbol": p["symbol"], "quantity": p["shares"], "average_buy_price": ac or 0.0,
+            "symbol": p["symbol"], "quantity": qty, "average_buy_price": ac or 0.0,
             "equity": equity, "percent_change": pct_chg,
-            "equity_change": round(equity - (ac or price) * p["shares"], 2),
+            "equity_change": round(equity - (ac or price) * qty, 2),
             "current_price": price, "type": "stock", "pe_ratio": None,
             "portfolio_percentage": 0.0,
         })
@@ -2056,7 +2119,8 @@ def _customer_book_payload(positions: list[dict]) -> dict:
     equity_summary = {"portfolio_equity": round(total, 2), "cash": 0.0, "buying_power": 0.0,
                       "day_change": 0.0, "day_change_pct": 0.0}
     return {"as_of": _dt.now(_tz.utc).isoformat(), "equity_summary": equity_summary,
-            "holdings": holdings, "watchlist": [], "unpriced": unpriced}
+            "holdings": holdings, "watchlist": [], "unpriced": unpriced,
+            "equal_weight": bool(equal_weight)}
 
 
 @app.get("/api/mybook")
@@ -2066,11 +2130,13 @@ def mybook_get(request: Request):
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        payload = _customer_book_payload(auth_users.get_positions(email))
+        ew = auth_users.get_equal_weight(email)
+        payload = _customer_book_payload(auth_users.get_positions(email), equal_weight=ew)
         return {"status": "ok", "data": {
             "positions": payload["holdings"],
             "total_equity": payload["equity_summary"]["portfolio_equity"],
             "unpriced": payload["unpriced"],
+            "equal_weight": ew,
         }}
     except Exception as e:
         raise _server_error(e)
@@ -2118,6 +2184,15 @@ def _book_fingerprint(positions: list[dict]) -> str:
     return _json.dumps(sorted([(p["symbol"], p["shares"], p.get("avg_cost")) for p in positions]))
 
 
+# The deep analysis emits one detailed card per holding, so its JSON grows with the
+# book; past ~30 names it overflows the LLM's max_tokens and returns truncated,
+# unusable output (a big equal-weight import used to fail here). Cap the DETAILED
+# per-holding analysis to the largest-weight names — Monte Carlo and Kelly still run
+# on the FULL book (they have no token limit). Keep in step with ai_analyzer's
+# deep_analyze_portfolio max_tokens.
+_BOOK_ANALYSIS_MAX_HOLDINGS = 40
+
+
 def _run_book_engines(payload: dict) -> dict:
     """Blocking engine suite on a customer payload — runs in a worker thread.
     Regime/Kelly/Monte-Carlo are best-effort (partial results beat a 500); the
@@ -2133,7 +2208,17 @@ def _run_book_engines(payload: dict) -> dict:
         regime_context = detect_regimes(symbols).get("regime_summary")
     except Exception:
         pass
-    analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
+    # Bound the per-holding analysis so a large book can't truncate the LLM output.
+    holdings = payload["holdings"]
+    analysis_payload, truncated = payload, None
+    if len(holdings) > _BOOK_ANALYSIS_MAX_HOLDINGS:
+        top = sorted(holdings, key=lambda h: h.get("equity") or 0,
+                     reverse=True)[:_BOOK_ANALYSIS_MAX_HOLDINGS]
+        analysis_payload = {**payload, "holdings": top}
+        truncated = {"analyzed": len(top), "total": len(holdings)}
+    analysis = deep_analyze_portfolio(analysis_payload, regime_context=regime_context)
+    if truncated:
+        analysis["holdings_truncated"] = truncated
     ai_verdicts = {}
     for ha in analysis.get("holdings_analysis") or []:
         if ha.get("symbol"):
@@ -2173,7 +2258,8 @@ async def mybook_analyze(request: Request):
     positions = auth_users.get_positions(email)
     if not positions:
         raise HTTPException(status_code=400, detail="Your book is empty — add positions first")
-    fp = _book_fingerprint(positions)
+    ew = auth_users.get_equal_weight(email)
+    fp = _book_fingerprint(positions) + ("|ew" if ew else "")
     with _mybook_lock:
         hit = _mybook_cache.get(email)
     if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
@@ -2190,7 +2276,7 @@ async def mybook_analyze(request: Request):
             # Quota gate after the cache re-check (cached hits are free), before
             # any engine work — a capped user costs nothing.
             _check_customer_quota(email, "book_analysis")
-            payload = await asyncio.to_thread(_customer_book_payload, positions)
+            payload = await asyncio.to_thread(_customer_book_payload, positions, ew)
             if not payload["holdings"]:
                 raise HTTPException(status_code=404,
                                     detail="No market data for any symbol on your book")
@@ -2237,12 +2323,49 @@ def mybook_import_watchlist(request: Request):
         raise _server_error(e)
 
 
+@app.post("/api/mybook/bulk")
+async def mybook_bulk(request: Request):
+    """Bulk-import a whole book from one pasted block — the answer to "I have 85
+    positions, not one at a time". Body: {"text": "<lines>"} or {"symbols": [...]}.
+
+    Privacy path: paste TICKERS ONLY (one per line, no share counts). With no sizes
+    the book is flagged equal-weight, so the analysis weights every name equally and
+    never needs the customer's real position sizes. A paste that DOES include share
+    counts is honored verbatim and turns equal-weight off. Existing positions are
+    upserted; the per-user cap still applies (overflow → `skipped_cap`)."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    text = (body or {}).get("text") or ""
+    syms = (body or {}).get("symbols")
+    if not text and isinstance(syms, list):
+        text = "\n".join(str(s) for s in syms)
+    items, invalid = _parse_bulk_book(text)
+    any_sized = any(it["shares"] is not None for it in items)
+    imported, skipped_cap = [], []
+    for it in items:
+        shares = it["shares"] if it["shares"] is not None else 1.0   # placeholder for symbols-only
+        ok = auth_users.set_position(email, it["symbol"], shares, it["avg_cost"])
+        (imported if ok else skipped_cap).append(it["symbol"])
+    if imported:
+        # Symbols-only paste → equal-weight (sizes private); any explicit size → real weights.
+        auth_users.set_equal_weight(email, not any_sized)
+    return {"status": "ok", "imported": imported, "skipped_cap": skipped_cap,
+            "invalid": invalid, "equal_weight": auth_users.get_equal_weight(email),
+            "data": mybook_get(request)["data"]}
+
+
 def _render_book_report(email: str) -> str:
     """Standalone, print-friendly HTML report of the customer's book + their LAST
     persisted analysis. Server-side rendered with every dynamic string escaped —
     this page bypasses the dashboard's audited JS builders."""
     import html as _h
-    book = _customer_book_payload(auth_users.get_positions(email))
+    ew = auth_users.get_equal_weight(email)
+    book = _customer_book_payload(auth_users.get_positions(email), equal_weight=ew)
     saved = auth_users.get_latest_book_analysis(email)
     e = _h.escape
 
@@ -2252,12 +2375,16 @@ def _render_book_report(email: str) -> str:
 
     pos_rows = "".join(
         f"<tr><td style='padding:6px 12px;font-weight:600'>{e(h['symbol'])}</td>"
-        f"<td style='padding:6px 12px;text-align:right'>{h['quantity']:g}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{('—' if ew else format(h['quantity'], 'g'))}</td>"
         f"<td style='padding:6px 12px;text-align:right'>${h['current_price']:,.2f}</td>"
-        f"<td style='padding:6px 12px;text-align:right'>${h['equity']:,.2f}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{('—' if ew else '$' + format(h['equity'], ',.2f'))}</td>"
         f"<td style='padding:6px 12px;text-align:right'>{h['portfolio_percentage']:.1f}%</td></tr>"
         for h in book["holdings"])
     total = book["equity_summary"]["portfolio_equity"]
+    total_html = ((f"<b>Equal-weight basis</b> — position sizes are private, so each of the "
+                   f"{len(book['holdings'])} priced names is weighted equally (1/N). "
+                   f"Dollar values are illustrative, not real holdings.")
+                  if ew else f"<b>Total: ${total:,.2f}</b>")
 
     body = ""
     if saved:
@@ -2310,7 +2437,7 @@ tr:nth-child(even){{background:#f6f6f6}}@media print{{a{{display:none}}}}</style
 <table><tr style='border-bottom:1px solid #ccc'><th style='padding:6px 12px;text-align:left'>Symbol</th>
 <th style='padding:6px 12px'>Shares</th><th style='padding:6px 12px'>Price</th>
 <th style='padding:6px 12px'>Value</th><th style='padding:6px 12px'>Weight</th></tr>{pos_rows}</table>
-<p><b>Total: ${total:,.2f}</b>{(' · No price data: ' + e(', '.join(book['unpriced']))) if book['unpriced'] else ''}</p>
+<p>{total_html}{(' · No price data: ' + e(', '.join(book['unpriced']))) if book['unpriced'] else ''}</p>
 {body}
 <hr><p style='color:#888;font-size:12px'>Informational and educational only — not financial advice.
 All trading decisions remain your responsibility. Generated by GESH Financial Observability ·

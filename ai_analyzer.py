@@ -368,7 +368,7 @@ def deep_analyze_portfolio(
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=10000,
+        max_tokens=24000,
         system=[{"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[{
             "name": "return_portfolio_analysis",

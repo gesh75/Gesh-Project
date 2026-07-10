@@ -200,6 +200,11 @@ CREATE TABLE IF NOT EXISTS usage_events (
     at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_at ON usage_events (at);
+CREATE TABLE IF NOT EXISTS customer_book_prefs (
+    email        TEXT PRIMARY KEY,
+    equal_weight INTEGER NOT NULL DEFAULT 0,
+    updated_at   TEXT NOT NULL DEFAULT ''
+);
 """
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
@@ -593,7 +598,8 @@ def get_watch(email: str) -> list[str]:
 # them, valued live at read time. Contains ZERO owner data. Same isolation contract
 # as the watchlist: every read/write is scoped to the session email.
 
-_MAX_POSITIONS = 30   # per-user cap — abuse guard (also bounds analyze-engine cost)
+_MAX_POSITIONS = 100   # per-user cap — abuse guard (also bounds analyze-engine cost).
+#                        Raised 30→100 (2026-07-10) to fit a real book via bulk import.
 
 
 def set_position(email: str, symbol: str, shares: float, avg_cost: float | None = None) -> bool:
@@ -646,6 +652,35 @@ def get_positions(email: str) -> list[dict]:
         ).fetchall()
     return [{"symbol": r["symbol"], "shares": r["shares"], "avg_cost": r["avg_cost"]}
             for r in rows]
+
+
+# ── equal-weight (privacy) flag ──────────────────────────────────────────────
+# When a customer bulk-imports SYMBOLS ONLY (no share counts — sizes private), the
+# book is flagged equal-weight: the analysis weights every name 1/N instead of by an
+# unknown/placeholder size. A bulk import that DOES carry share counts clears it.
+
+def set_equal_weight(email: str, on: bool) -> None:
+    em = _norm(email)
+    if not em:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "INSERT INTO customer_book_prefs (email, equal_weight, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(email) DO UPDATE SET equal_weight=excluded.equal_weight, "
+            "updated_at=excluded.updated_at",
+            (em, 1 if on else 0, now))
+
+
+def get_equal_weight(email: str) -> bool:
+    """True when the user's book is in equal-weight (sizes-private) mode."""
+    em = _norm(email)
+    if not em:
+        return False
+    with _conn() as con:
+        row = con.execute(
+            "SELECT equal_weight FROM customer_book_prefs WHERE email=?", (em,)).fetchone()
+    return bool(row and row["equal_weight"])
 
 
 # ── persisted book analyses (customer report page) ─────────────────────────────

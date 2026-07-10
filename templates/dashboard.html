@@ -609,9 +609,18 @@ body.customer .owner-only{display:none!important}
         <input id="mybook-cost" placeholder="Avg cost (opt.)" type="number" min="0" step="any"
                style="width:140px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
         <button class="btn-analyze" onclick="mybookAdd()">＋ Add</button>
+        <button class="btn-analyze" onclick="mybookToggleBulk()" title="Paste your whole list at once — one ticker per line. Sizes optional & private.">📋 Bulk import</button>
         <button class="btn-analyze" onclick="mybookImportWatchlist()" title="Add every saved watchlist ticker (1 share each — edit after)">⬇ Import watchlist</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
         <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()">🧠 Analyze My Portfolio</button>
+      </div>
+      <div id="mybook-bulk-panel" style="display:none;margin:0 0 12px">
+        <textarea id="mybook-bulk-text" rows="6" placeholder="Paste tickers — one per line:&#10;AAPL&#10;NVDA&#10;MSFT&#10;&#10;Sizes are optional & stay private. To weight exactly, add:  AAPL, 100, 150.25"
+          style="width:100%;box-sizing:border-box;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:14px;line-height:1.5;resize:vertical"></textarea>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn-analyze" onclick="mybookBulkImport()">Import list</button>
+          <span style="font-size:12px;color:var(--muted)">Tickers only → <b>equal-weight</b> (your sizes stay private). Up to 100 positions.</span>
+        </div>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Your positions stay private to your account. Valued from public quotes; nothing here connects to a broker.</div>
       <div id="mybook-list" style="margin-bottom:12px"></div>
@@ -2682,21 +2691,22 @@ async function loadMyBook(){
   const el=document.getElementById('mybook-list'); if(!el) return;
   try{
     const j=await fetch('/api/mybook').then(r=>r.ok?r.json():null).catch(()=>null);
-    const d=(j&&j.data)||{}; const pos=d.positions||[];
-    if(!pos.length&&!(d.unpriced||[]).length){ el.innerHTML='<span style="color:var(--muted);font-size:12px">No positions yet — add a ticker and share count above.</span>'; return; }
-    el.innerHTML=`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    const d=(j&&j.data)||{}; const pos=d.positions||[]; const eqw=!!d.equal_weight;
+    if(!pos.length&&!(d.unpriced||[]).length){ el.innerHTML='<span style="color:var(--muted);font-size:12px">No positions yet — add a ticker above, or use 📋 Bulk import to paste your whole list.</span>'; return; }
+    const eqwBanner=eqw?`<div style="margin-bottom:8px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--hover);font-size:12px;color:var(--muted2)">⚖️ <b>Equal-weight</b> — position sizes are private, so every name is weighted equally (1/N). Bulk-import with share counts for exact weighting.</div>`:'';
+    el.innerHTML=eqwBanner+`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
       <tbody>${pos.map(p=>`<tr style="border-bottom:1px dashed var(--border)">
         <td style="padding:8px 10px;font-weight:700;color:var(--accent)"><span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer" title="Analyze this ticker">${daEsc(p.symbol)}</span></td>
-        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${daEsc(p.quantity)}</td>
+        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${eqw?'—':daEsc(p.quantity)}</td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
-        <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">$${daFmt(p.equity,2)}</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${eqw?'—':'$'+daFmt(p.equity,2)}</td>
         <td style="padding:8px 10px;text-align:right;color:var(--muted2)">${daFmt(p.portfolio_percentage,1)}%</td>
         <td style="padding:8px 10px;text-align:right"><span onclick="mybookRemove('${daEsc(p.symbol)}')" style="cursor:pointer;color:var(--muted)" title="Remove">✕</span></td>
       </tr>`).join('')}</tbody></table></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:13px">
         <span style="color:var(--muted)">${(d.unpriced||[]).length?('No price data: '+d.unpriced.map(daEsc).join(', ')):''}</span>
-        <span>Total: <b style="color:var(--accent)">$${daFmt(d.total_equity,2)}</b></span></div>`;
+        <span>${eqw?('<span style="color:var(--muted)">'+daEsc(pos.length)+' names · equal-weight</span>'):('Total: <b style="color:var(--accent)">$'+daFmt(d.total_equity,2)+'</b>')}</span></div>`;
   }catch(e){ el.innerHTML=''; }
 }
 async function mybookAdd(){
@@ -2723,6 +2733,30 @@ async function mybookImportWatchlist(){
     }
     loadMyBook();
   }catch(e){}
+}
+function mybookToggleBulk(){
+  const p=document.getElementById('mybook-bulk-panel'); if(!p) return;
+  p.style.display=(p.style.display==='none'||!p.style.display)?'block':'none';
+  if(p.style.display==='block'){ const t=document.getElementById('mybook-bulk-text'); if(t) t.focus(); }
+}
+async function mybookBulkImport(){
+  const t=document.getElementById('mybook-bulk-text'); const text=(t&&t.value||'').trim();
+  if(!text){ if(window.toast) toast('Paste at least one ticker','error'); return; }
+  try{
+    const j=await fetch('/api/mybook/bulk',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text})}).then(r=>r.ok?r.json():null).catch(()=>null);
+    if(!j){ if(window.toast) toast('Import failed','error'); return; }
+    if(window.toast){
+      const n=(j.imported||[]).length, cap=(j.skipped_cap||[]).length, bad=(j.invalid||[]).length;
+      let msg='Imported '+n+' position'+(n===1?'':'s');
+      if(j.equal_weight) msg+=' · equal-weight (sizes private)';
+      if(cap) msg+=' · '+cap+' over the 100 cap';
+      if(bad) msg+=' · '+bad+' line'+(bad===1?'':'s')+' skipped';
+      toast(msg, n?'success':'error');
+    }
+    if(j.imported&&j.imported.length){ t.value=''; document.getElementById('mybook-bulk-panel').style.display='none'; }
+    loadMyBook();
+  }catch(e){ if(window.toast) toast('Import failed','error'); }
 }
 function mybookPrefill(sym){
   // "📌 Add to book" from the single-ticker view: prefill the entry row and put
