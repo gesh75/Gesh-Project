@@ -11,10 +11,22 @@ Same offline rules as the rest of the suite: prices/engines/LLM are stubbed.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
+
+
+def _mybook_analyze(c: TestClient):
+    """POST /api/mybook/analyze — poll through HTTP 202 until a terminal response."""
+    last = None
+    for _ in range(80):
+        last = c.post("/api/mybook/analyze", json={})
+        if last.status_code != 202:
+            return last
+        time.sleep(0.02)
+    return last
 
 
 @pytest.fixture
@@ -93,7 +105,7 @@ def _stub_engines(server, monkeypatch, counters=None):
     c = counters if counters is not None else {}
     c.setdefault("llm", 0)
 
-    def _deep(payload, regime_context=None):
+    def _deep(payload, regime_context=None, **kwargs):
         c["llm"] += 1
         return dict(_ANALYSIS)
     monkeypatch.setattr(server, "deep_analyze_portfolio", _deep, raising=True)
@@ -178,7 +190,7 @@ def test_analyze_book_runs_engines_and_is_not_masked(client, monkeypatch):
     counters = _stub_engines(server, monkeypatch)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    r = c.post("/api/mybook/analyze", json={})
+    r = _mybook_analyze(c)
     assert r.status_code == 200
     d = r.json()["data"]
     assert d["analysis"]["portfolio_score"] == 71
@@ -198,7 +210,7 @@ def test_analyze_book_kelly_receives_ai_verdicts(client, monkeypatch):
     counters = _stub_engines(server, monkeypatch)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 200
+    assert _mybook_analyze(c).status_code == 200
     assert counters["kelly_verdicts"] == {"NVDA": {"verdict": "TRIM", "pct_diff": -8.2}}
 
 
@@ -207,7 +219,7 @@ def test_analyze_book_anonymous_is_401_no_spend(client, monkeypatch):
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
     counters = _stub_engines(server, monkeypatch)
-    r = c.post("/api/mybook/analyze", json={})
+    r = _mybook_analyze(c)
     assert r.status_code == 401
     assert counters["llm"] == 0
 
@@ -217,7 +229,7 @@ def test_analyze_book_empty_is_400_no_spend(client, monkeypatch):
     _as(server, monkeypatch, "cust@x.com")
     counters = _stub_engines(server, monkeypatch)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
-    r = c.post("/api/mybook/analyze", json={})
+    r = _mybook_analyze(c)
     assert r.status_code == 400
     assert counters["llm"] == 0
 
@@ -230,12 +242,12 @@ def test_analyze_book_cached_until_book_changes(client, monkeypatch):
     counters = _stub_engines(server, monkeypatch)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 200
-    r2 = c.post("/api/mybook/analyze", json={})
+    assert _mybook_analyze(c).status_code == 200
+    r2 = _mybook_analyze(c)
     assert r2.status_code == 200 and r2.json()["cached"] is True
     assert counters["llm"] == 1
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})   # book changed
-    r3 = c.post("/api/mybook/analyze", json={})
+    r3 = _mybook_analyze(c)
     assert r3.status_code == 200 and r3.json()["cached"] is False
     assert counters["llm"] == 2
 
@@ -305,7 +317,7 @@ def test_report_page_renders_book_and_saved_analysis(client, monkeypatch):
     counters = _stub_engines(server, monkeypatch)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 200   # persists a copy
+    assert _mybook_analyze(c).status_code == 200   # persists a copy
     r = c.get("/mybook/report")
     assert r.status_code == 200
     assert "NVDA" in r.text and "$1,000.00" in r.text                  # own dollars, raw
@@ -379,8 +391,8 @@ def test_analyze_book_meters_live_vs_cached(client, monkeypatch, au):
     _stub_engines(server, monkeypatch)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    c.post("/api/mybook/analyze", json={})
-    c.post("/api/mybook/analyze", json={})           # cache hit
+    _mybook_analyze(c)
+    _mybook_analyze(c)           # cache hit
     by = {r["event"]: r["count"] for r in au.usage_summary() if r["email"] == "cust@x.com"}
     assert by.get("book_analysis") == 1
     assert by.get("book_analysis_cached") == 1
@@ -404,11 +416,11 @@ def test_book_analysis_quota_blocks_live_but_never_cached(client, monkeypatch, a
     monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 200   # live #1 = at cap
-    r = c.post("/api/mybook/analyze", json={})
+    assert _mybook_analyze(c).status_code == 200   # live #1 = at cap
+    r = _mybook_analyze(c)
     assert r.status_code == 200 and r.json()["cached"] is True         # cached = free
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})       # new fingerprint
-    r = c.post("/api/mybook/analyze", json={})
+    r = _mybook_analyze(c)
     assert r.status_code == 429                                        # capped
     assert counters["llm"] == 1                                        # no spend past cap
 
@@ -420,9 +432,9 @@ def test_quota_owner_exempt(client, monkeypatch):
     monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 200
+    assert _mybook_analyze(c).status_code == 200
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 200   # over cap, owner OK
+    assert _mybook_analyze(c).status_code == 200   # over cap, owner OK
     assert counters["llm"] == 2
 
 
@@ -434,7 +446,7 @@ def test_quota_zero_disables_cap(client, monkeypatch):
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     for shares in (10, 20, 30):
         c.post("/api/mybook", json={"symbol": "NVDA", "shares": shares})
-        assert c.post("/api/mybook/analyze", json={}).status_code == 200
+        assert _mybook_analyze(c).status_code == 200
     assert counters["llm"] == 3
 
 
@@ -468,9 +480,9 @@ def test_desk_tier_multiplies_quota(client, monkeypatch, au):
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     for i in range(5):                                    # 5 distinct books, 5 live runs
         c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10 + i})
-        assert c.post("/api/mybook/analyze", json={}).status_code == 200, i
+        assert _mybook_analyze(c).status_code == 200, i
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 99})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 429   # 6th capped
+    assert _mybook_analyze(c).status_code == 429   # 6th capped
     assert counters["llm"] == 5
 
 
@@ -481,9 +493,9 @@ def test_unknown_tier_gets_base_quota(client, monkeypatch, au):
     monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 200
+    assert _mybook_analyze(c).status_code == 200
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})
-    assert c.post("/api/mybook/analyze", json={}).status_code == 429
+    assert _mybook_analyze(c).status_code == 429
     assert counters["llm"] == 1
 
 
@@ -549,7 +561,7 @@ def test_analyze_book_partial_engine_failure_still_returns(client, monkeypatch):
     monkeypatch.setattr(server, "run_kelly_analysis", _boom, raising=True)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    r = c.post("/api/mybook/analyze", json={})
+    r = _mybook_analyze(c)
     assert r.status_code == 200
     assert "error" in r.json()["data"]["kelly"]
     assert r.json()["data"]["analysis"]["portfolio_score"] == 71

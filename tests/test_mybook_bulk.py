@@ -173,8 +173,9 @@ def test_bulk_reports_invalid_lines(client, monkeypatch):
 def _fake_engines(server, monkeypatch):
     captured = {}
 
-    def _deep(payload, regime_context=None):
+    def _deep(payload, regime_context=None, **kwargs):
         captured["holdings_seen"] = len(payload["holdings"])
+        captured["concise"] = kwargs.get("concise")
         return {"holdings_analysis": [], "portfolio_score": 50}
     monkeypatch.setattr(server, "deep_analyze_portfolio", _deep, raising=True)
     monkeypatch.setattr(server, "detect_regimes",
@@ -206,9 +207,18 @@ def test_deep_analysis_holdings_are_capped_for_large_book(monkeypatch):
 def test_small_book_is_not_capped(monkeypatch):
     import server
     captured = _fake_engines(server, monkeypatch)
-    result = server._run_book_engines(_book_payload(10))
-    assert captured["holdings_seen"] == 10
+    result = server._run_book_engines(_book_payload(6))
+    assert captured["holdings_seen"] == 6
+    assert captured.get("concise") is True
     assert "holdings_truncated" not in result["analysis"]
+
+
+def test_large_book_uses_concise_deep_analysis(monkeypatch):
+    import server
+    captured = _fake_engines(server, monkeypatch)
+    server._run_book_engines(_book_payload(33))
+    assert captured["holdings_seen"] == server._BOOK_ANALYSIS_MAX_HOLDINGS
+    assert captured.get("concise") is True
 
 
 # ─── error classifier must not crash on a cause-less exception ─────────────────

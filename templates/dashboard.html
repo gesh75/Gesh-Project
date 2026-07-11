@@ -655,6 +655,23 @@ body.customer .owner-only{display:none!important}
         <canvas id="price-chart"></canvas>
       </div>
     </div>
+
+    <!-- LONG-TERM MACRO OVERLAY — visible surface for VIX / F&G / Margin Debt + LT bias -->
+    <div class="card" style="margin-bottom:18px" id="lt-macro-card">
+      <div class="ch">
+        <span class="ct">LONG-TERM MACRO (1-3Y BIAS)</span>
+        <span class="ts" id="lt-ts"></span>
+      </div>
+      <div id="lt-macro-body" style="padding:16px 18px">
+        <div class="deep-placeholder" style="padding:12px 0">
+          <div class="deep-ph-text" style="font-size:15px">Loading macro sentiment overlay…</div>
+        </div>
+      </div>
+      <div style="padding:0 18px 14px;font-size:12px;color:var(--muted);line-height:1.5">
+        VIX high = opportunity tilt; Extreme Fear (low F&G) = long-term bullish; Rising margin debt = caution. Combined feeds LT_Macro node in consensus.
+      </div>
+    </div>
+
     <div class="grid">
       <div class="card">
         <div class="ch"><span class="ct">Open Positions</span><span class="badge b-cyan" id="pos-count" style="display:none"></span></div>
@@ -1361,6 +1378,8 @@ async function loadPortfolio(){
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
     applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
+    // Long-term macro visible UI (always load on portfolio refresh)
+    loadLongTermMacro(true);
   }catch(e){console.error(e);setConn(false);}
 }
 function renderStats(eq){
@@ -1755,6 +1774,63 @@ async function loadCachedConsensus(){
   const cont=$('cons-container'); if(!cont||cont.dataset.loaded) return;
   try{ const r=await fetch('/api/consensus/cached'); const j=await r.json();
     if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); prependStaleBadge('cons-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){console.error('cachedConsensus',e);}
+}
+
+/* ── Long-Term Macro (VIX, Fear&Greed, Margin Debt) visible panel ──────────── */
+function renderLongTermMacro(d) {
+  const body = $('lt-macro-body');
+  const tsEl = $('lt-ts');
+  if (!body) return;
+  if (!d || !d.vix) {
+    body.innerHTML = '<div class="empty" style="padding:12px 0">Macro data unavailable</div>';
+    return;
+  }
+  const v = d.vix || {}, fg = d.fear_greed || {}, md = d.margin_debt || {};
+  const bias = d.bias || 'NEUTRAL';
+  const score = (d.combined_score != null ? d.combined_score : 0);
+  const biasColor = bias === 'BULLISH' ? 'var(--green)' : bias === 'BEARISH' ? 'var(--red)' : 'var(--amber)';
+
+  const fmt = (x, suffix='') => (x==null || isNaN(x)) ? '—' : (typeof x==='number' ? x.toFixed(x>10?1:2) : x) + suffix;
+
+  body.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px">
+      <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.08em">VIX</div>
+        <div style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0">${fmt(v.level)}</div>
+        <div style="font-size:14px;color:${v.score>0?'var(--green)':v.score<0?'var(--red)':'var(--muted)'}">${daEsc(v.detail||'')}</div>
+      </div>
+      <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.08em">FEAR &amp; GREED</div>
+        <div style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0">${fmt(fg.level)}</div>
+        <div style="font-size:14px;color:${fg.score>0?'var(--green)':fg.score<0?'var(--red)':'var(--muted)'}">${daEsc(fg.detail||'')}</div>
+      </div>
+      <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.08em">MARGIN DEBT</div>
+        <div style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0">${fmt(md.level/1e6, 'T')}</div>
+        <div style="font-size:14px;color:${md.score>0?'var(--green)':md.score<0?'var(--red)':'var(--muted)'}">${daEsc(md.detail||'')}</div>
+      </div>
+      <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;justify-content:center">
+        <div style="font-size:12px;color:var(--muted);letter-spacing:.08em">COMBINED BIAS</div>
+        <div style="font-size:26px;font-weight:800;margin:4px 0 2px;color:${biasColor}">${daEsc(bias)} <span style="font-size:15px;opacity:.7">(${score>0?'+':''}${daEsc(score)})</span></div>
+        <div style="font-size:13px;color:var(--muted)">Feeds LT_Macro consensus node</div>
+      </div>
+    </div>`;
+  if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+async function loadLongTermMacro(useCached=true) {
+  const url = useCached ? '/api/long-term-macro/cached' : '/api/long-term-macro';
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('fetch failed');
+    const j = await r.json();
+    const data = j.data || j;
+    renderLongTermMacro(data);
+  } catch(e) {
+    console.warn('long-term-macro load failed', e);
+    const body = $('lt-macro-body');
+    if (body) body.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:8px 0">Long-term macro overlay temporarily unavailable (data fetch in progress or network).</div>';
+  }
 }
 
 const NODE_ICONS={
@@ -2417,6 +2493,7 @@ async function loadPortfolioWithECG(){
     renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
     initChartSymbols(d.holdings);
     applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
+    loadLongTermMacro(true);        // ensure long-term macro panel is populated on auto-refresh too
   }catch(e){console.error(e);setConn(false);}
 }
 
@@ -2769,17 +2846,29 @@ function mybookPrefill(sym){
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
-  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo. A large book can take 1–2 min; if it times out, click Analyze again and it loads from cache…</div></div>`;
+  const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo. This can take 2–4 minutes for a large book; keep this tab open…</div></div>`;
   try{
-    const res=await fetch('/api/mybook/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>null);
-    if(res&&(res.status===401||res.status===503)){
+    let res=null, j=null;
+    for(let attempt=0; attempt<110; attempt++){
+      res=await fetch('/api/mybook/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>null);
+      if(!res){ await wait(3000); continue; }
+      if(res.status===202){ await wait(3000); continue; }
+      j=await res.json().catch(()=>null);
+      break;
+    }
+    if(!res){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Network error — check connection and retry.</div></div>'; return; }
+    if(res.status===401){
       box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">🔒 Sign in to unlock portfolio analysis — deep AI scores, Kelly sizing, and Monte Carlo on your own book.</div></div>`; return;
     }
-    if(res&&res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
-    if(res&&res.status===429){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily portfolio-analysis limit reached — your last analysis stays available (🖨 Report), and the limit resets on a rolling 24-hour window.</div></div>'; return; }
-    const j=res?await res.json().catch(()=>null):null;
-    if(res&&!res.ok){
-      const msg=(j&&j.detail)||(res.status===503?'Claude API unreachable — check network and retry.':'Analysis failed — try again in a minute.');
+    if(res.status===503){
+      const msg=(j&&j.detail)||'Claude API unreachable — check network and retry.';
+      box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">${daEsc(String(msg))}</div></div>`; return;
+    }
+    if(res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
+    if(res.status===429){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily portfolio-analysis limit reached — your last analysis stays available (🖨 Report), and the limit resets on a rolling 24-hour window.</div></div>'; return; }
+    if(!res.ok){
+      const msg=(j&&j.detail)||'Analysis failed — try again in a minute.';
       box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">${daEsc(String(msg))}</div></div>`; return;
     }
     const d=j&&j.data;
@@ -2840,6 +2929,7 @@ setInterval(loadPortfolioWithECG,REFRESH);
 // Load ECG + regime on init so alert bar and macro bar populate immediately
 loadECG();
 loadRegime();
+loadLongTermMacro(true);  // make long-term features (VIX/F&G/MD + bias) visible immediately
 applyRoleNav();
 
 // ══════════════════════════════════════════════════════════════════════

@@ -234,6 +234,11 @@ EXCLUDED: dict[str, str] = {
                    "locked by tests/test_mybook.py",
     "/api/trading/gate-status": "OWNER-ONLY paper-trading order cap (require_api_key); "
                                 "reads owner trade_log counts — not a customer surface",
+    "/api/long-term-macro": "public macro sentiment overlay (VIX / Fear-&-Greed / aggregate "
+                            "US margin debt from FINRA) — no owner or customer dollars; "
+                            "internally cached, identical for every viewer",
+    "/api/long-term-macro/cached": "cached variant of /api/long-term-macro — same public "
+                                   "macro sentiment, no owner or customer dollars",
 }
 
 
