@@ -72,6 +72,7 @@ _BASE_WEIGHTS = {
     "Macro":         0.75,
     "ECG":           0.5,
     "Analyst":       0.5,
+    "LT_Macro":      0.5,   # long-term (1-3y) market-wide bias (VIX/F&G/margin debt)
     "News":          0.25,
     # Kelly: sizing output, not in directional vote
     # FFT_Cycle: removed from vote — spurious in non-stationary series
@@ -506,6 +507,17 @@ def run_consensus_holding(
         nodes["Macro"] = node_macro()
     except Exception as _macro_err:
         nodes["Macro"] = (None, f"Macro unavailable: {_macro_err}")
+
+    # Node 12: Long-term macro bias (VIX + Fear&Greed + FINRA margin debt → 1-3y
+    # tilt). Distinct from the short-term Macro node above — a slow-moving,
+    # market-WIDE bias (same signal for every holding), internally cached 6h/24h so
+    # per-symbol calls in a portfolio loop don't re-fetch. Graceful ABSTAIN on any
+    # failure, exactly like the other lazily-imported nodes.
+    try:
+        from long_term_macro import node_long_term_macro
+        nodes["LT_Macro"] = node_long_term_macro(symbol)
+    except Exception as _ltm_err:
+        nodes["LT_Macro"] = (None, f"LT-Macro unavailable: {_ltm_err}")
 
     votes   = {k: v[0] for k, v in nodes.items()}
     details = {k: v[1] for k, v in nodes.items()}
