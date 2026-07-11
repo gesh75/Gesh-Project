@@ -18,6 +18,14 @@
 # is the intended recovery path; the report timestamp shows the actual run time.
 
 set -u
+
+# ── Improvement #3 (2026-07-10): prevent host idle-sleep from freezing a run
+# mid-chain while it holds the lock (which lock-skips the next launchd fire).
+# Re-exec self under caffeinate -i once; guard var prevents an exec loop.
+if [ -z "${GESH_CAFFEINATED:-}" ] && command -v caffeinate >/dev/null 2>&1; then
+    GESH_CAFFEINATED=1 exec caffeinate -i "$0" "$@"
+fi
+
 # launchd spawns children with a 256 soft FD limit; a Yahoo throttle-retry
 # morning exhausts it mid-engines ([Errno 24], seen 2026-06-12). Raise to 10240
 # (hard limit is unlimited) — same defense server.py applies in-process.
@@ -33,6 +41,27 @@ export GESH_TRACKER_DB="${GESH_TRACKER_DB:-$GPT/gesh_financial.db}"
 PY="$GP/venv/bin/python3.14"
 LOG=/tmp/gesh_fullchain.log
 LOCK=/tmp/gesh_daily_chain.lock
+
+# ── Improvement #2 (2026-07-10): Telegram alert on every FATAL path.
+# Credentials live in the TRADING repo's .env (the product .env has none).
+# Fail-soft by design: a missing token or curl error logs a line, never
+# changes the chain's exit path.
+tg_alert() {
+    local msg="$1" tok="" chat="" envf
+    for envf in "$GPT/.env" "$GP/.env"; do
+        [ -z "$tok" ]  && tok=$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$envf" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+        [ -z "$chat" ] && chat=$(grep -m1 '^TELEGRAM_CHAT_ID='  "$envf" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+    done
+    if [ -z "$tok" ] || [ -z "$chat" ]; then
+        echo "[tg_alert] no TELEGRAM_BOT_TOKEN/CHAT_ID found — alert NOT sent: $msg"
+        return 0
+    fi
+    curl -sS -m 10 "https://api.telegram.org/bot${tok}/sendMessage" \
+        --data-urlencode "chat_id=${chat}" \
+        --data-urlencode "text=🚨 GESH daily chain — ${msg} [$(date '+%Y-%m-%d %H:%M %Z')]" \
+        >/dev/null 2>&1 && echo "[tg_alert] sent: $msg" || echo "[tg_alert] curl send failed: $msg"
+    return 0
+}
 
 # Cap the append-forever log at ~5MB (keep the most recent ~1MB).
 if [ -f "$LOG" ] && [ "$(stat -f%z "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
@@ -81,12 +110,37 @@ echo "### FULL 10:30 CHAIN — $(date '+%Y-%m-%d %H:%M:%S %Z')"
 SERVICEABLE_MAX_MIN=${GESH_SNAPSHOT_SERVICEABLE_MIN:-1440}
 DEGRADED=0
 step "1/5 fetch snapshot (MCP-first)"
-if GESH_PY="$PY" /bin/bash "$GP/fetch_snapshot_mcp.sh"; then
-    :  # source is asserted from the gate below, not assumed from this exit code
-else
+# Retry with backoff (restored 2026-07-14 from 2a7eaec, which never reached main).
+# The dominant step-1 failure mode is a TRANSIENT expired robinhood-trading MCP
+# OAuth token (or a VPN window): a single attempt is far too brittle — it cost two
+# full days in July. 4 attempts: now, +15m, +30m, +60m. The lock is held throughout
+# (PID-liveness, owner alive) and caffeinate keeps the host awake.
+#
+# Deliberately NOT fatal when all 4 fail (this is where it differs from 2a7eaec):
+# we fall through to the tiered snapshot_state gate below, which decides
+# FRESH / SERVICEABLE(degraded) / FATAL. Retry first, degrade second, die last.
+# Override the schedule for a manual run: GESH_SNAPSHOT_RETRY_WAITS="0" ./run_daily_analysis.sh
+fetch_snapshot_once() {
+    if GESH_PY="$PY" /bin/bash "$GP/fetch_snapshot_mcp.sh"; then
+        return 0  # source is asserted from the gate below, not assumed from this exit code
+    fi
     echo "MCP snapshot path failed — falling back to legacy robin_stocks pickle fetch"
-    "$PY" fetch_live_snapshot.py || echo "WARN: live fetch failed (MCP + legacy) — will try the last serviceable snapshot"
+    "$PY" fetch_live_snapshot.py
+}
+
+SNAP_OK=0
+for RETRY_WAIT in ${GESH_SNAPSHOT_RETRY_WAITS:-0 900 1800 3600}; do
+    if [ "$RETRY_WAIT" -gt 0 ]; then
+        echo "[retry] snapshot fetch failed — waiting $((RETRY_WAIT/60)) min before retry ($(date '+%H:%M:%S'))"
+        sleep "$RETRY_WAIT"
+    fi
+    if fetch_snapshot_once; then SNAP_OK=1; break; fi
+done
+if [ "$SNAP_OK" -ne 1 ]; then
+    echo "WARN: live fetch failed (MCP + legacy, all attempts) — will try the last serviceable snapshot"
+    tg_alert "step 1/5: snapshot fetch failed after all retries (MCP token expired? VPN on? check: claude mcp list) — falling back to the last serviceable snapshot"
 fi
+
 # stdout = the single state token; human detail (age/source/WARNING) goes to stderr -> the log.
 SNAP_STATE=$("$PY" snapshot_state.py "$SERVICEABLE_MAX_MIN")
 echo "snapshot state: $SNAP_STATE (serviceable limit ${SERVICEABLE_MAX_MIN} min)"
@@ -129,13 +183,13 @@ fi
 
 # ── 2/5 engines (fatal — everything downstream needs engine_results.json)
 step "2/5 run_engines2"
-"$PY" run_engines2.py || { echo "FATAL: engines failed"; exit 1; }
+"$PY" run_engines2.py || { echo "FATAL: engines failed"; tg_alert "FATAL step 2/5: run_engines2 failed — see /tmp/gesh_fullchain.log"; exit 1; }
 
 # ── 3/5 AI analysis + DB save (fatal — the report needs ai_result; stopping
 # here keeps yesterday's good gesh_report.html in place instead of overwriting
 # it with empty AI sections)
 step "3/5 run_ai2"
-"$PY" run_ai2.py || { echo "FATAL: run_ai2 failed — keeping previous report"; exit 1; }
+"$PY" run_ai2.py || { echo "FATAL: run_ai2 failed — keeping previous report"; tg_alert "FATAL step 3/5: run_ai2 failed — previous report kept, see /tmp/gesh_fullchain.log"; exit 1; }
 
 # ── 4/5 paper session + risk-gate audit chain (non-fatal by design; a degraded
 # run is research-only — skipped here, and run_paper_gate2's own entry guard
@@ -179,4 +233,5 @@ fi
 
 echo ""
 echo "### CHAIN DONE — $(date '+%Y-%m-%d %H:%M:%S %Z') (total $(($(date +%s)-T0))s, fail=$FAIL degraded=$DEGRADED)"
+[ "$FAIL" -ne 0 ] && tg_alert "chain finished with fail=1 (report generation or asserts failed) — see /tmp/gesh_fullchain.log"
 exit "$FAIL"

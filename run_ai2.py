@@ -78,10 +78,12 @@ regimes_list = regime_raw.get('regimes', []) if isinstance(regime_raw, dict) els
 for rd in regimes_list:
     sym  = rd.get('symbol', '?')
     reg  = rd.get('regime', 'UNKNOWN')
-    adx  = rd.get('adx', 0)
-    rsi  = rd.get('rsi', 0)
-    bb   = rd.get('bb_width', 0)
-    pctb = rd.get('pct_b', 0)
+    # `or 0` guards None VALUES (key present but null — e.g. failed OHLCV fetch);
+    # .get()'s default only covers missing keys. Crashed the chain 2026-07-10 (SPCX).
+    adx  = rd.get('adx') or 0
+    rsi  = rd.get('rsi') or 0
+    bb   = rd.get('bb_width') or 0
+    pctb = rd.get('pct_b') or 0
     regime_lines.append(
         f"  {sym}: {reg} | ADX={adx:.1f} RSI={rsi:.1f} BB-Width={bb:.1f}% %B={pctb:.0f}%"
     )
@@ -101,15 +103,15 @@ print("[ai] Regime context:\n" + regime_summary)
 
 # ── Signal override rules (apply before AI call) ─────────────────────────────
 # Rule 8: cash < $500 → block ALL ADD
-cash = equity_sum.get('cash', 0)
-total = equity_sum.get('total', 1)
+cash = equity_sum.get('cash') or 0    # None-safe
+total = equity_sum.get('total') or 1  # None-safe
 cash_rule_fires = cash < 500.0
 
 # Rule 5: RSI >= 70 → ADD → HOLD for that symbol
 rsi_overrides = {}
 for rd in regimes_list:
     sym = rd.get('symbol', '?')
-    rsi = rd.get('rsi', 0)
+    rsi = rd.get('rsi') or 0   # None-safe (failed OHLCV fetch → null rsi)
     if rsi >= 70:
         k_action = kelly.get(sym, {}).get('action', 'HOLD')
         if k_action in ('ADD',):
