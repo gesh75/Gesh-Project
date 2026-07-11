@@ -1167,8 +1167,18 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
-    return HTMLResponse(HTML.read_text().replace("{{ model }}", MODEL))
+def dashboard(request: Request):
+    html = HTML.read_text()
+    if auth_users.auth_enabled():
+        email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+        role = "owner" if (email and auth_users.is_owner(email)) else "customer"
+    else:
+        role = "owner"
+    # Inject initial role synchronously so customer UI (hiding owner-only nav) applies
+    # before first paint. This eliminates the 1-2s flash of full owner menu on refresh.
+    html = html.replace('<body', f'<body data-initial-role="{role}"', 1)
+    html = html.replace("{{ model }}", MODEL)
+    return HTMLResponse(html)
 
 
 # ─── Portfolio data ───────────────────────────────────────────────────────────
@@ -2184,10 +2194,19 @@ async def mybook_set(request: Request):
     except Exception:
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
-    ok = auth_users.set_position(email, sym, (body or {}).get("shares"),
+    shares_input = (body or {}).get("shares")
+    ok = auth_users.set_position(email, sym, shares_input,
                                  (body or {}).get("avg_cost"))
     if not ok and len(auth_users.get_positions(email)) < auth_users._MAX_POSITIONS:
         raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
+    # If the user supplied a real positive share count via the form, exit privacy/equal-weight mode.
+    # (Only bulk symbols-only sets the flag on; single adds with sizes should turn it off.)
+    try:
+        sh = float(shares_input) if shares_input not in (None, "") else 0
+        if ok and sh > 0:
+            auth_users.set_equal_weight(email, False)
+    except Exception:
+        pass
     return {"status": "ok" if ok else "full", "data": mybook_get(request)["data"]}
 
 
@@ -2198,6 +2217,18 @@ def mybook_remove(symbol: str, request: Request):
         raise HTTPException(status_code=401, detail="Authentication required")
     auth_users.remove_position(email, _safe_symbol(symbol))
     return mybook_get(request)
+
+
+@app.post("/api/mybook/clear")
+def mybook_clear(request: Request):
+    """Completely clear the user's book (all positions) and exit equal-weight mode.
+    Intended for users who did a symbols-only bulk import and now want to start over
+    with real share counts (or a corrected bulk list)."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth_users.clear_positions(email)
+    return {"status": "ok", "data": mybook_get(request)["data"]}
 
 
 # Per-user cache + single-flight for the book analysis. Keyed by (email) with the
@@ -2459,13 +2490,13 @@ def mybook_import_watchlist(request: Request):
 @app.post("/api/mybook/bulk")
 async def mybook_bulk(request: Request):
     """Bulk-import a whole book from one pasted block — the answer to "I have 85
-    positions, not one at a time". Body: {"text": "<lines>"} or {"symbols": [...]}.
+    positions, not one at a time". Body: {"text": "<lines>", "replace": true?} or {"symbols": [...]}.
 
-    Privacy path: paste TICKERS ONLY (one per line, no share counts). With no sizes
-    the book is flagged equal-weight, so the analysis weights every name equally and
-    never needs the customer's real position sizes. A paste that DOES include share
-    counts is honored verbatim and turns equal-weight off. Existing positions are
-    upserted; the per-user cap still applies (overflow → `skipped_cap`)."""
+    - If "replace": true, clears the existing book first (perfect after a bad symbols-only bulk).
+    - Privacy path: paste TICKERS ONLY (no share counts) → sets equal-weight mode (sizes private, 1/N weighting).
+    - Paste with counts (e.g. "AAPL 120") → honors real shares and turns equal-weight off.
+    - Existing positions are upserted unless replace=true; the per-user cap (100) still applies (overflow → skipped_cap).
+    """
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -2477,6 +2508,9 @@ async def mybook_bulk(request: Request):
     syms = (body or {}).get("symbols")
     if not text and isinstance(syms, list):
         text = "\n".join(str(s) for s in syms)
+    replace = bool((body or {}).get("replace"))
+    if replace:
+        auth_users.clear_positions(email)
     items, invalid = _parse_bulk_book(text)
     any_sized = any(it["shares"] is not None for it in items)
     imported, skipped_cap = [], []
@@ -2489,7 +2523,7 @@ async def mybook_bulk(request: Request):
         auth_users.set_equal_weight(email, not any_sized)
     return {"status": "ok", "imported": imported, "skipped_cap": skipped_cap,
             "invalid": invalid, "equal_weight": auth_users.get_equal_weight(email),
-            "data": mybook_get(request)["data"]}
+            "replaced": replace, "data": mybook_get(request)["data"]}
 
 
 def _render_book_report(email: str) -> str:

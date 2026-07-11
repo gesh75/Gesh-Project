@@ -639,6 +639,19 @@ def remove_position(email: str, symbol: str) -> None:
         con.execute("DELETE FROM customer_positions WHERE email=? AND symbol=?", (em, sym))
 
 
+def clear_positions(email: str) -> None:
+    """Remove ALL positions for the user and exit equal-weight mode.
+    Use this when the user wants a clean slate (e.g. after a symbols-only bulk import
+    they now want to replace with real share counts)."""
+    em = _norm(email)
+    if not em:
+        return
+    with _conn() as con:
+        con.execute("DELETE FROM customer_positions WHERE email=?", (em,))
+    # Explicit clear should also leave the user in "real sizes" mode
+    set_equal_weight(email, False)
+
+
 def get_positions(email: str) -> list[dict]:
     """The user's book, oldest-first: [{symbol, shares, avg_cost}]. Empty list for
     an unknown user."""
