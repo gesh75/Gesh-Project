@@ -2207,8 +2207,7 @@ def mybook_remove(symbol: str, request: Request):
 _MYBOOK_TTL = 900  # 15 min
 _mybook_cache: dict[str, tuple[float, str, dict]] = {}
 _mybook_lock = threading.Lock()
-_mybook_flight: dict[str, asyncio.Lock] = {}
-_mybook_tasks: dict[str, asyncio.Task] = {}
+_mybook_jobs: dict[str, dict] = {}   # email -> {"fp", "status": running|done|error, "error"}
 
 
 def _book_fingerprint(positions: list[dict]) -> str:
@@ -2346,24 +2345,34 @@ def _run_book_engines(payload: dict) -> dict:
                                "unpriced": payload["unpriced"]}})
 
 
-async def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> tuple[str, dict]:
-    _check_customer_quota(email, "book_analysis")
-    payload = await asyncio.to_thread(_customer_book_payload, positions, ew)
-    if not payload["holdings"]:
-        raise HTTPException(status_code=404,
-                            detail="No market data for any symbol on your book")
-    result = await asyncio.to_thread(_run_book_engines, payload)
-    with _mybook_lock:
-        _mybook_cache[email] = (time.monotonic(), fp, result)
-        for k in [k for k, (ts, _, _) in _mybook_cache.items()
-                  if (time.monotonic() - ts) >= _MYBOOK_TTL]:
-            del _mybook_cache[k]
+def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> None:
+    """Run the engine suite in a daemon THREAD (not an asyncio task) so the
+    background analysis is independent of the request's event loop — a multi-minute
+    run survives the client/tunnel disconnect, and it behaves identically under
+    TestClient (whose per-request event loops would strand an asyncio task). The
+    outcome is written into _mybook_jobs / _mybook_cache under _mybook_lock, and the
+    poll of /api/mybook/analyze picks it up."""
     try:
-        auth_users.save_book_analysis(email, result)
-    except Exception:
-        pass
-    auth_users.log_usage(email, "book_analysis")
-    return fp, result
+        _check_customer_quota(email, "book_analysis")   # may raise HTTPException(429)
+        payload = _customer_book_payload(positions, ew)
+        if not payload["holdings"]:
+            raise HTTPException(status_code=404,
+                                detail="No market data for any symbol on your book")
+        result = _run_book_engines(payload)
+        with _mybook_lock:
+            _mybook_cache[email] = (time.monotonic(), fp, result)
+            for k in [k for k, (ts, _, _) in _mybook_cache.items()
+                      if (time.monotonic() - ts) >= _MYBOOK_TTL]:
+                del _mybook_cache[k]
+            _mybook_jobs[email] = {"fp": fp, "status": "done"}
+        try:
+            auth_users.save_book_analysis(email, result)
+        except Exception:
+            pass
+        auth_users.log_usage(email, "book_analysis")
+    except BaseException as e:   # record ANY failure so the poller can surface it
+        with _mybook_lock:
+            _mybook_jobs[email] = {"fp": fp, "status": "error", "error": e}
 
 
 @app.post("/api/mybook/analyze", dependencies=[Depends(require_customer_or_owner)])
@@ -2371,11 +2380,13 @@ async def mybook_analyze(request: Request):
     """Full engine suite on the CUSTOMER's own book — deep AI analysis + Kelly +
     Monte Carlo, exactly the owner pipeline but fed from their entered positions.
     Auth-gated (LLM spend), heavy rate bucket, cached per (user, book fingerprint)
-    for _MYBOOK_TTL, single-flight per user, engines offloaded to a thread. NOT
-    logged to the owner's analysis history — this is the customer's data.
+    for _MYBOOK_TTL, single-flight per user. NOT logged to the owner's analysis
+    history — this is the customer's data.
 
-    Long runs return HTTP 202 {status: running} immediately; the client polls this
-    same endpoint every few seconds until 200 (Cloudflare tunnel ~100s limit)."""
+    The engine suite can run for minutes, so it runs in a daemon thread: the first
+    call returns HTTP 202 {status: running} immediately and the client polls this
+    same endpoint every few seconds until 200 (outlasting the Cloudflare tunnel's
+    ~100s limit); a completed run warms the per-book cache so the poll returns it."""
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -2385,57 +2396,41 @@ async def mybook_analyze(request: Request):
     ew = auth_users.get_equal_weight(email)
     fp = _book_fingerprint(positions) + ("|ew" if ew else "")
 
-    def _task_response(task: asyncio.Task) -> dict | JSONResponse | None:
-        if not task.done():
-            return JSONResponse(status_code=202, content={"status": "running"})
-        try:
-            got_fp, result = task.result()
-        except HTTPException:
-            _mybook_tasks.pop(email, None)
-            raise
-        except Exception as e:
-            _mybook_tasks.pop(email, None)
-            raise _server_error(e)
-        _mybook_tasks.pop(email, None)
-        if got_fp == fp:
-            return {"status": "ok", "cached": False, "data": result}
-        return None
-
-    task = _mybook_tasks.get(email)
-    if task is not None:
-        resp = _task_response(task)
-        if resp is not None:
-            return resp
     with _mybook_lock:
-        hit = _mybook_cache.get(email)
-    if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
-        auth_users.log_usage(email, "book_analysis_cached")
-        return {"status": "ok", "cached": True, "data": hit[2]}
-    try:
-        flight = _mybook_flight.setdefault(email, asyncio.Lock())
-        async with flight:
-            task = _mybook_tasks.get(email)
-            if task is not None:
-                resp = _task_response(task)
-                if resp is not None:
-                    return resp
-            with _mybook_lock:
+        # 1) a background job in flight / just finished for THIS book? (checked before
+        #    the cache so the poll that completes a live run is reported as live, not
+        #    a cache hit — the worker already metered the one "book_analysis").
+        job = _mybook_jobs.get(email)
+        if job and job.get("fp") == fp:
+            status = job.get("status")
+            if status == "running":
+                return JSONResponse(status_code=202, content={"status": "running"})
+            if status == "error":
+                err = job.pop("error", None)
+                del _mybook_jobs[email]
+                if isinstance(err, HTTPException):
+                    raise err
+                raise _server_error(err if isinstance(err, Exception)
+                                    else RuntimeError(str(err)))
+            if status == "done":
+                del _mybook_jobs[email]           # completion is handed back exactly once
                 hit = _mybook_cache.get(email)
-            if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
-                auth_users.log_usage(email, "book_analysis_cached")
-                return {"status": "ok", "cached": True, "data": hit[2]}
-            _mybook_tasks[email] = asyncio.create_task(
-                _mybook_analyze_worker(email, fp, positions, ew),
-            )
-            return JSONResponse(
-                status_code=202,
-                content={"status": "running",
-                         "message": "Analysis started — poll every few seconds"},
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise _server_error(e)
+                if hit and hit[1] == fp:
+                    return {"status": "ok", "cached": False, "data": hit[2]}
+                # cache entry vanished (evicted) → fall through and re-run
+        # 2) a genuine repeat view — fresh cached result for this exact book?
+        hit = _mybook_cache.get(email)
+        if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
+            auth_users.log_usage(email, "book_analysis_cached")
+            return {"status": "ok", "cached": True, "data": hit[2]}
+        # 3) start a fresh background job (single-flight: the lock makes this atomic)
+        _mybook_jobs[email] = {"fp": fp, "status": "running"}
+    threading.Thread(target=_mybook_analyze_worker,
+                     args=(email, fp, positions, ew), daemon=True).start()
+    return JSONResponse(
+        status_code=202,
+        content={"status": "running", "message": "Analysis started — poll every few seconds"},
+    )
 
 
 @app.post("/api/mybook/import-watchlist")
