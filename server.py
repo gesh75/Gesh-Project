@@ -1167,8 +1167,18 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard():
-    return HTMLResponse(HTML.read_text().replace("{{ model }}", MODEL))
+def dashboard(request: Request):
+    html = HTML.read_text()
+    if auth_users.auth_enabled():
+        email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+        role = "owner" if (email and auth_users.is_owner(email)) else "customer"
+    else:
+        role = "owner"
+    # Inject initial role synchronously so customer UI (hiding owner-only nav) applies
+    # before first paint. This eliminates the 1-2s flash of full owner menu on refresh.
+    html = html.replace('<body', f'<body data-initial-role="{role}"', 1)
+    html = html.replace("{{ model }}", MODEL)
+    return HTMLResponse(html)
 
 
 # ─── Portfolio data ───────────────────────────────────────────────────────────
@@ -1737,6 +1747,36 @@ def screener_cached():
     return _cached_response("screener")
 
 
+# ─── Long-Term Macro Overlay (VIX + Fear & Greed + Margin Debt) ───────────────
+# Visible surface for Proposal 1 long-term (1-3y) sentiment bias features.
+# Data is cached internally in long_term_macro (6h/24h), so this is cheap.
+
+@app.get("/api/long-term-macro")
+def long_term_macro():
+    try:
+        from long_term_macro import get_long_term_macro_sentiment
+        data = get_long_term_macro_sentiment()
+        return {"status": "ok", "data": _sanitize(data)}
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/long-term-macro/cached")
+def long_term_macro_cached():
+    """Serve last computed or live (module has its own TTL cache)."""
+    # Reuse the live fetch (internal caches prevent hammering). Frontend treats as 'cached' for instant paint.
+    try:
+        from long_term_macro import get_long_term_macro_sentiment
+        data = get_long_term_macro_sentiment()
+        out = {"status": "ok", "data": _sanitize(data), "cached": True}
+        # attach a fake ran_at from the payload if present
+        if isinstance(data, dict) and data.get("fetched_at"):
+            out["ran_at"] = data["fetched_at"]
+        return out
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.get("/api/portfolio/history")
 def portfolio_history(points: int = 60):
     """Portfolio equity series for the KPI sparklines. Always returns a list."""
@@ -2154,10 +2194,19 @@ async def mybook_set(request: Request):
     except Exception:
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
-    ok = auth_users.set_position(email, sym, (body or {}).get("shares"),
+    shares_input = (body or {}).get("shares")
+    ok = auth_users.set_position(email, sym, shares_input,
                                  (body or {}).get("avg_cost"))
     if not ok and len(auth_users.get_positions(email)) < auth_users._MAX_POSITIONS:
         raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
+    # If the user supplied a real positive share count via the form, exit privacy/equal-weight mode.
+    # (Only bulk symbols-only sets the flag on; single adds with sizes should turn it off.)
+    try:
+        sh = float(shares_input) if shares_input not in (None, "") else 0
+        if ok and sh > 0:
+            auth_users.set_equal_weight(email, False)
+    except Exception:
+        pass
     return {"status": "ok" if ok else "full", "data": mybook_get(request)["data"]}
 
 
@@ -2170,6 +2219,18 @@ def mybook_remove(symbol: str, request: Request):
     return mybook_get(request)
 
 
+@app.post("/api/mybook/clear")
+def mybook_clear(request: Request):
+    """Completely clear the user's book (all positions) and exit equal-weight mode.
+    Intended for users who did a symbols-only bulk import and now want to start over
+    with real share counts (or a corrected bulk list)."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    auth_users.clear_positions(email)
+    return {"status": "ok", "data": mybook_get(request)["data"]}
+
+
 # Per-user cache + single-flight for the book analysis. Keyed by (email) with the
 # book fingerprint in the value: same book within the TTL = cached result; any
 # position change = new fingerprint = fresh run. Same eviction/loop-affinity rules
@@ -2177,7 +2238,7 @@ def mybook_remove(symbol: str, request: Request):
 _MYBOOK_TTL = 900  # 15 min
 _mybook_cache: dict[str, tuple[float, str, dict]] = {}
 _mybook_lock = threading.Lock()
-_mybook_flight: dict[str, asyncio.Lock] = {}
+_mybook_jobs: dict[str, dict] = {}   # email -> {"fp", "status": running|done|error, "error"}
 
 
 def _book_fingerprint(positions: list[dict]) -> str:
@@ -2185,13 +2246,68 @@ def _book_fingerprint(positions: list[dict]) -> str:
 
 
 # The deep analysis emits one detailed prose card per holding, so the LLM's OUTPUT
-# (and thus its runtime, ~70 tok/s) grows with the book: 35 cards generated ~24k
-# tokens over 4+ minutes — past every request/tunnel timeout — and a bigger book
-# truncated outright. So cap the DETAILED analysis (and its regime + analyst
-# enrichment) to the largest-weight names; Monte Carlo + Kelly still cover the FULL
-# book. ~12 keeps a cold run near ~2 min so it completes and warms the per-book
-# cache (a retry then returns instantly).
-_BOOK_ANALYSIS_MAX_HOLDINGS = 12
+# (and thus its runtime, ~70 tok/s) grows with the book. Cap DETAILED cards to the
+# largest-weight names; Monte Carlo + Kelly still cover the FULL book. Customer
+# books always use concise cards + a retry ladder so we stay under max_tokens and
+# the ~100s Cloudflare tunnel limit (see async mybook_analyze polling).
+_BOOK_ANALYSIS_MAX_HOLDINGS = 8
+_BOOK_ANALYSIS_RETRY_CAPS = (6, 4)
+
+
+def _deep_analyze_for_book(
+    analysis_payload: dict,
+    regime_context: str | None,
+    truncated: dict | None,
+) -> dict:
+    """Customer-book deep analysis: concise output, shrink on truncation."""
+    holdings = analysis_payload.get("holdings") or []
+    caps = [len(holdings)]
+    if truncated:
+        caps.extend(c for c in _BOOK_ANALYSIS_RETRY_CAPS if c < len(holdings))
+    last_err: Exception | None = None
+    for cap in caps:
+        payload = analysis_payload
+        if cap < len(holdings):
+            top = sorted(holdings, key=lambda h: h.get("equity") or 0,
+                         reverse=True)[:cap]
+            payload = {**analysis_payload, "holdings": top}
+        try:
+            analysis = deep_analyze_portfolio(
+                payload,
+                regime_context=regime_context,
+                concise=True,
+                max_tokens=12000,
+            )
+            if truncated and cap < truncated["analyzed"]:
+                truncated["analyzed"] = cap
+            return analysis
+        except RuntimeError as e:
+            if "truncated" in str(e).lower() and cap != caps[-1]:
+                logger.warning(
+                    "mybook deep analysis truncated at %d holdings — retrying smaller",
+                    cap,
+                )
+                last_err = e
+                continue
+            raise
+    raise last_err or RuntimeError("mybook deep analysis failed")
+
+
+def _jsonable(o):
+    """Recursively coerce engine output to JSON-native types. Monte Carlo / Kelly /
+    regime lean on numpy and can hand back numpy scalars (np.bool_, np.float64) that
+    FastAPI's encoder chokes on ("'numpy.bool' object is not iterable") — turning a
+    completed analysis into a 500. numpy scalars/arrays expose .tolist()."""
+    if isinstance(o, dict):
+        return {k: _jsonable(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_jsonable(v) for v in o]
+    if type(o).__module__.startswith("numpy"):
+        try:
+            return _jsonable(o.tolist())
+        except Exception:
+            return str(o)
+    return o
 
 
 def _run_book_engines(payload: dict) -> dict:
@@ -2231,7 +2347,7 @@ def _run_book_engines(payload: dict) -> dict:
         regime_context = detect_regimes(analyzed_symbols).get("regime_summary")
     except Exception:
         pass
-    analysis = deep_analyze_portfolio(analysis_payload, regime_context=regime_context)
+    analysis = _deep_analyze_for_book(analysis_payload, regime_context, truncated)
     if truncated:
         analysis["holdings_truncated"] = truncated
     ai_verdicts = {}
@@ -2254,10 +2370,40 @@ def _run_book_engines(payload: dict) -> dict:
                                    upside, ai_verdicts)
     except Exception as e:
         kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
-    return {"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
-            "book": {"positions": payload["holdings"],
-                     "total_equity": payload["equity_summary"]["portfolio_equity"],
-                     "unpriced": payload["unpriced"]}}
+    return _jsonable({"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
+                      "book": {"positions": payload["holdings"],
+                               "total_equity": payload["equity_summary"]["portfolio_equity"],
+                               "unpriced": payload["unpriced"]}})
+
+
+def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> None:
+    """Run the engine suite in a daemon THREAD (not an asyncio task) so the
+    background analysis is independent of the request's event loop — a multi-minute
+    run survives the client/tunnel disconnect, and it behaves identically under
+    TestClient (whose per-request event loops would strand an asyncio task). The
+    outcome is written into _mybook_jobs / _mybook_cache under _mybook_lock, and the
+    poll of /api/mybook/analyze picks it up."""
+    try:
+        _check_customer_quota(email, "book_analysis")   # may raise HTTPException(429)
+        payload = _customer_book_payload(positions, ew)
+        if not payload["holdings"]:
+            raise HTTPException(status_code=404,
+                                detail="No market data for any symbol on your book")
+        result = _run_book_engines(payload)
+        with _mybook_lock:
+            _mybook_cache[email] = (time.monotonic(), fp, result)
+            for k in [k for k, (ts, _, _) in _mybook_cache.items()
+                      if (time.monotonic() - ts) >= _MYBOOK_TTL]:
+                del _mybook_cache[k]
+            _mybook_jobs[email] = {"fp": fp, "status": "done"}
+        try:
+            auth_users.save_book_analysis(email, result)
+        except Exception:
+            pass
+        auth_users.log_usage(email, "book_analysis")
+    except BaseException as e:   # record ANY failure so the poller can surface it
+        with _mybook_lock:
+            _mybook_jobs[email] = {"fp": fp, "status": "error", "error": e}
 
 
 @app.post("/api/mybook/analyze", dependencies=[Depends(require_customer_or_owner)])
@@ -2265,8 +2411,13 @@ async def mybook_analyze(request: Request):
     """Full engine suite on the CUSTOMER's own book — deep AI analysis + Kelly +
     Monte Carlo, exactly the owner pipeline but fed from their entered positions.
     Auth-gated (LLM spend), heavy rate bucket, cached per (user, book fingerprint)
-    for _MYBOOK_TTL, single-flight per user, engines offloaded to a thread. NOT
-    logged to the owner's analysis history — this is the customer's data."""
+    for _MYBOOK_TTL, single-flight per user. NOT logged to the owner's analysis
+    history — this is the customer's data.
+
+    The engine suite can run for minutes, so it runs in a daemon thread: the first
+    call returns HTTP 202 {status: running} immediately and the client polls this
+    same endpoint every few seconds until 200 (outlasting the Cloudflare tunnel's
+    ~100s limit); a completed run warms the per-book cache so the poll returns it."""
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -2275,44 +2426,42 @@ async def mybook_analyze(request: Request):
         raise HTTPException(status_code=400, detail="Your book is empty — add positions first")
     ew = auth_users.get_equal_weight(email)
     fp = _book_fingerprint(positions) + ("|ew" if ew else "")
+
     with _mybook_lock:
-        hit = _mybook_cache.get(email)
-    if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
-        auth_users.log_usage(email, "book_analysis_cached")
-        return {"status": "ok", "cached": True, "data": hit[2]}
-    try:
-        flight = _mybook_flight.setdefault(email, asyncio.Lock())
-        async with flight:
-            with _mybook_lock:
+        # 1) a background job in flight / just finished for THIS book? (checked before
+        #    the cache so the poll that completes a live run is reported as live, not
+        #    a cache hit — the worker already metered the one "book_analysis").
+        job = _mybook_jobs.get(email)
+        if job and job.get("fp") == fp:
+            status = job.get("status")
+            if status == "running":
+                return JSONResponse(status_code=202, content={"status": "running"})
+            if status == "error":
+                err = job.pop("error", None)
+                del _mybook_jobs[email]
+                if isinstance(err, HTTPException):
+                    raise err
+                raise _server_error(err if isinstance(err, Exception)
+                                    else RuntimeError(str(err)))
+            if status == "done":
+                del _mybook_jobs[email]           # completion is handed back exactly once
                 hit = _mybook_cache.get(email)
-            if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
-                auth_users.log_usage(email, "book_analysis_cached")
-                return {"status": "ok", "cached": True, "data": hit[2]}
-            # Quota gate after the cache re-check (cached hits are free), before
-            # any engine work — a capped user costs nothing.
-            _check_customer_quota(email, "book_analysis")
-            payload = await asyncio.to_thread(_customer_book_payload, positions, ew)
-            if not payload["holdings"]:
-                raise HTTPException(status_code=404,
-                                    detail="No market data for any symbol on your book")
-            result = await asyncio.to_thread(_run_book_engines, payload)
-            with _mybook_lock:
-                _mybook_cache[email] = (time.monotonic(), fp, result)
-                for k in [k for k, (ts, _, _) in _mybook_cache.items()
-                          if (time.monotonic() - ts) >= _MYBOOK_TTL]:
-                    del _mybook_cache[k]
-            # Durable copy powers GET /mybook/report after the in-memory TTL/restart;
-            # metering counts the live LLM run. Both best-effort by contract.
-            try:
-                auth_users.save_book_analysis(email, result)
-            except Exception:
-                pass
-            auth_users.log_usage(email, "book_analysis")
-            return {"status": "ok", "cached": False, "data": result}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise _server_error(e)
+                if hit and hit[1] == fp:
+                    return {"status": "ok", "cached": False, "data": hit[2]}
+                # cache entry vanished (evicted) → fall through and re-run
+        # 2) a genuine repeat view — fresh cached result for this exact book?
+        hit = _mybook_cache.get(email)
+        if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
+            auth_users.log_usage(email, "book_analysis_cached")
+            return {"status": "ok", "cached": True, "data": hit[2]}
+        # 3) start a fresh background job (single-flight: the lock makes this atomic)
+        _mybook_jobs[email] = {"fp": fp, "status": "running"}
+    threading.Thread(target=_mybook_analyze_worker,
+                     args=(email, fp, positions, ew), daemon=True).start()
+    return JSONResponse(
+        status_code=202,
+        content={"status": "running", "message": "Analysis started — poll every few seconds"},
+    )
 
 
 @app.post("/api/mybook/import-watchlist")
@@ -2341,13 +2490,13 @@ def mybook_import_watchlist(request: Request):
 @app.post("/api/mybook/bulk")
 async def mybook_bulk(request: Request):
     """Bulk-import a whole book from one pasted block — the answer to "I have 85
-    positions, not one at a time". Body: {"text": "<lines>"} or {"symbols": [...]}.
+    positions, not one at a time". Body: {"text": "<lines>", "replace": true?} or {"symbols": [...]}.
 
-    Privacy path: paste TICKERS ONLY (one per line, no share counts). With no sizes
-    the book is flagged equal-weight, so the analysis weights every name equally and
-    never needs the customer's real position sizes. A paste that DOES include share
-    counts is honored verbatim and turns equal-weight off. Existing positions are
-    upserted; the per-user cap still applies (overflow → `skipped_cap`)."""
+    - If "replace": true, clears the existing book first (perfect after a bad symbols-only bulk).
+    - Privacy path: paste TICKERS ONLY (no share counts) → sets equal-weight mode (sizes private, 1/N weighting).
+    - Paste with counts (e.g. "AAPL 120") → honors real shares and turns equal-weight off.
+    - Existing positions are upserted unless replace=true; the per-user cap (100) still applies (overflow → skipped_cap).
+    """
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -2359,6 +2508,9 @@ async def mybook_bulk(request: Request):
     syms = (body or {}).get("symbols")
     if not text and isinstance(syms, list):
         text = "\n".join(str(s) for s in syms)
+    replace = bool((body or {}).get("replace"))
+    if replace:
+        auth_users.clear_positions(email)
     items, invalid = _parse_bulk_book(text)
     any_sized = any(it["shares"] is not None for it in items)
     imported, skipped_cap = [], []
@@ -2371,7 +2523,7 @@ async def mybook_bulk(request: Request):
         auth_users.set_equal_weight(email, not any_sized)
     return {"status": "ok", "imported": imported, "skipped_cap": skipped_cap,
             "invalid": invalid, "equal_weight": auth_users.get_equal_weight(email),
-            "data": mybook_get(request)["data"]}
+            "replaced": replace, "data": mybook_get(request)["data"]}
 
 
 def _render_book_report(email: str) -> str:

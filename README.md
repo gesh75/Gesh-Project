@@ -240,6 +240,10 @@ python -m trading.autopilot --job pre_market_scan
 
 Open **http://localhost:9000** for the dashboard.
 
+> **Deep gaps & improvements analysis (2026-07-09):** See `GAPS_AND_IMPROVEMENTS_2026-07-09.md` (full evidence-based review across all gesh repos, code, tests, CI, audits, product surface). Run the verification commands at the end of that doc.
+
+> **Production Ops Layer:** The durable watchers live in `~/.gesh/`. See the new `OPS_LAYER.md` for details, current scripts (gatewatch, GS stop proximity, etc.), portability notes, and recommendations.
+
 ---
 
 ## AI Models

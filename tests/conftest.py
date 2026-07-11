@@ -67,11 +67,12 @@ def _clear_server_response_caches() -> None:
     def _clear() -> None:
         srv = sys.modules.get("server")
         # _ticker_card_flight holds asyncio.Locks bound to one test's event loop —
-        # every TestClient spins a fresh loop, so a leaked lock raises
-        # "bound to a different event loop" in the next test.
+        # every TestClient spins a fresh loop, so a leaked lock raises "bound to a
+        # different event loop" in the next test. _mybook_jobs holds background-
+        # analysis status; a stale entry would make the next test poll a done job.
         for name in ("_chart_cache", "_ticker_get_cache", "_RATE_HITS",
                      "_ticker_card_cache", "_ticker_card_flight",
-                     "_mybook_cache", "_mybook_flight"):
+                     "_mybook_cache", "_mybook_jobs"):
             state = getattr(srv, name, None)
             if state is not None:
                 state.clear()
