@@ -1737,6 +1737,36 @@ def screener_cached():
     return _cached_response("screener")
 
 
+# ─── Long-Term Macro Overlay (VIX + Fear & Greed + Margin Debt) ───────────────
+# Visible surface for Proposal 1 long-term (1-3y) sentiment bias features.
+# Data is cached internally in long_term_macro (6h/24h), so this is cheap.
+
+@app.get("/api/long-term-macro")
+def long_term_macro():
+    try:
+        from long_term_macro import get_long_term_macro_sentiment
+        data = get_long_term_macro_sentiment()
+        return {"status": "ok", "data": _sanitize(data)}
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/long-term-macro/cached")
+def long_term_macro_cached():
+    """Serve last computed or live (module has its own TTL cache)."""
+    # Reuse the live fetch (internal caches prevent hammering). Frontend treats as 'cached' for instant paint.
+    try:
+        from long_term_macro import get_long_term_macro_sentiment
+        data = get_long_term_macro_sentiment()
+        out = {"status": "ok", "data": _sanitize(data), "cached": True}
+        # attach a fake ran_at from the payload if present
+        if isinstance(data, dict) and data.get("fetched_at"):
+            out["ran_at"] = data["fetched_at"]
+        return out
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.get("/api/portfolio/history")
 def portfolio_history(points: int = 60):
     """Portfolio equity series for the KPI sparklines. Always returns a list."""
@@ -2178,6 +2208,7 @@ _MYBOOK_TTL = 900  # 15 min
 _mybook_cache: dict[str, tuple[float, str, dict]] = {}
 _mybook_lock = threading.Lock()
 _mybook_flight: dict[str, asyncio.Lock] = {}
+_mybook_tasks: dict[str, asyncio.Task] = {}
 
 
 def _book_fingerprint(positions: list[dict]) -> str:
@@ -2185,13 +2216,68 @@ def _book_fingerprint(positions: list[dict]) -> str:
 
 
 # The deep analysis emits one detailed prose card per holding, so the LLM's OUTPUT
-# (and thus its runtime, ~70 tok/s) grows with the book: 35 cards generated ~24k
-# tokens over 4+ minutes — past every request/tunnel timeout — and a bigger book
-# truncated outright. So cap the DETAILED analysis (and its regime + analyst
-# enrichment) to the largest-weight names; Monte Carlo + Kelly still cover the FULL
-# book. ~12 keeps a cold run near ~2 min so it completes and warms the per-book
-# cache (a retry then returns instantly).
-_BOOK_ANALYSIS_MAX_HOLDINGS = 12
+# (and thus its runtime, ~70 tok/s) grows with the book. Cap DETAILED cards to the
+# largest-weight names; Monte Carlo + Kelly still cover the FULL book. Customer
+# books always use concise cards + a retry ladder so we stay under max_tokens and
+# the ~100s Cloudflare tunnel limit (see async mybook_analyze polling).
+_BOOK_ANALYSIS_MAX_HOLDINGS = 8
+_BOOK_ANALYSIS_RETRY_CAPS = (6, 4)
+
+
+def _deep_analyze_for_book(
+    analysis_payload: dict,
+    regime_context: str | None,
+    truncated: dict | None,
+) -> dict:
+    """Customer-book deep analysis: concise output, shrink on truncation."""
+    holdings = analysis_payload.get("holdings") or []
+    caps = [len(holdings)]
+    if truncated:
+        caps.extend(c for c in _BOOK_ANALYSIS_RETRY_CAPS if c < len(holdings))
+    last_err: Exception | None = None
+    for cap in caps:
+        payload = analysis_payload
+        if cap < len(holdings):
+            top = sorted(holdings, key=lambda h: h.get("equity") or 0,
+                         reverse=True)[:cap]
+            payload = {**analysis_payload, "holdings": top}
+        try:
+            analysis = deep_analyze_portfolio(
+                payload,
+                regime_context=regime_context,
+                concise=True,
+                max_tokens=12000,
+            )
+            if truncated and cap < truncated["analyzed"]:
+                truncated["analyzed"] = cap
+            return analysis
+        except RuntimeError as e:
+            if "truncated" in str(e).lower() and cap != caps[-1]:
+                logger.warning(
+                    "mybook deep analysis truncated at %d holdings — retrying smaller",
+                    cap,
+                )
+                last_err = e
+                continue
+            raise
+    raise last_err or RuntimeError("mybook deep analysis failed")
+
+
+def _jsonable(o):
+    """Recursively coerce engine output to JSON-native types. Monte Carlo / Kelly /
+    regime lean on numpy and can hand back numpy scalars (np.bool_, np.float64) that
+    FastAPI's encoder chokes on ("'numpy.bool' object is not iterable") — turning a
+    completed analysis into a 500. numpy scalars/arrays expose .tolist()."""
+    if isinstance(o, dict):
+        return {k: _jsonable(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_jsonable(v) for v in o]
+    if type(o).__module__.startswith("numpy"):
+        try:
+            return _jsonable(o.tolist())
+        except Exception:
+            return str(o)
+    return o
 
 
 def _run_book_engines(payload: dict) -> dict:
@@ -2231,7 +2317,7 @@ def _run_book_engines(payload: dict) -> dict:
         regime_context = detect_regimes(analyzed_symbols).get("regime_summary")
     except Exception:
         pass
-    analysis = deep_analyze_portfolio(analysis_payload, regime_context=regime_context)
+    analysis = _deep_analyze_for_book(analysis_payload, regime_context, truncated)
     if truncated:
         analysis["holdings_truncated"] = truncated
     ai_verdicts = {}
@@ -2254,10 +2340,30 @@ def _run_book_engines(payload: dict) -> dict:
                                    upside, ai_verdicts)
     except Exception as e:
         kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
-    return {"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
-            "book": {"positions": payload["holdings"],
-                     "total_equity": payload["equity_summary"]["portfolio_equity"],
-                     "unpriced": payload["unpriced"]}}
+    return _jsonable({"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
+                      "book": {"positions": payload["holdings"],
+                               "total_equity": payload["equity_summary"]["portfolio_equity"],
+                               "unpriced": payload["unpriced"]}})
+
+
+async def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> tuple[str, dict]:
+    _check_customer_quota(email, "book_analysis")
+    payload = await asyncio.to_thread(_customer_book_payload, positions, ew)
+    if not payload["holdings"]:
+        raise HTTPException(status_code=404,
+                            detail="No market data for any symbol on your book")
+    result = await asyncio.to_thread(_run_book_engines, payload)
+    with _mybook_lock:
+        _mybook_cache[email] = (time.monotonic(), fp, result)
+        for k in [k for k, (ts, _, _) in _mybook_cache.items()
+                  if (time.monotonic() - ts) >= _MYBOOK_TTL]:
+            del _mybook_cache[k]
+    try:
+        auth_users.save_book_analysis(email, result)
+    except Exception:
+        pass
+    auth_users.log_usage(email, "book_analysis")
+    return fp, result
 
 
 @app.post("/api/mybook/analyze", dependencies=[Depends(require_customer_or_owner)])
@@ -2266,7 +2372,10 @@ async def mybook_analyze(request: Request):
     Monte Carlo, exactly the owner pipeline but fed from their entered positions.
     Auth-gated (LLM spend), heavy rate bucket, cached per (user, book fingerprint)
     for _MYBOOK_TTL, single-flight per user, engines offloaded to a thread. NOT
-    logged to the owner's analysis history — this is the customer's data."""
+    logged to the owner's analysis history — this is the customer's data.
+
+    Long runs return HTTP 202 {status: running} immediately; the client polls this
+    same endpoint every few seconds until 200 (Cloudflare tunnel ~100s limit)."""
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -2275,6 +2384,28 @@ async def mybook_analyze(request: Request):
         raise HTTPException(status_code=400, detail="Your book is empty — add positions first")
     ew = auth_users.get_equal_weight(email)
     fp = _book_fingerprint(positions) + ("|ew" if ew else "")
+
+    def _task_response(task: asyncio.Task) -> dict | JSONResponse | None:
+        if not task.done():
+            return JSONResponse(status_code=202, content={"status": "running"})
+        try:
+            got_fp, result = task.result()
+        except HTTPException:
+            _mybook_tasks.pop(email, None)
+            raise
+        except Exception as e:
+            _mybook_tasks.pop(email, None)
+            raise _server_error(e)
+        _mybook_tasks.pop(email, None)
+        if got_fp == fp:
+            return {"status": "ok", "cached": False, "data": result}
+        return None
+
+    task = _mybook_tasks.get(email)
+    if task is not None:
+        resp = _task_response(task)
+        if resp is not None:
+            return resp
     with _mybook_lock:
         hit = _mybook_cache.get(email)
     if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
@@ -2283,32 +2414,24 @@ async def mybook_analyze(request: Request):
     try:
         flight = _mybook_flight.setdefault(email, asyncio.Lock())
         async with flight:
+            task = _mybook_tasks.get(email)
+            if task is not None:
+                resp = _task_response(task)
+                if resp is not None:
+                    return resp
             with _mybook_lock:
                 hit = _mybook_cache.get(email)
             if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
                 auth_users.log_usage(email, "book_analysis_cached")
                 return {"status": "ok", "cached": True, "data": hit[2]}
-            # Quota gate after the cache re-check (cached hits are free), before
-            # any engine work — a capped user costs nothing.
-            _check_customer_quota(email, "book_analysis")
-            payload = await asyncio.to_thread(_customer_book_payload, positions, ew)
-            if not payload["holdings"]:
-                raise HTTPException(status_code=404,
-                                    detail="No market data for any symbol on your book")
-            result = await asyncio.to_thread(_run_book_engines, payload)
-            with _mybook_lock:
-                _mybook_cache[email] = (time.monotonic(), fp, result)
-                for k in [k for k, (ts, _, _) in _mybook_cache.items()
-                          if (time.monotonic() - ts) >= _MYBOOK_TTL]:
-                    del _mybook_cache[k]
-            # Durable copy powers GET /mybook/report after the in-memory TTL/restart;
-            # metering counts the live LLM run. Both best-effort by contract.
-            try:
-                auth_users.save_book_analysis(email, result)
-            except Exception:
-                pass
-            auth_users.log_usage(email, "book_analysis")
-            return {"status": "ok", "cached": False, "data": result}
+            _mybook_tasks[email] = asyncio.create_task(
+                _mybook_analyze_worker(email, fp, positions, ew),
+            )
+            return JSONResponse(
+                status_code=202,
+                content={"status": "running",
+                         "message": "Analysis started — poll every few seconds"},
+            )
     except HTTPException:
         raise
     except Exception as e:

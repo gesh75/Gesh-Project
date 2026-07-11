@@ -336,7 +336,12 @@ SCREENER_SCHEMA = {
 def deep_analyze_portfolio(
     payload: dict[str, Any],
     regime_context: str | None = None,
+    concise: bool = False,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
+    """`concise` trades card verbosity for speed — the LLM's runtime scales with
+    output tokens, so terse cards keep a live interactive analysis (customer book)
+    from running minutes-long. `max_tokens` overrides the output ceiling."""
     _budget_guard("deep_analyze_portfolio")
     # Bounded client: SDK defaults (600s timeout x retries) allow a ~30-min
     # silent stall. 240s covers a slow ~7-10K-token generation.
@@ -344,6 +349,11 @@ def deep_analyze_portfolio(
 
     today = __import__('datetime').date.today().isoformat()
     regime_block = f"\n\n{regime_context}" if regime_context else ""
+    brevity = ("\n\nBE CONCISE — this is a fast interactive report on a larger book. "
+               "For each holding give at most 2 short risks, 2 short rewards, and "
+               "one-line 3M/12M outlooks; a one-sentence snowflake_summary. No preamble "
+               "or repetition.") if concise else ""
+    _max_tokens = max_tokens if max_tokens is not None else 24000
 
     import copy
     sanitized = copy.deepcopy(payload)
@@ -368,7 +378,7 @@ def deep_analyze_portfolio(
 
     message = client.messages.create(
         model=MODEL,
-        max_tokens=24000,
+        max_tokens=_max_tokens,
         system=[{"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[{
             "name": "return_portfolio_analysis",
@@ -379,7 +389,7 @@ def deep_analyze_portfolio(
         messages=[{
             "role": "user",
             "content": (
-                f"Perform a deep financial analysis of this portfolio. Today is {today}.{regime_block}\n\n"
+                f"Perform a deep financial analysis of this portfolio. Today is {today}.{regime_block}{brevity}\n\n"
                 f"```json\n{json.dumps(sanitized, separators=(',', ':'))}\n```"
             )
         }]
