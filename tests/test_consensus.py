@@ -82,6 +82,12 @@ def _offline_consensus(monkeypatch):
     # ABSTAIN so the deterministic 8-node model (sum 9.0) the tests assert holds.
     import macro_connector
     monkeypatch.setattr(macro_connector, "node_macro", lambda *a, **k: (consensus.ABSTAIN, "macro-stub"))
+    # LT_Macro (0.5 weight) also self-fetches (VIX/F&G/FINRA), so pin it ABSTAIN
+    # too — same reason as Macro. The directional-tally tests stay deterministic;
+    # its own wiring is covered by tests/test_long_term_macro.py.
+    import long_term_macro
+    monkeypatch.setattr(long_term_macro, "node_long_term_macro",
+                        lambda *a, **k: (consensus.ABSTAIN, "ltm-stub"))
     # Phase 4: NODE_WEIGHTS is now regime-conditional (calls detect_regimes). Pin
     # it to "no regime" so these tally tests use the balanced BASE weights (sum 9.0)
     # deterministically, and clear the 30-min regime cache between tests.
@@ -117,10 +123,10 @@ def test_strong_buy_all_bullish(monkeypatch):
     assert res["raw_score"] == pytest.approx(1.0)
     assert res["verdict"] == "STRONG BUY"
     assert res["verdict_color"] == "green"
-    assert res["active_nodes"] == 8     # the 8 controlled nodes voted (Macro pinned ABSTAIN)
-    # confidence = round(active / len(NODE_WEIGHTS) * 100, 0). NODE_WEIGHTS has 9
-    # entries (the 8 controlled nodes + Macro), so round(8/9*100) = 89.0.
-    assert res["confidence"] == pytest.approx(89.0)
+    assert res["active_nodes"] == 8     # the 8 controlled nodes voted (Macro + LT_Macro pinned ABSTAIN)
+    # confidence = round(active / len(NODE_WEIGHTS) * 100, 0). NODE_WEIGHTS has 10
+    # entries (the 8 controlled nodes + Macro + LT_Macro), so round(8/10*100) = 80.0.
+    assert res["confidence"] == pytest.approx(80.0)
 
 
 def test_buy_band(monkeypatch):
@@ -189,12 +195,12 @@ def test_vote_tally_counts(monkeypatch):
     assert res["bullish"] == 2
     assert res["bearish"] == 1
     assert res["neutral"] == 3          # Momentum, Fundamentals, ECG
-    assert res["abstains"] == 3         # Analyst, News + Macro (pinned ABSTAIN)
-    assert res["active_nodes"] == 6     # 8 controlled nodes - 2 abstains (Macro excluded)
+    assert res["abstains"] == 4         # Analyst, News + Macro + LT_Macro (pinned ABSTAIN)
+    assert res["active_nodes"] == 6     # 8 controlled nodes - 2 abstains (Macro + LT_Macro excluded)
     # Kelly + FFT are reported but excluded from the directional tally.
     assert "Kelly" in res["votes"]
     assert "FFT_Cycle" in res["votes"]
-    assert res["total_nodes"] == 11     # 8 directional + Kelly + FFT + Macro
+    assert res["total_nodes"] == 12     # 8 directional + Kelly + FFT + Macro + LT_Macro
 
 
 def test_kelly_and_fft_excluded_from_score(monkeypatch):
