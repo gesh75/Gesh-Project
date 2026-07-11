@@ -2933,6 +2933,7 @@ async function mybookAnalyze(){
     }
     if(res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
     if(res.status===429){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily portfolio-analysis limit reached — your last analysis stays available (🖨 Report), and the limit resets on a rolling 24-hour window.</div></div>'; return; }
+    if(res.status===409){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ An analysis is already running for your book — let it finish, then click Analyze again.</div></div>'; return; }
     if(!res.ok){
       const msg=(j&&j.detail)||'Analysis failed — try again in a minute.';
       box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">${daEsc(String(msg))}</div></div>`; return;

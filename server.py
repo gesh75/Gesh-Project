@@ -2454,7 +2454,18 @@ async def mybook_analyze(request: Request):
         if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
             auth_users.log_usage(email, "book_analysis_cached")
             return {"status": "ok", "cached": True, "data": hit[2]}
-        # 3) start a fresh background job (single-flight: the lock makes this atomic)
+        # 3) a DIFFERENT book is already analyzing for this user (a same-fp running
+        #    job returned 202 in step 1, so reaching here with status 'running' means
+        #    the book changed mid-run). Refuse rather than spawn a SECOND concurrent
+        #    thread — that would double the Claude spend + book_analysis metering and
+        #    let the two workers clobber each other's job/cache slot (single slot per
+        #    email). One in-flight analysis per user; the client waits, then retries.
+        if job and job.get("status") == "running":
+            return JSONResponse(status_code=409, content={
+                "status": "busy",
+                "detail": "An analysis is already running for your book — "
+                          "wait for it to finish, then retry."})
+        # 4) start a fresh background job (single-flight: the lock makes this atomic)
         _mybook_jobs[email] = {"fp": fp, "status": "running"}
     threading.Thread(target=_mybook_analyze_worker,
                      args=(email, fp, positions, ew), daemon=True).start()
