@@ -35,7 +35,7 @@ cash_blocked = cash < 500.0
 rsi_overrides = {}
 for rd in regimes_list:
     sym = rd.get('symbol','')
-    rsi = rd.get('rsi', 0)
+    rsi = rd.get('rsi') or 0  # None-safe (failed OHLCV fetch)
     k_act = kelly_res.get(sym, {}).get('action','HOLD')
     if rsi >= 70 and k_act == 'ADD':
         rsi_overrides[sym] = rsi
@@ -43,7 +43,7 @@ for rd in regimes_list:
 # Action plan (after overrides)
 def final_action(sym):
     k_act = kelly_res.get(sym, {}).get('action', 'HOLD')
-    rsi   = regime_by_sym.get(sym, {}).get('rsi', 0)
+    rsi   = regime_by_sym.get(sym, {}).get('rsi') or 0  # None-safe
     if cash_blocked and k_act == 'ADD':
         return 'HOLD', f'Cash ${cash:.0f}<$500 (Rule 8)'
     if rsi >= 70 and k_act == 'ADD':
@@ -141,8 +141,8 @@ def holding_card(h):
 
     reg     = regime_by_sym.get(sym, {})
     reg_name= reg.get('regime','?')
-    rsi_val = reg.get('rsi', 0)
-    adx_val = reg.get('adx', 0)
+    rsi_val = reg.get('rsi') or 0
+    adx_val = reg.get('adx') or 0
 
     act, reason = final_action(sym)
 
@@ -433,10 +433,10 @@ regime_cards_html = ''
 for rd in regimes_list:
     sym  = rd.get('symbol','')
     reg  = rd.get('regime','')
-    adx  = rd.get('adx',0)
-    rsi  = rd.get('rsi',0)
-    bb   = rd.get('bb_width',0)
-    pctb = rd.get('pct_b',0)
+    adx  = rd.get('adx') or 0
+    rsi  = rd.get('rsi') or 0
+    bb   = rd.get('bb_width') or 0
+    pctb = rd.get('pct_b') or 0
     desc = rd.get('description','')
     col  = {'TRENDING':'#00d4ff','MOMENTUM-HIGH':'#f0b429','BREAKOUT-READY':'#00e87a','RANGING':'#aaa'}.get(reg,'#aaa')
     regime_cards_html += f'''<div class="regime-card" style="border-left:3px solid {col}">

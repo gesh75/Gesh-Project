@@ -31,6 +31,15 @@ def _restore_session() -> bool:
     if not os.path.isfile(PICKLE_PATH):
         return False
     _st = os.stat(PICKLE_PATH)
+    if _st.st_size == 0:
+        # A failed login leaves a 0-byte pickle behind (seen 2026-07-07..10); it can
+        # never restore and only produces a noisy "Ran out of input" — remove it.
+        print('[fetch_live] Pickle is empty (0 bytes) — removing dead session file', flush=True)
+        try:
+            os.remove(PICKLE_PATH)
+        except OSError:
+            pass
+        return False
     if _st.st_uid != os.getuid() or (_st.st_mode & 0o022):
         print('[fetch_live] Refusing unsafe (writable) session file', flush=True)
         return False
@@ -69,8 +78,16 @@ def fetch():
         if not user or not passwd:
             raise RuntimeError('No stored session and ROBINHOOD_USER/PASS not set')
         print('[fetch_live] No stored session — logging in fresh...', flush=True)
-        r.login(username=user, password=passwd, expiresIn=86400,
-                scope='internal', store_session=True)
+        login_resp = r.login(username=user, password=passwd, expiresIn=86400,
+                             scope='internal', store_session=True)
+        # robin_stocks does NOT raise on a failed login (it prints "Login failed"
+        # and returns) — verify the token or die with a clear message instead of
+        # the confusing "can only be called when logged in" traceback later.
+        if not (isinstance(login_resp, dict) and login_resp.get('access_token')):
+            raise RuntimeError(
+                'Legacy robin_stocks login did not complete (no access_token — '
+                'device-approval flow broken, trading-repo rule #52). '
+                'Fix the PRIMARY path instead: re-authorize the robinhood-trading MCP.')
         print('[fetch_live] Fresh login OK', flush=True)
 
     # Profile / cash
