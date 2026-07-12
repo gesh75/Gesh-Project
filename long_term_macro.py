@@ -340,6 +340,69 @@ def get_long_term_macro_sentiment() -> Dict[str, Any]:
     }
 
 
+def _fear_greed_label(level: Optional[float]) -> Optional[str]:
+    """Human Fear & Greed label from the 0-100 CNN index (mirrors fear_greed_score's
+    thresholds). The downstream agentic-rh bridge keys its contrarian brake on the
+    words 'Extreme Fear' / 'Extreme Greed', so we expose the label explicitly rather
+    than leaving it buried in the score detail string."""
+    if level is None:
+        return None
+    try:
+        lv = float(level)
+    except (TypeError, ValueError):
+        return None
+    if lv < 25:
+        return "Extreme Fear"
+    if lv > 75:
+        return "Extreme Greed"
+    if lv < 40:
+        return "Fear"
+    if lv > 60:
+        return "Greed"
+    return "Neutral"
+
+
+def engine_block(sentiment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Normalize the long-term-macro sentiment into the flat, self-describing block
+    written to ``engine_results.json`` (top-level key ``long_term_macro``).
+
+    This is the contract the downstream agentic-rh bridge consumes for its regime
+    tier ladder (B1/B2): it keys a CONTRARIAN sizing brake on
+      * ``fear_greed.level`` (label) — Extreme Greed → brake, Extreme Fear → lean in,
+      * ``vix.level`` — panic (>=30) → lean in, complacency (<=12) → brake,
+      * ``margin_debt.elevated`` — record/rising-fast leverage → brake,
+      * ``combined_score`` / ``bias`` — the blended tilt.
+
+    We add a ``label`` to fear_greed and an ``elevated`` bool to margin_debt so the
+    consumer never has to parse a prose ``detail`` string. NEVER raises — any missing
+    piece degrades to a NEUTRAL/None field so a data outage can only make the bridge
+    fall back to today's behaviour, never mis-fire."""
+    try:
+        s = sentiment if isinstance(sentiment, dict) else get_long_term_macro_sentiment()
+    except Exception:
+        s = {}
+    vix = s.get("vix") if isinstance(s.get("vix"), dict) else {}
+    fg = s.get("fear_greed") if isinstance(s.get("fear_greed"), dict) else {}
+    md = s.get("margin_debt") if isinstance(s.get("margin_debt"), dict) else {}
+    fg_level = fg.get("level")
+    # margin_debt score is -1 only on a strong/record-risk rise (see margin_debt_score);
+    # treat any negative (bearish) margin score as "elevated" leverage for the brake.
+    try:
+        md_elevated: Optional[bool] = float(md.get("score")) < 0 if md.get("score") is not None else None
+    except (TypeError, ValueError):
+        md_elevated = None
+    return {
+        "vix": {"level": vix.get("level"), "detail": vix.get("detail")},
+        "fear_greed": {"level": fg_level, "label": _fear_greed_label(fg_level),
+                       "detail": fg.get("detail")},
+        "margin_debt": {"elevated": md_elevated, "level": md.get("level"),
+                        "detail": md.get("detail")},
+        "combined_score": s.get("combined_score"),
+        "bias": s.get("bias", "NEUTRAL"),
+        "fetched_at": s.get("fetched_at"),
+    }
+
+
 def node_long_term_macro(symbol: str = None) -> tuple[int | None, str]:
     """Consensus node compatible return for long-term macro sentiment.
     Can be called as a new node or blended into existing MACRO node.
