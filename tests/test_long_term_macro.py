@@ -67,11 +67,29 @@ def test_endpoint_live_shape(client):
     assert body["data"]["vix"]["level"] == 15.0
 
 
-def test_endpoint_cached_shape(client):
+def test_endpoint_cached_cold_computes(client):
+    """A cold serve-cache computes fresh and honestly reports cached=False."""
     r = client.get("/api/long-term-macro/cached")
     assert r.status_code == 200
     body = r.json()
-    assert body["status"] == "ok" and body["cached"] is True
+    assert body["status"] == "ok" and body["cached"] is False
+    assert body["data"]["combined_score"] == 0.55
+
+
+def test_endpoint_cached_serves_from_cache_after_live(client, monkeypatch):
+    """After a live call warms the serve cache, /cached returns cached=True and
+    does NOT re-enter the module (genuine cache, not a relabelled live call)."""
+    assert client.get("/api/long-term-macro").status_code == 200   # warms cache
+    calls = {"n": 0}
+
+    def _boom():
+        calls["n"] += 1
+        raise AssertionError("module must not be called on a warm cache hit")
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment", _boom)
+    r = client.get("/api/long-term-macro/cached")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cached"] is True and calls["n"] == 0
     assert body["data"]["combined_score"] == 0.55
 
 
