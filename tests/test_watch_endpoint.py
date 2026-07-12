@@ -53,7 +53,10 @@ def test_watch_data_contract():
     assert d["schema_version"] == 1
     assert d["mode"] == "paper"
     assert isinstance(d["live_prices_available"], bool)
-    assert d["autonomy"]["required"] == 30
+    # The retired 30-trade gate is gone: required now comes from the engine's
+    # versioned gate DTO (100 engine-only closes; GATE_REQUIRED_FALLBACK when the
+    # engine import fails — both are 100 today).
+    assert d["autonomy"]["required"] == 100
 
 
 def test_watch_data_lookback_param_honored():

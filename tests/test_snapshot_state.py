@@ -90,7 +90,15 @@ def test_mcp_source_has_no_warning(tmp_path):
 
 
 # --- CLI contract the shell relies on --------------------------------------
-def test_cli_prints_state_token_to_stdout(tmp_path, capsys):
+def test_cli_prints_state_token_to_stdout(tmp_path, capsys, monkeypatch):
+    # main() has no `now` injection point — freeze the module clock at the
+    # fixture's NOW so the age stays 5 min regardless of the real date.
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+
+    monkeypatch.setattr(ss, "datetime", _FrozenDatetime)
     path = _write_snap(tmp_path, age_min=5)
     rc = ss.main(["snapshot_state.py", str(SERVICEABLE_MAX), path])
     out = capsys.readouterr()

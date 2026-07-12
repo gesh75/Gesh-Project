@@ -35,7 +35,7 @@ cash_blocked = cash < 500.0
 rsi_overrides = {}
 for rd in regimes_list:
     sym = rd.get('symbol','')
-    rsi = rd.get('rsi', 0)
+    rsi = rd.get('rsi') or 0   # regime may emit rsi=None on a short/missing series
     k_act = kelly_res.get(sym, {}).get('action','HOLD')
     if rsi >= 70 and k_act == 'ADD':
         rsi_overrides[sym] = rsi
@@ -43,7 +43,7 @@ for rd in regimes_list:
 # Action plan (after overrides)
 def final_action(sym):
     k_act = kelly_res.get(sym, {}).get('action', 'HOLD')
-    rsi   = regime_by_sym.get(sym, {}).get('rsi', 0)
+    rsi   = regime_by_sym.get(sym, {}).get('rsi') or 0
     if cash_blocked and k_act == 'ADD':
         return 'HOLD', f'Cash ${cash:.0f}<$500 (Rule 8)'
     if rsi >= 70 and k_act == 'ADD':
@@ -106,6 +106,22 @@ def snowflake_bar(val, label, max_val=100):
 now_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 fetch_at = snap.get('fetched_at','')[:19].replace('T',' ')
 
+# Degraded-run provenance banner — surfaced when the chain ran on a stale
+# snapshot (run_engines2/run_ai2 stamp degraded/age/source): research-only,
+# no paper records were created for this run.
+degraded_banner_html = ''
+if eng.get('degraded'):
+    _age_s = eng.get('snapshot_age_seconds')
+    _age_txt = f"{_age_s/3600:.1f}h old" if isinstance(_age_s, (int, float)) else "age unknown"
+    degraded_banner_html = (
+        '<div style="background:#ff3c5a22;border:1px solid #ff3c5a;color:#ff3c5a;'
+        'padding:10px 14px;border-radius:8px;margin:0 0 14px;font-weight:bold">'
+        f'⚠️ DEGRADED RUN — snapshot {_age_txt} '
+        f'(source: {_esc(str(eng.get("snapshot_source", "UNKNOWN")))}). '
+        'Research-only: prices/cash may be stale; no paper records were created for this run.'
+        '</div>'
+    )
+
 # ─── Ticker tape ─────────────────────────────────────────────────────────────
 tape_items = []
 for h in holdings:
@@ -141,8 +157,8 @@ def holding_card(h):
 
     reg     = regime_by_sym.get(sym, {})
     reg_name= reg.get('regime','?')
-    rsi_val = reg.get('rsi', 0)
-    adx_val = reg.get('adx', 0)
+    rsi_val = reg.get('rsi') or 0
+    adx_val = reg.get('adx') or 0
 
     act, reason = final_action(sym)
 
@@ -433,10 +449,10 @@ regime_cards_html = ''
 for rd in regimes_list:
     sym  = rd.get('symbol','')
     reg  = rd.get('regime','')
-    adx  = rd.get('adx',0)
-    rsi  = rd.get('rsi',0)
-    bb   = rd.get('bb_width',0)
-    pctb = rd.get('pct_b',0)
+    adx  = rd.get('adx') or 0
+    rsi  = rd.get('rsi') or 0
+    bb   = rd.get('bb_width') or 0
+    pctb = rd.get('pct_b') or 0
     desc = rd.get('description','')
     col  = {'TRENDING':'#00d4ff','MOMENTUM-HIGH':'#f0b429','BREAKOUT-READY':'#00e87a','RANGING':'#aaa'}.get(reg,'#aaa')
     regime_cards_html += f'''<div class="regime-card" style="border-left:3px solid {col}">
@@ -657,6 +673,8 @@ html = f'''<!DOCTYPE html>
       <div>Data: {fetch_at} UTC</div>
     </div>
   </div>
+
+  {degraded_banner_html}
 
   <!-- Ticker tape -->
   <div class="tape">{tape_html}</div>

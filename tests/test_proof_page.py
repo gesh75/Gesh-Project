@@ -58,8 +58,9 @@ class TestLoadTrackRecord:
         data = proof_page.load_track_record(db, launch_date="2026-05-21", today="2026-06-03")
         assert data["closed_trades"] == 0
         assert data["win_rate"] == 0.0
-        assert data["gate"]["ready"] is False
-        assert data["gate"]["closed_trades"]["pass"] is False
+        assert data["gate"]["version"] == 2       # authoritative engine-cohort DTO
+        assert data["gate"]["pass"] is False
+        assert data["gate"]["closes"] == 0
         assert data["days_running"] == 13          # 2026-05-21 → 2026-06-03
         assert data["days_target"] == 180
         assert data["equity_curve"] == [1.0]        # starts at 1.0, no trades
@@ -79,12 +80,15 @@ class TestLoadTrackRecord:
         assert len(data["equity_curve"]) == 5       # 1.0 + 4 steps
         assert data["equity_curve"][-1] > 1.0        # net positive
 
-    def test_gate_passes_when_thresholds_met(self, tmp_path):
-        # 30 consistent winners → gate closed_trades + win_rate pass
+    def test_retired_30_trade_gate_no_longer_passes(self, tmp_path):
+        # 30 consistent winners sailed through the RETIRED local 30-trade gate; the
+        # authoritative engine gate (trading/tracker.py gate_status_dto) requires
+        # 100 ENGINE closes — the page must hold fail-closed until then.
         db = _make_db(tmp_path, [{"exit": 112, "outcome": "WIN"} for _ in range(30)])
         data = proof_page.load_track_record(db, launch_date="2026-05-21", today="2026-08-30")
-        assert data["gate"]["closed_trades"]["pass"] is True
-        assert data["gate"]["win_rate"]["pass"] is True
+        assert data["gate"]["pass"] is False
+        assert data["gate"]["closes"] == 30
+        assert data["gate"]["required"] > 30
         assert data["closed_trades"] == 30
 
 
@@ -102,7 +106,7 @@ class TestRenderHtml:
     def test_shows_sample_size_banner_when_thin(self, tmp_path):
         db = _make_db(tmp_path, [{"exit": 110, "outcome": "WIN"}])
         html = proof_page.render_html(proof_page.load_track_record(db, today="2026-06-03"))
-        assert "1" in html and "30" in html          # N / 30 closed
+        assert "1 of 100" in html                    # N of 100 ENGINE closes
         assert "building" in html.lower() or "track record" in html.lower()
 
     def test_is_self_contained_no_external_scripts(self, tmp_path):

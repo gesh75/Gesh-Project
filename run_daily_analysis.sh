@@ -99,6 +99,34 @@ case "$SNAP_STATE" in
         exit 1 ;;
 esac
 
+# Degraded provenance threshold (non-fatal): independent of the SERVICEABLE
+# limit above, any snapshot older than GESH_DEGRADED_AFTER_S (default 3600s)
+# makes the run RESEARCH-ONLY — engines + AI still refresh, but step 4/5 (paper
+# gate) is skipped and run_engines2/run_ai2 stamp {degraded,
+# snapshot_age_seconds, snapshot_source} into engine_results.json. The exported
+# GESH_DEGRADED flag is run_paper_gate2's belt-and-braces entry guard.
+DEGRADED_AFTER_S=${GESH_DEGRADED_AFTER_S:-3600}
+SNAP_AGE_S=$("$PY" - <<'PYEOF'
+import json
+from datetime import datetime, timezone
+try:
+    with open('live_portfolio_snapshot.json') as fh:
+        snap = json.load(fh)
+    age = datetime.now(timezone.utc) - datetime.fromisoformat(snap['fetched_at'])
+    print(int(age.total_seconds()))
+except Exception:
+    print(-1)   # unreadable age counts as degraded (fail-safe)
+PYEOF
+)
+if [ "$SNAP_AGE_S" -lt 0 ] || [ "$SNAP_AGE_S" -gt "$DEGRADED_AFTER_S" ]; then
+    DEGRADED=1
+fi
+export GESH_DEGRADED="$DEGRADED"
+export GESH_DEGRADED_AFTER_S="$DEGRADED_AFTER_S"
+if [ "$DEGRADED" -eq 1 ]; then
+    echo "### DEGRADED RUN (RESEARCH-ONLY) — snapshot age ${SNAP_AGE_S}s (limit ${DEGRADED_AFTER_S}s, state $SNAP_STATE). Paper gate will be SKIPPED; report carries a degraded banner."
+fi
+
 # ── 2/5 engines (fatal — everything downstream needs engine_results.json)
 step "2/5 run_engines2"
 "$PY" run_engines2.py || { echo "FATAL: engines failed"; exit 1; }
@@ -109,9 +137,15 @@ step "2/5 run_engines2"
 step "3/5 run_ai2"
 "$PY" run_ai2.py || { echo "FATAL: run_ai2 failed — keeping previous report"; exit 1; }
 
-# ── 4/5 paper session + risk-gate audit chain (non-fatal by design)
+# ── 4/5 paper session + risk-gate audit chain (non-fatal by design; a degraded
+# run is research-only — skipped here, and run_paper_gate2's own entry guard
+# double-checks via GESH_DEGRADED + the engine_results provenance stamp)
 step "4/5 run_paper_gate2"
-"$PY" run_paper_gate2.py || echo "WARN: paper-gate step failed (non-fatal)"
+if [ "$DEGRADED" -eq 1 ]; then
+    echo "### DEGRADED RUN — SKIPPING 4/5 paper gate (research-only: no paper records on a stale snapshot)"
+else
+    "$PY" run_paper_gate2.py || echo "WARN: paper-gate step failed (non-fatal)"
+fi
 
 # ── 5/5 HTML report (template fill, <1s)
 step "5/5 gen_report2"

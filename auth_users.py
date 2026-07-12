@@ -315,10 +315,26 @@ def get_user_by_sub_id(sub_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+# Every email-keyed child table in _DDL. rename_user_email() MUST move all of them
+# with the users row — otherwise a NEW account later registered with the OLD address
+# inherits the previous customer's data (cross-tenant leak). Guarded by
+# tests/test_tenant_rename_migration.py, which derives this set from the live schema.
+_EMAIL_KEYED_TABLES = (
+    "watchlist",
+    "customer_positions",
+    "customer_analyses",
+    "usage_events",
+    "customer_book_prefs",
+)
+
+
 def rename_user_email(old_email: str, new_email: str) -> bool:
-    """Move a subscription's account to a new email (LS lets a customer change their email).
-    Returns True on success, False if the target email is already taken by a DIFFERENT row
-    (caller then falls back rather than clobbering)."""
+    """Move a subscription's account AND every email-keyed child row (watchlist,
+    positions, analyses, usage, book prefs) to a new email in ONE transaction
+    (LS lets a customer change their email). Returns False — caller falls back
+    rather than clobbering — when the target email is already taken by a
+    DIFFERENT users row, OR already owns child rows (child rows can exist
+    without a users row; renaming onto them would silently merge two tenants)."""
     old, new = _norm(old_email), _norm(new_email)
     if not new or old == new:
         return False
@@ -326,7 +342,14 @@ def rename_user_email(old_email: str, new_email: str) -> bool:
         clash = con.execute("SELECT 1 FROM users WHERE email=?", (new,)).fetchone()
         if clash:
             return False
+        for table in _EMAIL_KEYED_TABLES:   # trusted module constant, not user input
+            if con.execute(f"SELECT 1 FROM {table} WHERE email=? LIMIT 1", (new,)).fetchone():
+                return False                # orphan tenant data at the target — refuse to merge
         con.execute("UPDATE users SET email=? WHERE email=?", (new, old))
+        for table in _EMAIL_KEYED_TABLES:
+            con.execute(f"UPDATE {table} SET email=? WHERE email=?", (new, old))
+        # _conn() commits on clean exit and rolls back (close without commit) on
+        # any raise above — the users row and child rows move together or not at all.
     return True
 
 

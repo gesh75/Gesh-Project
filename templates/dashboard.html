@@ -57,6 +57,17 @@ td,.sval,.num{font-variant-numeric:tabular-nums}
 .tab-btn .tab-icon{font-size:16px;opacity:.7}
 .tab-btn.active .tab-icon{opacity:1}
 .tab-pane{display:none}.tab-pane.active{display:block}
+
+/* Force initial customer view to Analyze + My Book (no flash to overview or other tabs) */
+body.customer .tab-pane { display: none !important; }
+body.customer #tab-analyze { display: block !important; }
+
+/* Pre-activate the Analyze nav item for customers */
+body.customer .nav-item[data-tab="analyze"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--card2);
+}
 /* Stat cards enhanced */
 .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
@@ -483,9 +494,16 @@ body:not(.role-known) .owner-only { display: none !important; }
     var role = document.body.getAttribute('data-initial-role') || 'owner';
     if (role === 'customer') {
       document.body.classList.add('customer');
-      // Show customer tools immediately (Scanner etc.)
+      // Show customer My Book nav and tools immediately
+      var mb = document.getElementById('mybook-nav');
+      if (mb) mb.style.display = 'block';
       var ct = document.getElementById('customer-tools');
       if (ct) ct.style.display = 'block';
+      // Force initial active states for mybook experience
+      var analyzeNav = document.querySelector('.nav-item[data-tab="analyze"]');
+      if (analyzeNav) analyzeNav.classList.add('active');
+      var firstMy = document.querySelector('#mybook-nav .nav-item');
+      if (firstMy) firstMy.classList.add('active');
     }
     document.body.classList.add('role-known');
   } catch(e){}
@@ -503,6 +521,31 @@ body:not(.role-known) .owner-only { display: none !important; }
     <a class="nav-item" href="/track-record" title="Public signal track record" style="text-decoration:none">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
       <span class="nav-label">Track Record</span></a>
+  </div>
+
+  <!-- Customer My Book tabs - surface rich analyses like the full 9000 dashboard but for the user's book -->
+  <div class="sb-group" id="mybook-nav" style="display:none">
+    <div class="sb-group-title">My Book</div>
+    <button class="nav-item" data-tab="analyze" onclick="switchTab('analyze'); focusMyBookSection('overview')" title="My Portfolio overview &amp; book management">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+      <span class="nav-label">Overview</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('analyze'); mybookAnalyze()" title="Deep AI + Kelly + Monte Carlo on your book">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3A3.5 3.5 0 0 0 9 19a3 3 0 0 0 3 0 3 3 0 0 0 3 0 3.5 3.5 0 0 0 3-5.7A3.5 3.5 0 0 0 16 7a4 4 0 0 0-4-4z"/><line x1="12" y1="3" x2="12" y2="19"/></svg>
+      <span class="nav-label">Deep Analysis</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('analyze'); showBookSignals()" title="Signals &amp; consensus for your holdings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+      <span class="nav-label">Signals</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('analyze'); showBookRisk()" title="Risk, Monte Carlo &amp; Kelly on your book">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
+      <span class="nav-label">Risk</span>
+    </button>
+    <button class="nav-item" data-tab="scanner" onclick="switchTab('scanner')" title="Market scanner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <span class="nav-label">Scanner</span>
+    </button>
   </div>
 
   <div class="sb-group owner-only">
@@ -2616,7 +2659,9 @@ async function applyRoleNav(){
     document.body.classList.add('customer');
     window.__isCustomer=true;
     switchTab('analyze');
-    // Show customer tools (scanner etc.)
+    // Show My Book nav and tools
+    const mb = document.getElementById('mybook-nav');
+    if (mb) mb.style.display = 'block';
     const ct = document.getElementById('customer-tools');
     if (ct) ct.style.display = 'block';
   } else {
@@ -2865,6 +2910,39 @@ async function mybookClear(){
     loadMyBook();
   }catch(e){ if(window.toast) toast('Clear failed','error'); }
 }
+
+// Customer My Book tab helpers - surface analyses like the full 9000 experience
+function focusMyBookSection(section) {
+  switchTab('analyze');
+  setTimeout(() => {
+    const list = document.getElementById('mybook-list');
+    if (list) {
+      list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    if (section === 'analysis') {
+      mybookAnalyze();
+    }
+  }, 80);
+}
+
+function showBookSignals() {
+  switchTab('analyze');
+  mybookAnalyze(); // ensures the rich verdict / kelly / signals are generated
+  setTimeout(() => {
+    const results = document.getElementById('mybook-results');
+    if (results) results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 400);
+}
+
+function showBookRisk() {
+  switchTab('analyze');
+  mybookAnalyze(); // pulls in Monte Carlo + Kelly sizing
+  setTimeout(() => {
+    const results = document.getElementById('mybook-results');
+    if (results) results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 400);
+}
+
 async function mybookImportWatchlist(){
   try{
     const j=await fetch('/api/mybook/import-watchlist',{method:'POST'}).then(r=>r.ok?r.json():null).catch(()=>null);

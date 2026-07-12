@@ -19,7 +19,8 @@ Usage:
 Data sources (no new paid APIs required for MVP):
 - VIX: yfinance (^VIX) or FRED (already used in macro_connector)
 - Fear & Greed: CNN public endpoint (scrape-friendly) + historical GitHub fallback
-- Margin Debt: FINRA public page scrape (monthly) + historical fallback
+- Margin Debt: FINRA public page scrape (monthly, official units = $ millions);
+  unavailable on failure — NEVER synthesized
 
 Cache: 6h for live, daily for historical margin.
 
@@ -33,12 +34,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
@@ -233,67 +232,132 @@ def fear_greed_score(fg_df: Optional[pd.DataFrame]) -> Dict[str, Any]:
 # Margin Debt (FINRA)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def fetch_margin_debt() -> Optional[pd.DataFrame]:
-    """Fetch FINRA margin debt (monthly). Primary = scrape public table or use historical.
-    For production: implement robust scrape or use paid feed.
+FINRA_MARGIN_URL = "https://www.finra.org/rules-guidance/key-topics/margin-accounts/margin-statistics"
+FINRA_MARGIN_SOURCE = "FINRA margin statistics (finra.org)"
+# FINRA month labels are "May-26" style — parsed with an EXPLICIT format only.
+# An inferring parser turns "May-26" into year-0001 garbage that mis-sorts rows.
+FINRA_DATE_FORMAT = "%b-%y"
+# Cache schema version. v1 caches carried mis-parsed dates and /1000 values —
+# the loader rejects anything but the current schema so they are never served.
+MARGIN_CACHE_SCHEMA = 2
+
+
+def _fetch_finra_tables() -> list[pd.DataFrame]:
+    """Network seam: raw tables from the FINRA margin-statistics page."""
+    return pd.read_html(FINRA_MARGIN_URL, header=0)
+
+
+def _parse_finra_margin_table(tables: list[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    """Extract [date, margin_debt_millions] from FINRA tables.
+    Values are kept in FINRA's official units — $ MILLIONS. Never rescale."""
+    df = None
+    for t in tables:
+        cols_lower = [str(c).lower() for c in t.columns]
+        if any('debit' in c or 'margin' in c for c in cols_lower):
+            df = t
+            break
+    if df is None:
+        return None
+    df = df.iloc[:, [0, 1]].copy()
+    df.columns = ['date', 'margin_debt_millions']
+    df['date'] = pd.to_datetime(df['date'], format=FINRA_DATE_FORMAT, errors='coerce')
+    df['margin_debt_millions'] = pd.to_numeric(
+        df['margin_debt_millions'].astype(str).str.replace(',', '', regex=False),
+        errors='coerce'
+    )
+    df = df.dropna(subset=['date', 'margin_debt_millions']).set_index('date').sort_index()
+    if df.empty:
+        return None
+    return df[['margin_debt_millions']]
+
+
+def _margin_cache_payload(cache: Optional[dict]) -> Optional[Dict[str, Any]]:
+    """Serve a cached series only if it is the current schema (post-fix units/dates)."""
+    if not cache or cache.get("schema") != MARGIN_CACHE_SCHEMA:
+        return None
+    if not cache.get("as_of") or not cache.get("series"):
+        return None
+    return {
+        "status": "ok",
+        "source": cache.get("source", FINRA_MARGIN_SOURCE),
+        "as_of": cache["as_of"],
+        "quality": "cached",
+        "series": cache["series"],
+    }
+
+
+def fetch_margin_debt() -> Dict[str, Any]:
+    """FINRA margin debt (monthly, official units = $ millions).
+
+    Returns {"status", "source", "as_of", "quality", "series"}:
+      * quality "live"   — fresh scrape from FINRA
+      * quality "cached" — served from .margin_debt_cache.json (fresh or stale)
+      * status "unavailable" — FINRA unreachable and no usable cache.
+    On failure NO synthetic series is ever produced — fabricated market data
+    is a stop-ship violation of the project's #1 rule.
     """
     cache = _load_cache(MARGIN_CACHE)
-    if cache and _cache_valid(MARGIN_CACHE, ttl_hours=24):
-        try:
-            return pd.DataFrame(cache["data"])
-        except Exception:
-            pass
+    cached_payload = _margin_cache_payload(cache)
+    if cached_payload and _cache_valid(MARGIN_CACHE, ttl_hours=24):
+        return cached_payload
 
-    # Real fetch: scrape FINRA margin statistics page
     try:
-        url = "https://www.finra.org/rules-guidance/key-topics/margin-accounts/margin-statistics"
-        tables = pd.read_html(url, header=0)
-        df = None
-        for t in tables:
-            cols_lower = [str(c).lower() for c in t.columns]
-            if any('debit' in c or 'margin' in c for c in cols_lower):
-                df = t
-                break
+        df = _parse_finra_margin_table(_fetch_finra_tables())
         if df is not None:
-            # Take first two columns: Date and main Debit/Margin column
-            df = df.iloc[:, [0, 1]].copy()
-            df.columns = ['date', 'margin_debt']
-            df['date'] = pd.to_datetime(df['date'], errors='coerce')
-            df['margin_debt'] = pd.to_numeric(
-                df['margin_debt'].astype(str).str.replace(',', '', regex=False),
-                errors='coerce'
-            )
-            df = df.dropna(subset=['date', 'margin_debt']).set_index('date').sort_index()
-            # FINRA reports in $000s; normalize to millions for readability
-            df['margin_debt_millions'] = df['margin_debt'] / 1000.0
-            df = df[['margin_debt_millions']]
-            _save_cache(MARGIN_CACHE, {"fetched_at": datetime.utcnow().isoformat(), "data": df.reset_index().to_dict("records")})
-            return df
+            series = [
+                {"date": ts.strftime("%Y-%m"), "margin_debt_millions": float(v)}
+                for ts, v in df["margin_debt_millions"].items()
+            ]
+            as_of = series[-1]["date"]
+            _save_cache(MARGIN_CACHE, {
+                "schema": MARGIN_CACHE_SCHEMA,
+                "fetched_at": datetime.utcnow().isoformat(),
+                "source": FINRA_MARGIN_SOURCE,
+                "as_of": as_of,
+                "series": series,
+            })
+            return {
+                "status": "ok",
+                "source": FINRA_MARGIN_SOURCE,
+                "as_of": as_of,
+                "quality": "live",
+                "series": series,
+            }
     except Exception as e:
         logger.warning(f"Margin debt scrape failed: {e}")
 
-    # Fallback stub if scrape fails
-    try:
-        dates = pd.date_range(end=datetime.utcnow(), periods=12, freq="ME")
-        values = [920_000 + i * 40_000 for i in range(12)]
-        df = pd.DataFrame({"date": dates, "margin_debt_millions": values})
-        df = df.set_index("date")
-        return df
-    except Exception as e:
-        logger.error(f"Margin debt fallback failed: {e}")
-        return None
+    # Stale cache beats nothing — but it must say so (quality + its own as_of).
+    if cached_payload:
+        return cached_payload
+
+    return {
+        "status": "unavailable",
+        "source": FINRA_MARGIN_SOURCE,
+        "as_of": None,
+        "quality": "unavailable",
+        "series": [],
+    }
 
 
-def margin_debt_score(md_df: Optional[pd.DataFrame]) -> Dict[str, Any]:
+def margin_debt_score(md: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Leverage cycle score for long-term.
     Rapid rise or record highs → caution (-1)
     Declining after high → opportunity (+1)
     """
-    if md_df is None or len(md_df) < 3:
-        return {"score": 0, "detail": "Margin debt insufficient", "level": None}
+    md = md or {}
+    provenance = {
+        "source": md.get("source", FINRA_MARGIN_SOURCE),
+        "as_of": md.get("as_of"),
+        "quality": md.get("quality", "unavailable"),
+    }
+    series = md.get("series") or []
+    if md.get("status") != "ok" or len(series) < 3:
+        detail = "Margin debt unavailable" if md.get("status") != "ok" else "Margin debt insufficient"
+        return {"score": 0, "detail": detail, "level": None,
+                "status": "unavailable", **provenance}
 
-    latest = float(md_df["margin_debt_millions"].iloc[-1])
-    prev = float(md_df["margin_debt_millions"].iloc[-2])
+    latest = float(series[-1]["margin_debt_millions"])
+    prev = float(series[-2]["margin_debt_millions"])
     mom = (latest - prev) / prev if prev > 0 else 0
 
     if mom > 0.08:  # strong rise
@@ -306,7 +370,7 @@ def margin_debt_score(md_df: Optional[pd.DataFrame]) -> Dict[str, Any]:
         score = 0
         detail = f"Margin debt stable (latest {latest/1e6:.1f}T)"
 
-    return {"score": score, "detail": detail, "level": latest}
+    return {"score": score, "detail": detail, "level": latest, "status": "ok", **provenance}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -323,8 +387,7 @@ def get_long_term_macro_sentiment() -> Dict[str, Any]:
     fg_df = fetch_fear_greed()
     fg = fear_greed_score(fg_df)
 
-    md_df = fetch_margin_debt()
-    md = margin_debt_score(md_df)
+    md = margin_debt_score(fetch_margin_debt())
 
     total = vix["score"] + fg["score"] + md["score"]
     # Normalize to -1 to +1 range roughly

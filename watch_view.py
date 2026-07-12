@@ -22,13 +22,22 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-# Single source of truth for DB path + autonomy thresholds + palette: proof_page.
+# Single source of truth for DB path + the AUTHORITATIVE autonomy gate + palette:
+# proof_page. The retired 30-trade/win-rate/Sharpe/drawdown constants are gone —
+# the verdict now comes from the engine's versioned gate DTO (same as /track-record).
 from proof_page import (
     DEFAULT_TRACKER_DB,
-    MIN_CLOSED_TRADES, MIN_WIN_RATE, MIN_SHARPE, MAX_DRAWDOWN,
+    GATE_REQUIRED_FALLBACK,
     LAUNCH_DATE,
+    _load_gate_dto,
     _BG, _SURFACE, _BORDER, _CYAN, _GREEN, _YELLOW, _RED, _DIM,
 )
+
+# Descriptive display bars for the cockpit's quality checklist ONLY — they gate
+# NOTHING. The authoritative READY verdict is the engine gate DTO's `pass`.
+_DISPLAY_MIN_WIN_RATE = 0.55
+_DISPLAY_MIN_SHARPE   = 0.50
+_DISPLAY_MAX_DRAWDOWN = 0.10
 
 SCHEMA_VERSION = 1
 _ORANGE = "#FF8C00"          # risk/at-risk only — never used for a loss
@@ -281,17 +290,29 @@ def load_watch_data(
     feed.sort(key=lambda e: e.get("event_time") or "", reverse=True)
     feed = feed[:activity_limit]
 
+    # Authoritative gate: the engine's versioned DTO (fail-closed fallback inside).
+    # closed_n stays the ALL-cohort count (descriptive); the count/verdict that
+    # gates autonomy is the DTO's engine-only cohort.
+    gate = _load_gate_dto(db_path)
+    required = int(gate.get("required") or GATE_REQUIRED_FALLBACK)
+    engine_closes = gate.get("closes")
+    count_n = engine_closes if engine_closes is not None else closed_n
     autonomy = {
         "closed_n": closed_n,
-        "required": MIN_CLOSED_TRADES,
-        "closed_trades": {"value": closed_n, "required": MIN_CLOSED_TRADES, "pass": closed_n >= MIN_CLOSED_TRADES},
-        "win_rate": {"value": win_rate, "required": MIN_WIN_RATE, "pass": closed_n > 0 and win_rate >= MIN_WIN_RATE},
-        "sharpe": {"value": sharpe, "required": MIN_SHARPE, "pass": sharpe >= MIN_SHARPE},
-        "max_drawdown": {"value": max_dd, "required": MAX_DRAWDOWN, "pass": closed_n > 0 and max_dd <= MAX_DRAWDOWN},
+        "engine_closes": engine_closes,
+        "required": required,
+        "gate_version": gate.get("version"),
+        "criteria": gate.get("criteria") or {},
+        "closed_trades": {"value": count_n, "required": required, "pass": count_n >= required},
+        # Descriptive quality checklist (all-cohort, display bars only — see header).
+        "win_rate": {"value": win_rate, "required": _DISPLAY_MIN_WIN_RATE,
+                     "pass": closed_n > 0 and win_rate >= _DISPLAY_MIN_WIN_RATE},
+        "sharpe": {"value": sharpe, "required": _DISPLAY_MIN_SHARPE,
+                   "pass": sharpe >= _DISPLAY_MIN_SHARPE},
+        "max_drawdown": {"value": max_dd, "required": _DISPLAY_MAX_DRAWDOWN,
+                         "pass": closed_n > 0 and max_dd <= _DISPLAY_MAX_DRAWDOWN},
+        "ready": bool(gate.get("pass")),
     }
-    autonomy["ready"] = all(
-        autonomy[k]["pass"] for k in ("closed_trades", "win_rate", "sharpe", "max_drawdown")
-    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -309,7 +330,7 @@ def load_watch_data(
             "realized_pnl_7d_usd": realized_7d,
             "win_rate_total": win_rate,
             "streak": streak,
-            "sample_provisional": closed_n < MIN_CLOSED_TRADES,
+            "sample_provisional": closed_n < required,
         },
         "open_positions": open_positions,
         "recent_closes": recent_closes,
@@ -345,7 +366,10 @@ def render_watch_html(data: dict[str, Any]) -> str:
     import json
     payload = json.dumps(data)
     _auto = data.get("autonomy", {})
-    auto_label = f"{_auto.get('closed_n', 0)} of {_auto.get('required', MIN_CLOSED_TRADES)}" + (
+    _count = _auto.get("engine_closes")
+    if _count is None:
+        _count = _auto.get("closed_n", 0)
+    auto_label = f"{_count} of {_auto.get('required', GATE_REQUIRED_FALLBACK)}" + (
         " · READY" if _auto.get("ready") else "")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

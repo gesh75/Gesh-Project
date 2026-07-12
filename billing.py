@@ -431,6 +431,9 @@ def _apply_email_change(ev: dict[str, Any], user: dict | None) -> tuple[str, dic
     if not (user and sub_id and email and user.get("billing_sub_id") == sub_id
             and user["email"] != email):
         return (user["email"] if user else email), user
+    # rename_user_email migrates the users row AND every email-keyed child table
+    # (watchlist/positions/analyses/usage/book prefs) in one transaction, and refuses
+    # (False) when the target email already owns rows — no cross-tenant merge here.
     if auth_users.rename_user_email(user["email"], email):
         logger.info("billing: moved sub=%s %s -> %s (email change)", sub_id, user["email"], email)
         return email, auth_users.get_user(email)
