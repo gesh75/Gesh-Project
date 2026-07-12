@@ -2582,7 +2582,7 @@ def _render_book_report(email: str) -> str:
   <p style='color:#444;line-height:1.6'>{e(str(d.get('market_context', '')))}</p>
   {('<h2>Key risks</h2><ul>' + risks + '</ul>') if risks else ''}
   {sector_block}
-  <h2>Monte Carlo (1yr)</h2>
+  <h2>Monte Carlo ({e(str(mc.get('horizon_days') or 21))} trading days)</h2>
   <table>{row('Median outcome', '$' + format(mc.get('median', 0) or 0, ',.0f'))}
   {row('P5 – P95', '$' + format(mc.get('p5', 0) or 0, ',.0f') + ' – $' + format(mc.get('p95', 0) or 0, ',.0f'))}
   {row('VaR 95%', '$' + format(mc.get('var_95', 0) or 0, ',.0f'))}</table>

@@ -14,19 +14,22 @@ Enhancements (2026-05):
 
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
-import yfinance as yf
-import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 from datetime import datetime, timedelta
 from typing import Any
 
+import numpy as np
+import pandas as pd
+
+import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 N_SIMS: int   = 1000      # number of Monte Carlo paths
 PERIOD_DAYS   = 252        # 1 year of history for vol estimation
-TRADING_DAYS  = 21         # forecast horizon (~1 month)
+TRADING_DAYS  = 21         # forecast horizon (~1 month) — NOT 1 year; UI labels
+                           # must render horizon_days/horizon_label, never "1yr"
+FALLBACK_DAILY_VOL = 0.018  # used ONLY for symbols whose history failed to load;
+                            # such symbols are flagged in calibration_degraded_symbols
 
 # Regime → drift multiplier (applied to the historical mean return)
 REGIME_DRIFT: dict[str, float] = {
@@ -52,11 +55,25 @@ def _ewma_vol(returns: pd.Series, span: int = 30) -> float:
     rolling std for the full window.
     """
     if len(returns) < 5:
-        return 0.018
+        return FALLBACK_DAILY_VOL
     ewma_var = float(returns.ewm(span=span).var().iloc[-1])
     if ewma_var <= 0 or np.isnan(ewma_var):
-        return float(returns.std()) or 0.018
+        return float(returns.std()) or FALLBACK_DAILY_VOL
     return float(np.sqrt(ewma_var))
+
+
+def _arithmetic_daily_drift(returns: pd.Series) -> float:
+    """μ = E[log r] + ½·Var[log r] — the GBM ARITHMETIC daily drift.
+
+    The simulation applies the log-normal variance adjustment explicitly
+    (loc = μ − ½σ²). The raw log-return mean is itself already μ − ½σ²,
+    so storing it here applied the adjustment TWICE and biased every
+    simulated path low by ½σ² per day (fixed 2026-07).
+    """
+    var = float(returns.var())
+    if np.isnan(var):
+        var = 0.0
+    return float(returns.mean()) + 0.5 * var
 
 
 def _get_portfolio_regime(symbols: list[str]) -> str:
@@ -75,7 +92,10 @@ def _get_portfolio_regime(symbols: list[str]) -> str:
 
 
 def _fetch_data(symbols: list[str]) -> tuple[dict[str, float], dict[str, float], pd.DataFrame]:
-    """Fetch EWMA vols, historical drifts, and log-returns DataFrame."""
+    """Fetch EWMA vols, ARITHMETIC daily drifts, and log-returns DataFrame.
+
+    Symbols absent from the returned dicts had no usable history — callers
+    must surface that (calibration:"degraded"), never silently substitute."""
     end   = datetime.today()
     start = end - timedelta(days=PERIOD_DAYS + 30)
     ewma_vols: dict[str, float] = {}
@@ -97,7 +117,7 @@ def _fetch_data(symbols: list[str]) -> tuple[dict[str, float], dict[str, float],
                     if len(s) > 5:
                         ret = np.log(s / s.shift(1)).dropna()
                         ewma_vols[sym]   = _ewma_vol(ret)
-                        hist_drifts[sym] = float(ret.mean())   # daily historical drift
+                        hist_drifts[sym] = _arithmetic_daily_drift(ret)
                         rets_dict[sym]   = ret
         else:  # single-ticker Series
             s = data.dropna()
@@ -105,7 +125,7 @@ def _fetch_data(symbols: list[str]) -> tuple[dict[str, float], dict[str, float],
                 ret = np.log(s / s.shift(1)).dropna()
                 sym = symbols[0]
                 ewma_vols[sym]   = _ewma_vol(ret)
-                hist_drifts[sym] = float(ret.mean())
+                hist_drifts[sym] = _arithmetic_daily_drift(ret)
                 rets_dict[sym]   = ret
         if rets_dict:
             log_returns = pd.DataFrame(rets_dict)
@@ -122,8 +142,8 @@ def _weighted_portfolio_vol(
     weighted = 0.0
     for h in holdings:
         wt = h["equity"] / total_equity if total_equity else 0.0
-        weighted += wt * vols.get(h["symbol"], 0.018)
-    return weighted or 0.018
+        weighted += wt * vols.get(h["symbol"], FALLBACK_DAILY_VOL)
+    return weighted or FALLBACK_DAILY_VOL
 
 
 def _correlated_portfolio_vol(
@@ -134,7 +154,7 @@ def _correlated_portfolio_vol(
 ) -> float:
     """True correlated portfolio vol using the EWMA covariance matrix."""
     if total_equity <= 0:
-        return 0.018
+        return FALLBACK_DAILY_VOL
     valid = [h["symbol"] for h in holdings if h["symbol"] in log_returns_df.columns]
     if len(valid) < 2:
         return _weighted_portfolio_vol(holdings, vols, total_equity)
@@ -186,10 +206,13 @@ def run_monte_carlo(
     Simulate portfolio value over `horizon_days` using GBM.
 
     Volatility:  EWMA (λ≈0.94) per symbol → EWMA covariance matrix → portfolio σ.
-    Drift:       Historical weighted drift × regime multiplier (if use_regime_drift).
+    Drift:       ARITHMETIC historical weighted drift × regime multiplier (if
+                 use_regime_drift). The −½σ² variance adjustment is applied
+                 exactly ONCE, inside the simulation.
 
     Returns dict with keys:
-      current_equity, horizon_days, n_sims, vol_method,
+      current_equity, horizon_days, horizon_label, n_sims, vol_method,
+      calibration ("ok"|"degraded"), calibration_degraded_symbols,
       regime, regime_multiplier,
       median, mean, p5, p25, p75, p95,
       var_95, cvar_95, var_95_pct,
@@ -204,6 +227,11 @@ def run_monte_carlo(
     symbols = [h["symbol"] for h in holdings]
     ewma_vols, hist_drifts, log_returns_df = _fetch_data(symbols)
 
+    # Symbols with no usable history fall back to FALLBACK_DAILY_VOL / zero
+    # drift — flag them so the substitution is never silent.
+    degraded_symbols = [s for s in symbols if s not in ewma_vols]
+    calibration = "degraded" if degraded_symbols else "ok"
+
     # ── Regime detection ─────────────────────────────────────────────────────
     regime = _get_portfolio_regime(symbols) if use_regime_drift else "NEUTRAL"
     regime_multiplier = REGIME_DRIFT.get(regime, 1.0)
@@ -217,7 +245,7 @@ def run_monte_carlo(
     # ── Volatility (EWMA covariance) ─────────────────────────────────────────
     daily_sig = _correlated_portfolio_vol(holdings, total_equity, log_returns_df, ewma_vols)
     if daily_sig <= 0 or np.isnan(daily_sig):
-        daily_sig = 0.018
+        daily_sig = FALLBACK_DAILY_VOL
 
     # ── GARCH(1,1) override (optional — if volatility_models installed) ───────
     vol_method = "EWMA-Corr"
@@ -231,6 +259,8 @@ def run_monte_carlo(
         pass
 
     # ── Simulation ────────────────────────────────────────────────────────────
+    # GBM log-return increments: loc = μ − ½σ², where μ is the ARITHMETIC daily
+    # drift from _fetch_data — the variance adjustment is applied exactly ONCE.
     rng = np.random.default_rng(seed=42)
     daily_returns = rng.normal(
         loc   = daily_mu - 0.5 * daily_sig ** 2,
@@ -270,7 +300,7 @@ def run_monte_carlo(
     per_symbol = [
         {
             "symbol":           h["symbol"],
-            "ewma_vol_daily_pct": round(ewma_vols.get(h["symbol"], 0.018) * 100, 2),
+            "ewma_vol_daily_pct": round(ewma_vols.get(h["symbol"], FALLBACK_DAILY_VOL) * 100, 2),
             "weight_pct":       round(h["equity"] / total_equity * 100, 1) if total_equity else 0,
         }
         for h in holdings
@@ -279,8 +309,11 @@ def run_monte_carlo(
     return {
         "current_equity":    round(total_equity, 2),
         "horizon_days":      horizon_days,
+        "horizon_label":     f"{horizon_days} trading days",
         "n_sims":            n_sims,
         "vol_method":        vol_method,
+        "calibration":       calibration,
+        "calibration_degraded_symbols": degraded_symbols,
         "regime":            regime,
         "regime_multiplier": regime_multiplier,
         "daily_vol_pct":     round(daily_sig * 100, 3),
