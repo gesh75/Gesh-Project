@@ -353,10 +353,22 @@ def rename_user_email(old_email: str, new_email: str) -> bool:
     return True
 
 
+# A valid-format PBKDF2 hash of a random secret nobody holds. Verifying a
+# submitted password against THIS when the account is missing/inactive makes the
+# unknown-user path do the same 200k-round work as a real wrong-password miss —
+# closing the timing side-channel that would otherwise reveal which emails exist.
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
+
+
 def verify_credentials(email: str, password: str) -> bool:
-    """True only when the user exists, is active, and the password matches."""
+    """True only when the user exists, is active, and the password matches.
+
+    Runs one PBKDF2 verification on EVERY call — even for an unknown or inactive
+    account (against a throwaway dummy hash) — so response time never leaks whether
+    the email is registered (username enumeration)."""
     u = get_user(email)
     if not u or not u["is_active"]:
+        verify_password(password, _DUMMY_PASSWORD_HASH)  # constant-time decoy; result discarded
         return False
     return verify_password(password, u["password_hash"])
 

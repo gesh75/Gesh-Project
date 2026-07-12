@@ -264,6 +264,46 @@ def _bucket_ok(ip: str, bucket: str, limit: int, window: int) -> bool:
         return True
 
 
+# ─── Login brute-force throttle (GPT-5.6 audit item 8) ───────────────────────
+# Counts only FAILED /auth/login attempts, per IP and per (IP, email). A correct
+# login clears both buckets so a legitimate owner is never locked out by earlier
+# fat-fingered attempts. We key on the IP too (not email alone) so an attacker
+# can't lock a victim out of their own account by spraying failures at it.
+LOGIN_FAIL_LIMIT = 8          # blocked after this many failures in the window
+LOGIN_FAIL_WINDOW = 300       # 5-minute sliding window
+_LOGIN_FAILS: dict[str, deque] = defaultdict(deque)
+_LOGIN_LOCK = threading.Lock()
+
+
+def _login_keys(ip: str, email: str) -> tuple[str, str]:
+    return (f"ip:{ip}", f"ip:{ip}|em:{(email or '').strip().lower()}")
+
+
+def _login_blocked(ip: str, email: str) -> bool:
+    now = time.time()
+    with _LOGIN_LOCK:
+        for key in _login_keys(ip, email):
+            d = _LOGIN_FAILS[key]
+            while d and d[0] <= now - LOGIN_FAIL_WINDOW:
+                d.popleft()
+            if len(d) >= LOGIN_FAIL_LIMIT:
+                return True
+        return False
+
+
+def _login_record_fail(ip: str, email: str) -> None:
+    now = time.time()
+    with _LOGIN_LOCK:
+        for key in _login_keys(ip, email):
+            _LOGIN_FAILS[key].append(now)
+
+
+def _login_clear(ip: str, email: str) -> None:
+    with _LOGIN_LOCK:
+        for key in _login_keys(ip, email):
+            _LOGIN_FAILS.pop(key, None)
+
+
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
 from auth import login, logout
 from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
@@ -697,15 +737,27 @@ def login_page():
 @app.post("/auth/login")
 async def auth_login(request: Request):
     """JSON login → sets an httpOnly session cookie. (JSON, not form, to avoid a
-    python-multipart dependency on the running server.)"""
+    python-multipart dependency on the running server.)
+
+    Brute-force hardened (audit item 8): failed attempts are throttled per IP and
+    per (IP, email); the 200k-round PBKDF2 verify runs in a worker thread so it
+    never blocks the event loop."""
+    ip = request.client.host if request.client else "unknown"
     try:
         body = await request.json()
     except Exception:
         body = {}
     email = (body.get("email") or "").strip()
     password = body.get("password") or ""
-    if not auth_users.verify_credentials(email, password):
+    if _login_blocked(ip, email):
+        return JSONResponse(status_code=429,
+                            content={"ok": False, "detail": "Too many login attempts — try again shortly"})
+    # PBKDF2 is CPU-bound (~200k rounds); off-load so concurrent requests keep flowing.
+    ok = await asyncio.to_thread(auth_users.verify_credentials, email, password)
+    if not ok:
+        _login_record_fail(ip, email)
         return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid email or password"})
+    _login_clear(ip, email)
     auth_users.touch_last_login(email)
     resp = JSONResponse(content={"ok": True})
     resp.set_cookie(
@@ -2384,7 +2436,8 @@ def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> No
     outcome is written into _mybook_jobs / _mybook_cache under _mybook_lock, and the
     poll of /api/mybook/analyze picks it up."""
     try:
-        _check_customer_quota(email, "book_analysis")   # may raise HTTPException(429)
+        # Quota was already reserved atomically at accept time (in the handler under
+        # _mybook_lock, before this thread was started) — no re-check here.
         payload = _customer_book_payload(positions, ew)
         if not payload["holdings"]:
             raise HTTPException(status_code=404,
@@ -2428,14 +2481,19 @@ async def mybook_analyze(request: Request):
     fp = _book_fingerprint(positions) + ("|ew" if ew else "")
 
     with _mybook_lock:
-        # 1) a background job in flight / just finished for THIS book? (checked before
-        #    the cache so the poll that completes a live run is reported as live, not
-        #    a cache hit — the worker already metered the one "book_analysis").
         job = _mybook_jobs.get(email)
+        # 1) SINGLE-FLIGHT IS PER-USER, not per-fingerprint. If ANY analysis is in
+        #    flight for this user, a new request (even for a freshly-edited book)
+        #    must NOT spawn a second concurrent worker — that would double-spend the
+        #    quota and let a slow stale run overwrite a newer result. The client
+        #    keeps polling; the new book runs once the current one finishes.
+        if job and job.get("status") == "running":
+            return JSONResponse(status_code=202, content={"status": "running"})
+        # 2) a finished / errored job for THIS exact book — handed back exactly once
+        #    (checked before the cache so the poll that completes a live run reports
+        #    it as live, not a cache hit — the worker already metered it).
         if job and job.get("fp") == fp:
             status = job.get("status")
-            if status == "running":
-                return JSONResponse(status_code=202, content={"status": "running"})
             if status == "error":
                 err = job.pop("error", None)
                 del _mybook_jobs[email]
@@ -2449,12 +2507,20 @@ async def mybook_analyze(request: Request):
                 if hit and hit[1] == fp:
                     return {"status": "ok", "cached": False, "data": hit[2]}
                 # cache entry vanished (evicted) → fall through and re-run
-        # 2) a genuine repeat view — fresh cached result for this exact book?
+        elif job:
+            # a finished / errored job for a DIFFERENT (now-stale) book — discard it
+            # so a fresh run for the current book can start cleanly.
+            _mybook_jobs.pop(email, None)
+        # 3) a genuine repeat view — fresh cached result for this exact book?
         hit = _mybook_cache.get(email)
         if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
             auth_users.log_usage(email, "book_analysis_cached")
             return {"status": "ok", "cached": True, "data": hit[2]}
-        # 3) start a fresh background job (single-flight: the lock makes this atomic)
+        # 4) reserve quota ATOMICALLY (under the lock, before starting the worker) so
+        #    an over-cap call 429s immediately instead of a thread discovering the cap
+        #    minutes later — and combined with per-user single-flight, no two runs can
+        #    slip past the check→log window. Raises HTTPException(429) before any spend.
+        _check_customer_quota(email, "book_analysis")
         _mybook_jobs[email] = {"fp": fp, "status": "running"}
     threading.Thread(target=_mybook_analyze_worker,
                      args=(email, fp, positions, ew), daemon=True).start()
