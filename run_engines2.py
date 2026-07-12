@@ -307,6 +307,73 @@ except Exception as e:
     print(f"  crypto ERROR: {e}")
     results['crypto_risk'] = {}
 
+# ── Long-term macro overlay (B1/B2 for the agentic-rh bridge) ────────────────
+# VIX regime + CNN Fear&Greed + FINRA margin debt → a normalized block the bridge
+# turns into a CONTRARIAN regime-tier exposure ladder. Fail-soft: a data outage
+# writes an empty block, and the bridge degrades to today's (binary) behaviour.
+print(f"\n{_t()} [bonus] Long-term macro sentiment...")
+try:
+    import long_term_macro
+    results['long_term_macro'] = long_term_macro.engine_block()
+    results['long_term_macro_ran_at'] = _utcnow()
+    _lt = results['long_term_macro']
+    print(f"  bias={_lt.get('bias')}  score={_lt.get('combined_score')}  "
+          f"F&G={(_lt.get('fear_greed') or {}).get('label')}")
+except Exception as e:
+    print(f"  long-term macro ERROR: {e}")
+    results['long_term_macro'] = {}
+
+# ── Per-name FFT cycle phase (B4) ────────────────────────────────────────────
+# Dominant-cycle phase per held/tracked name so the bridge can prefer TROUGH/
+# EARLY-UP entries and avoid PEAK for multi-day holds. Slimmed to the fields the
+# bridge reads (phase_label / cycle_position / is_rising / primary period).
+print(f"\n{_t()} [bonus] FFT cycle phase per name...")
+try:
+    from fft_cycles import batch_fft_cycles
+    _fft_raw = batch_fft_cycles(symbols).get("cycles", {})
+    _fft: dict = {}
+    for _sym, _rec in _fft_raw.items():
+        if not isinstance(_rec, dict) or _rec.get("error"):
+            continue
+        _primary = _rec.get("primary_cycle") if isinstance(_rec.get("primary_cycle"), dict) else {}
+        _fft[_sym] = {
+            "phase_label": _rec.get("phase_label"),
+            "cycle_position": _rec.get("cycle_position"),
+            "is_rising": _rec.get("is_rising"),
+            "primary_cycle": {"period_days": _primary.get("period_days")},
+        }
+    results['fft'] = _fft
+    results['fft_ran_at'] = _utcnow()
+    print(f"  fft phases for {len(_fft)}/{len(symbols)} names")
+except Exception as e:
+    print(f"  fft ERROR: {e}")
+    results['fft'] = {}
+
+# ── Per-name consolidation zones (B7) ────────────────────────────────────────
+# Tight-range breakout setups (entry/stop/target/R-R) as a {SYM: zone} map so the
+# bridge can use structural stops instead of a flat band %. Intraday 5m scan;
+# fail-soft (network/illiquid names simply produce no zone).
+print(f"\n{_t()} [bonus] Consolidation zones per name...")
+try:
+    from consolidation_zone import scan_consolidations
+    _scan = scan_consolidations(symbols, interval="5m", period="1d", min_rr=1.5)
+    _zones: dict = {}
+    for _r in (_scan.get("found") or []):
+        _sym = _r.get("symbol")
+        if not _sym:
+            continue
+        _zones[str(_sym).upper()] = {
+            "entry": _r.get("entry"), "stop": _r.get("stop"),
+            "target": _r.get("target"), "rr": _r.get("rr_ratio"),
+            "zone_low": _r.get("zone_low"), "zone_high": _r.get("zone_high"),
+        }
+    results['consolidation_zone'] = _zones
+    results['consolidation_zone_ran_at'] = _utcnow()
+    print(f"  consolidation setups for {len(_zones)}/{len(symbols)} names")
+except Exception as e:
+    print(f"  consolidation ERROR: {e}")
+    results['consolidation_zone'] = {}
+
 # ── Store regime_summary for AI step ─────────────────────────────────────────
 results['regime_summary'] = regime_summary
 

@@ -125,3 +125,41 @@ def test_lt_macro_appears_in_consensus_votes(monkeypatch):
     assert "LT_Macro" in out["votes"]
     assert out["votes"]["LT_Macro"] == 1          # bullish combined score → +1
     assert "VIX" in out["details"]["LT_Macro"]
+
+
+# ── engine_block() — the engine_results.json contract for the agentic-rh bridge ──
+
+def test_engine_block_shape_and_fields():
+    """engine_block normalizes the raw sentiment into the flat block the bridge reads:
+    fear_greed.label, margin_debt.elevated, vix.level, combined_score, bias."""
+    blk = ltm.engine_block({**_SENT,
+                            "fear_greed": {"score": -1, "detail": "Extreme Greed 82", "level": 82.0},
+                            "margin_debt": {"score": -1, "detail": "rising fast", "level": 9.0e11}})
+    assert blk["fear_greed"]["level"] == 82.0
+    assert blk["fear_greed"]["label"] == "Extreme Greed"     # derived from the 0-100 level
+    assert blk["margin_debt"]["elevated"] is True            # negative margin score → elevated
+    assert blk["vix"]["level"] == 15.0
+    assert blk["combined_score"] == 0.55 and blk["bias"] == "BULLISH"
+
+
+@pytest.mark.parametrize("level,label", [
+    (10.0, "Extreme Fear"), (24.9, "Extreme Fear"), (30.0, "Fear"),
+    (50.0, "Neutral"), (68.0, "Greed"), (82.0, "Extreme Greed"), (None, None),
+])
+def test_engine_block_fear_greed_labels(level, label):
+    blk = ltm.engine_block({**_SENT, "fear_greed": {"score": 0, "detail": "", "level": level}})
+    assert blk["fear_greed"]["label"] == label
+
+
+def test_engine_block_margin_elevated_only_when_score_negative():
+    assert ltm.engine_block({**_SENT, "margin_debt": {"score": -1, "level": 1}})["margin_debt"]["elevated"] is True
+    assert ltm.engine_block({**_SENT, "margin_debt": {"score": 0, "level": 1}})["margin_debt"]["elevated"] is False
+    assert ltm.engine_block({**_SENT, "margin_debt": {"score": None, "level": 1}})["margin_debt"]["elevated"] is None
+
+
+def test_engine_block_never_raises_on_garbage():
+    for bad in ({}, {"vix": None, "fear_greed": [], "margin_debt": "x"}, {"combined_score": None}):
+        blk = ltm.engine_block(bad)
+        assert blk["bias"] == "NEUTRAL"
+        assert blk["fear_greed"]["label"] is None
+        assert set(blk) >= {"vix", "fear_greed", "margin_debt", "combined_score", "bias"}
