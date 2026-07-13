@@ -655,10 +655,14 @@ body:not(.role-known) .owner-only { display: none !important; }
         <span class="badge b-cyan">LIVE · 11-node consensus · regime · cycle · fundamentals</span>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 4px">
-        <input id="analyze-input" placeholder="Enter a ticker — e.g. AAPL, TSLA, NVDA" autocomplete="off"
-               style="flex:1;min-width:220px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:16px;letter-spacing:.04em"
-               onkeydown="if(event.key==='Enter')analyzeTicker(this.value)">
-        <button class="btn-analyze" onclick="analyzeTicker(document.getElementById('analyze-input').value)">▶ Analyze</button>
+        <div style="position:relative;flex:1;min-width:220px">
+          <input id="analyze-input" placeholder="Enter a company name or ticker — e.g. Apple, AAPL" autocomplete="off"
+                 style="width:100%;box-sizing:border-box;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:16px;letter-spacing:.04em"
+                 oninput="symbolSearch(this.value)"
+                 onkeydown="if(event.key==='Enter'){hideSymbolDropdown();analyzeTicker(this.value)}else if(event.key==='Escape')hideSymbolDropdown()">
+          <div id="symbol-dropdown" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:50;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.4);max-height:300px;overflow-y:auto"></div>
+        </div>
+        <button class="btn-analyze" onclick="hideSymbolDropdown();analyzeTicker(document.getElementById('analyze-input').value)">▶ Analyze</button>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Not financial advice — research/observability only. Signals are live on public market data; you trade your own account.</div>
       <div id="analyze-watchlist" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px"></div>
@@ -2700,6 +2704,36 @@ function buildRow(label,val){
   return `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">`
     +`<span style="color:var(--muted)">${daEsc(label)}</span><b>${daEsc(val)}</b></div>`;
 }
+
+// ── Company-name → ticker typeahead (Analyze box) ─────────────────────────────
+let _symSearchTimer=null;
+function hideSymbolDropdown(){ const d=$('symbol-dropdown'); if(d){ d.style.display='none'; d.innerHTML=''; } }
+function pickSymbol(sym){
+  const inp=$('analyze-input'); if(inp) inp.value=sym;
+  hideSymbolDropdown();
+  analyzeTicker(sym);
+}
+function symbolSearch(q){
+  clearTimeout(_symSearchTimer);
+  const query=(q||'').trim();
+  if(query.length<2){ hideSymbolDropdown(); return; }
+  // debounce so we don't fire a request on every keystroke
+  _symSearchTimer=setTimeout(async ()=>{
+    let rows=[];
+    try{ rows=(((await fetch('/api/symbol-search?q='+encodeURIComponent(query)+'&limit=8').then(r=>r.json()))||{}).data)||[]; }catch(e){ rows=[]; }
+    const d=$('symbol-dropdown'); if(!d) return;
+    if(!rows.length){ hideSymbolDropdown(); return; }
+    // Every sink is daEsc'd (guard requires it at the interpolation). The onclick
+    // arg is additionally hard-stripped to a bare ticker charset before escaping.
+    d.innerHTML=rows.map(r=>`<div onclick="pickSymbol('${daEsc((r.symbol||'').replace(/[^A-Za-z0-9.\-]/g,''))}')" style="padding:9px 14px;cursor:pointer;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;gap:12px"
+        onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
+        <b style="color:var(--accent)">${daEsc(r.symbol||'')}</b><span style="color:var(--muted);font-size:13px;text-align:right">${daEsc(r.name||'')}</span></div>`).join('');
+    d.style.display='block';
+  }, 180);
+}
+// close the dropdown on an outside click
+document.addEventListener('click',e=>{ const w=$('analyze-input'); const d=$('symbol-dropdown');
+  if(d&&w&&e.target!==w&&!d.contains(e.target)) hideSymbolDropdown(); });
 
 async function analyzeTicker(raw){
   // Charset mirrors the server's _SYMBOL_RE (^indices, forex =X, BRK.B, BTC-USD)

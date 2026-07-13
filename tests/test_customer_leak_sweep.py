@@ -225,6 +225,8 @@ COVERED: dict[str, str] = {
 EXCLUDED: dict[str, str] = {
     "/api/ollama/status": "410 Gone — endpoint permanently removed; carries no data",
     "/api/me": "returns only a session role string (owner|customer) — no owner financial data",
+    "/api/symbol-search": "public reference data (ticker + company name) from the Alpaca "
+                          "asset universe — no owner positions/dollars, no LLM",
     "/api/usage/summary": "OWNER-ONLY metering view (403s customer sessions — locked by "
                           "tests/test_mybook.py); the sweep's 200-with-masking contract "
                           "cannot apply to a route customers cannot read",
