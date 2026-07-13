@@ -1596,14 +1596,32 @@ function buildRadarChart(cid,scores){
   radarCharts[cid]=new Chart(c,{type:'radar',data:{labels:['Value','Growth','Health','Momentum','Dividend'],datasets:[{data,backgroundColor:bgMap[bgIdx],borderColor:col,borderWidth:2,pointBackgroundColor:col,pointBorderColor:'transparent',pointRadius:3,pointHoverRadius:5}]},options:{responsive:false,maintainAspectRatio:false,scales:{r:{min:0,max:100,ticks:{display:false,stepSize:25},grid:{color:'rgba(255,255,255,.05)'},angleLines:{color:'rgba(255,255,255,.05)'},pointLabels:{color:'#4a5568',font:{size:9,family:"'SF Mono',monospace"}}}},plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>' '+c.raw+'/100'}}}}});
 }
 
+// Canonical fair-value gap: +% = estimate ABOVE current price (undervalued/upside).
+// The model's own fair_value.pct_diff is non-deterministic in formula ((est-cur)/cur
+// vs (cur-est)/est), so the SAME stock rendered +88% on one run and -47% on another.
+// Recompute from the two grounded numbers so every surface agrees. null if unknown.
+function daFvPct(fv){
+  if(!fv||fv.estimate==null||fv.current==null||!fv.current) return null;
+  return (fv.estimate-fv.current)/Math.abs(fv.current)*100;
+}
+// {pct, label, str} from the canonical gap — status label derived from the SAME
+// number as the %, so badge and percentage can never disagree.
+function daFairValue(fv){
+  const p=daFvPct(fv);
+  if(p==null) return null;
+  return {pct:p, label:p>0.5?'undervalued':p<-0.5?'overvalued':'fair',
+          str:(p>=0?'+':'')+p.toFixed(1)+'%'};
+}
+
 function buildFV(fv){
   if(!fv||!fv.estimate) return '<span style="font-size:13px;color:var(--muted)">No estimate</span>';
   const c=fv.current||0,e=fv.estimate||0,mx=Math.max(c,e)*1.08||1;
   const cw=Math.min(100,(c/mx)*100).toFixed(1),ew=Math.min(100,(e/mx)*100).toFixed(1);
-  const pct=Math.abs(fv.pct_diff||0).toFixed(1);
-  const under=fv.pct_diff>0;
-  const bc=fv.status==='undervalued'?'fvb-under':fv.status==='overvalued'?'fvb-over':'fvb-fair';
-  const bt=fv.status==='undervalued'?`+${pct}% Under`:fv.status==='overvalued'?`-${pct}% Over`:'Fair Value';
+  const p=daFvPct(fv), pv=p!=null?p:0;
+  const pct=Math.abs(pv).toFixed(1);
+  const under=pv>0.5, over=pv<-0.5;
+  const bc=under?'fvb-under':over?'fvb-over':'fvb-fair';
+  const bt=under?`+${pct}% Under`:over?`-${pct}% Over`:'Fair Value';
   return `<div class="fv-row"><span class="fv-lbl">Current</span><div class="fv-bar-track"><div class="fv-bar-fill" style="width:${cw}%;background:var(--accent)"></div></div><span class="fv-price">${fmt(c)}</span></div><div class="fv-row"><span class="fv-lbl">Est.Fair</span><div class="fv-bar-track"><div class="fv-bar-fill" style="width:${ew}%;background:${under?'var(--green)':'var(--red)'}"></div></div><span class="fv-price">${fmt(e)}</span></div><span class="fv-badge ${bc}">${bt}</span>`;
 }
 
@@ -2704,6 +2722,20 @@ function buildRow(label,val){
   return `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">`
     +`<span style="color:var(--muted)">${daEsc(label)}</span><b>${daEsc(val)}</b></div>`;
 }
+// Fundamentals sanity guards (build*-named so the XSS guard trusts them; both delegate
+// to buildRow which escapes). A negative trailing P/E is not a meaningful multiple —
+// label it N/M rather than render a misleading negative number. A 52-wk range whose
+// low is <=0, inverted, or >5× below the high is split-mismatched/bad upstream data —
+// hide it rather than feed a wrong low into the card.
+function buildPERow(pe){
+  if(pe==null) return '';
+  return Number(pe)<0 ? buildRow('P/E ratio','N/M (trailing loss)') : buildRow('P/E ratio', pe);
+}
+function buildRangeRow(low,high){
+  if(low==null||high==null) return '';
+  if(low<=0||low>=high||high/low>5) return '';
+  return buildRow('52-wk range', '$'+low+' – $'+high);
+}
 
 // ── Company-name → ticker typeahead (Analyze box) ─────────────────────────────
 let _symSearchTimer=null;
@@ -2840,7 +2872,7 @@ async function analyzeTicker(raw){
         <div class="card"><div style="${T}">Price Cycle (FFT)</div>
           ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
         <div class="card"><div style="${T}">Fundamentals</div>
-          ${fu&&fu.pe_ratio!=null?buildRow('P/E ratio', fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu&&fu.high_52!=null&&fu.low_52!=null?buildRow('52-wk range', '$'+fu.low_52+' – $'+fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
+          ${fu?buildPERow(fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu?buildRangeRow(fu.low_52,fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
         <div class="card"><div style="${T}">Analyst Ratings</div>
           ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', an.num_buy+' / '+an.num_hold+' / '+an.num_sell):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+an.target_mean):''}${an&&an.upside_pct!=null?buildRow('Upside', an.upside_pct+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?an.num_analysts:'—')}</div>
       </div>
@@ -2867,8 +2899,9 @@ async function analyzeTicker(raw){
 function buildAICard(h){
   const sc=h.scores||{}, fv=h.fair_value||{};
   const skeys=['valuation','growth','health','momentum','dividend'];
-  const fvPct=fv.pct_diff!=null?((fv.pct_diff>=0?'+':'')+Number(fv.pct_diff).toFixed(1)+'%'):'';
-  const fvColor=fv.pct_diff>5?'var(--green)':fv.pct_diff<-5?'var(--red)':'var(--yellow)';
+  const fvv=daFairValue(fv);
+  const fvPct=fvv?fvv.str:'';
+  const fvColor=fvv&&fvv.pct>5?'var(--green)':fvv&&fvv.pct<-5?'var(--red)':'var(--yellow)';
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
   return `<div class="card" style="margin-bottom:16px">
     <div style="${T}">🧠 AI Research — ${daEsc(h.symbol||'')}</div>
@@ -2879,7 +2912,7 @@ function buildAICard(h){
           <span style="font-size:12px;color:var(--muted)">${daEsc(h.company_type||'')}</span>
         </div>
         <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
-          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fv.status||'')} ${daEsc(fvPct)}</span>
+          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>
         </div>
       </div>
       <div class="da-sbars">
@@ -3296,7 +3329,7 @@ function daRender(data, meta, kellyData, portData){
           const pri=actPri[k.action]||'P3';
           const ac=actColor[k.action]||'var(--muted2)';
           const aiV=aiMap[sym]||{};
-          const fvPct=aiV.fv&&aiV.fv.pct_diff!=null?(aiV.fv.pct_diff>=0?'+':'')+Number(aiV.fv.pct_diff).toFixed(1)+'%':'';
+          const fvPct=(daFairValue(aiV.fv)||{}).str||'';
           const rowBg=k.action==='TRIM'?'rgba(255,68,68,.04)':k.action==='ADD'?'rgba(0,230,118,.04)':'';
           return `<tr style="border-bottom:1px dashed var(--border);background:${rowBg}">
             <td style="padding:9px 10px"><span class="da-pri" style="${daPriStyle(pri)}">${pri}</span></td>
@@ -3354,8 +3387,9 @@ function daRender(data, meta, kellyData, portData){
 
   $('da-holdings').innerHTML=holdings.length?holdings.map(h=>{
     const sc=h.scores||{}, fv=h.fair_value||{};
-    const fvPct=fv.pct_diff!=null?((fv.pct_diff>=0?'+':'')+Number(fv.pct_diff).toFixed(1)+'%'):'';
-    const fvColor=fv.pct_diff>5?'var(--green)':fv.pct_diff<-5?'var(--red)':'var(--yellow)';
+    const fvv=daFairValue(fv);
+    const fvPct=fvv?fvv.str:'';
+    const fvColor=fvv&&fvv.pct>5?'var(--green)':fvv&&fvv.pct<-5?'var(--red)':'var(--yellow)';
     const regime=rmap[h.symbol]||'';
     return `<div class="da-holding">
       <div class="hdr">
@@ -3367,7 +3401,7 @@ function daRender(data, meta, kellyData, portData){
           <div style="font-size:12px;color:var(--muted);margin-top:3px">${daEsc(h.company_type||'')}${regime?' · '+daEsc(regime):''}</div>
         </div>
         <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
-          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fv.status||'')} ${fvPct}</span>
+          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>
         </div>
       </div>
       <div class="da-sbars">
