@@ -2609,6 +2609,11 @@ function switchTab(name, btn){
   if(pane) pane.classList.add('active');
   // drive sidebar nav active state by data-tab (works for clicks AND programmatic calls)
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+  // Reset scroll to the top of the newly-shown pane. Panes share the window scroll
+  // (.main has no own overflow-y), so switching while scrolled down left the new
+  // pane's top content above the viewport — it read as a blank/black screen until
+  // you scrolled up (observed on the Risk tab). Always land at the top on switch.
+  window.scrollTo(0, 0);
   // lazy-load data per tab (cached results render by default → never empty)
   if(name==='risk'){ loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
   if(name==='analysis'){ tryLoadCachedAnalysis(); }
