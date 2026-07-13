@@ -172,3 +172,38 @@ def test_engine_block_never_raises_on_garbage():
         assert blk["bias"] == "NEUTRAL"
         assert blk["fear_greed"]["label"] is None
         assert set(blk) >= {"vix", "fear_greed", "margin_debt", "combined_score", "bias"}
+
+
+# ── Fear & Greed fetcher: CNN graphdata API (rebuilt to bypass 418) ────────────
+
+class _Resp:
+    def __init__(self, status, payload=None):
+        self.status_code = status
+        self._payload = payload or {}
+    def json(self):
+        return self._payload
+
+
+def test_fear_greed_uses_graphdata_with_browser_headers(monkeypatch, tmp_path):
+    """The one live source is CNN's graphdata API — hit with full browser headers
+    (it 418s bare agents). Returns a {date, fear_greed} frame from the series."""
+    monkeypatch.setattr(ltm, "F_G_CACHE", tmp_path / "fg.json")   # cold cache
+    seen = {}
+    def _get(url, headers=None, timeout=None):
+        seen["url"] = url
+        seen["headers"] = headers or {}
+        return _Resp(200, {"fear_and_greed_historical": {"data": [
+            {"x": 1_700_000_000_000, "y": 55.0}, {"x": 1_700_086_400_000, "y": 62.0}]}})
+    monkeypatch.setattr(ltm.requests, "get", _get)
+    df = ltm.fetch_fear_greed()
+    assert df is not None and list(df.columns) == ["date", "fear_greed"]
+    assert df["fear_greed"].iloc[-1] == 62.0
+    assert "dataviz.cnn.io" in seen["url"]
+    assert "User-Agent" in seen["headers"] and "Chrome" in seen["headers"]["User-Agent"]
+
+
+def test_fear_greed_418_returns_none_not_stale(monkeypatch, tmp_path):
+    """A bot-block / failure returns None (honest no-data), never a stale frame."""
+    monkeypatch.setattr(ltm, "F_G_CACHE", tmp_path / "fg.json")
+    monkeypatch.setattr(ltm.requests, "get", lambda *a, **k: _Resp(418))
+    assert ltm.fetch_fear_greed() is None

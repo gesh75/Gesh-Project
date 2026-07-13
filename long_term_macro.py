@@ -125,78 +125,54 @@ def vix_regime_score(vix_series: Optional[pd.Series]) -> Dict[str, Any]:
 # Fear & Greed (CNN)
 # ──────────────────────────────────────────────────────────────────────────────
 
+# CNN's dataviz API — the one live Fear & Greed source — returns HTTP 418 to bare
+# user agents, so it needs a full browser-like header set. The graphdata endpoint
+# carries BOTH the current score and the daily series in one call, which is why the
+# old page-scrape (fragile regex) and the long-dead GitHub CSV fallback are gone —
+# they returned no / empty / 6-year-stale data.
+_CNN_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.cnn.com/markets/fear-and-greed",
+    "Origin": "https://www.cnn.com",
+}
+
+
 def fetch_fear_greed() -> Optional[pd.DataFrame]:
-    """Fetch CNN Fear & Greed. Prioritize live current from page + graphdata for series."""
+    """Fetch the CNN Business Fear & Greed Index (0-100 contrarian sentiment gauge).
+
+    Single source: CNN's official dataviz graphdata API, which returns the current
+    score plus the daily historical series in one call. Requires full browser
+    headers (the endpoint 418s bare agents). On any failure returns None — an honest
+    'no data' the caller degrades cleanly, never a stale or empty frame."""
     cache = _load_cache(F_G_CACHE)
     if cache and _cache_valid(F_G_CACHE):
         try:
             return pd.DataFrame(cache["data"])
         except Exception:
             pass
-
-    df = None
-    current_score = None
-
-    # 1. Scrape current score from the main page (reliable for current value)
-    try:
-        url = 'https://www.cnn.com/markets/fear-and-greed'
-        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}, timeout=10)
-        if resp.status_code == 200:
-            import re
-            # Look for the prominent number near "Fear & Greed"
-            m = re.search(r'(\d{1,3})\s*</[^>]+>\s*<[^>]*>\s*(?:Fear|Greed)', resp.text, re.IGNORECASE | re.DOTALL)
-            if not m:
-                m = re.search(r'fear-and-greed[^>]*>(\d{1,3})', resp.text, re.IGNORECASE)
-            if m:
-                current_score = int(m.group(1))
-    except Exception as e:
-        logger.warning(f"F&G current scrape failed: {e}")
-
-    # 2. Try graphdata for historical series (for trend if needed)
     try:
         start = (datetime.utcnow() - timedelta(days=40)).strftime("%Y-%m-%d")
         url = f"https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{start}"
-        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            hist = data.get("fear_and_greed_historical", {}).get("data", [])
-            if hist:
-                df = pd.DataFrame(hist)
-                df["date"] = pd.to_datetime(df["x"], unit="ms").dt.date
-                df = df[["date", "y"]].rename(columns={"y": "fear_greed"})
-    except Exception as e:
-        logger.warning(f"F&G graphdata failed: {e}")
-
-    # Ensure we have current value
-    if current_score is not None:
-        today = datetime.utcnow().date()
-        if df is None or df.empty:
-            df = pd.DataFrame({"date": [today], "fear_greed": [current_score]})
-        else:
-            # update or append current
-            if str(df['date'].iloc[-1]) == str(today):
-                df.at[df.index[-1], 'fear_greed'] = current_score
-            else:
-                df = pd.concat([df, pd.DataFrame({"date": [today], "fear_greed": [current_score]})], ignore_index=True)
-
-    if df is not None and not df.empty:
-        _save_cache(F_G_CACHE, {"fetched_at": datetime.utcnow().isoformat(), "data": df.to_dict("records")})
-        return df
-
-    # Final fallback
-    try:
-        hist_url = "https://raw.githubusercontent.com/hackingthemarkets/sentiment-fear-and-greed/master/datasets/fear-greed.csv"
-        df = pd.read_csv(hist_url)
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date']).dt.date
-        else:
-            df = df.iloc[:, :2]
-            df.columns = ['date', 'fear_greed']
-            df['date'] = pd.to_datetime(df['date']).dt.date
-        df = df[['date', 'fear_greed']].dropna()
+        resp = requests.get(url, headers=_CNN_HEADERS, timeout=10)
+        if resp.status_code != 200:
+            logger.warning("F&G graphdata HTTP %s", resp.status_code)
+            return None
+        hist = (resp.json().get("fear_and_greed_historical") or {}).get("data") or []
+        if not hist:
+            return None
+        df = pd.DataFrame(hist)
+        df["date"] = pd.to_datetime(df["x"], unit="ms").dt.date
+        df = df[["date", "y"]].rename(columns={"y": "fear_greed"}).dropna()
+        if df.empty:
+            return None
+        _save_cache(F_G_CACHE, {"fetched_at": datetime.utcnow().isoformat(),
+                                "data": df.to_dict("records")})
         return df
     except Exception as e:
-        logger.error(f"F&G all failed: {e}")
+        logger.warning("F&G fetch failed: %s", e)
         return None
 
 

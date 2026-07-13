@@ -227,7 +227,7 @@ _HEAVY_PREFIXES = (
     # the normal 300/min cap could hammer the providers. Trailing slash on purpose:
     # the exact "/api/regime" (dashboard-polled, chain-cached) stays in the normal
     # bucket — only the /{symbol} variants are heavy.
-    "/api/regime/", "/api/fundamentals/", "/api/analyst/", "/api/news/",
+    "/api/regime/", "/api/fundamentals/", "/api/analyst/", "/api/news/", "/api/momentum/",
     # Customer-book analysis = regime + Monte Carlo + Kelly + one Claude call.
     # Book CRUD (/api/mybook without /analyze) stays in the normal bucket.
     "/api/mybook/analyze",
@@ -1936,6 +1936,22 @@ def symbol_search(q: str = "", limit: int = 10):
     try:
         import symbol_search as _ss
         return {"status": "ok", "data": _ss.search(q, limit)}
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/momentum/{symbol}")
+def momentum_symbol(symbol: str):
+    """Momentum buy/sell signal (RSI + MACD + Volume, combined) for ANY ticker.
+    Pure price math on public daily OHLCV — no LLM, no owner data."""
+    sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("momentum", sym)
+    if cached:
+        return cached
+    try:
+        import momentum_signal
+        return _ticker_get_store("momentum", sym,
+                                 {"status": "ok", "data": momentum_signal.compute(sym)})
     except Exception as e:
         raise _server_error(e)
 
