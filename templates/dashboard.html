@@ -2753,7 +2753,11 @@ async function analyzeTicker(raw){
       fetch(`/api/news/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(`/api/momentum/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
     ]);
-    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[], mo=mom&&mom.data;
+    const [lev,earn]=await Promise.all([
+      fetch(`/api/levels/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
+      fetch(`/api/earnings/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
+    ]);
+    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[], mo=mom&&mom.data, lv=lev&&lev.data, ea=earn&&earn.data;
     if(!d && !rg && !fc && !fu){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">No data for '+daEsc(sym)+' — check the ticker and try again.</div></div>'; return; }
     const periods=['1d','5d','1mo','3mo','6mo','1y'];
     const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
@@ -2795,7 +2799,35 @@ async function analyzeTicker(raw){
         <div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.5">${daEsc(mo.rationale)}</div>
       </div>`;
     }
-    box.innerHTML=`${consHtml}${momHtml}<div id="analyze-ai"></div>
+    // Trade Setup card (support/resistance + entry/stop/target). buildRow escapes leaves.
+    let levHtml='';
+    if(lv&&lv.available){
+      const st=lv.setup||{};
+      const sup=(lv.support||[]).map(x=>'$'+daEsc(x)).join(' · ')||'—';
+      const res=(lv.resistance||[]).map(x=>'$'+daEsc(x)).join(' · ')||'—';
+      const rrColor=(st.risk_reward!=null&&st.risk_reward>=2)?'var(--green)':(st.risk_reward!=null&&st.risk_reward<1)?'var(--red)':'var(--yellow)';
+      levHtml=`<div class="card" style="margin-bottom:16px"><div style="${T}">🎯 Trade Setup <span style="color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0">support · resistance · stop</span></div>
+        ${buildRow('Resistance (above)', res)}${buildRow('Support (below)', sup)}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin:12px 0">
+          <div style="background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">ENTRY</div><div style="font-size:17px;font-weight:700">$${daEsc(st.entry)}</div></div>
+          <div style="background:var(--card2);border:1px solid var(--red);border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">STOP</div><div style="font-size:17px;font-weight:700;color:var(--red)">$${daEsc(st.stop)}</div></div>
+          <div style="background:var(--card2);border:1px solid var(--green);border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">TARGET</div><div style="font-size:17px;font-weight:700;color:var(--green)">$${daEsc(st.target)}</div></div>
+          <div style="background:var(--card2);border:1px solid ${rrColor};border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">RISK:REWARD</div><div style="font-size:17px;font-weight:700;color:${rrColor}">${st.risk_reward!=null?daEsc(st.risk_reward)+'×':'—'}</div></div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.5">${daEsc(lv.note||'')}</div></div>`;
+    }
+    // Earnings card (EPS beat/miss) — a Chart.js bar chart drawn after paint.
+    let earnHtml='';
+    if(ea&&ea.available&&(ea.quarters||[]).length){
+      earnHtml=`<div class="card" style="margin-bottom:16px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+        <div style="${T};margin:0">📊 Earnings — EPS beat/miss</div>
+        <span style="font-size:13px;color:var(--muted2)">${daEsc(ea.beat_count)}/${daEsc(ea.scored_count)} beats${ea.avg_surprise_pct!=null?' · avg surprise '+daEsc(ea.avg_surprise_pct)+'%':''}</span></div>
+        <div style="position:relative;height:220px"><canvas id="earnings-canvas"></canvas></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px">${daEsc(ea.note||'')}</div></div>`;
+    } else if(ea&&!ea.available){
+      earnHtml=`<div class="card" style="margin-bottom:16px"><div style="${T}">📊 Earnings</div><div class="deep-ph-text" style="padding:12px 0">Earnings data unavailable — ${daEsc(ea.reason||'no source')}.</div></div>`;
+    }
+    box.innerHTML=`${consHtml}${momHtml}${levHtml}${earnHtml}<div id="analyze-ai"></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
         <div class="card"><div style="${T}">Market Regime</div>
           ${buildRow('Regime', rg?((rg.icon?rg.icon+' ':'')+rg.regime):'n/a')}${buildRow('ADX', rg&&rg.adx!=null?rg.adx:'—')}${buildRow('RSI', rg&&rg.rsi!=null?rg.rsi:'—')}
@@ -2819,6 +2851,7 @@ async function analyzeTicker(raw){
           <div style="font-size:14px;color:var(--text)">${daEsc(n.title)}</div>
           <div style="font-size:12px;color:var(--muted)">${daEsc(n.source)}${n.published?' · '+daEsc(n.published):''}</div></a>`).join(''):'<div class="deep-ph-text" style="padding:20px 0;text-align:center">No recent news for this ticker.</div>'}</div>`;
     analyzeChart(sym,'1mo');
+    if(ea&&ea.available&&(ea.quarters||[]).length) drawEarningsChart(ea.quarters);
     analyzeAI(sym);
   }catch(e){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">'+daEsc('Could not analyze '+sym)+'</div></div>'; }
 }
@@ -3091,6 +3124,27 @@ async function mybookAnalyze(){
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
+}
+
+// Earnings EPS actual-vs-estimate grouped bar chart (data → Chart.js canvas API,
+// not innerHTML — no XSS surface). Quarters oldest→newest.
+let earningsChart=null;
+function drawEarningsChart(quarters){
+  const el=document.getElementById('earnings-canvas'); if(!el||!window.Chart) return;
+  const labels=quarters.map(q=>String(q.period||'').slice(0,7));
+  const actual=quarters.map(q=>q.eps_actual);
+  const est=quarters.map(q=>q.eps_estimate);
+  const barCol=quarters.map(q=>(q.surprise_pct!=null&&q.surprise_pct<0)?'#ff4444':'#00e676'); // miss red / beat green
+  if(earningsChart){earningsChart.destroy();earningsChart=null;}
+  earningsChart=new Chart(el.getContext('2d'),{type:'bar',
+    data:{labels,datasets:[
+      {label:'EPS actual',data:actual,backgroundColor:barCol,borderRadius:3},
+      {label:'Estimate',type:'line',data:est,borderColor:'#5b7290',borderWidth:2,pointRadius:3,pointBackgroundColor:'#5b7290',fill:false,tension:0}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#8fa3bf',boxWidth:12}},
+        tooltip:{callbacks:{afterLabel:c=>{const q=quarters[c.dataIndex];return q&&q.surprise_pct!=null?('surprise '+(q.surprise_pct>=0?'+':'')+q.surprise_pct+'%'):'';}}}},
+      scales:{x:{ticks:{color:'#5b7290'},grid:{display:false}},y:{ticks:{color:'#5b7290'},grid:{color:'rgba(255,255,255,.04)'}}}}});
 }
 
 let analyzePriceChart=null;

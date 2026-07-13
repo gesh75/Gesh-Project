@@ -203,6 +203,8 @@ COVERED: dict[str, str] = {
     "/api/fft-cycles/{symbol}": "/api/fft-cycles/NVDA",
     "/api/regime/{symbol}": "/api/regime/NVDA",
     "/api/momentum/{symbol}": "/api/momentum/NVDA",
+    "/api/levels/{symbol}": "/api/levels/NVDA",
+    "/api/earnings/{symbol}": "/api/earnings/NVDA",
     "/api/fundamentals/{symbol}": "/api/fundamentals/NVDA",
     "/api/analyst/{symbol}": "/api/analyst/NVDA",
     "/api/news/{symbol}": "/api/news/NVDA",

@@ -228,6 +228,7 @@ _HEAVY_PREFIXES = (
     # the exact "/api/regime" (dashboard-polled, chain-cached) stays in the normal
     # bucket — only the /{symbol} variants are heavy.
     "/api/regime/", "/api/fundamentals/", "/api/analyst/", "/api/news/", "/api/momentum/",
+    "/api/levels/", "/api/earnings/",
     # Customer-book analysis = regime + Monte Carlo + Kelly + one Claude call.
     # Book CRUD (/api/mybook without /analyze) stays in the normal bucket.
     "/api/mybook/analyze",
@@ -1952,6 +1953,39 @@ def momentum_symbol(symbol: str):
         import momentum_signal
         return _ticker_get_store("momentum", sym,
                                  {"status": "ok", "data": momentum_signal.compute(sym)})
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/levels/{symbol}")
+def levels_symbol(symbol: str):
+    """Support/resistance levels + a long trade-setup (entry/stop/target, R:R) for
+    ANY ticker. Pure price math on public daily OHLCV — no LLM, no owner data."""
+    sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("levels", sym)
+    if cached:
+        return cached
+    try:
+        import trade_levels
+        return _ticker_get_store("levels", sym,
+                                 {"status": "ok", "data": trade_levels.compute(sym)})
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/earnings/{symbol}")
+def earnings_symbol(symbol: str):
+    """Earnings history (EPS actual vs estimate, beat/miss) for ANY ticker — the
+    visual deep-analysis data. Finnhub primary (VPN-safe), yfinance fallback. No
+    LLM, no owner data. Cached 5 min."""
+    sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("earnings", sym)
+    if cached:
+        return cached
+    try:
+        import earnings_viz
+        return _ticker_get_store("earnings", sym,
+                                 {"status": "ok", "data": earnings_viz.get_earnings(sym)})
     except Exception as e:
         raise _server_error(e)
 
