@@ -28,6 +28,19 @@ def test_name_prefix_matches_ticker():
     assert out and out[0]["symbol"] == "AAPL"
 
 
+def test_curated_name_wins_lookalike_tie(monkeypatch):
+    # Full-universe case: both "Apple Inc." (AAPL) and "Apple Hospitality REIT"
+    # (APLE) name-prefix-match "Apple". APLE is listed FIRST here, but AAPL is a
+    # curated megacap, so the tiebreaker must still rank it #1 (the live bug that
+    # surfaced APLE for a plain "Apple" search).
+    monkeypatch.setattr(ss, "_universe", lambda: [
+        {"symbol": "APLE", "name": "Apple Hospitality REIT, Inc."},
+        {"symbol": "AAPL", "name": "Apple Inc."},
+    ])
+    out = ss.search("Apple")
+    assert out[0]["symbol"] == "AAPL"
+
+
 def test_partial_name_substring():
     syms = [r["symbol"] for r in ss.search("micro")]
     assert "MSFT" in syms          # "Microsoft" matched by name

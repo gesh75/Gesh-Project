@@ -61,6 +61,19 @@ _FALLBACK: list[dict] = [
 ]
 
 
+# Symbols in the curated list above are the names people actually type — they win
+# name-match ties over obscure look-alikes (e.g. "Apple" → AAPL, not APLE the hotel
+# REIT). Used as the primary sort key inside the name-match buckets.
+_PRIORITY: set[str] = {a["symbol"].upper() for a in _FALLBACK}
+
+
+def _rank_names(bucket: list[dict]) -> list[dict]:
+    """Order a name-match bucket: curated megacaps first, then shorter symbols,
+    then alphabetical — so the flagship company outranks an obscure look-alike."""
+    return sorted(bucket, key=lambda a: (a["symbol"].upper() not in _PRIORITY,
+                                         len(a["symbol"]), a["symbol"].upper()))
+
+
 def _load_from_alpaca() -> list[dict]:
     """Full active, tradable US-equity + ETF universe (symbol + name). [] on any
     failure or missing keys — the caller falls back to the bundled list."""
@@ -122,4 +135,4 @@ def search(query: str, limit: int = 10) -> list[dict]:
             name_sub.append(a)
         if len(exact) + len(sym_pref) >= limit and len(name_pref) + len(name_sub) >= limit:
             break   # enough high-quality hits gathered; stop scanning ~11k rows
-    return (exact + sym_pref + name_pref + name_sub)[:limit]
+    return (exact + sym_pref + _rank_names(name_pref) + _rank_names(name_sub))[:limit]
