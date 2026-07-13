@@ -2098,7 +2098,21 @@ def _latest_close(sym: str) -> float | None:
         if len(closes) == 0:
             return None
         import numpy as np
-        return round(float(np.array(closes).flatten()[-1]), 2)
+        arr = np.array(closes).flatten().astype(float)
+        last = round(float(arr[-1]), 2)
+        # Bad-tick guard: a single split-mismatched / partial quote (the observed
+        # NVDA $17.16 flash against a ~$205 book) poisons valuation, weights, and
+        # Kelly. If the latest close is wildly off the recent median (a real move
+        # stays inside 0.5×–2×), fall back to the most recent in-band close, or the
+        # median if none qualifies — never persist an obvious outlier.
+        if len(arr) >= 5:
+            med = float(np.median(arr[-20:]))
+            if med > 0 and not (med * 0.5 <= last <= med * 2.0):
+                for v in arr[-2::-1]:
+                    if med * 0.5 <= float(v) <= med * 2.0:
+                        return round(float(v), 2)
+                return round(med, 2)
+        return last
     except Exception:
         return None
 
