@@ -15,6 +15,10 @@ customer's own inputs — **zero owner data**.
 | `/api/analyst/{sym}` | GET | session¹ | no | RH buy/hold/sell primary, yfinance targets fallback. ETFs legitimately 404 |
 | `/api/news/{sym}` | GET | session¹ | no | Alpaca primary (key-gated), RSS fallback. Headlines only — no sentiment score |
 | `/api/chart/{sym}?period=` | GET | session¹ | no | 1D/5D = Alpaca 5-min bars (trimmed to the requested sessions); daily ranges = Yahoo/RH |
+| `/api/symbol-search?q=` | GET | session¹ | no | Company-name→ticker autocomplete (RH primary, static fallback). Feeds the Analyze search dropdown |
+| `/api/momentum/{sym}` | GET | session¹ | no | RSI + MACD + Volume → BUY/SELL/NEUTRAL signal. Pure TA, no LLM |
+| `/api/levels/{sym}` | GET | session¹ | no | Support/resistance (pivots + fractal swings) → long setup entry/stop/target/RR. Pure price math |
+| `/api/earnings/{sym}` | GET | session¹ | no | EPS beat/miss history + surprise %. Finnhub primary (VPN-safe), yfinance fallback; honest "unavailable" without a source |
 | `/api/analyze-ticker` | POST | customer-or-owner² | **yes** | The 🧠 AI research card. Price-grounded, 404-before-spend, 15-min/symbol cache, single-flight |
 | `/api/watchlist` | GET/POST/DELETE `{sym}` | session | no | 50-symbol cap |
 | `/api/mybook` | GET/POST/DELETE `{sym}` | session | no | The customer's own positions (30 cap), valued live |
@@ -34,6 +38,7 @@ wall OFF it requires the `X-API-Key` header (`GESH_API_KEY`) and otherwise fails
 GESH_AUTH_ENABLED=1           # login wall — unlocks the AI card + book analysis for sessions
 GESH_AUTH_SECRET=...          # cookie HMAC secret
 ALPACA_API_KEY= / ALPACA_SECRET_KEY=   # 1D/5D intraday charts + Recent News (dormant if unset)
+FINNHUB_API_KEY=              # VPN-safe earnings history for /api/earnings (yfinance fallback is Yahoo-blocked behind GlobalProtect; card shows "unavailable" without it)
 QUOTA_DAILY_TICKER_CARD=25    # base cap: AI cards / customer / rolling 24h (0 = off)
 QUOTA_DAILY_BOOK_ANALYSIS=10  # base cap: book analyses / customer / rolling 24h
 ```
