@@ -424,16 +424,18 @@ _STATE_CHANGING = (_ACTIVATE_EVENTS | _REVOKE_EVENTS
 
 
 def _apply_email_change(ev: dict[str, Any], user: dict | None) -> tuple[str, dict | None]:
-    """AFTER validation, move the single account to a changed email (sub_id authoritative,
-    #5). Done here — not in lookup — so a stale/invalid event never mutates the email first
-    (#2-r4). Returns the (email, user_row) to operate on."""
+    """AFTER validation, update the UUID-owned account's profile email.
+
+    The subscription ID remains authoritative. Child ownership is keyed by immutable
+    ``user_id``, so the rename changes only ``users.email``. Keeping this after ordering and
+    variant validation ensures a stale/invalid event never mutates the profile first (#2-r4).
+    """
     email, sub_id = ev["email"], ev["sub_id"]
     if not (user and sub_id and email and user.get("billing_sub_id") == sub_id
             and user["email"] != email):
         return (user["email"] if user else email), user
-    # rename_user_email migrates the users row AND every email-keyed child table
-    # (watchlist/positions/analyses/usage/book prefs) in one transaction, and refuses
-    # (False) when the target email already owns rows — no cross-tenant merge here.
+    # Child rows retain the same immutable user_id; only the users profile is updated.
+    # A target users row still causes a conflict, so separate accounts are never merged.
     if auth_users.rename_user_email(user["email"], email):
         logger.info("billing: moved sub=%s %s -> %s (email change)", sub_id, user["email"], email)
         return email, auth_users.get_user(email)
@@ -550,8 +552,8 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
     _cap = os.getenv("BILLING_CAPTURE_DIR", "").strip()
     if _cap:
         try:
-            from pathlib import Path as _Path
             import time as _time
+            from pathlib import Path as _Path
             _d = _Path(_cap)
             _d.mkdir(parents=True, exist_ok=True)
             (_d / f"{int(_time.time() * 1000)}_{name or 'unknown'}.json").write_bytes(raw_body)

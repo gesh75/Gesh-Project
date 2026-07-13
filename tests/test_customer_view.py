@@ -53,6 +53,10 @@ def test_is_owner():
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "georgy75@gmail.com")
+    auth_users.init_auth_db()
+    if auth_users.get_user("georgy75@gmail.com") is None:
+        auth_users.create_user("georgy75@gmail.com", "owner-test-password")
     monkeypatch.setattr(server, "_customer_scale_factor", lambda: 0.5)
     return TestClient(server.app, raise_server_exceptions=False)
 
@@ -175,6 +179,9 @@ def test_customer_cannot_trigger_spend_or_mutation(monkeypatch, client, path):
 def test_owner_passes_the_gate(monkeypatch):
     """Owner session satisfies require_api_key without any X-API-Key header."""
     monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "georgy75@gmail.com")
+    auth_users.init_auth_db()
+    auth_users.create_user("georgy75@gmail.com", "owner-test-password")
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "georgy75@gmail.com")
     import types
     req = types.SimpleNamespace(cookies={server.auth_users.COOKIE_NAME: "x"})
