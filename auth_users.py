@@ -16,6 +16,8 @@ Provision users (after setting GESH_AUTH_SECRET in .env):
     python3 auth_users.py list
     python3 auth_users.py disable alice@example.com      # revoke (e.g. churn)
     python3 auth_users.py enable  alice@example.com
+    python3 auth_users.py tier    alice@example.com desk # comp a tester: observer|trader|desk
+                                                         #   scales LLM quotas 1× / 2× / 5×
 Then enable the wall:
     # in .env:  GESH_AUTH_ENABLED=1   GESH_AUTH_SECRET=<32+ random chars>
     # restart :9000
@@ -443,7 +445,7 @@ def issue_magic_token(email: str, ttl: int = 900) -> str | None:
 def list_users() -> list[dict[str, Any]]:
     with _conn() as con:
         rows = con.execute(
-            "SELECT id, email, is_active, created_at, last_login_at FROM users ORDER BY created_at"
+            "SELECT id, email, is_active, tier, created_at, last_login_at FROM users ORDER BY created_at"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -568,14 +570,27 @@ def _cli(argv: list[str]) -> int:
         set_active(argv[1], cmd == "enable")
         print(f"✓ {argv[1]} is now {'active' if cmd == 'enable' else 'disabled'}")
         return 0
+    if cmd == "tier" and len(argv) >= 3:
+        email, tier = argv[1], argv[2].strip().lower()
+        valid = {"observer", "trader", "desk"}
+        if tier not in valid:
+            print(f"✗ tier must be one of {sorted(valid)}")
+            return 1
+        if not get_user(email):
+            print(f"✗ no such user: {email}")
+            return 1
+        set_billing(email, tier=tier)
+        print(f"✓ {email} tier set to {tier} (LLM quotas now "
+              f"{ {'observer': '1×', 'trader': '2×', 'desk': '5×'}[tier] })")
+        return 0
     if cmd == "list":
         users = list_users()
         if not users:
             print("(no users)")
         for u in users:
             state = "active" if u["is_active"] else "DISABLED"
-            print(f"  {u['email']:32} {state:9} created {u['created_at'][:10]} "
-                  f"last_login={u['last_login_at'] or '—'}")
+            print(f"  {u['email']:32} {state:9} tier={u.get('tier') or '—':8} "
+                  f"created {u['created_at'][:10]} last_login={u['last_login_at'] or '—'}")
         print(f"\nWall: {'ENABLED' if auth_enabled() else 'OFF (set GESH_AUTH_ENABLED=1)'}")
         return 0
     print(__doc__)

@@ -121,6 +121,32 @@ class TestUserStore:
         assert {"a@x.com", "b@x.com"} <= emails
 
 
+# ── tier CLI (comp a tester to higher LLM quotas) ─────────────────────────────
+
+class TestTierCli:
+    def test_tier_sets_billing_tier(self):
+        au.create_user("t@x.com", "pw")
+        rc = au._cli(["tier", "t@x.com", "desk"])
+        assert rc == 0
+        assert au.get_tier("t@x.com") == "desk"
+
+    def test_invalid_tier_rejected(self):
+        au.create_user("t@x.com", "pw")
+        rc = au._cli(["tier", "t@x.com", "platinum"])
+        assert rc == 1
+        assert au.get_tier("t@x.com") is None      # unchanged
+
+    def test_unknown_user_rejected(self):
+        rc = au._cli(["tier", "ghost@x.com", "desk"])
+        assert rc == 1
+
+    def test_list_query_exposes_tier(self):
+        au.create_user("t@x.com", "pw")
+        au._cli(["tier", "t@x.com", "trader"])
+        row = next(u for u in au.list_users() if u["email"] == "t@x.com")
+        assert row["tier"] == "trader"             # list_users SELECT includes tier
+
+
 # ── gate decision (OFF by default) ────────────────────────────────────────────
 
 class TestGate:
