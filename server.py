@@ -1928,6 +1928,18 @@ def fft_cycles_single(symbol: str):
         raise _server_error(e)
 
 
+@app.get("/api/symbol-search")
+def symbol_search(q: str = "", limit: int = 10):
+    """Company-name / ticker typeahead for the Analyze box. Returns [{symbol,name}]
+    matches (public reference data — no LLM, no owner data). Universe loaded from
+    Alpaca once and cached 24h in-memory, so this is a cheap in-memory match."""
+    try:
+        import symbol_search as _ss
+        return {"status": "ok", "data": _ss.search(q, limit)}
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.get("/api/regime/{symbol}")
 def regime_symbol(symbol: str):
     """Market regime (ADX/BB/RSI + FRED macro) for ANY ticker — the customer

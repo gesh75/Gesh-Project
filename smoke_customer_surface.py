@@ -78,6 +78,14 @@ def main() -> int:
         role = r.json().get("role")
         record("PASS", "session role", role or "?")
 
+    # ── 1b. company-name → ticker typeahead ──────────────────────────────────
+    r = s.get(f"{base}/api/symbol-search?q=apple", timeout=15)
+    matches = (r.json().get("data") if r.status_code == 200 else []) or []
+    check("symbol-search (name→ticker)",
+          r.status_code == 200 and any(m.get("symbol") == "AAPL" for m in matches),
+          f"HTTP {r.status_code} / {len(matches)} matches",
+          why_pass=f"'apple' → {len(matches)} matches incl. AAPL")
+
     # ── 2. per-ticker mechanical cards (no LLM) ──────────────────────────────
     for path, expect_key in [(f"/api/regime/{SMOKE_SYM}", "regime"),
                              (f"/api/fundamentals/{SMOKE_SYM}", None),
