@@ -2763,13 +2763,17 @@ async function analyzeTicker(raw){
     const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
     // Rich consensus card — mirrors the owner Signals card: 11-node vote chips +
     // score bar + bull/bear/neutral counts (voteChip/scoreBar are audited builders).
+    const px=(lv&&lv.available&&lv.price!=null)?lv.price:null;
     let consHtml='';
     if(d){
       const vc=d.verdict_color, chipClass=vc==='green'?'cv-green':vc==='red'?'cv-red':vc==='cyan'?'cv-cyan':'cv-muted';
       const voteChips=Object.entries(d.votes||{}).map(([n,v])=>voteChip(n,v)).join('');
       consHtml=`<div class="card" style="margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <span class="kelly-sym" style="font-size:24px">${daEsc(sym)}</span>
+          <span style="display:flex;align-items:baseline;gap:10px">
+            <span class="kelly-sym" style="font-size:24px">${daEsc(sym)}</span>
+            ${px!=null?`<span style="font-size:16px;font-weight:600;color:var(--muted2)">$${daEsc(px)}</span>`:''}
+          </span>
           <span class="cons-verdict ${chipClass}">${daEsc(d.verdict)}</span>
         </div>
         <div style="display:flex;gap:16px;font-size:15px;color:var(--muted2);margin-bottom:10px;flex-wrap:wrap">
@@ -2790,7 +2794,7 @@ async function analyzeTicker(raw){
     let momHtml='';
     if(mo&&mo.available){
       const momColor=mo.signal==='BUY'?'var(--green)':mo.signal==='SELL'?'var(--red)':'var(--muted2)';
-      momHtml=`<div class="card" style="margin-bottom:16px">
+      momHtml=`<div class="card" style="height:100%;margin:0">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
           <div style="${T};margin:0">📈 Momentum Signal <span style="color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0">RSI · MACD · Volume</span></div>
           <span style="font-size:15px;font-weight:800;padding:4px 14px;border-radius:6px;color:${momColor};background:${momColor}18;border:1px solid ${momColor}55">${daEsc(mo.signal)}</span>
@@ -2806,7 +2810,7 @@ async function analyzeTicker(raw){
       const sup=(lv.support||[]).map(x=>'$'+daEsc(x)).join(' · ')||'—';
       const res=(lv.resistance||[]).map(x=>'$'+daEsc(x)).join(' · ')||'—';
       const rrColor=(st.risk_reward!=null&&st.risk_reward>=2)?'var(--green)':(st.risk_reward!=null&&st.risk_reward<1)?'var(--red)':'var(--yellow)';
-      levHtml=`<div class="card" style="margin-bottom:16px"><div style="${T}">🎯 Trade Setup <span style="color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0">support · resistance · stop</span></div>
+      levHtml=`<div class="card" style="height:100%;margin:0"><div style="${T}">🎯 Trade Setup <span style="color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0">support · resistance · stop</span></div>
         ${buildRow('Resistance (above)', res)}${buildRow('Support (below)', sup)}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin:12px 0">
           <div style="background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">ENTRY</div><div style="font-size:17px;font-weight:700">$${daEsc(st.entry)}</div></div>
@@ -2827,7 +2831,8 @@ async function analyzeTicker(raw){
     } else if(ea&&!ea.available){
       earnHtml=`<div class="card" style="margin-bottom:16px"><div style="${T}">📊 Earnings</div><div class="deep-ph-text" style="padding:12px 0">Earnings data unavailable — ${daEsc(ea.reason||'no source')}.</div></div>`;
     }
-    box.innerHTML=`${consHtml}${momHtml}${levHtml}${earnHtml}<div id="analyze-ai"></div>
+    const tradeGrid=(momHtml||levHtml)?`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px">${momHtml}${levHtml}</div>`:'';
+    box.innerHTML=`${consHtml}${tradeGrid}${earnHtml}<div id="analyze-ai"></div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
         <div class="card"><div style="${T}">Market Regime</div>
           ${buildRow('Regime', rg?((rg.icon?rg.icon+' ':'')+rg.regime):'n/a')}${buildRow('ADX', rg&&rg.adx!=null?rg.adx:'—')}${buildRow('RSI', rg&&rg.rsi!=null?rg.rsi:'—')}
