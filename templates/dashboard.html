@@ -609,7 +609,7 @@ body:not(.role-known) .owner-only { display: none !important; }
   <a href="/watch" id="watch-link" class="badge b-cyan owner-only" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
   <a href="/invest" class="badge b-cyan owner-only" style="text-decoration:none" title="Diversification radar — where new cash should go (advisory)">💎 Invest</a>
   <a href="/usage" class="badge b-cyan owner-only" style="text-decoration:none" title="Per-customer usage counters (LLM spend, reports)">📊 Usage</a>
-  <button class="btn-ref" onclick="loadPortfolio()">↻ Refresh</button>
+  <button class="btn-ref" onclick="loadPortfolio()" title="Reloads the latest portfolio snapshot. Live Robinhood prices appear only when the brokerage session is online; otherwise the most recent cached snapshot is shown (the daily chain refreshes it each morning).">↻ Refresh</button>
 </header>
 
 <!-- Persistent stats bar -->
@@ -1415,8 +1415,14 @@ function updateSnapshotStalenessBanner(stale,ageS,asOf){
 function applyPortfolioConn(d){
   const ageS=d&&d.snapshot_age_seconds;
   const stale=!!(d&&d.stale_snapshot)||(ageS!=null&&ageS>86400);
-  setConn(true, !!(d&&d.offline)||stale);
-  setTs(d&&(d.offline||stale)?d.as_of:null, ageS!=null?ageS:null);
+  const offline=!!(d&&d.offline);
+  setConn(true, offline||stale);
+  setTs(d&&(offline||stale)?d.as_of:null, ageS!=null?ageS:null);
+  // Honesty on the Refresh action: when the brokerage session is offline, ↻ Refresh
+  // reloads the SAME cached snapshot (there's no live upstream to pull), so say so
+  // rather than let the button imply a live update it can't deliver. textContent =
+  // XSS-safe. The Refresh button's title tooltip carries the same explanation.
+  if(offline){ const ts=$('ts'); if(ts) ts.textContent += ' · offline — ↻ shows the latest snapshot, not live prices'; }
   updateSnapshotStalenessBanner(stale, ageS, d&&d.as_of);
 }
 
