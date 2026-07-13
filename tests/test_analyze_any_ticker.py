@@ -335,3 +335,36 @@ def test_per_ticker_gets_are_heavy_rate_limited():
                  "/api/analyst/NVDA", "/api/news/NVDA"):
         assert path.startswith(server._HEAVY_PREFIXES), path
     assert not "/api/regime".startswith(server._HEAVY_PREFIXES)
+
+
+# ── _latest_close bad-tick guard (audit fix set 2: price consistency) ──────────
+
+def _close_df(values):
+    return pd.DataFrame({"Close": values})
+
+
+def test_latest_close_normal_series(monkeypatch):
+    monkeypatch.setattr(price_source, "yf_download",
+                        lambda *a, **k: _close_df([200, 201, 203, 202, 205]), raising=False)
+    assert server._latest_close("NVDA") == 205.0
+
+
+def test_latest_close_bad_tick_falls_back(monkeypatch):
+    # the observed $17.16 flash against a ~$205 book → outlier, return prior good close
+    monkeypatch.setattr(price_source, "yf_download",
+                        lambda *a, **k: _close_df([203, 204, 205, 206, 17.16]), raising=False)
+    assert server._latest_close("NVDA") == 206.0
+
+
+def test_latest_close_real_move_is_kept(monkeypatch):
+    # a genuine 40% run stays inside the 0.5x-2x band → NOT clipped
+    monkeypatch.setattr(price_source, "yf_download",
+                        lambda *a, **k: _close_df([100, 110, 120, 130, 140]), raising=False)
+    assert server._latest_close("X") == 140.0
+
+
+def test_latest_close_short_series_unguarded(monkeypatch):
+    # < 5 points → no median to judge against, return the last close as-is
+    monkeypatch.setattr(price_source, "yf_download",
+                        lambda *a, **k: _close_df([100, 5]), raising=False)
+    assert server._latest_close("X") == 5.0
