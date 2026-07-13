@@ -511,8 +511,9 @@ def run_consensus_holding(
     # Node 12: Long-term macro bias (VIX + Fear&Greed + FINRA margin debt → 1-3y
     # tilt). Distinct from the short-term Macro node above — a slow-moving,
     # market-WIDE bias (same signal for every holding), internally cached 6h/24h so
-    # per-symbol calls in a portfolio loop don't re-fetch. Graceful ABSTAIN on any
-    # failure, exactly like the other lazily-imported nodes.
+    # per-symbol calls in a portfolio loop don't re-fetch. Graceful ABSTAIN on
+    # import/call failure (the except below), exactly like the other lazily-imported
+    # nodes; a pure data outage instead degrades to a neutral vote inside the node.
     try:
         from long_term_macro import node_long_term_macro
         nodes["LT_Macro"] = node_long_term_macro(symbol)

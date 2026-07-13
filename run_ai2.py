@@ -25,9 +25,45 @@ try:
 except Exception:
     pass
 
+DEGRADED_AFTER_S_DEFAULT = 3600.0
+
+def snapshot_degraded_info(snap: dict, threshold_s: float | None = None,
+                           *, now=None) -> dict:
+    """Degraded-run provenance stamp (duplicated in run_engines2.py — the two
+    copies are pinned to identical behavior by tests/test_degraded_provenance.py).
+    A run driven by a snapshot older than GESH_DEGRADED_AFTER_S (default 3600s)
+    is research-only; the stamp travels in engine_results.json so downstream
+    consumers (paper gate, report) can tell a stale-data run from a fresh one.
+    Unknown age counts as degraded (fail-safe)."""
+    from datetime import datetime, timezone
+    if threshold_s is None:
+        try:
+            threshold_s = float(os.environ.get('GESH_DEGRADED_AFTER_S', '')
+                                or DEGRADED_AFTER_S_DEFAULT)
+        except (TypeError, ValueError):
+            threshold_s = DEGRADED_AFTER_S_DEFAULT
+    now = now or datetime.now(timezone.utc)
+    try:
+        age_s = (now - datetime.fromisoformat(snap['fetched_at'])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        age_s = None
+    return {
+        'degraded': age_s is None or age_s > threshold_s,
+        'snapshot_age_seconds': None if age_s is None else int(age_s),
+        'snapshot_source': snap.get('source', 'UNKNOWN'),
+    }
+
 # ── Load engine results ───────────────────────────────────────────────────────
 with open(BASE / 'engine_results.json') as f:
     eng = json.load(f)
+
+# Re-stamp provenance at AI time (age keeps growing after run_engines2) so the
+# persisted eng always carries an up-to-date degraded/age/source triple.
+_degraded_info = snapshot_degraded_info(eng.get('snapshot', {}))
+eng.update(_degraded_info)
+if _degraded_info['degraded']:
+    print(f"[ai] DEGRADED RUN — snapshot age {_degraded_info['snapshot_age_seconds']}s "
+          f"(source={_degraded_info['snapshot_source']}); research-only provenance stamped")
 
 holdings   = eng['holdings']
 equity_sum = eng['equity_summary']

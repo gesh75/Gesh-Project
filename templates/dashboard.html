@@ -57,6 +57,17 @@ td,.sval,.num{font-variant-numeric:tabular-nums}
 .tab-btn .tab-icon{font-size:16px;opacity:.7}
 .tab-btn.active .tab-icon{opacity:1}
 .tab-pane{display:none}.tab-pane.active{display:block}
+
+/* Force initial customer view to Analyze + My Book (no flash to overview or other tabs) */
+body.customer .tab-pane { display: none !important; }
+body.customer #tab-analyze { display: block !important; }
+
+/* Pre-activate the Analyze nav item for customers */
+body.customer .nav-item[data-tab="analyze"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--card2);
+}
 /* Stat cards enhanced */
 .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
@@ -483,9 +494,16 @@ body:not(.role-known) .owner-only { display: none !important; }
     var role = document.body.getAttribute('data-initial-role') || 'owner';
     if (role === 'customer') {
       document.body.classList.add('customer');
-      // Show customer tools immediately (Scanner etc.)
+      // Show customer My Book nav and tools immediately
+      var mb = document.getElementById('mybook-nav');
+      if (mb) mb.style.display = 'block';
       var ct = document.getElementById('customer-tools');
       if (ct) ct.style.display = 'block';
+      // Force initial active states for mybook experience
+      var analyzeNav = document.querySelector('.nav-item[data-tab="analyze"]');
+      if (analyzeNav) analyzeNav.classList.add('active');
+      var firstMy = document.querySelector('#mybook-nav .nav-item');
+      if (firstMy) firstMy.classList.add('active');
     }
     document.body.classList.add('role-known');
   } catch(e){}
@@ -505,6 +523,31 @@ body:not(.role-known) .owner-only { display: none !important; }
       <span class="nav-label">Track Record</span></a>
   </div>
 
+  <!-- Customer My Book tabs - surface rich analyses like the full 9000 dashboard but for the user's book -->
+  <div class="sb-group" id="mybook-nav" style="display:none">
+    <div class="sb-group-title">My Book</div>
+    <button class="nav-item" data-tab="analyze" onclick="switchTab('analyze'); focusMyBookSection('overview')" title="My Portfolio overview &amp; book management">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+      <span class="nav-label">Overview</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('analyze'); mybookAnalyze()" title="Deep AI + Kelly + Monte Carlo on your book">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3A3.5 3.5 0 0 0 9 19a3 3 0 0 0 3 0 3 3 0 0 0 3 0 3.5 3.5 0 0 0 3-5.7A3.5 3.5 0 0 0 16 7a4 4 0 0 0-4-4z"/><line x1="12" y1="3" x2="12" y2="19"/></svg>
+      <span class="nav-label">Deep Analysis</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('analyze'); showBookSignals()" title="Signals &amp; consensus for your holdings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
+      <span class="nav-label">Signals</span>
+    </button>
+    <button class="nav-item" onclick="switchTab('analyze'); showBookRisk()" title="Risk, Monte Carlo &amp; Kelly on your book">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
+      <span class="nav-label">Risk</span>
+    </button>
+    <button class="nav-item owner-only" data-tab="scanner" onclick="switchTab('scanner')" title="Market scanner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <span class="nav-label">Scanner</span>
+    </button>
+  </div>
+
   <div class="sb-group owner-only">
     <div class="sb-group-title">Monitor</div>
     <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Overview">
@@ -518,8 +561,9 @@ body:not(.role-known) .owner-only { display: none !important; }
       <span class="nav-label">Scanner</span><span class="nav-badge" id="navb-scanner"></span></button>
   </div>
 
-  <!-- Customer-visible tools (pay surface) -->
-  <div class="sb-group" id="customer-tools" style="display:none">
+  <!-- Scanner has no customer-reachable pane (customers only see Analyze/My Book),
+       so this group is owner-only — customers must not get a dead nav link. -->
+  <div class="sb-group owner-only" id="customer-tools" style="display:none">
     <div class="sb-group-title">Tools</div>
     <button class="nav-item" data-tab="scanner" onclick="switchTab('scanner')" title="Market Scanner (public research)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
@@ -700,7 +744,7 @@ body:not(.role-known) .owner-only { display: none !important; }
         </div>
       </div>
       <div style="padding:0 18px 14px;font-size:12px;color:var(--muted);line-height:1.5">
-        VIX high = opportunity tilt; Extreme Fear (low F&G) = long-term bullish; Rising margin debt = caution. Combined feeds LT_Macro node in consensus.
+        VIX high = opportunity tilt; Extreme Fear (low F&G) = long-term bullish; Rising margin debt = caution. Combined into a long-term macro signal the consensus engine weighs.
       </div>
     </div>
 
@@ -1838,13 +1882,14 @@ function renderLongTermMacro(d) {
       </div>
       <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
         <div style="font-size:12px;color:var(--muted);letter-spacing:.08em">MARGIN DEBT</div>
-        <div style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0">${fmt(md.level/1e6, 'T')}</div>
+        <div style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0">${(md.status==='unavailable'||md.level==null)?'—':fmt(md.level/1e6, 'T')}</div>
         <div style="font-size:14px;color:${md.score>0?'var(--green)':md.score<0?'var(--red)':'var(--muted)'}">${daEsc(md.detail||'')}</div>
+        <div style="font-size:11px;color:var(--muted);opacity:.7">${daEsc('FINRA'+(md.as_of?' · '+md.as_of:'')+(md.quality?' · '+md.quality:''))}</div>
       </div>
       <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;justify-content:center">
         <div style="font-size:12px;color:var(--muted);letter-spacing:.08em">COMBINED BIAS</div>
         <div style="font-size:26px;font-weight:800;margin:4px 0 2px;color:${biasColor}">${daEsc(bias)} <span style="font-size:15px;opacity:.7">(${score>0?'+':''}${daEsc(score)})</span></div>
-        <div style="font-size:13px;color:var(--muted)">Feeds LT_Macro consensus node</div>
+        <div style="font-size:13px;color:var(--muted)">One long-term macro input to the consensus engine</div>
       </div>
     </div>`;
   if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -2616,7 +2661,9 @@ async function applyRoleNav(){
     document.body.classList.add('customer');
     window.__isCustomer=true;
     switchTab('analyze');
-    // Show customer tools (scanner etc.)
+    // Show My Book nav and tools
+    const mb = document.getElementById('mybook-nav');
+    if (mb) mb.style.display = 'block';
     const ct = document.getElementById('customer-tools');
     if (ct) ct.style.display = 'block';
   } else {
@@ -2865,6 +2912,39 @@ async function mybookClear(){
     loadMyBook();
   }catch(e){ if(window.toast) toast('Clear failed','error'); }
 }
+
+// Customer My Book tab helpers - surface analyses like the full 9000 experience
+function focusMyBookSection(section) {
+  switchTab('analyze');
+  setTimeout(() => {
+    const list = document.getElementById('mybook-list');
+    if (list) {
+      list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    if (section === 'analysis') {
+      mybookAnalyze();
+    }
+  }, 80);
+}
+
+function showBookSignals() {
+  switchTab('analyze');
+  mybookAnalyze(); // ensures the rich verdict / kelly / signals are generated
+  setTimeout(() => {
+    const results = document.getElementById('mybook-results');
+    if (results) results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 400);
+}
+
+function showBookRisk() {
+  switchTab('analyze');
+  mybookAnalyze(); // pulls in Monte Carlo + Kelly sizing
+  setTimeout(() => {
+    const results = document.getElementById('mybook-results');
+    if (results) results.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 400);
+}
+
 async function mybookImportWatchlist(){
   try{
     const j=await fetch('/api/mybook/import-watchlist',{method:'POST'}).then(r=>r.ok?r.json():null).catch(()=>null);
@@ -2933,7 +3013,8 @@ async function mybookAnalyze(){
     }
     if(res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
     if(res.status===429){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily portfolio-analysis limit reached — your last analysis stays available (🖨 Report), and the limit resets on a rolling 24-hour window.</div></div>'; return; }
-    if(res.status===409){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ An analysis is already running for your book — let it finish, then click Analyze again.</div></div>'; return; }
+    // (In-flight runs return 202 and are handled by the poll loop above — the server
+    //  never returns 409 for this endpoint, so no "busy" branch is needed here.)
     if(!res.ok){
       const msg=(j&&j.detail)||'Analysis failed — try again in a minute.';
       box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">${daEsc(String(msg))}</div></div>`; return;
@@ -2955,7 +3036,7 @@ async function mybookAnalyze(){
         ${a.market_context?`<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55">${daEsc(a.market_context)}</div>`:''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">
-        <div class="card"><div style="${T}">Monte Carlo (1yr, 1000 sims)</div>
+        <div class="card"><div style="${T}">Monte Carlo (${daEsc(mc.horizon_days||21)} trading days, ${daEsc(mc.n_sims||1000)} sims)</div>
           ${mc.error?buildRow('Status','unavailable'):buildRow('Median outcome','$'+daFmt(mc.median,0))+buildRow('P5 – P95','$'+daFmt(mc.p5,0)+' – $'+daFmt(mc.p95,0))+buildRow('VaR 95%','$'+daFmt(mc.var_95,0)+' ('+daFmt(mc.var_95_pct,1)+'%)')+buildRow('Prob. of profit',daFmt(mc.prob_profit_pct,0)+'%')+buildRow('Regime',mc.regime||'—')}</div>
         <div class="card"><div style="${T}">Kelly Sizing</div>
           ${ky.error||!kh.length?buildRow('Status','unavailable'):buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div>

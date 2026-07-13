@@ -53,6 +53,34 @@ def _utcnow() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
 
+DEGRADED_AFTER_S_DEFAULT = 3600.0
+
+def snapshot_degraded_info(snap: dict, threshold_s: float | None = None,
+                           *, now=None) -> dict:
+    """Degraded-run provenance stamp (duplicated in run_ai2.py — the two copies
+    are pinned to identical behavior by tests/test_degraded_provenance.py).
+    A run driven by a snapshot older than GESH_DEGRADED_AFTER_S (default 3600s)
+    is research-only; the stamp travels in engine_results.json so downstream
+    consumers (paper gate, report) can tell a stale-data run from a fresh one.
+    Unknown age counts as degraded (fail-safe)."""
+    from datetime import datetime, timezone
+    if threshold_s is None:
+        try:
+            threshold_s = float(os.environ.get('GESH_DEGRADED_AFTER_S', '')
+                                or DEGRADED_AFTER_S_DEFAULT)
+        except (TypeError, ValueError):
+            threshold_s = DEGRADED_AFTER_S_DEFAULT
+    now = now or datetime.now(timezone.utc)
+    try:
+        age_s = (now - datetime.fromisoformat(snap['fetched_at'])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        age_s = None
+    return {
+        'degraded': age_s is None or age_s > threshold_s,
+        'snapshot_age_seconds': None if age_s is None else int(age_s),
+        'snapshot_source': snap.get('source', 'UNKNOWN'),
+    }
+
 # MERGE over the existing file instead of clobbering it: a full rewrite wipes
 # the *_ran_at freshness stamps and the dashboard's POST-run caches (screener
 # etc.) every morning, leaving every sidebar badge stale and the Radar tab
@@ -69,6 +97,14 @@ results.update({
     'holdings': holdings,
     'equity_summary': equity_sum,
 })
+
+# Provenance: stamp degraded/age/source so a stale-snapshot run can never
+# masquerade as fresh output (run_paper_gate2 skips on it; the report labels it).
+_degraded_info = snapshot_degraded_info(snap)
+results.update(_degraded_info)
+if _degraded_info['degraded']:
+    print(f"[engines] DEGRADED RUN — snapshot age {_degraded_info['snapshot_age_seconds']}s "
+          f"(source={_degraded_info['snapshot_source']}); research-only provenance stamped")
 
 # ── 1. Regime ────────────────────────────────────────────────────────────────
 print(f"\n{_t()} [1/8] Running regime detection...")

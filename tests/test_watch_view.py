@@ -188,7 +188,9 @@ def test_mode_is_always_paper_and_live_orders_excluded(tmp_path):
 
 def test_autonomy_bar_not_ready_without_qualitative_gates(tmp_path):
     db = _empty_db(tmp_path)
-    # 30 closed but all losses → count gate passes, win-rate fails → NOT ready.
+    # 30 all-loss closes: under the AUTHORITATIVE engine gate (100 engine-only
+    # closes + quality criteria, via the versioned DTO) neither the count nor the
+    # verdict can pass — the retired 30-trade bar must not resurface as "ready".
     for i in range(30):
         _insert(db, "paper_outcomes", position_id=i, symbol="X", source="m", action="BUY", qty=1,
                 entry_price=100, exit_price=95, entry_at="2026-06-01T00:00:00+00:00",
@@ -196,8 +198,9 @@ def test_autonomy_bar_not_ready_without_qualitative_gates(tmp_path):
                 outcome="LOSS", hold_days=4)
     d = watch_view.load_watch_data(db, today="2026-06-06", price_fetcher=_NO_PRICES)
     assert d["autonomy"]["closed_n"] == 30
-    assert d["autonomy"]["closed_trades"]["pass"] is True
-    assert d["autonomy"]["ready"] is False          # bar at 30/30 must NOT imply ready
+    assert d["autonomy"]["required"] == 100
+    assert d["autonomy"]["closed_trades"]["pass"] is False   # 30 < 100 (engine cohort: 0)
+    assert d["autonomy"]["ready"] is False                   # DTO verdict, never the old bar
 
 
 # ── render_watch_html ────────────────────────────────────────────────────────
@@ -206,7 +209,7 @@ def test_render_contains_panels_and_poll(tmp_path):
     d = watch_view.load_watch_data(_empty_db(tmp_path), price_fetcher=_NO_PRICES)
     html = watch_view.render_watch_html(d)
     for needle in ("Open Positions", "Recent Closes", "Activity", "/watch/data",
-                   "NOT FINANCIAL ADVICE", "of 30"):
+                   "NOT FINANCIAL ADVICE", "of 100"):   # authoritative engine-gate bar
         assert needle in html, needle
 
 

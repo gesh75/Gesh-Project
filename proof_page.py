@@ -4,7 +4,8 @@ proof_page.py — public signal-accuracy "proof page" generator.
 The Sep-2026 alpha is sold on a documented paper-trade track record. This module
 reads the canonical closed-trade table (``paper_outcomes``, written by the trading
 engine's ``trading/tracker.py``) and renders a single self-contained HTML page that
-shows win-rate / Sharpe / max-drawdown / equity-curve + the autonomy-gate progress.
+shows the full ledger, engine vs manual cohorts, and the AUTHORITATIVE autonomy-gate
+progress (the engine's versioned gate_status_dto — engine cohort, 100-close floor).
 
 Design goals:
   * HONEST at 0 closed trades — renders a "building track record · day X of 180"
@@ -43,11 +44,15 @@ DEFAULT_TRACKER_DB = os.getenv(
     str(Path.home() / "Projects" / "gesh-project-trading" / "gesh_financial.db"),
 )
 
-# Autonomy-gate thresholds — mirror trading/tracker.py (kept in sync intentionally).
-MIN_CLOSED_TRADES = 30
-MIN_WIN_RATE      = 0.55
-MIN_SHARPE        = 0.50
-MAX_DRAWDOWN      = 0.10
+# Readiness is NEVER derived here: the page consumes the trading engine's versioned
+# gate_status_dto() (trading/tracker.py — engine cohort, 100-close floor plus
+# expectancy / profit factor / Monte-Carlo / probabilistic+deflated Sharpe / OOS).
+# The retired local 30-trade/win-rate/Sharpe/drawdown re-derivation is gone; the
+# constants below only shape the fail-CLOSED fallback DTO when that import fails.
+GATE_DTO_VERSION_EXPECTED = 2
+GATE_REQUIRED_FALLBACK    = 100
+ENGINE_SOURCES_FALLBACK   = ("consensus", "market_scan")
+_TRADING_PKG_ALIAS        = "gesh_trading_engine"
 DAYS_TARGET       = 180          # 6-month documented track record (the sales asset)
 LAUNCH_DATE       = "2026-05-21"  # execution clock start (post bug-fix), per roadmap
 
@@ -85,6 +90,89 @@ def _days_between(start: str, end: str) -> int:
     return max((d1 - d0).days, 0)
 
 
+def _trading_home() -> Path:
+    """Trading-engine repo root — same GESH_TRADING_HOME sibling-dir convention as
+    run_engines2.py / run_ai2.py."""
+    return Path(os.getenv(
+        "GESH_TRADING_HOME",
+        str(Path(__file__).parent.parent / "gesh-project-trading"),
+    ))
+
+
+def _import_gate_status_fn():
+    """Resolve the ENGINE repo's trading.tracker.gate_status_dto.
+
+    The product repo has its OWN `trading` package (risk_gate/state/…) already
+    bound in sys.modules inside the server, so a sys.path insert can never reach
+    the engine's copy — the engine package is loaded under an alias name via
+    importlib instead (the CLAUDE.md "pin via importlib" convention). Separated
+    into a seam so tests can stub or fail it deterministically."""
+    import importlib
+    import importlib.util
+    import sys
+
+    pkg_dir = _trading_home() / "trading"
+    if _TRADING_PKG_ALIAS not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            _TRADING_PKG_ALIAS, pkg_dir / "__init__.py",
+            submodule_search_locations=[str(pkg_dir)],
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"trading engine package not found at {pkg_dir}")
+        pkg = importlib.util.module_from_spec(spec)
+        sys.modules[_TRADING_PKG_ALIAS] = pkg
+        try:
+            spec.loader.exec_module(pkg)
+        except BaseException:
+            sys.modules.pop(_TRADING_PKG_ALIAS, None)  # never cache a half-import
+            raise
+    tracker = importlib.import_module(f"{_TRADING_PKG_ALIAS}.tracker")
+    return tracker.gate_status_dto
+
+
+def _fallback_gate_dto() -> dict[str, Any]:
+    """Fail-CLOSED gate when the engine isn't importable: the public page must never
+    claim readiness on a degraded path. `closes` is patched by the caller from the
+    locally-read ledger so progress copy stays honest."""
+    return {
+        "version": GATE_DTO_VERSION_EXPECTED, "cohort": "engine",
+        "cohort_sources": list(ENGINE_SOURCES_FALLBACK),
+        "closes": 0, "required": GATE_REQUIRED_FALLBACK,
+        "criteria": {}, "pass": False,
+        "summary": "autonomy gate unavailable — evaluated fail-closed",
+        "eta_note": "", "window": "since_launch", "as_of": "",
+        "fallback": True,
+    }
+
+
+def _load_gate_dto(db_path: str) -> dict[str, Any]:
+    """Authoritative autonomy-gate DTO evaluated over `db_path`. Any import/DB
+    error degrades to the fail-closed fallback — never an exception, never a pass."""
+    try:
+        if not Path(db_path).exists():
+            # The engine's _conn() would CREATE a missing DB — this page is read-only.
+            raise FileNotFoundError(db_path)
+        return _import_gate_status_fn()(db_path=db_path)
+    except Exception:
+        return _fallback_gate_dto()
+
+
+def _cohort_stats(rows: list[dict]) -> dict[str, Any]:
+    """Per-cohort ledger stats (engine vs manual are computed on DISJOINT row sets —
+    manual wins can never leak into engine numbers)."""
+    closed = len(rows)
+    wins = sum(1 for r in rows if r["outcome"] == "WIN")
+    pnls = [float(r["pnl_pct"] or 0) for r in rows]
+    return {
+        "closed": closed,
+        "wins": wins,
+        "losses": sum(1 for r in rows if r["outcome"] == "LOSS"),
+        "breakeven": sum(1 for r in rows if r["outcome"] == "BREAKEVEN"),
+        "win_rate": round(wins / closed, 4) if closed else 0.0,
+        "total_pnl_pct": round(sum(pnls), 4),
+    }
+
+
 def load_track_record(
     db_path: str | None = None,
     *,
@@ -97,7 +185,9 @@ def load_track_record(
     Returns a dict with: closed_trades, wins, losses, breakeven, win_rate,
     profit_factor, avg_win_pct, avg_loss_pct, total_pnl_pct, sharpe, max_drawdown,
     equity_curve (cumulative, starts at 1.0), trades (list), open_positions,
-    signal_ratings, days_running, days_target, and gate (per-threshold pass/fail).
+    signal_ratings, days_running, days_target — all-source LEDGER stats — plus
+    `engine` / `manual` (disjoint cohort stats) and `gate` (the trading engine's
+    versioned engine-cohort autonomy-gate DTO; fail-closed fallback on error).
     """
     db_path = db_path or DEFAULT_TRACKER_DB
     today = today or date.today().isoformat()
@@ -172,13 +262,15 @@ def load_track_record(
             max_dd = max(max_dd, (peak - equity_curve[-1]) / peak)
     max_dd = round(max_dd, 4)
 
-    gate = {
-        "closed_trades": {"value": closed, "required": MIN_CLOSED_TRADES, "pass": closed >= MIN_CLOSED_TRADES},
-        "win_rate":      {"value": win_rate, "required": MIN_WIN_RATE, "pass": closed > 0 and win_rate >= MIN_WIN_RATE},
-        "sharpe":        {"value": sharpe, "required": MIN_SHARPE, "pass": sharpe >= MIN_SHARPE},
-        "max_drawdown":  {"value": max_dd, "required": MAX_DRAWDOWN, "pass": closed > 0 and max_dd <= MAX_DRAWDOWN},
-    }
-    gate["ready"] = all(g["pass"] for g in gate.values() if isinstance(g, dict))
+    # AUTHORITATIVE gate: the engine's versioned DTO (engine cohort only). The old
+    # local 30-trade/win-rate/Sharpe/dd re-derivation over the mixed population is
+    # retired — it claimed progress manual closes can never provide.
+    gate = _load_gate_dto(db_path)
+    sources = tuple(str(s) for s in (gate.get("cohort_sources") or ENGINE_SOURCES_FALLBACK))
+    engine_rows = [r for r in rows if (r.get("source") or "") in sources]
+    manual_rows = [r for r in rows if (r.get("source") or "") not in sources]
+    if gate.get("fallback"):
+        gate = {**gate, "closes": len(engine_rows)}  # honest progress, still fail-closed
 
     by_source: dict[str, int] = {}
     for r in rows:
@@ -194,6 +286,7 @@ def load_track_record(
         "sharpe": sharpe, "max_drawdown": max_dd, "equity_curve": equity_curve,
         "trades": rows, "open_positions": open_positions, "signal_ratings": signal_ratings,
         "days_running": _days_between(launch_date, today), "days_target": DAYS_TARGET,
+        "engine": _cohort_stats(engine_rows), "manual": _cohort_stats(manual_rows),
         "gate": gate, "generated_at": today,
     }
 
@@ -245,6 +338,23 @@ def _gate_chip(label: str, g: dict, fmt: str) -> str:
     )
 
 
+def _cohort_line(label: str, key: str, s: dict[str, Any], note: str) -> str:
+    """One cohort's ledger stats. label/key/note are code literals; every stat is
+    int/float-coerced. data-* attributes are the machine-checkable contract that
+    engine and manual numbers are never mixed."""
+    return (
+        f'<div data-cohort="{key}" style="margin:4px 0;color:{_DIM}">'
+        f'<b style="color:#dfe8f2">{label}</b> <span>({note})</span> — '
+        f'closed <b class="num" style="color:#e8eef6" data-k="{key}-closed">{int(s["closed"])}</b> · '
+        f'wins <b class="num" style="color:{_GREEN}" data-k="{key}-wins">{int(s["wins"])}</b> · '
+        f'losses <b class="num" style="color:{_RED}" data-k="{key}-losses">{int(s["losses"])}</b> · '
+        f'breakeven <b class="num" data-k="{key}-breakeven">{int(s["breakeven"])}</b> · '
+        f'win rate <b class="num" style="color:#e8eef6" data-k="{key}-winrate">{float(s["win_rate"])*100:.0f}%</b> · '
+        f'total P&amp;L <b class="num" style="color:#e8eef6" data-k="{key}-pnl">{float(s["total_pnl_pct"])*100:+.1f}%</b>'
+        f'</div>'
+    )
+
+
 def _fmt_spy(v: Any) -> str:
     return f"{v*100:+.1f}%" if isinstance(v, (int, float)) else "n/a"
 
@@ -257,43 +367,75 @@ def _fmt_sources(by_source: Any) -> str:
 
 def render_html(data: dict[str, Any]) -> str:
     """Render the self-contained proof-page HTML from a load_track_record() dict."""
-    n = data["closed_trades"]
     gate = data["gate"]
-    pct = lambda x: f"{x*100:.1f}%"
+    closes = int(gate.get("closes") or 0)
+    required = int(gate.get("required") or GATE_REQUIRED_FALLBACK)
+    # Belt-and-braces fail-closed: a pass CLAIM needs both the engine gate's verdict
+    # AND the full engine sample — a buggy/spoofed DTO can never render "gate met".
+    ready = bool(gate.get("pass")) and closes >= required
 
-    chips = "".join([
-        _gate_chip("Closed Trades", gate["closed_trades"], "{:.0f}"),
-        _gate_chip("Win Rate", gate["win_rate"], "{:.0%}"),
-        _gate_chip("Sharpe", gate["sharpe"], "{:.2f}"),
-        _gate_chip("Max Drawdown", gate["max_drawdown"], "{:.0%}"),
-    ])
+    crit = gate.get("criteria") or {}
+    chip_defs: list[tuple[str, dict, str]] = [(
+        "Engine Closes",
+        {"value": closes, "required": required, "pass": closes >= required},
+        "{:.0f}",
+    )]
+    for label, key, fmt in (
+        ("Expectancy / Trade", "expectancy", "{:+.4f}"),
+        ("Profit Factor", "profit_factor", "{:.2f}"),
+        ("Max Drawdown", "max_drawdown", "{:.0%}"),
+        ("Prob. Sharpe", "prob_sharpe", "{:.2f}"),
+        ("Deflated Sharpe", "deflated_sharpe", "{:.2f}"),
+    ):
+        g = crit.get(key)
+        if isinstance(g, dict):
+            chip_defs.append((label, g, fmt))
+    chips = "".join(_gate_chip(label, g, fmt) for label, g, fmt in chip_defs)
 
-    if n == 0:
+    if closes == 0:
         banner_txt = (
             f"Building track record — Day {data['days_running']} of {data['days_target']}. "
-            f"0 of {MIN_CLOSED_TRADES} closed paper trades recorded. "
-            "The engine is accumulating signal-accuracy data; metrics publish as trades close."
+            f"0 of {required} engine closed trades recorded. Manual trades are tracked "
+            "separately below and never count toward the autonomy gate."
         )
         banner_color = _YELLOW
-    elif not gate["ready"]:
+    elif not ready:
         banner_txt = (
             f"Building track record — Day {data['days_running']} of {data['days_target']}. "
-            f"{n} of {MIN_CLOSED_TRADES} closed paper trades. Sample size is still small — "
-            "metrics are provisional until the 30-trade autonomy gate is met."
+            f"{closes} of {required} engine closed trades. Manual trades are shown "
+            "separately and never count toward the gate; metrics are provisional until "
+            f"the {required}-close engine autonomy gate is met."
         )
         banner_color = _YELLOW
     else:
         banner_txt = (
-            f"Autonomy gate met — {n} closed paper trades, "
-            f"{pct(data['win_rate'])} win rate over {data['days_running']} days."
+            f"Autonomy gate met — {closes} engine closed trades, all readiness "
+            f"criteria passed over {data['days_running']} days."
         )
         banner_color = _GREEN
+
+    srcs = _esc(" + ".join(str(s) for s in (gate.get("cohort_sources")
+                                            or ENGINE_SOURCES_FALLBACK)))
+    cohorts_html = (
+        f'<div style="background:{_SURFACE};border:1px solid {_BORDER};border-radius:10px;'
+        f'padding:12px 16px;margin-bottom:20px;font-size:13px">'
+        f'<div style="color:{_DIM};font-size:11px;text-transform:uppercase;'
+        f'letter-spacing:.5px;margin-bottom:6px">Cohorts — the autonomy gate measures '
+        f'the engine cohort ONLY</div>'
+        + _cohort_line("Engine cohort", "engine", data["engine"],
+                       f"sources: {srcs} — the only autonomy-gate population")
+        + _cohort_line("Manual cohort", "manual", data["manual"],
+                       "rated hand trades — informational, never gates")
+        + "</div>"
+    )
+
+    def ts(v: Any) -> str:
+        return _esc((str(v or "")[:16].replace("T", " ")) or "—")
 
     rows_html = ""
     for t in reversed(data["trades"][-50:]):
         oc = t["outcome"]
         c = _GREEN if oc == "WIN" else (_RED if oc == "LOSS" else _DIM)
-        ts = lambda v: _esc((str(v or "")[:16].replace("T", " ")) or "—")
         rows_html += (
             f'<tr style="border-bottom:1px solid {_BORDER}">'
             f'<td style="padding:8px 12px">{_esc(t["symbol"])}</td>'
@@ -349,12 +491,15 @@ def render_html(data: dict[str, Any]) -> str:
 
  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">{chips}</div>
 
+ {cohorts_html}
+
  <div style="background:{_SURFACE};border:1px solid {_BORDER};border-radius:10px;padding:16px;margin-bottom:8px">
    <div style="color:{_DIM};font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
      Cumulative paper equity (normalised to 1.00)</div>
    {_svg_equity_curve(data['equity_curve'])}
  </div>
  <div style="display:flex;gap:24px;flex-wrap:wrap;color:{_DIM};font-size:12px;margin-bottom:24px">
+   <span><b style="color:#dfe8f2">All sources (full ledger):</b></span>
    <span>Wins: <b style="color:{_GREEN}" class="num">{data['wins']}</b></span>
    <span>Losses: <b style="color:{_RED}" class="num">{data['losses']}</b></span>
    <span>Breakeven: <b class="num" style="color:{_DIM}">{data['breakeven']}</b></span>
@@ -373,7 +518,8 @@ def render_html(data: dict[str, Any]) -> str:
    by the live engine at decision time, before the market moved — never backfilled, never
    backtested. The complete ledger is shown including every losing trade. Timestamps are UTC
    close times from the tracker database; win rate uses the conservative policy (breakevens
-   count in the denominator).
+   count in the denominator). The autonomy gate is evaluated by the trading engine on the
+   ENGINE cohort only — manual trades are reported separately and never count toward it.
  </div>
 
  <h2 style="font-size:15px;margin:0 0 8px">Closed trades</h2>
@@ -404,5 +550,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
     out = generate(args.db, args.out)
     d = load_track_record(args.db)
-    print(f"Wrote {out} — {d['closed_trades']} closed trades, "
-          f"win rate {d['win_rate']*100:.0f}%, gate ready={d['gate']['ready']}")
+    print(f"Wrote {out} — {d['closed_trades']} closed trades "
+          f"(engine {d['engine']['closed']} / manual {d['manual']['closed']}), "
+          f"gate v{d['gate']['version']} pass={d['gate']['pass']} "
+          f"({d['gate']['closes']}/{d['gate']['required']} engine closes)")

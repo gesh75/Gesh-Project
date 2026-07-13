@@ -21,6 +21,11 @@ google-genai==1.73.1
 # News & sentiment
 requests==2.33.1
 beautifulsoup4==4.14.3
+# lxml is the parser pandas.read_html uses for the FINRA margin-debt scrape
+# (long_term_macro.fetch_margin_debt). Declared explicitly — it otherwise only
+# arrives transitively via openbb, which the CI test job strips, so without this
+# the FINRA path silently degrades to "unavailable" wherever openbb is absent.
+lxml==6.1.0
 praw==7.8.1
 vaderSentiment==3.3.2
 nltk==3.9.4

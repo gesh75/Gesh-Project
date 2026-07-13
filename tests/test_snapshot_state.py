@@ -20,13 +20,8 @@ NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
 SERVICEABLE_MAX = 1440.0  # 24h
 
 
-def _write_snap(tmp_path, *, age_min: float, source: str = "robinhood_mcp", holdings: int = 10,
-                base_now: datetime | None = None):
-    # classify()-level tests inject now=NOW and default base_now=NOW (deterministic).
-    # The CLI (main) has no now injection and uses wall-clock by design, so its test
-    # must anchor the fixture to REAL now — otherwise a NOW-frozen fetched_at reads as
-    # hours/days old against wall-clock and the token drifts FRESH→SERVICEABLE→STALE.
-    fetched = ((base_now or NOW) - timedelta(minutes=age_min)).isoformat()
+def _write_snap(tmp_path, *, age_min: float, source: str = "robinhood_mcp", holdings: int = 10):
+    fetched = (NOW - timedelta(minutes=age_min)).isoformat()
     p = tmp_path / "live_portfolio_snapshot.json"
     p.write_text(json.dumps({
         "fetched_at": fetched,
@@ -95,9 +90,16 @@ def test_mcp_source_has_no_warning(tmp_path):
 
 
 # --- CLI contract the shell relies on --------------------------------------
-def test_cli_prints_state_token_to_stdout(tmp_path, capsys):
-    # main() classifies against wall-clock (no now injection) — anchor to real now.
-    path = _write_snap(tmp_path, age_min=5, base_now=datetime.now(timezone.utc))
+def test_cli_prints_state_token_to_stdout(tmp_path, capsys, monkeypatch):
+    # main() has no `now` injection point — freeze the module clock at the
+    # fixture's NOW so the age stays 5 min regardless of the real date.
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+
+    monkeypatch.setattr(ss, "datetime", _FrozenDatetime)
+    path = _write_snap(tmp_path, age_min=5)
     rc = ss.main(["snapshot_state.py", str(SERVICEABLE_MAX), path])
     out = capsys.readouterr()
     assert rc == 0

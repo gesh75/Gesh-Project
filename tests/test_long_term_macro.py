@@ -155,6 +155,15 @@ def test_engine_block_margin_elevated_only_when_score_negative():
     assert ltm.engine_block({**_SENT, "margin_debt": {"score": -1, "level": 1}})["margin_debt"]["elevated"] is True
     assert ltm.engine_block({**_SENT, "margin_debt": {"score": 0, "level": 1}})["margin_debt"]["elevated"] is False
     assert ltm.engine_block({**_SENT, "margin_debt": {"score": None, "level": 1}})["margin_debt"]["elevated"] is None
+    # A genuine FINRA outage (status != "ok") is UNKNOWN, not a definite "not elevated":
+    # score=0 + status="unavailable" must degrade to None so the leverage brake never
+    # reads an outage as a confirmed all-clear.
+    assert ltm.engine_block(
+        {**_SENT, "margin_debt": {"score": 0, "status": "unavailable", "level": None}}
+    )["margin_debt"]["elevated"] is None
+    assert ltm.engine_block(
+        {**_SENT, "margin_debt": {"score": 0, "status": "ok", "level": 1}}
+    )["margin_debt"]["elevated"] is False   # explicit ok status still computes from score
 
 
 def test_engine_block_never_raises_on_garbage():
