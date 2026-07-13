@@ -2931,7 +2931,20 @@ async function analyzeAI(sym){
     }
     const j=res&&res.ok?await res.json().catch(()=>null):null;
     const h=j&&j.data;
-    if(!h||!h.scores){ el.innerHTML=''; return; }   // degrade silently — mechanical cards remain
+    if(!h||!h.scores){ el.innerHTML=''; return; }   // no card at all — degrade silently
+    // A well-formed card has real signal: some non-zero score, OR a verdict, OR a
+    // fair-value estimate. A response with all five scores 0 AND no verdict AND no
+    // fair value is a degenerate/transient model result — render an honest
+    // "unavailable" state rather than a misleading all-zeros research card (the
+    // live mechanical cards above still apply).
+    const sc=h.scores||{};
+    const scoreSum=['valuation','growth','health','momentum','dividend'].reduce((s,k)=>s+(Number(sc[k])||0),0);
+    const hasSignal=scoreSum>0||String(h.verdict||'').trim()||(h.fair_value&&h.fair_value.estimate!=null);
+    if(!hasSignal){
+      el.innerHTML=`<div class="card" style="margin-bottom:16px"><div style="${T}">🧠 AI Research — ${daEsc(sym)}</div>
+        <div class="deep-ph-text" style="padding:16px 0;text-align:center">AI research is temporarily unavailable for ${daEsc(sym)} — the live signals above still apply. Tap ▶ Analyze again in a moment.</div></div>`;
+      return;
+    }
     el.innerHTML=buildAICard(h);
   }catch(e){ el.innerHTML=''; }
 }
