@@ -1801,27 +1801,41 @@ def screener_cached():
 
 # ─── Long-Term Macro Overlay (VIX + Fear & Greed + Margin Debt) ───────────────
 # Visible surface for Proposal 1 long-term (1-3y) sentiment bias features.
-# Data is cached internally in long_term_macro (6h/24h), so this is cheap.
+# Two layers: long_term_macro caches the raw upstream fetches (6h/24h files); the
+# serve-side cache below lets /cached repaint INSTANTLY from memory without
+# re-entering the module, while the live route always recomputes + refreshes it.
+_LTM_TTL_SEC = 900   # 15-min serve cache
+_ltm_cache: dict[str, tuple[float, dict]] = {}
+_ltm_lock = threading.Lock()
+
+
+def _ltm_compute() -> dict:
+    """Compute the overlay (module-cached upstream) and refresh the serve cache."""
+    from long_term_macro import get_long_term_macro_sentiment
+    data = _sanitize(get_long_term_macro_sentiment())
+    with _ltm_lock:
+        _ltm_cache["v"] = (time.monotonic(), data)
+    return data
+
 
 @app.get("/api/long-term-macro")
 def long_term_macro():
+    """Live compute — always refreshes the serve cache."""
     try:
-        from long_term_macro import get_long_term_macro_sentiment
-        data = get_long_term_macro_sentiment()
-        return {"status": "ok", "data": _sanitize(data)}
+        return {"status": "ok", "data": _ltm_compute()}
     except Exception as e:
         raise _server_error(e)
 
 
 @app.get("/api/long-term-macro/cached")
 def long_term_macro_cached():
-    """Serve last computed or live (module has its own TTL cache)."""
-    # Reuse the live fetch (internal caches prevent hammering). Frontend treats as 'cached' for instant paint.
+    """Instant paint from the serve cache; computes once on a cold/expired entry."""
     try:
-        from long_term_macro import get_long_term_macro_sentiment
-        data = get_long_term_macro_sentiment()
-        out = {"status": "ok", "data": _sanitize(data), "cached": True}
-        # attach a fake ran_at from the payload if present
+        with _ltm_lock:
+            hit = _ltm_cache.get("v")
+        cached = bool(hit and (time.monotonic() - hit[0]) < _LTM_TTL_SEC)
+        data = hit[1] if cached else _ltm_compute()
+        out = {"status": "ok", "data": data, "cached": cached}
         if isinstance(data, dict) and data.get("fetched_at"):
             out["ran_at"] = data["fetched_at"]
         return out
@@ -2518,7 +2532,8 @@ async def mybook_analyze(request: Request):
             return {"status": "ok", "cached": True, "data": hit[2]}
         # 4) reserve quota ATOMICALLY (under the lock, before starting the worker) so
         #    an over-cap call 429s immediately instead of a thread discovering the cap
-        #    minutes later — and combined with per-user single-flight, no two runs can
+        #    minutes later — and combined with per-user single-flight (step 1 returns
+        #    202 for ANY in-flight run, whatever the fingerprint), no two runs can
         #    slip past the check→log window. Raises HTTPException(429) before any spend.
         _check_customer_quota(email, "book_analysis")
         _mybook_jobs[email] = {"fp": fp, "status": "running"}

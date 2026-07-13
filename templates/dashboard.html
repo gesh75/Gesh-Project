@@ -744,7 +744,7 @@ body:not(.role-known) .owner-only { display: none !important; }
         </div>
       </div>
       <div style="padding:0 18px 14px;font-size:12px;color:var(--muted);line-height:1.5">
-        VIX high = opportunity tilt; Extreme Fear (low F&G) = long-term bullish; Rising margin debt = caution. Combined into an advisory long-term macro overlay (not a wired consensus node).
+        VIX high = opportunity tilt; Extreme Fear (low F&G) = long-term bullish; Rising margin debt = caution. Combined into a long-term macro signal the consensus engine weighs.
       </div>
     </div>
 
@@ -1889,7 +1889,7 @@ function renderLongTermMacro(d) {
       <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;justify-content:center">
         <div style="font-size:12px;color:var(--muted);letter-spacing:.08em">COMBINED BIAS</div>
         <div style="font-size:26px;font-weight:800;margin:4px 0 2px;color:${biasColor}">${daEsc(bias)} <span style="font-size:15px;opacity:.7">(${score>0?'+':''}${daEsc(score)})</span></div>
-        <div style="font-size:13px;color:var(--muted)">Advisory long-term overlay (not a consensus node)</div>
+        <div style="font-size:13px;color:var(--muted)">One long-term macro input to the consensus engine</div>
       </div>
     </div>`;
   if (tsEl) tsEl.textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -3013,6 +3013,8 @@ async function mybookAnalyze(){
     }
     if(res.status===400){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Your book is empty — add positions first.</div></div>'; return; }
     if(res.status===429){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">⏳ Daily portfolio-analysis limit reached — your last analysis stays available (🖨 Report), and the limit resets on a rolling 24-hour window.</div></div>'; return; }
+    // (In-flight runs return 202 and are handled by the poll loop above — the server
+    //  never returns 409 for this endpoint, so no "busy" branch is needed here.)
     if(!res.ok){
       const msg=(j&&j.detail)||'Analysis failed — try again in a minute.';
       box.innerHTML=`<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">${daEsc(String(msg))}</div></div>`; return;

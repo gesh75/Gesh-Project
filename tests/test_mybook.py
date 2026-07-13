@@ -252,6 +252,29 @@ def test_analyze_book_cached_until_book_changes(client, monkeypatch):
     assert counters["llm"] == 2
 
 
+def test_analyze_book_different_book_while_running_is_202_no_double_spend(client, monkeypatch):
+    """A book edit mid-run must NOT spawn a second concurrent analysis (double
+    Claude spend + clobbered job slot). One in-flight analysis per user: the new
+    request gets 202 'running' (the client keeps polling — same contract as the
+    normal in-flight poll), and the running job is left untouched so the original
+    run completes. (Reconciled to the 202 keep-polling contract; the earlier draft
+    used 409 'busy'.)"""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    counters = _stub_engines(server, monkeypatch)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    # Simulate an analysis already in flight for a DIFFERENT book fingerprint.
+    with server._mybook_lock:
+        server._mybook_jobs["cust@x.com"] = {"fp": "some-other-book", "status": "running"}
+    r = c.post("/api/mybook/analyze", json={})
+    assert r.status_code == 202
+    assert r.json()["status"] == "running"
+    # the in-flight job is untouched (not overwritten) so the original run completes
+    assert server._mybook_jobs["cust@x.com"]["fp"] == "some-other-book"
+    assert counters["llm"] == 0                       # no second worker → no double spend
+
+
 # ─── watchlist → book bulk import ─────────────────────────────────────────────
 
 def test_import_watchlist_adds_missing_skips_existing(client, monkeypatch, au):

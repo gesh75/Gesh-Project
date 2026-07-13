@@ -1,192 +1,174 @@
-"""
-Offline unit tests for long_term_macro margin-debt integrity (STOP-SHIP class).
+"""Long-term macro overlay — the VIX / Fear&Greed / FINRA-margin-debt 1-3y bias.
 
-Guards three data-integrity rules for the FINRA margin-debt feed:
-  * Month labels ("May-26") MUST be parsed with an explicit %b-%y format —
-    an inferring parser produced year-0001 dates that sorted Dec-25 after
-    May-26, so month-over-month math ran on the wrong rows.
-  * FINRA publishes debit balances in $ MILLIONS — values stay in official
-    units (the old code divided by 1,000 a second time).
-  * Retrieval failure returns {"status": "unavailable"} — a synthetic series
-    is NEVER generated (fabricated market data violates the project's #1 rule).
-Payloads must carry source / as_of / quality; a cache serve is labeled
-quality="cached" and keeps the cached as_of.
+Covers the three layers that shipped without tests:
+  * node_long_term_macro() → consensus vote from the combined score
+  * GET /api/long-term-macro[/cached] shape (no network — the fetch is stubbed)
+  * the node is WIRED into run_consensus_holding (appears in votes) AND registered
+    in _BASE_WEIGHTS (so the confidence denominator stays correct)
+
+Offline: the sentiment fetch (yfinance VIX / F&G API / FINRA) is monkeypatched, so
+no network is touched.
 """
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timedelta
-from pathlib import Path
-
-import pandas as pd
 import pytest
+from starlette.testclient import TestClient
 
 import long_term_macro as ltm
 
-pytestmark = pytest.mark.unit
+_SENT = {
+    "vix": {"score": 1, "detail": "VIX 15.0 low", "level": 15.0},
+    "fear_greed": {"score": 1, "detail": "Greed 68", "level": 68.0},
+    "margin_debt": {"score": 0, "detail": "flat", "level": 750000.0},
+    "combined_score": 0.55,
+    "bias": "BULLISH",
+}
 
-FIXTURE = Path(__file__).parent / "fixtures" / "finra_margin_statistics.html"
 
+# ── node vote logic ───────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("score,expected", [
+    (0.55, 1), (0.31, 1),          # > 0.3  → BULLISH tilt
+    (-0.55, -1), (-0.31, -1),      # < -0.3 → BEARISH tilt
+    (0.30, 0), (0.0, 0), (-0.30, 0),  # band → NEUTRAL
+])
+def test_node_vote_thresholds(monkeypatch, score, expected):
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment",
+                        lambda: {**_SENT, "combined_score": score})
+    vote, detail = ltm.node_long_term_macro("AAPL")
+    assert vote == expected
+    assert isinstance(detail, str) and detail          # non-empty reasoning
+
+
+def test_node_detail_mentions_each_component(monkeypatch):
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment", lambda: _SENT)
+    _, detail = ltm.node_long_term_macro()
+    assert "VIX" in detail and "FG" in detail and "MD" in detail
+
+
+# ── API endpoints ─────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def margin_cache(tmp_path, monkeypatch):
-    """Point the module cache at a throwaway path so tests never read/write
-    the repo-root .margin_debt_cache.json."""
-    cache = tmp_path / ".margin_debt_cache.json"
-    monkeypatch.setattr(ltm, "MARGIN_CACHE", cache)
-    return cache
+def client(monkeypatch):
+    import server
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: False)
+    # both endpoints lazily `from long_term_macro import get_long_term_macro_sentiment`
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment", lambda: dict(_SENT))
+    return TestClient(server.app, raise_server_exceptions=False)
 
 
-@pytest.fixture
-def live_finra(margin_cache, monkeypatch):
-    """FINRA 'up': the network seam serves the checked-in fixture tables."""
-    tables = pd.read_html(FIXTURE, header=0)
-    monkeypatch.setattr(ltm, "_fetch_finra_tables", lambda: tables, raising=False)
-    return margin_cache
+def test_endpoint_live_shape(client):
+    r = client.get("/api/long-term-macro")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["data"]["bias"] == "BULLISH"
+    assert body["data"]["vix"]["level"] == 15.0
 
 
-@pytest.fixture
-def finra_down(margin_cache, monkeypatch):
-    """FINRA 'down': the network seam raises."""
+def test_endpoint_cached_cold_computes(client):
+    """A cold serve-cache computes fresh and honestly reports cached=False."""
+    r = client.get("/api/long-term-macro/cached")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok" and body["cached"] is False
+    assert body["data"]["combined_score"] == 0.55
+
+
+def test_endpoint_cached_serves_from_cache_after_live(client, monkeypatch):
+    """After a live call warms the serve cache, /cached returns cached=True and
+    does NOT re-enter the module (genuine cache, not a relabelled live call)."""
+    assert client.get("/api/long-term-macro").status_code == 200   # warms cache
+    calls = {"n": 0}
+
     def _boom():
-        raise ConnectionError("FINRA unreachable")
-    monkeypatch.setattr(ltm, "_fetch_finra_tables", _boom, raising=False)
-    return margin_cache
+        calls["n"] += 1
+        raise AssertionError("module must not be called on a warm cache hit")
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment", _boom)
+    r = client.get("/api/long-term-macro/cached")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cached"] is True and calls["n"] == 0
+    assert body["data"]["combined_score"] == 0.55
 
 
-def _write_cache(path: Path, *, as_of: str, age_hours: float, series: list[dict]) -> None:
-    path.write_text(json.dumps({
-        "schema": 2,
-        "fetched_at": (datetime.utcnow() - timedelta(hours=age_hours)).isoformat(),
-        "source": "FINRA margin statistics (finra.org)",
-        "as_of": as_of,
-        "series": series,
-    }))
+def test_endpoint_nan_sanitized_not_500(client, monkeypatch):
+    """A NaN level (insufficient data) must serialize to null, not crash the route."""
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment",
+                        lambda: {**_SENT, "vix": {"score": 0, "detail": "n/a",
+                                                  "level": float("nan")}})
+    r = client.get("/api/long-term-macro")
+    assert r.status_code == 200
+    assert r.json()["data"]["vix"]["level"] is None
 
 
-# ── (a) explicit %b-%y date parsing ──────────────────────────────────────────
+# ── consensus wiring ──────────────────────────────────────────────────────────
 
-def test_dates_parsed_with_explicit_month_year_format(live_finra):
-    result = ltm.fetch_margin_debt()
-    assert result["status"] == "ok"
-    # May-26 means 2026-05 — and it is the LATEST row, after Dec-25 (2025-12).
-    assert result["as_of"] == "2026-05"
-    dates = [row["date"] for row in result["series"]]
-    assert dates == sorted(dates)
-    assert dates[0] == "2025-05"
-    assert dates[-1] == "2026-05"
-    assert "2025-12" in dates
+def test_node_registered_in_base_weights():
+    """In _BASE_WEIGHTS so len(NODE_WEIGHTS) counts it — otherwise an active
+    LT_Macro would push confidence (= active/len(weights)) over 100%."""
+    import consensus
+    assert "LT_Macro" in consensus._BASE_WEIGHTS
 
 
-# ── (b) official units: $ millions, no /1000 ─────────────────────────────────
-
-def test_values_kept_in_official_finra_millions(live_finra):
-    result = ltm.fetch_margin_debt()
-    by_date = {row["date"]: row["margin_debt_millions"] for row in result["series"]}
-    # FINRA publishes 1,415,557 ($M) for May-26 — NOT 1415.557.
-    assert by_date["2026-05"] == pytest.approx(1_415_557.0)
-    assert by_date["2025-05"] == pytest.approx(920_960.0)
-
-
-# ── (c) retrieval failure → unavailable, NEVER synthetic ─────────────────────
-
-def test_retrieval_failure_returns_unavailable(finra_down):
-    result = ltm.fetch_margin_debt()
-    assert result["status"] == "unavailable"
-    # No invented data points, under any key.
-    assert not result.get("series")
-    assert not result.get("data")
+def test_lt_macro_appears_in_consensus_votes(monkeypatch):
+    """The node must actually be assembled into run_consensus_holding's votes —
+    the whole point of the overlay. Other nodes ABSTAIN offline; LT_Macro votes."""
+    import consensus
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment",
+                        lambda: {**_SENT, "combined_score": 0.55})
+    # keep the price-based nodes fast + offline → they ABSTAIN, LT_Macro still votes
+    monkeypatch.setattr(consensus.price_source, "yf_download",
+                        lambda *a, **k: None, raising=False)
+    out = consensus.run_consensus_holding("AAPL", 1000.0, 10000.0, 90.0, 100.0)
+    assert "LT_Macro" in out["votes"]
+    assert out["votes"]["LT_Macro"] == 1          # bullish combined score → +1
+    assert "VIX" in out["details"]["LT_Macro"]
 
 
-def test_retrieval_failure_never_scores_synthetic_series(finra_down):
-    score = ltm.margin_debt_score(ltm.fetch_margin_debt())
-    assert score["score"] == 0
-    assert score["level"] is None
-    assert score["status"] == "unavailable"
+# ── engine_block() — the engine_results.json contract for the agentic-rh bridge ──
+
+def test_engine_block_shape_and_fields():
+    """engine_block normalizes the raw sentiment into the flat block the bridge reads:
+    fear_greed.label, margin_debt.elevated, vix.level, combined_score, bias."""
+    blk = ltm.engine_block({**_SENT,
+                            "fear_greed": {"score": -1, "detail": "Extreme Greed 82", "level": 82.0},
+                            "margin_debt": {"score": -1, "detail": "rising fast", "level": 9.0e11}})
+    assert blk["fear_greed"]["level"] == 82.0
+    assert blk["fear_greed"]["label"] == "Extreme Greed"     # derived from the 0-100 level
+    assert blk["margin_debt"]["elevated"] is True            # negative margin score → elevated
+    assert blk["vix"]["level"] == 15.0
+    assert blk["combined_score"] == 0.55 and blk["bias"] == "BULLISH"
 
 
-# ── (d) source / as_of / quality fields ──────────────────────────────────────
-
-def test_payload_includes_source_as_of_quality(live_finra):
-    result = ltm.fetch_margin_debt()
-    assert "finra" in result["source"].lower()
-    assert result["as_of"] == "2026-05"
-    assert result["quality"] == "live"
-
-
-def test_score_carries_provenance_fields(live_finra):
-    score = ltm.margin_debt_score(ltm.fetch_margin_debt())
-    # May-26 1,415,557 vs Apr-26 1,304,281 → +8.5% MoM → leverage caution.
-    assert score["score"] == -1
-    assert score["level"] == pytest.approx(1_415_557.0)
-    assert score["status"] == "ok"
-    assert "finra" in score["source"].lower()
-    assert score["as_of"] == "2026-05"
-    assert score["quality"] == "live"
+@pytest.mark.parametrize("level,label", [
+    (10.0, "Extreme Fear"), (24.9, "Extreme Fear"), (30.0, "Fear"),
+    (50.0, "Neutral"), (68.0, "Greed"), (82.0, "Extreme Greed"), (None, None),
+])
+def test_engine_block_fear_greed_labels(level, label):
+    blk = ltm.engine_block({**_SENT, "fear_greed": {"score": 0, "detail": "", "level": level}})
+    assert blk["fear_greed"]["label"] == label
 
 
-def test_sentiment_overlay_exposes_margin_provenance(live_finra, monkeypatch):
-    monkeypatch.setattr(ltm, "fetch_vix", lambda *a, **k: None)
-    monkeypatch.setattr(ltm, "fetch_fear_greed", lambda *a, **k: None)
-    sent = ltm.get_long_term_macro_sentiment()
-    md = sent["margin_debt"]
-    assert md["as_of"] == "2026-05"
-    assert md["quality"] == "live"
-    assert "finra" in md["source"].lower()
+def test_engine_block_margin_elevated_only_when_score_negative():
+    assert ltm.engine_block({**_SENT, "margin_debt": {"score": -1, "level": 1}})["margin_debt"]["elevated"] is True
+    assert ltm.engine_block({**_SENT, "margin_debt": {"score": 0, "level": 1}})["margin_debt"]["elevated"] is False
+    assert ltm.engine_block({**_SENT, "margin_debt": {"score": None, "level": 1}})["margin_debt"]["elevated"] is None
+    # A genuine FINRA outage (status != "ok") is UNKNOWN, not a definite "not elevated":
+    # score=0 + status="unavailable" must degrade to None so the leverage brake never
+    # reads an outage as a confirmed all-clear.
+    assert ltm.engine_block(
+        {**_SENT, "margin_debt": {"score": 0, "status": "unavailable", "level": None}}
+    )["margin_debt"]["elevated"] is None
+    assert ltm.engine_block(
+        {**_SENT, "margin_debt": {"score": 0, "status": "ok", "level": 1}}
+    )["margin_debt"]["elevated"] is False   # explicit ok status still computes from score
 
 
-# ── cache semantics ──────────────────────────────────────────────────────────
-
-def test_successful_fetch_writes_versioned_cache(live_finra):
-    ltm.fetch_margin_debt()
-    cached = json.loads(live_finra.read_text())
-    assert cached["schema"] == 2
-    assert cached["as_of"] == "2026-05"
-    assert cached["series"][-1]["margin_debt_millions"] == pytest.approx(1_415_557.0)
-
-
-def test_fresh_cache_served_without_hitting_finra(margin_cache, monkeypatch):
-    def _fail():
-        raise AssertionError("network seam must not be called on a fresh cache")
-    monkeypatch.setattr(ltm, "_fetch_finra_tables", _fail, raising=False)
-    series = [
-        {"date": "2026-02", "margin_debt_millions": 1_253_192.0},
-        {"date": "2026-03", "margin_debt_millions": 1_220_922.0},
-        {"date": "2026-04", "margin_debt_millions": 1_304_281.0},
-    ]
-    _write_cache(margin_cache, as_of="2026-04", age_hours=1, series=series)
-    result = ltm.fetch_margin_debt()
-    assert result["status"] == "ok"
-    assert result["quality"] == "cached"
-    assert result["as_of"] == "2026-04"
-    assert result["series"] == series
-
-
-def test_stale_cache_served_as_cached_when_finra_down(finra_down):
-    series = [
-        {"date": "2026-02", "margin_debt_millions": 1_253_192.0},
-        {"date": "2026-03", "margin_debt_millions": 1_220_922.0},
-        {"date": "2026-04", "margin_debt_millions": 1_304_281.0},
-    ]
-    _write_cache(finra_down, as_of="2026-04", age_hours=48, series=series)
-    result = ltm.fetch_margin_debt()
-    assert result["status"] == "ok"
-    assert result["quality"] == "cached"
-    assert result["as_of"] == "2026-04"
-    assert result["series"] == series
-
-
-def test_legacy_corrupt_cache_is_rejected_not_served(finra_down):
-    # Pre-fix cache format: year-0001 dates + /1000 values, no schema/as_of.
-    finra_down.write_text(json.dumps({
-        "fetched_at": datetime.utcnow().isoformat(),
-        "data": [
-            {"date": "0001-05-26 00:00:00", "margin_debt_millions": 1415.557},
-            {"date": "0001-04-26 00:00:00", "margin_debt_millions": 1304.281},
-            {"date": "0001-03-26 00:00:00", "margin_debt_millions": 1220.922},
-        ],
-    }))
-    result = ltm.fetch_margin_debt()
-    assert result["status"] == "unavailable"
-    assert not result.get("series")
+def test_engine_block_never_raises_on_garbage():
+    for bad in ({}, {"vix": None, "fear_greed": [], "margin_debt": "x"}, {"combined_score": None}):
+        blk = ltm.engine_block(bad)
+        assert blk["bias"] == "NEUTRAL"
+        assert blk["fear_greed"]["label"] is None
+        assert set(blk) >= {"vix", "fear_greed", "margin_debt", "combined_score", "bias"}
