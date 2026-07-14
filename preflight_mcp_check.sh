@@ -43,14 +43,33 @@ if [ ! -x "$CLAUDE_BIN" ]; then
     exit 0
 fi
 
-# `claude mcp list` health-checks every server; grep our line.
+# ── Check 1: `claude mcp list` (cheap, but NOT authoritative — see Check 2) ───
 LINE="$("$CLAUDE_BIN" mcp list 2>&1 | grep -i 'robinhood-trading' || true)"
 echo "mcp line: ${LINE:-<absent>}"
 
 if echo "$LINE" | grep -q 'Connected'; then
-    echo "preflight OK — robinhood-trading MCP connected"
+    echo "mcp list says: connected"
 else
-    tg_alert "robinhood-trading MCP is NOT connected (${LINE:-server missing}). Re-authorize it (open Claude app / claude /mcp) before the 10:30 chain, or the snapshot fetch will fail."
+    tg_alert "robinhood-trading MCP is NOT connected (${LINE:-server missing}). Re-authorize before the 10:30 chain: claude mcp login robinhood-trading"
+fi
+
+# ── Check 2: HEADLESS probe — the authoritative one ───────────────────────────
+# `claude mcp list` reports the CONFIGURED/health-checked state and can say
+# "✔ Connected" while a headless `claude -p` run — which is what the chain
+# actually uses — still has NO robinhood tools, because a rejected OAuth refresh
+# token can only be renewed from an INTERACTIVE session. That false green is
+# exactly how the 2026-07-12..14 outage stayed invisible for three days: the
+# preflight was happy while every fetch silently returned UNAVAILABLE.
+# So we ask a real headless session what tools it can actually see.
+PROBE="$("$CLAUDE_BIN" -p 'If you have a tool whose name starts with mcp__robinhood, output exactly READY. Otherwise output exactly NONE. Output one word, nothing else.' \
+    --allowedTools "mcp__robinhood-trading" \
+    --permission-mode acceptEdits 2>&1 | tr -d '[:space:]')"
+echo "headless probe: ${PROBE:-<empty>}"
+
+if echo "$PROBE" | grep -q 'READY'; then
+    echo "preflight OK — robinhood-trading usable from a headless run"
+else
+    tg_alert "robinhood-trading MCP is UNUSABLE from headless \`claude -p\` (the chain's snapshot path) even though mcp list may look connected — the OAuth refresh token was rejected. Fix BEFORE 10:30, from an interactive terminal:  claude mcp login robinhood-trading"
 fi
 
 # Bonus check: DNS to api.robinhood.com (catches the corporate-VPN block, rule #54).
