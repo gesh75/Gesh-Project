@@ -602,8 +602,8 @@ body:not(.role-known) .owner-only { display: none !important; }
 
 <!-- ═══ TOPBAR ═══ -->
 <header class="topbar">
-  <span class="badge" id="modelbook-badge" title="Customer view: all dollar amounts are normalized to a $100K model portfolio — percentages, prices and signals are real; absolute sizing is illustrative." style="display:none;background:rgba(255,184,0,.12);color:#ffb800;border:1px solid rgba(255,184,0,.35)">📊 MODEL PORTFOLIO ($100K)</span>
-  <span class="badge b-cyan" id="model-badge">{{ model }}</span>
+  <span class="badge" id="modelbook-badge" title="Customer view: absolute dollar amounts are normalized to a model portfolio so real account size stays private — percentages, prices, and signals are all real; only the dollar sizing is illustrative." style="display:none;background:rgba(255,184,0,.12);color:#ffb800;border:1px solid rgba(255,184,0,.35)">📊 Illustrative sizing · signals are real</span>
+  <span class="badge b-cyan" id="model-badge" title="Deep analysis runs on {{ model }}">✨ Powered by Claude</span>
   <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
   <span class="ts" id="ts">—</span>
   <a href="/watch" id="watch-link" class="badge b-cyan owner-only" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
