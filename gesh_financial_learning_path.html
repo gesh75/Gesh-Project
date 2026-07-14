@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GESH Financial — Learning Path</title>
+<style>
+  :root{
+    --bg:#0A0E14; --card:#121821; --card2:#161D28; --border:#1E2733;
+    --text:#e2e8f0; --muted:#94a3b8; --dim:#5b6878; --accent:#00d4ff;
+    --green:#00e676; --red:#ff5252; --yellow:#ffb800; --purple:#a78bfa;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f8fb; --card:#fff; --card2:#f0f3f8; --border:#e2e8f0;
+           --text:#0f172a; --muted:#475569; --dim:#94a3b8; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:32px 20px 80px}
+  header{text-align:center;margin-bottom:8px}
+  h1{font-size:30px;margin:0 0 4px;color:var(--accent);letter-spacing:.02em}
+  .sub{color:var(--muted);font-size:15px}
+  .meta{color:var(--dim);font-size:12px;margin-top:6px}
+  .legend{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:20px 0 8px}
+  .pill{font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;text-transform:uppercase;letter-spacing:.05em}
+  .p-new{background:rgba(0,230,118,.14);color:var(--green);border:1px solid rgba(0,230,118,.4)}
+  .p-core{background:rgba(0,212,255,.12);color:var(--accent);border:1px solid rgba(0,212,255,.4)}
+  .p-adv{background:rgba(167,139,250,.14);color:var(--purple);border:1px solid rgba(167,139,250,.4)}
+  nav.toc{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin:24px 0}
+  nav.toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:0 0 10px}
+  nav.toc ol{margin:0;padding-left:22px;columns:2;column-gap:32px}
+  @media (max-width:640px){nav.toc ol{columns:1}}
+  nav.toc a{color:var(--text);text-decoration:none}
+  nav.toc a:hover{color:var(--accent)}
+  .module{background:var(--card);border:1px solid var(--border);border-radius:12px;
+          padding:22px 24px;margin:18px 0;scroll-margin-top:16px}
+  .module h3{margin:0 0 4px;font-size:20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .module .num{color:var(--dim);font-variant-numeric:tabular-nums}
+  .goal{color:var(--muted);font-size:14px;margin:2px 0 14px;font-style:italic}
+  .module h4{margin:16px 0 6px;font-size:14px;color:var(--accent);text-transform:uppercase;letter-spacing:.05em}
+  ul.learn{margin:6px 0;padding-left:20px}
+  ul.learn li{margin:4px 0}
+  code{background:var(--card2);border:1px solid var(--border);border-radius:4px;
+       padding:1px 6px;font:13px/1.4 "SF Mono",ui-monospace,Menlo,monospace;color:var(--accent)}
+  .files{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .file{background:var(--card2);border:1px solid var(--border);border-radius:5px;
+        padding:2px 8px;font:12px/1.4 "SF Mono",ui-monospace,monospace;color:var(--muted)}
+  .try{background:var(--card2);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;
+       padding:10px 14px;margin:12px 0;font-size:14px}
+  .try b{color:var(--accent)}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border)}
+  th{color:var(--dim);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.04em}
+  footer{text-align:center;color:var(--dim);font-size:12px;margin-top:40px;line-height:1.7}
+  .disclaimer{background:var(--card2);border:1px solid var(--border);border-radius:8px;
+              padding:12px 16px;margin-top:24px;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>🎓 GESH Financial — Learning Path</h1>
+  <div class="sub">From "what is a portfolio signal" to running the full AI trading-intelligence stack.</div>
+  <div class="meta">Regenerated 2026-07-14 · reflects the 12-node consensus + customer surface + execution tier</div>
+</header>
+
+<div class="legend">
+  <span class="pill p-core">Core</span>
+  <span class="pill p-adv">Advanced</span>
+  <span class="pill p-new">New (2026)</span>
+</div>
+
+<nav class="toc">
+  <h2>Curriculum</h2>
+  <ol>
+    <li><a href="#m1">Orientation &amp; the two services</a></li>
+    <li><a href="#m2">Live portfolio data</a></li>
+    <li><a href="#m3">Market regime &amp; the macro layer</a></li>
+    <li><a href="#m4">Risk math: Monte Carlo &amp; Kelly</a></li>
+    <li><a href="#m5">The 12-node consensus engine</a></li>
+    <li><a href="#m6">AI analysis &amp; multi-LLM routing</a></li>
+    <li><a href="#m7">Intelligence agents</a></li>
+    <li><a href="#m8">The customer surface (Analyze)</a></li>
+    <li><a href="#m9">Execution tier: intent → gate → paper fill</a></li>
+    <li><a href="#m10">The daily analysis chain &amp; autopilot</a></li>
+    <li><a href="#m11">Proof, billing &amp; going live</a></li>
+  </ol>
+</nav>
+
+<div class="module" id="m1">
+  <h3><span class="num">01</span> Orientation &amp; the two services <span class="pill p-core">Core</span></h3>
+  <div class="goal">Understand what GESH is and how the pieces fit before touching code.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li><b>Port 9000</b> — the product customers pay for: the GESH intelligence dashboard (Analyze, Track Record, Risk, Regime, Kelly, Monte Carlo, SEC/News, Daily Analysis).</li>
+    <li><b>Port 9003</b> — the internal engine: scanner, autopilot, paper execution, win-rate tracker. Customers never see it.</li>
+    <li>The stack: <b>FastAPI + SQLite + yfinance/Robinhood + Anthropic Claude</b> (with Gemini + local Ollama as second opinions).</li>
+    <li>Everything is <b>paper-mode by default</b> — no real orders until weeks of clean paper proof.</li>
+  </ul>
+  <div class="try"><b>Try:</b> open <code>http://localhost:9000</code> (dashboard) and read <code>docs/ARCHITECTURE.md</code> for the container + sequence diagrams.</div>
+  <div class="files"><span class="file">README.md</span><span class="file">CLAUDE.md</span><span class="file">docs/ARCHITECTURE.md</span></div>
+</div>
+
+<div class="module" id="m2">
+  <h3><span class="num">02</span> Live portfolio data <span class="pill p-core">Core</span></h3>
+  <div class="goal">Know where the numbers come from — and which cash figure is safe to size against.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li>Holdings, equity, and watchlist quotes are ingested via <code>robin_stocks</code> (MCP-first, with a robin_stocks fallback).</li>
+    <li><b>Deployable cash</b> = <code>portfolio_cash</code> (settled, unleveraged). NEVER size against <code>buying_power</code> (leveraged margin on Gold) or <code>cash</code> (negative margin figure).</li>
+    <li>Snapshots carry a <code>source</code> tag and an age — a stale/offline snapshot is shown as "Cached", not "Live".</li>
+  </ul>
+  <div class="files"><span class="file">data_fetcher.py</span><span class="file">auth.py</span><span class="file">fetch_live_snapshot.py</span></div>
+</div>
+
+<div class="module" id="m3">
+  <h3><span class="num">03</span> Market regime &amp; the macro layer <span class="pill p-core">Core</span></h3>
+  <div class="goal">Read the weather before you trade: trending vs. ranging, and the macro backdrop.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li><b>Regime</b> = ADX (trend strength) + Bollinger width + RSI → TRENDING / RANGING / etc.</li>
+    <li><b>FRED macro layer</b>: live Fed funds rate, 10Y–2Y yield spread (inversion = recession signal), CPI YoY — injected into every deep-analysis prompt.</li>
+    <li><b>Polymarket</b> prediction-market sentiment blends with news mood for a RISK_ON / RISK_OFF read.</li>
+  </ul>
+  <div class="try"><b>Try:</b> <code>GET /api/regime</code> and <code>GET /api/regime/NVDA</code>. Note the macro block at the top of the summary.</div>
+  <div class="files"><span class="file">regime.py</span><span class="file">news_agent.py</span></div>
+</div>
+
+<div class="module" id="m4">
+  <h3><span class="num">04</span> Risk math: Monte Carlo &amp; Kelly <span class="pill p-adv">Advanced</span></h3>
+  <div class="goal">Quantify "how bad could it get" and "how big should this position be".</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li><b>Monte Carlo</b>: 1000 GBM simulations → median outcome, P5–P95 band, and 95% VaR in real dollars.</li>
+    <li><b>Kelly criterion</b>: optimal position size from edge + odds → ADD / HOLD / TRIM with exact share deltas.</li>
+    <li>Reconciliation rules: when Kelly (sizing) and the AI (valuation) conflict, Kelly wins for <i>size</i>.</li>
+  </ul>
+  <div class="try"><b>Try:</b> <code>POST /api/monte-carlo</code> and <code>POST /api/kelly</code>; watch VaR fall and diversification rise as you spread a book across more names.</div>
+  <div class="files"><span class="file">monte_carlo.py</span><span class="file">kelly.py</span></div>
+</div>
+
+<div class="module" id="m5">
+  <h3><span class="num">05</span> The 12-node consensus engine <span class="pill p-new">New</span></h3>
+  <div class="goal">How GESH turns many independent signals into one verdict + confidence.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li>Each node votes BULLISH / NEUTRAL / BEARISH / ABSTAIN. A regime-conditional weighted tally → verdict + confidence (= active nodes / total).</li>
+    <li>The <b>12th node is <code>LT_Macro</code></b> — a long-term (1–3y) market-wide bias from VIX / Fear&amp;Greed / margin debt.</li>
+    <li>Weighted directional nodes: Rel.Strength, Trend, Volume, Momentum, Fundamentals, Macro, ECG, Analyst, LT_Macro, News. Kelly (sizing) and FFT_Cycle (informational) are surfaced but out of the vote.</li>
+  </ul>
+  <table>
+    <tr><th>Score</th><th>Verdict</th></tr>
+    <tr><td>≥ 0.55</td><td>STRONG BUY / SELL</td></tr>
+    <tr><td>≥ 0.25</td><td>BUY / SELL</td></tr>
+    <tr><td>&lt; 0.25</td><td>HOLD / NEUTRAL</td></tr>
+  </table>
+  <div class="files"><span class="file">consensus.py</span><span class="file">long_term_macro.py</span><span class="file">fft_cycles.py</span></div>
+</div>
+
+<div class="module" id="m6">
+  <h3><span class="num">06</span> AI analysis &amp; multi-LLM routing <span class="pill p-adv">Advanced</span></h3>
+  <div class="goal">How structured prompts become scored, grounded research — without hallucinated prices.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li>Claude is called with a <b>forced tool schema</b> so it must return structured JSON (scores, fair value, risks, verdict) — never free text.</li>
+    <li>Prices are <b>grounded</b>: the real latest quote is passed in so the model can't invent a price. Fair-value % is recomputed deterministically in the UI so it can't flip sign.</li>
+    <li>Model routing: Claude Sonnet (deep) / Haiku (batch), Gemini (contrarian second opinion), Ollama (offline fallback).</li>
+  </ul>
+  <div class="files"><span class="file">ai_analyzer.py</span><span class="file">gemini_agent.py</span><span class="file">ollama_agent.py</span></div>
+</div>
+
+<div class="module" id="m7">
+  <h3><span class="num">07</span> Intelligence agents <span class="pill p-core">Core</span></h3>
+  <div class="goal">The feeds that give the engine an information edge.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li><b>News sentiment</b> (Yahoo RSS + Finnhub + Polymarket macro), <b>SEC EDGAR</b> filing watcher (10-K/10-Q/8-K), <b>fundamental momentum</b> scanner (80+ stocks).</li>
+    <li>Rule: never fabricate sentiment when <code>article_count=0</code>; spread scores realistically across the full range.</li>
+  </ul>
+  <div class="files"><span class="file">news_agent.py</span><span class="file">sec_agent.py</span><span class="file">fundamental_agent.py</span></div>
+</div>
+
+<div class="module" id="m8">
+  <h3><span class="num">08</span> The customer surface (Analyze) <span class="pill p-new">New</span></h3>
+  <div class="goal">The self-serve product: research any ticker + analyze your own book — fully isolated per user.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li><b>Any-ticker research cards</b>: company-name→ticker search, 12-node consensus, momentum (RSI/MACD/Volume), trade setup (support/resistance → entry/stop/target/RR), earnings beat/miss, regime, cycle, fundamentals, analyst, news.</li>
+    <li><b>AI research card</b>: one price-grounded Claude call per symbol / 15 min; degrades honestly to "temporarily unavailable" on an empty response.</li>
+    <li><b>Money masking</b>: a customer's dollars are normalized to a model book so they never see the owner's real account size — % / prices / signals are real, only sizing is illustrative.</li>
+    <li><b>Quotas &amp; tiers</b>: rolling-24h caps on live LLM calls, scaled by tier (observer 1× / trader 2× / desk 5×). Comp a tester with <code>python3 auth_users.py tier &lt;email&gt; desk</code>.</li>
+  </ul>
+  <table>
+    <tr><th>Route</th><th>What</th></tr>
+    <tr><td><code>/api/symbol-search</code></td><td>name → ticker</td></tr>
+    <tr><td><code>/api/momentum/{sym}</code></td><td>RSI+MACD+Volume signal</td></tr>
+    <tr><td><code>/api/levels/{sym}</code></td><td>support/resistance trade setup</td></tr>
+    <tr><td><code>/api/earnings/{sym}</code></td><td>EPS beat/miss history</td></tr>
+    <tr><td><code>/api/analyze-ticker</code></td><td>AI research card (LLM)</td></tr>
+    <tr><td><code>/api/mybook/analyze</code></td><td>full engine on the customer's own book</td></tr>
+  </table>
+  <div class="files"><span class="file">server.py</span><span class="file">symbol_search.py</span><span class="file">momentum_signal.py</span><span class="file">trade_levels.py</span><span class="file">earnings_viz.py</span><span class="file">docs/CUSTOMER_SURFACE.md</span></div>
+</div>
+
+<div class="module" id="m9">
+  <h3><span class="num">09</span> Execution tier: intent → gate → paper fill <span class="pill p-adv">Advanced</span></h3>
+  <div class="goal">How a verdict safely becomes a (simulated) order, with every decision audited.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li>A verdict becomes a typed <code>TradeIntent</code> → the <b>8-gate risk gate</b> (kill-switch → market hours → confidence → position cap → order rate → cash floor → daily loss → data freshness).</li>
+    <li>Every gate verdict (approve/reject) is persisted to <code>risk_decisions</code>; every simulated fill to <code>orders</code> with an idempotency key.</li>
+    <li><b>PAPER_MODE=true</b> is the default and must stay so until the autonomy gate is met.</li>
+  </ul>
+  <div class="files"><span class="file">trading/contract.py</span><span class="file">trading/risk_gate.py</span><span class="file">trading/execution.py</span></div>
+</div>
+
+<div class="module" id="m10">
+  <h3><span class="num">10</span> The daily analysis chain &amp; autopilot <span class="pill p-adv">Advanced</span></h3>
+  <div class="goal">The heartbeat: a deterministic 5-step chain runs every weekday morning.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li>10:30 ET Mon–Fri: snapshot → engines → one Claude deep-analysis → paper/risk-gate audit → HTML report (<code>/report</code>).</li>
+    <li>Autopilot (9003): 08:30 scan → 09:35 execute → 12:30 rebalance → 15:55 EOD stop-loss sweep.</li>
+    <li>The chain is <b>deterministic</b>: never hand-run engines or hand-edit the report.</li>
+  </ul>
+  <div class="files"><span class="file">run_daily_analysis.sh</span><span class="file">run_engines2.py</span><span class="file">trading/autopilot.py</span></div>
+</div>
+
+<div class="module" id="m11">
+  <h3><span class="num">11</span> Proof, billing &amp; going live <span class="pill p-new">New</span></h3>
+  <div class="goal">Turn accumulated paper win-rate into the sales proof and a paid product.</div>
+  <h4>Learn</h4>
+  <ul class="learn">
+    <li><b>/track-record</b> — the public signal-accuracy proof page (timestamped ledger, all losses visible, SPY benchmark). Never paywalled.</li>
+    <li><b>Autonomy gate</b> for live Alpaca trading: ≥30 closed paper trades · win-rate ≥55% · Sharpe ≥0.5 · max drawdown &lt;10%.</li>
+    <li><b>Billing</b>: Lemon Squeezy webhook → provision/revoke + set tier; magic-link onboarding.</li>
+  </ul>
+  <div class="files"><span class="file">proof_page.py</span><span class="file">billing.py</span><span class="file">trading/tracker.py</span></div>
+</div>
+
+<div class="disclaimer">
+  <b>Disclaimer.</b> GESH Financial is for informational and educational purposes only — not financial advice.
+  All trading decisions remain the user's responsibility. Paper mode is the default; never flip to live
+  execution without weeks of paper validation.
+</div>
+
+<footer>
+  GESH Financial — Learning Path · generated from the live codebase 2026-07-14<br>
+  Deep-dive references: <code>docs/ARCHITECTURE.md</code> · <code>docs/CUSTOMER_SURFACE.md</code> · <code>GAPS_AND_IMPROVEMENTS_2026-07-09.md</code>
+</footer>
+</div>
+</body>
+</html>
