@@ -2029,6 +2029,20 @@ def fundamentals_symbol(symbol: str):
             row = rows[0] if rows and not rows[0].get("error") else None
         if not row:
             raise HTTPException(status_code=404, detail="No fundamentals")
+        # Cross-source sanity: the 52-wk range here is RH-sourced; compare it to the
+        # (differently-sourced) price feed. A price implausibly outside the band flags
+        # a whole-series feed error the median bad-tick guard can't see (e.g. NFLX
+        # ~$73 vs a ~$500+ low). _cached_close is the shared 5-min cache — cheap.
+        try:
+            import price_sanity
+            px = _cached_close(sym)
+            suspect, reason = price_sanity.is_price_suspect(
+                px, row.get("low_52"), row.get("high_52"))
+            if suspect:
+                row["price_suspect"] = True
+                row["price_suspect_reason"] = reason
+        except Exception:  # noqa: BLE001 — advisory flag must never break the card
+            pass
         return _ticker_get_store("fundamentals", sym, {"status": "ok", "data": row})
     except HTTPException:
         raise

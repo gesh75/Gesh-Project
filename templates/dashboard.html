@@ -2747,6 +2747,13 @@ function buildRangeRow(low,high){
   if(low<=0||low>=high||high/low>5) return '';
   return buildRow('52-wk range', '$'+low+' – $'+high);
 }
+// Cross-source price-sanity warning (server sets price_suspect when the quote is
+// implausibly outside the RH 52-wk range — a whole-series feed error). build*-named
+// + daEsc so the guard trusts it.
+function buildSuspectBadge(reason){
+  if(!reason) return '';
+  return `<div style="background:rgba(255,184,0,.12);border:1px solid rgba(255,184,0,.4);border-radius:6px;padding:7px 10px;margin:2px 0 8px;font-size:12px;color:var(--yellow)">⚠ Price may be unreliable — ${daEsc(reason)}</div>`;
+}
 
 // ── Company-name → ticker typeahead (Analyze box) ─────────────────────────────
 let _symSearchTimer=null;
@@ -2883,7 +2890,7 @@ async function analyzeTicker(raw){
         <div class="card"><div style="${T}">Price Cycle (FFT)</div>
           ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
         <div class="card"><div style="${T}">Fundamentals</div>
-          ${fu?buildPERow(fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu?buildRangeRow(fu.low_52,fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
+          ${fu&&fu.price_suspect?buildSuspectBadge(fu.price_suspect_reason):''}${fu?buildPERow(fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu?buildRangeRow(fu.low_52,fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
         <div class="card"><div style="${T}">Analyst Ratings</div>
           ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', an.num_buy+' / '+an.num_hold+' / '+an.num_sell):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+an.target_mean):''}${an&&an.upside_pct!=null?buildRow('Upside', an.upside_pct+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?an.num_analysts:'—')}</div>
       </div>
