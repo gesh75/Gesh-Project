@@ -7,6 +7,7 @@ Deterministic on synthetic OHLCV — pivots, swing structure, and the long setup
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 from starlette.testclient import TestClient
 
@@ -106,8 +107,6 @@ def test_normal_setup_is_actionable():
 # ── Codex #1: OHLC bars stay row-aligned when the download has a lone NaN ────────
 
 def test_ohlc_joint_alignment_on_download(monkeypatch):
-    import pandas as pd
-    import trade_levels as _tl
     n = 40
     idx = pd.RangeIndex(n)
     close = pd.Series(np.linspace(90.0, 100.0, n), index=idx)
@@ -121,7 +120,7 @@ def test_ohlc_joint_alignment_on_download(monkeypatch):
         def yf_download(*a, **k):
             return frame
     monkeypatch.setitem(__import__("sys").modules, "price_source", _PS)
-    out = _tl.compute("TEST")
+    out = tl.compute("TEST")
     # joint dropna removes ONLY row 5 from all three → still coherent + aligned
     assert out["available"] is True
     assert out["setup"]["stop"] < out["setup"]["entry"] < out["setup"]["target"]
@@ -173,7 +172,6 @@ def test_levels_endpoint_entry_binds_to_latest_close(client, monkeypatch):
     class _PS:
         @staticmethod
         def yf_download(*a, **k):
-            import pandas as pd
             n = 40
             close = np.linspace(380.0, 396.18, n)   # 6mo last bar = 396.18
             return pd.DataFrame({"Close": close, "High": close + 1, "Low": close - 1})
