@@ -2200,6 +2200,23 @@ def _ticker_card_store(sym: str, card: dict) -> None:
                 del _ticker_card_flight[k]
 
 
+def _price_quality(sym: str, price) -> tuple[bool, str]:
+    """(suspect, reason) — cross-check a grounding price against the symbol's 52-wk
+    range (RH fundamentals — a DIFFERENT feed than the price). Codex #3: so a
+    whole-series feed error doesn't silently drive the AI card / valuation while it's
+    only flagged for display on the fundamentals card. Advisory; (False, "") on error."""
+    try:
+        import price_sanity
+        cached = _ticker_get_cached("fundamentals", sym)
+        row = (cached or {}).get("data") if cached else None
+        if not row:
+            import market_data
+            row = market_data.rh_fundamentals(sym) or {}
+        return price_sanity.is_price_suspect(price, row.get("low_52"), row.get("high_52"))
+    except Exception:  # noqa: BLE001 — advisory flag, never break the card
+        return False, ""
+
+
 @app.post("/api/analyze-ticker", dependencies=[Depends(require_customer_or_owner)])
 async def analyze_ticker_endpoint(request: Request):
     """Rich single-ticker AI research card for ANY ticker — the customer-facing,
@@ -2242,6 +2259,12 @@ async def analyze_ticker_endpoint(request: Request):
             if price is None:
                 raise HTTPException(status_code=404, detail="No market data for this ticker")
             card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
+            # Mark the DECISION output when the grounding quote is cross-source-suspect
+            # (Codex #3) — the card was built on this price, so the user must see it.
+            suspect, reason = await asyncio.to_thread(_price_quality, sym, price)
+            if suspect and isinstance(card, dict):
+                card["price_suspect"] = True
+                card["price_suspect_reason"] = reason
             _ticker_card_store(sym, card)
             auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card}

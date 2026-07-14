@@ -66,3 +66,25 @@ def test_fundamentals_endpoint_no_flag_when_price_normal(client, monkeypatch):
     monkeypatch.setattr(server, "_cached_close", lambda s: 103.12)
     r = c.get("/api/fundamentals/INTC")
     assert r.json()["data"].get("price_suspect") is None
+
+
+# ── Codex #3: the AI decision output (analyze-ticker card) is marked, not just display ──
+
+def test_analyze_ticker_marks_suspect_price(monkeypatch):
+    import server
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
+    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    monkeypatch.setattr(server, "_latest_close", lambda sym: 73.83)          # broken NFLX-style feed
+    monkeypatch.setattr(server, "deep_analyze_ticker",
+                        lambda sym, current_price=None, regime_context=None: {
+                            "symbol": sym, "verdict": "HOLD", "scores": {"valuation": 40}, "fair_value": {}})
+    import market_data
+    monkeypatch.setattr(market_data, "rh_fundamentals",
+                        lambda s: {"low_52": 500.0, "high_52": 1200.0}, raising=False)
+    c = TestClient(server.app, raise_server_exceptions=False)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    r = c.post("/api/analyze-ticker", json={"symbol": "NFLX"})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data.get("price_suspect") is True and data.get("price_suspect_reason")
