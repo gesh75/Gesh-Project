@@ -218,3 +218,14 @@ def test_render_empty_states(tmp_path):
     html = watch_view.render_watch_html(d)
     assert "No open positions" in html
     assert "No closed trades" in html
+
+
+def test_render_neutralises_script_breakout():
+    # A value carrying "</script>" in the server-rendered initial-paint payload MUST
+    # NOT terminate the <script> block (parity with invest_view's neutralisation).
+    d = {"autonomy": {"closed": 0, "required": 30},
+         "positions": [{"symbol": "A</script><script>evil()</script>"}],
+         "closes": [], "activity": []}
+    html = watch_view.render_watch_html(d)
+    assert "evil()</script>" not in html      # raw break-out neutralised…
+    assert "<\\/script>" in html              # …to the escaped form

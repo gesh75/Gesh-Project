@@ -364,7 +364,10 @@ def render_watch_html(data: dict[str, Any]) -> str:
     """Self-contained dark-theme /watch page: server-rendered initial paint + a 12s
     fetch() poll that rebuilds the three panels and stat strip client-side."""
     import json
-    payload = json.dumps(data)
+    # Neutralise '</' so no data value (a symbol, signal_reason, source, …) can break
+    # out of the <script> tag that inlines this initial-paint payload — matches the
+    # convention in invest_view.render_invest_html (defense in depth on an owner page).
+    payload = json.dumps(data).replace("</", "<\\/")
     _auto = data.get("autonomy", {})
     _count = _auto.get("engine_closes")
     if _count is None:
