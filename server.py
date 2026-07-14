@@ -306,6 +306,7 @@ def _login_clear(ip: str, email: str) -> None:
 
 
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
+import fair_value                       # canonical fair-value % (Codex #2)
 from auth import login, logout
 from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
@@ -1639,7 +1640,7 @@ def kelly_endpoint():
                     for ha in holdings_analysis:
                         ai_verdicts[ha["symbol"]] = {
                             "verdict": ha.get("verdict"),
-                            "pct_diff": ha.get("fair_value", {}).get("pct_diff", 0)
+                            "pct_diff": fair_value.canonical_pct_diff(ha.get("fair_value")),  # canonical, not the model pct_diff (Codex #2)
                         }
         except Exception as err:
             print(f"Failed to fetch AI verdicts for Kelly: {err}")
@@ -2511,7 +2512,7 @@ def _run_book_engines(payload: dict) -> dict:
         if ha.get("symbol"):
             ai_verdicts[ha["symbol"]] = {
                 "verdict": ha.get("verdict"),
-                "pct_diff": (ha.get("fair_value") or {}).get("pct_diff", 0),
+                "pct_diff": fair_value.canonical_pct_diff(ha.get("fair_value")),  # canonical (Codex #2)
             }
     try:
         mc = run_monte_carlo(payload["holdings"], payload["equity_summary"])
