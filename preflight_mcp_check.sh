@@ -8,6 +8,11 @@
 set -u
 # Rule #55: launchd PATH omits Homebrew — claude lives in /opt/homebrew/bin.
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Rule #56: claude keeps its OAuth token in the macOS Keychain and needs USER set
+# to read it. Without USER this check REPORTS A FALSE "not connected" and pages
+# Georgi for an outage that isn't real (and the chain's own fetch fails for the
+# same reason). Verified 2026-07-14. Keep in sync with fetch_snapshot_mcp.sh.
+export USER="${USER:-$(id -un)}"
 
 GP="$(cd "$(dirname "$0")" && pwd)"
 GPT="${GESH_TRADING_HOME:-$(dirname "$GP")/gesh-project-trading}"
