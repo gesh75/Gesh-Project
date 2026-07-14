@@ -53,6 +53,9 @@ def compute(symbol: str, close=None, high=None, low=None) -> dict:
 
         price = float(close[-1])
         h, low_bar, c = float(high[-1]), float(low[-1]), price
+        if not np.isfinite([price, h, low_bar]).all():
+            return {"available": False, "reason": "non-finite price data"}
+        entry = round(price, 2)
 
         # ── classic floor-trader pivots (from the last completed bar) ──────────
         p = (h + low_bar + c) / 3.0
@@ -64,16 +67,18 @@ def compute(symbol: str, close=None, high=None, low=None) -> dict:
         window_hi = float(np.max(high[-60:])) if len(high) >= 60 else float(np.max(high))
         window_lo = float(np.min(low[-60:])) if len(low) >= 60 else float(np.min(low))
 
-        # candidate support = levels BELOW price; resistance = levels ABOVE price
-        supports = sorted({round(x, 2) for x in ([s1, s2, window_lo] + sw_lows) if x < price},
+        # candidate support = levels BELOW entry; resistance = ABOVE entry. Round to the
+        # DISPLAY precision (2dp) BEFORE comparing to entry, so a level within half a cent
+        # of price can't round to == entry and surface as "support at the current price"
+        # (or a resistance rounding down to == entry, which would make target == entry).
+        supports = sorted({rx for rx in (round(x, 2) for x in ([s1, s2, window_lo] + sw_lows)) if rx < entry},
                           reverse=True)
-        resistances = sorted({round(x, 2) for x in ([r1, r2, window_hi] + sw_highs) if x > price})
+        resistances = sorted({rx for rx in (round(x, 2) for x in ([r1, r2, window_hi] + sw_highs)) if rx > entry})
 
-        nearest_support = supports[0] if supports else round(price * 0.95, 2)
-        nearest_resistance = resistances[0] if resistances else round(price * 1.05, 2)
+        nearest_support = supports[0] if supports else round(entry * 0.95, 2)
+        nearest_resistance = resistances[0] if resistances else round(entry * 1.05, 2)
 
         # ── long trade setup ──────────────────────────────────────────────────
-        entry = round(price, 2)
         stop = round(nearest_support * (1 - _STOP_BUFFER), 2)
         target = round(nearest_resistance, 2)
         risk = entry - stop
