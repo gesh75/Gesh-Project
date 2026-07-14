@@ -96,8 +96,12 @@ def _as(server, monkeypatch, email):
 
 _ANALYSIS = {"portfolio_score": 71, "portfolio_verdict": "HOLD", "portfolio_type": "Growth",
              "risk_score": 55, "diversification_score": 40, "market_context": "test",
+             # fair_value carries estimate+current (the real schema, ai_analyzer.py):
+             # Kelly's pct_diff is now the CANONICAL (estimate-current)/|current|*100,
+             # = (91.8-100)/100*100 = -8.2 — NOT the model's own pct_diff field (Codex #2).
              "holdings_analysis": [{"symbol": "NVDA", "verdict": "TRIM",
-                                    "fair_value": {"pct_diff": -8.2}}],
+                                    "fair_value": {"estimate": 91.8, "current": 100.0,
+                                                   "status": "OVERVALUED", "pct_diff": 999.0}}],
              "portfolio_risks": []}
 
 

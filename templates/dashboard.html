@@ -2923,6 +2923,7 @@ function buildAICard(h){
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
   return `<div class="card" style="margin-bottom:16px">
     <div style="${T}">🧠 AI Research — ${daEsc(h.symbol||'')}</div>
+    ${h.price_suspect?buildSuspectBadge((h.price_suspect_reason||'')+' — this analysis was built on that quote, treat it with caution'):''}
     <div class="da-holding" style="border:none;padding:0;margin:0">
       <div class="hdr">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">

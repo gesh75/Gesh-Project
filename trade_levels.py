@@ -55,6 +55,8 @@ def compute(symbol: str, close=None, high=None, low=None) -> dict:
         h, low_bar, c = float(high[-1]), float(low[-1]), price
         if not np.isfinite([price, h, low_bar]).all():
             return {"available": False, "reason": "non-finite price data"}
+        if price <= 0:
+            return {"available": False, "reason": "non-positive price"}
         entry = round(price, 2)
 
         # ── classic floor-trader pivots (from the last completed bar) ──────────
@@ -81,6 +83,13 @@ def compute(symbol: str, close=None, high=None, low=None) -> dict:
         # ── long trade setup ──────────────────────────────────────────────────
         stop = round(nearest_support * (1 - _STOP_BUFFER), 2)
         target = round(nearest_resistance, 2)
+        # Invariant: a coherent long setup requires stop < entry < target. At 2dp
+        # the levels can collapse to equality for a sub-dollar / penny price (e.g.
+        # entry $0.01 → stop/target also round to $0.01). Rather than emit a
+        # degenerate setup (RR undefined / stop == entry), report unavailable.
+        if not (stop < entry < target):
+            return {"available": False,
+                    "reason": "no coherent setup at this price precision (levels collapse at 2dp)"}
         risk = entry - stop
         reward = target - entry
         rr = round(reward / risk, 2) if risk > 0 else None

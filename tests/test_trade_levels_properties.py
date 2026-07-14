@@ -64,3 +64,40 @@ def test_never_raises_on_garbage():
     for bad in (np.array([]), np.array([np.nan] * 50), np.array([100.0])):
         out = tl.compute("x", close=bad, high=bad, low=bad)
         assert out["available"] is False
+
+
+def test_non_positive_prices_are_unavailable():
+    # Codex finding #4: negative / zero prices must NOT produce a setup.
+    for px in (-10.0, -0.5, 0.0):
+        c = np.full(40, px)
+        h = np.full(40, px + 1.0)
+        lo = np.full(40, px - 1.0)
+        out = tl.compute("x", close=c, high=h, low=lo)
+        assert out["available"] is False
+
+
+def test_penny_price_collapse_is_unavailable():
+    # $0.01 → every level rounds to 0.01 at 2dp; must report unavailable, not a
+    # degenerate entry==stop==target setup.
+    for px in (0.01, 0.02, 0.03):
+        c = np.full(40, px)
+        h = np.full(40, px + 0.001)
+        lo = np.full(40, px - 0.001)
+        out = tl.compute("x", close=c, high=h, low=lo)
+        assert out["available"] is False
+
+
+def test_setup_ordering_strict_on_random_pennyish_range():
+    # For any AVAILABLE setup (incl. low-priced names that survive), enforce the
+    # strict invariant — never entry==stop or entry==target.
+    rng = np.random.default_rng(11)
+    for _ in range(300):
+        base = float(rng.uniform(0.5, 8.0))          # cheap-but-tradeable range
+        c = base + np.cumsum(rng.normal(0, 0.05, 60))
+        c = np.clip(c, 0.05, None)
+        h = c + np.abs(rng.normal(0, 0.05, 60)) + 0.01
+        lo = np.clip(c - np.abs(rng.normal(0, 0.05, 60)) - 0.01, 0.01, None)
+        out = tl.compute("x", close=c, high=h, low=lo)
+        if out["available"]:
+            s = out["setup"]
+            assert s["stop"] < s["entry"] < s["target"]

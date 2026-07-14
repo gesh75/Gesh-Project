@@ -21,6 +21,7 @@ Final: score = sum(votes) / len(voting nodes)
 """
 
 from __future__ import annotations
+import os
 import sqlite3, json, numpy as np
 from datetime import datetime, timedelta, timezone
 import yfinance as yf
@@ -539,8 +540,16 @@ def run_consensus_holding(
     active_count = 0
     abstains = 0
 
+    # LT_Macro is DISPLAY-ONLY by default (Codex #5 / decision doc): it applies a
+    # market-wide tilt to every ticker and has no walk-forward validation yet, so it
+    # is excluded from the weighted tally + confidence denominator unless explicitly
+    # enabled via GESH_LT_MACRO_VOTING. Its vote is still computed and returned in
+    # `votes` for the dashboard card. Flip the env flag on only after validation.
+    _skip = {"Kelly", "FFT_Cycle"}
+    if os.getenv("GESH_LT_MACRO_VOTING", "").strip().lower() not in ("1", "true", "yes", "on"):
+        _skip.add("LT_Macro")
     for node, vote in votes.items():
-        if node in ("Kelly", "FFT_Cycle"):
+        if node in _skip:
             continue
         w = NODE_WEIGHTS.get(node, 1.0)
         if vote is None:

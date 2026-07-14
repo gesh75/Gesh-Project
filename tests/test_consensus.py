@@ -195,8 +195,10 @@ def test_vote_tally_counts(monkeypatch):
     assert res["bullish"] == 2
     assert res["bearish"] == 1
     assert res["neutral"] == 3          # Momentum, Fundamentals, ECG
-    assert res["abstains"] == 4         # Analyst, News + Macro + LT_Macro (pinned ABSTAIN)
-    assert res["active_nodes"] == 6     # 8 controlled nodes - 2 abstains (Macro + LT_Macro excluded)
+    # LT_Macro is DISPLAY-ONLY by default (Codex #5) — excluded from the tally
+    # counters entirely (like Kelly/FFT), so it is NOT counted as an abstain.
+    assert res["abstains"] == 3         # Analyst, News + Macro (pinned ABSTAIN)
+    assert res["active_nodes"] == 6     # 8 controlled nodes - 2 abstains (Analyst, News)
     # Kelly + FFT are reported but excluded from the directional tally.
     assert "Kelly" in res["votes"]
     assert "FFT_Cycle" in res["votes"]
