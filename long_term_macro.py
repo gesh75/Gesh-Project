@@ -369,12 +369,20 @@ def get_long_term_macro_sentiment() -> Dict[str, Any]:
     # Normalize to -1 to +1 range roughly
     norm = max(min(total / 3.0, 1.0), -1.0)
 
+    # Availability: each sub-score returns level=None ("no data") when its source is
+    # down. If VIX and F&G are BOTH unavailable the macro read is not real — the
+    # consensus node must ABSTAIN (None), not cast a neutral 0 that dilutes the tally
+    # (Codex #5). margin_debt alone is too weak to stand as the sole live source.
+    sources_live = [vix.get("level") is not None, fg.get("level") is not None]
+
     return {
         "vix": vix,
         "fear_greed": fg,
         "margin_debt": md,
         "combined_score": round(norm, 2),
         "bias": "BULLISH" if norm > 0.3 else "BEARISH" if norm < -0.3 else "NEUTRAL",
+        "available": any(sources_live),
+        "sources_live": sum(1 for x in sources_live if x),
         "fetched_at": datetime.utcnow().isoformat(),
     }
 
@@ -456,8 +464,12 @@ def node_long_term_macro(symbol: str = None) -> tuple[int | None, str]:
     Can be called as a new node or blended into existing MACRO node.
     """
     sent = get_long_term_macro_sentiment()
-    score = sent["combined_score"]
     detail = f"VIX={sent['vix']['detail']}; FG={sent['fear_greed']['detail']}; MD={sent['margin_debt']['detail']}"
+    # Abstain (None) when the macro data is unavailable — a missing read must NOT count
+    # as a neutral vote in the consensus denominator (Codex #5).
+    if not sent.get("available", True):
+        return None, f"LT-Macro unavailable (no live sources) — {detail}"
+    score = sent["combined_score"]
     if score > 0.3:
         return 1, detail  # BULLISH tilt for long-term
     if score < -0.3:

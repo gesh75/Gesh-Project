@@ -207,3 +207,30 @@ def test_fear_greed_418_returns_none_not_stale(monkeypatch, tmp_path):
     monkeypatch.setattr(ltm, "F_G_CACHE", tmp_path / "fg.json")
     monkeypatch.setattr(ltm.requests, "get", lambda *a, **k: _Resp(418))
     assert ltm.fetch_fear_greed() is None
+
+
+# ── Codex #5: abstain on unavailable + availability flag ──────────────────────
+
+def test_node_abstains_when_unavailable(monkeypatch):
+    # A missing macro read must be an ABSTENTION (None), not a neutral 0 vote that
+    # dilutes the consensus denominator.
+    monkeypatch.setattr(ltm, "get_long_term_macro_sentiment",
+                        lambda: {**_SENT, "combined_score": 0.55, "available": False})
+    vote, detail = ltm.node_long_term_macro("AAPL")
+    assert vote is None
+    assert "unavailable" in detail.lower()
+
+
+def test_sentiment_available_flag_tracks_live_sources(monkeypatch):
+    monkeypatch.setattr(ltm, "fetch_vix", lambda period="1y": None)
+    monkeypatch.setattr(ltm, "fetch_fear_greed", lambda: None)
+    monkeypatch.setattr(ltm, "fetch_margin_debt", lambda: None)
+    monkeypatch.setattr(ltm, "vix_regime_score", lambda s: {"score": 0, "detail": "VIX no data", "level": None})
+    monkeypatch.setattr(ltm, "fear_greed_score", lambda d: {"score": 0, "detail": "F&G no data", "level": None})
+    monkeypatch.setattr(ltm, "margin_debt_score", lambda m: {"score": 0, "detail": "MD unavailable"})
+    out = ltm.get_long_term_macro_sentiment()
+    assert out["available"] is False and out["sources_live"] == 0
+
+    monkeypatch.setattr(ltm, "vix_regime_score", lambda s: {"score": 1, "detail": "VIX 15", "level": 15.0})
+    out2 = ltm.get_long_term_macro_sentiment()
+    assert out2["available"] is True and out2["sources_live"] >= 1
