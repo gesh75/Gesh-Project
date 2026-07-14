@@ -267,3 +267,84 @@ This analysis is actionable. Prioritize Phase 0 items immediately. The foundatio
 **Final confirmation (last background task):** ~/Projects/Git is empty (only .DS_Store). No .git directories under paths containing /Git/ add new active gesh work. Gesh mentions in *.md files under Projects are the expected core docs + attribution in other gesh75 projects. All broad "check all the gits + all the local" scans the user surfaced are now fully processed and consistent.
 
 *Analysis performed by Grok (xAI) — focused on product excellence, safety, and engineering rigor.*
+
+---
+
+# 2026-07-14 — State Update: "Where we are now" (post-customer-surface + audit-hardening)
+
+This section brings the living roadmap current. It records what shipped **since the
+2026-07-09 review**, where the long-term features stand, and what's still open. It is
+the answer to "no new doc on the long terms / where are we now."
+
+## What shipped since 2026-07-09
+
+### Customer surface — the self-serve product (the *Analyze* tab)
+The dashboard is no longer just "view the owner's research." A per-user, money-masked
+customer surface now lets any logged-in user research any ticker and analyze their own book:
+
+| Capability | Route(s) | LLM? |
+|---|---|---|
+| Company-name → ticker search (RH primary, curated fallback; megacaps win name ties) | `/api/symbol-search` | no |
+| 12-node consensus card (LT_Macro is the 12th node) | `/api/consensus/{sym}` | no |
+| Momentum signal — RSI + MACD + Volume → BUY/SELL/NEUTRAL | `/api/momentum/{sym}` | no |
+| Trade setup — support/resistance (pivots + fractal swings) → entry/stop/target/RR | `/api/levels/{sym}` | no |
+| Earnings — EPS beat/miss + surprise % (Finnhub primary, yfinance fallback) | `/api/earnings/{sym}` | no |
+| Regime / cycle / fundamentals / analyst / news cards | per-ticker GETs | no |
+| AI research card — price-grounded, one Claude call/symbol/15 min | `/api/analyze-ticker` | **yes** |
+| Per-user watchlist + portfolio book; full engine run on the customer's own book | `/api/watchlist`, `/api/mybook`, `/api/mybook/analyze` | mixed |
+
+All customer dollar amounts are normalized to a model book (`_MODEL_BOOK_USD`,
+`CUSTOMER_MODEL_BOOK_USD`) so a customer never sees the owner's real account size —
+percentages, prices, and signals are real; only absolute sizing is illustrative. Full
+runbook: `docs/CUSTOMER_SURFACE.md`.
+
+### Engine
+- **LT_Macro node** added to the consensus engine (12th surfaced node; 1–3y market-wide
+  bias from VIX / Fear&Greed / margin debt). Weighted directional tally is 10 nodes;
+  Kelly (sizing) and FFT_Cycle (informational) are surfaced but out of the vote.
+
+### Data-quality & resilience hardening (from Nikolai's live audit, 2026-07-14)
+- **Canonical fair-value %** — recomputed deterministically from estimate+current so the
+  same stock can't read +88% on one surface and −47% on another.
+- **Fundamentals guards** — negative trailing P/E renders "N/M (trailing loss)";
+  implausible 52-wk ranges (split-mismatched upstream) are suppressed, not shown.
+- **Price bad-tick guard** — a single outlier close (observed NVDA $17.16 flash) is
+  rejected against the recent-20 median before it can poison book valuation / Kelly.
+- **AI card honest degrade** — an empty/degenerate model response shows "temporarily
+  unavailable" instead of a misleading all-zeros research card.
+
+### UX / honesty
+- Offline snapshots now say so ("offline — ↻ shows the latest snapshot, not live prices");
+  Refresh no longer implies a live pull it can't deliver.
+- Tab switches reset scroll to top (fixed the Risk tab blank-viewport quirk).
+- Header badges are customer-facing: "✨ Powered by Claude" (model in tooltip) and
+  "📊 Illustrative sizing · signals are real" (masking base in tooltip).
+- Tier admin CLI: `python3 auth_users.py tier <email> <observer|trader|desk>` to comp a
+  tester to higher LLM quotas (1× / 2× / 5×).
+
+## Long-term features — status
+
+| Feature | Status |
+|---|---|
+| FRED macro layer in regime prompts | ✅ live |
+| Polymarket macro sentiment blend | ✅ live |
+| Gemini multi-LLM second opinions | ✅ live |
+| LT_Macro long-term (1–3y) consensus node | ✅ live (2026-07) |
+| Customer self-serve research + book analysis | ✅ live (2026-07) |
+| Billing (Lemon Squeezy) + tiers + quotas | ✅ live |
+| Autonomy gate → live Alpaca trading | ⏳ accumulating paper proof (0 closed vs. ≥30 needed) |
+| gesh-core extraction (kill 46-module duplication) | 🚧 phase 3 in progress |
+| Data-source resilience layer (multi-provider, circuit breakers) | 🚧 partial (bad-tick guard added; full abstraction open) |
+| Production deploy story (Docker, health, observability) | ❌ open |
+
+## Still open (carried from the 2026-07-09 top-5, unchanged priority)
+1. Complete gesh-core extraction + make the private dependency reliable.
+2. Raise real test coverage to 70–80% with property-based + Monte-Carlo harness tests.
+3. Data-source abstraction + resilience (multi-provider, circuit breakers, strong freshness).
+4. Production-grade deployment (Docker, health, observability) + clear self-host/hosted path.
+5. Bulletproof autonomy proof (tracker accuracy) + polished customer surfaces + onboarding.
+
+## Cross-repo note
+The `gesh-project-trading` repo (port 9003 engine, `GESH_PROJECT_DOCS.html`,
+`GESH_MONETIZATION_REPORT.html`) and the local `gesh_financial_learning_path.html` are
+**separate from this repo** and are NOT updated by this section — they need their own pass.
