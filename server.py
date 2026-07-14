@@ -1968,8 +1968,14 @@ def levels_symbol(symbol: str):
         return cached
     try:
         import trade_levels
+        # Bind the trade-setup ENTRY (and the header quote) to the SAME canonical
+        # quote the chart / AI card / portfolio table use (_latest_close — the
+        # bad-tick-guarded 1mo last close), instead of trade_levels' independent 6mo
+        # last bar. This eliminates the "$396.18 vs $394.76" divergence (GESH-1).
+        # On a data outage _latest_close is None → compute falls back to its own series.
+        px = _latest_close(sym)
         return _ticker_get_store("levels", sym,
-                                 {"status": "ok", "data": trade_levels.compute(sym)})
+                                 {"status": "ok", "data": trade_levels.compute(sym, current_price=px)})
     except Exception as e:
         raise _server_error(e)
 

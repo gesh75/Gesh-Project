@@ -2857,10 +2857,14 @@ async function analyzeTicker(raw){
     let levHtml='';
     if(lv&&lv.available){
       const st=lv.setup||{};
+      // Default-true so cached payloads from before this deploy (which lack the key)
+      // still render normally; the 5-min cache self-heals to the real flag (GESH-2).
+      const actionable=st.actionable!==false;
       const sup=(lv.support||[]).map(x=>'$'+daEsc(x)).join(' · ')||'—';
       const res=(lv.resistance||[]).map(x=>'$'+daEsc(x)).join(' · ')||'—';
-      const rrColor=(st.risk_reward!=null&&st.risk_reward>=2)?'var(--green)':(st.risk_reward!=null&&st.risk_reward<1)?'var(--red)':'var(--yellow)';
+      const rrColor=!actionable?'var(--red)':(st.risk_reward!=null&&st.risk_reward>=2)?'var(--green)':(st.risk_reward!=null&&st.risk_reward<1)?'var(--red)':'var(--yellow)';
       levHtml=`<div class="card" style="height:100%;margin:0"><div style="${T}">🎯 Trade Setup <span style="color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0">support · resistance · stop</span></div>
+        ${!actionable?`<div style="border:1px solid var(--red);border-radius:6px;padding:8px 10px;margin-bottom:10px;color:var(--red);font-size:12px;line-height:1.5">⚠ No actionable setup at current levels. ${daEsc(st.warning||'Reward:risk is below the minimum threshold.')}</div>`:''}
         ${buildRow('Resistance (above)', res)}${buildRow('Support (below)', sup)}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin:12px 0">
           <div style="background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">ENTRY</div><div style="font-size:17px;font-weight:700">$${daEsc(st.entry)}</div></div>
