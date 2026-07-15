@@ -88,3 +88,100 @@ def test_analyze_ticker_marks_suspect_price(monkeypatch):
     assert r.status_code == 200
     data = r.json()["data"]
     assert data.get("price_suspect") is True and data.get("price_suspect_reason")
+
+
+# ── Codex #3 follow-up: opt-in STRICT mode blocks decisions on suspect quotes ────
+# Default (env unset) stays warn-only — byte-identical to the behavior above.
+
+def test_strict_reject_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("GESH_REJECT_SUSPECT_PRICES", raising=False)
+    assert ps.strict_reject_enabled() is False
+
+
+@pytest.mark.parametrize("val,expected", [
+    ("1", True), ("true", True), ("TRUE", True), ("yes", True), ("on", True),
+    ("0", False), ("false", False), ("", False), ("nope", False),
+])
+def test_strict_reject_env_parsing(monkeypatch, val, expected):
+    monkeypatch.setenv("GESH_REJECT_SUSPECT_PRICES", val)
+    assert ps.strict_reject_enabled() is expected
+
+
+def _suspect_client(monkeypatch, spend_counter):
+    import market_data
+    import server
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
+    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    monkeypatch.setattr(server, "_latest_close", lambda sym: 73.83)      # broken feed
+    monkeypatch.setattr(market_data, "rh_fundamentals",
+                        lambda s: {"low_52": 500.0, "high_52": 1200.0}, raising=False)
+
+    def _spend(sym, current_price=None, regime_context=None):
+        spend_counter["n"] += 1
+        return {"symbol": sym, "verdict": "HOLD", "scores": {"valuation": 40}, "fair_value": {}}
+    monkeypatch.setattr(server, "deep_analyze_ticker", _spend)
+    c = TestClient(server.app, raise_server_exceptions=False)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    return c
+
+
+def test_strict_mode_blocks_ai_card_on_suspect_price_before_spend(monkeypatch):
+    """GESH_REJECT_SUSPECT_PRICES=1 → 422 and NO Claude call (the check moves ahead
+    of the spend, so a broken feed costs nothing and produces no decision)."""
+    monkeypatch.setenv("GESH_REJECT_SUSPECT_PRICES", "1")
+    spend = {"n": 0}
+    c = _suspect_client(monkeypatch, spend)
+    r = c.post("/api/analyze-ticker", json={"symbol": "NFLX"})
+    assert r.status_code == 422
+    assert "unreliable" in (r.json().get("detail") or "").lower()
+    assert spend["n"] == 0                    # blocked BEFORE the LLM call
+
+
+def test_default_mode_still_warns_and_spends(monkeypatch):
+    monkeypatch.delenv("GESH_REJECT_SUSPECT_PRICES", raising=False)
+    spend = {"n": 0}
+    c = _suspect_client(monkeypatch, spend)
+    r = c.post("/api/analyze-ticker", json={"symbol": "NFLX"})
+    assert r.status_code == 200
+    assert r.json()["data"]["price_suspect"] is True
+    assert spend["n"] == 1                    # warn-only default is unchanged
+
+
+# ── the trade setup must not look tradeable on a suspect quote either (GESH-9) ──
+
+def _levels_client(monkeypatch):
+    import market_data
+    import server
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: False)
+    monkeypatch.setattr(server, "_latest_close", lambda sym: 73.83)       # broken feed
+    monkeypatch.setattr(market_data, "rh_fundamentals",
+                        lambda s: {"low_52": 500.0, "high_52": 1200.0}, raising=False)
+    monkeypatch.setattr("trade_levels.compute",
+                        lambda sym, current_price=None: {
+                            "available": True, "symbol": sym, "price": current_price,
+                            "support": [70.0], "resistance": [80.0], "pivots": {},
+                            "swing_high_60d": 80.0, "swing_low_60d": 70.0,
+                            "setup": {"entry": current_price, "stop": 69.0, "target": 80.0,
+                                      "risk_reward": 1.3, "risk_pct": 5.0, "reward_pct": 8.0,
+                                      "actionable": True, "warning": None},
+                            "note": "x"}, raising=False)
+    return TestClient(server.app, raise_server_exceptions=False)
+
+
+def test_levels_setup_flagged_non_actionable_on_suspect_quote(monkeypatch):
+    monkeypatch.delenv("GESH_REJECT_SUSPECT_PRICES", raising=False)
+    c = _levels_client(monkeypatch)
+    r = c.get("/api/levels/NFLX")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["price_suspect"] is True
+    assert d["setup"]["actionable"] is False        # was True from the engine
+    assert "suspect" in d["setup"]["warning"].lower()
+
+
+def test_levels_strict_mode_rejects_suspect_quote(monkeypatch):
+    monkeypatch.setenv("GESH_REJECT_SUSPECT_PRICES", "1")
+    c = _levels_client(monkeypatch)
+    r = c.get("/api/levels/NFLX")
+    assert r.status_code == 422

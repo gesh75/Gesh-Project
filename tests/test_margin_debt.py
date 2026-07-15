@@ -16,7 +16,7 @@ quality="cached" and keeps the cached as_of.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -56,9 +56,13 @@ def finra_down(margin_cache, monkeypatch):
 
 
 def _write_cache(path: Path, *, as_of: str, age_hours: float, series: list[dict]) -> None:
+    # Deliberately writes the LEGACY *naive* stamp (what caches on disk hold from before
+    # the utcnow()→now(timezone.utc) migration) so these tests keep exercising
+    # _parse_ts's naive tolerance. Built from an aware now to avoid the deprecated call.
+    naive = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).replace(tzinfo=None)
     path.write_text(json.dumps({
         "schema": 2,
-        "fetched_at": (datetime.utcnow() - timedelta(hours=age_hours)).isoformat(),
+        "fetched_at": naive.isoformat(),
         "source": "FINRA margin statistics (finra.org)",
         "as_of": as_of,
         "series": series,
@@ -138,6 +142,18 @@ def test_sentiment_overlay_exposes_margin_provenance(live_finra, monkeypatch):
 
 # ── cache semantics ──────────────────────────────────────────────────────────
 
+def test_parse_ts_accepts_legacy_naive_and_aware():
+    """Codex #7 (utcnow → now(timezone.utc)): caches written before the migration hold
+    NAIVE stamps. Both forms must parse to AWARE UTC — otherwise aware-minus-naive
+    raises TypeError and every legacy cache silently looks invalid forever."""
+    naive = ltm._parse_ts("2026-07-15T00:00:00")
+    aware = ltm._parse_ts("2026-07-15T00:00:00+00:00")
+    assert naive.tzinfo is not None and aware.tzinfo is not None
+    assert naive == aware                       # a legacy naive stamp WAS UTC
+    # the age subtraction against an aware now is exactly what used to blow up
+    assert (ltm._utc_now() - naive).total_seconds() > 0
+
+
 def test_successful_fetch_writes_versioned_cache(live_finra):
     ltm.fetch_margin_debt()
     cached = json.loads(live_finra.read_text())
@@ -180,7 +196,7 @@ def test_stale_cache_served_as_cached_when_finra_down(finra_down):
 def test_legacy_corrupt_cache_is_rejected_not_served(finra_down):
     # Pre-fix cache format: year-0001 dates + /1000 values, no schema/as_of.
     finra_down.write_text(json.dumps({
-        "fetched_at": datetime.utcnow().isoformat(),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
         "data": [
             {"date": "0001-05-26 00:00:00", "margin_debt_millions": 1415.557},
             {"date": "0001-04-26 00:00:00", "margin_debt_millions": 1304.281},

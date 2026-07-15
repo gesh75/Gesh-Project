@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -53,13 +53,29 @@ CACHE_TTL_H = 6
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _utc_now() -> datetime:
+    """Timezone-aware UTC now — datetime.utcnow() is deprecated (Codex #7)."""
+    return datetime.now(timezone.utc)
+
+
+def _parse_ts(raw: str) -> datetime:
+    """Parse a stored ISO timestamp as AWARE UTC.
+
+    Caches written before the utcnow() migration hold NAIVE strings; subtracting an
+    aware now() from those raises TypeError, so a legacy cache would silently look
+    invalid (and refetch) forever. Treat a naive stamp as UTC — which is what it was.
+    """
+    ts = datetime.fromisoformat(raw)
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
 def _cache_valid(path: Path, ttl_hours: int = CACHE_TTL_H) -> bool:
     if not path.exists():
         return False
     try:
         data = json.loads(path.read_text())
-        fetched = datetime.fromisoformat(data.get("fetched_at", ""))
-        return (datetime.utcnow() - fetched).total_seconds() < ttl_hours * 3600
+        fetched = _parse_ts(data.get("fetched_at", ""))
+        return (_utc_now() - fetched).total_seconds() < ttl_hours * 3600
     except Exception:
         return False
 
@@ -154,7 +170,7 @@ def fetch_fear_greed() -> Optional[pd.DataFrame]:
         except Exception:
             pass
     try:
-        start = (datetime.utcnow() - timedelta(days=40)).strftime("%Y-%m-%d")
+        start = (_utc_now() - timedelta(days=40)).strftime("%Y-%m-%d")
         url = f"https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{start}"
         resp = requests.get(url, headers=_CNN_HEADERS, timeout=10)
         if resp.status_code != 200:
@@ -168,7 +184,7 @@ def fetch_fear_greed() -> Optional[pd.DataFrame]:
         df = df[["date", "y"]].rename(columns={"y": "fear_greed"}).dropna()
         if df.empty:
             return None
-        _save_cache(F_G_CACHE, {"fetched_at": datetime.utcnow().isoformat(),
+        _save_cache(F_G_CACHE, {"fetched_at": _utc_now().isoformat(),
                                 "data": df.to_dict("records")})
         return df
     except Exception as e:
@@ -287,7 +303,7 @@ def fetch_margin_debt() -> Dict[str, Any]:
             as_of = series[-1]["date"]
             _save_cache(MARGIN_CACHE, {
                 "schema": MARGIN_CACHE_SCHEMA,
-                "fetched_at": datetime.utcnow().isoformat(),
+                "fetched_at": _utc_now().isoformat(),
                 "source": FINRA_MARGIN_SOURCE,
                 "as_of": as_of,
                 "series": series,
@@ -383,7 +399,7 @@ def get_long_term_macro_sentiment() -> Dict[str, Any]:
         "bias": "BULLISH" if norm > 0.3 else "BEARISH" if norm < -0.3 else "NEUTRAL",
         "available": any(sources_live),
         "sources_live": sum(1 for x in sources_live if x),
-        "fetched_at": datetime.utcnow().isoformat(),
+        "fetched_at": _utc_now().isoformat(),
     }
 
 
