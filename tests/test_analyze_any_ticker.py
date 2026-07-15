@@ -398,3 +398,57 @@ def test_latest_close_short_series_unguarded(monkeypatch):
     monkeypatch.setattr(price_source, "yf_download",
                         lambda *a, **k: _close_df([100, 5]), raising=False)
     assert server._latest_close("X") == 5.0
+
+
+# ── GESH-8: per-card provenance — a REAL feed or nothing, never a constant ──────
+# _ticker_get_store used to default source="live". Because a cache hit returns the
+# stored dict verbatim, that constant claimed "live" on a 5-minute-old cached serve
+# and could never say otherwise. It is gone; endpoints that OBSERVE the serving feed
+# set `source` explicitly, and the rest omit it.
+
+def test_store_no_longer_stamps_a_constant_live_source():
+    resp = server._ticker_get_store("t", "X", {"status": "ok", "data": {}})
+    assert "source" not in resp                  # never a constant claim
+    assert resp["as_of"]                          # fetch time IS truthful → age
+
+
+def test_store_never_clobbers_an_observed_source():
+    resp = server._ticker_get_store("t", "Y", {"status": "ok", "data": {}, "source": "robinhood"})
+    assert resp["source"] == "robinhood"
+
+
+def test_fundamentals_envelope_names_the_serving_feed(monkeypatch):
+    monkeypatch.setattr("market_data.rh_fundamentals",
+                        lambda s: {"pe_ratio": 1.0, "sector": "Tech"}, raising=False)
+    assert _client(monkeypatch).get("/api/fundamentals/NVDA").json()["source"] == "robinhood"
+
+
+def test_analyst_envelope_names_the_serving_feed(monkeypatch):
+    monkeypatch.setattr("market_data.rh_analyst",
+                        lambda s: {"recommendation": "Hold", "num_analysts": 20}, raising=False)
+    assert _client(monkeypatch).get("/api/analyst/NVDA").json()["source"] == "robinhood"
+
+
+def test_news_envelope_names_alpaca_when_alpaca_served(monkeypatch):
+    import news_agent
+    monkeypatch.setattr(news_agent, "_fetch_alpaca_news",
+                        lambda s: [{"title": "t", "url": "u", "source": "benzinga",
+                                    "published": "p"}], raising=False)
+    assert _client(monkeypatch).get("/api/news/NVDA").json()["source"] == "alpaca"
+
+
+def test_news_envelope_names_rss_on_fallback(monkeypatch):
+    import news_agent
+    monkeypatch.setattr(news_agent, "_fetch_alpaca_news", lambda s: [], raising=False)
+    monkeypatch.setattr(news_agent, "_fetch_all_news",
+                        lambda s: [{"title": "t", "url": "u", "source": "yahoo",
+                                    "published": "p"}], raising=False)
+    assert _client(monkeypatch).get("/api/news/NVDA").json()["source"] == "rss"
+
+
+def test_news_envelope_claims_no_feed_when_nothing_served(monkeypatch):
+    import news_agent
+    monkeypatch.setattr(news_agent, "_fetch_alpaca_news", lambda s: [], raising=False)
+    monkeypatch.setattr(news_agent, "_fetch_all_news", lambda s: [], raising=False)
+    body = _client(monkeypatch).get("/api/news/NVDA").json()
+    assert body["data"] == [] and "source" not in body

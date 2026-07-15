@@ -1221,14 +1221,19 @@ def _ticker_get_cached(bucket: str, sym: str) -> dict | None:
 
 
 def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
-    # Stamp a coarse freshness signal so each Analyze widget can label its OWN state
-    # (live ≤5min vs cached/delayed) rather than the page making one global LIVE-vs-
-    # CACHED claim (GESH-4). as_of = fetch time; a cache HIT returns this same stamp,
-    # so the widget always reflects the true data age. setdefault: never clobber a
-    # payload that already carries its own as_of/source.
+    # Stamp the fetch time so each Analyze widget can label its OWN age rather than the
+    # page making one global LIVE-vs-CACHED claim (GESH-4). A cache HIT returns this
+    # same dict, so `as_of` keeps reflecting when the data was actually fetched — the
+    # widget derives live-vs-cached from its age.
+    #
+    # `source` is NOT defaulted here. It previously defaulted to the constant "live",
+    # which — because a cache hit returns the stored dict verbatim — claimed "live" even
+    # on a 5-minute-old cached serve and could never say otherwise. A constant is not an
+    # observation. Endpoints that KNOW which feed served the row set `source` explicitly
+    # (setdefault yields to them); the rest omit it rather than assert something
+    # unverified (GESH-8).
     if isinstance(resp, dict) and "price" not in resp:   # skip the tiny _cached_close blob
         resp.setdefault("as_of", _dt.now(_tz.utc).isoformat())
-        resp.setdefault("source", "live")
     with _ticker_get_lock:
         _ticker_get_cache[(bucket, sym)] = (time.monotonic(), resp)
     return resp
@@ -2020,7 +2025,12 @@ def levels_symbol(symbol: str):
             data,
             _quality_block(pmeta, suspect, reason, degraded=px is None),
             context=f"levels:{sym}")
-        return _ticker_get_store("levels", sym, {"status": "ok", "data": data})
+        # The levels card's feed is the one that served the quote — already observed
+        # off the frame (GESH-8 uses the same truth as decision_quality, never a label).
+        resp = {"status": "ok", "data": data}
+        if pmeta.get("source"):
+            resp["source"] = pmeta["source"]
+        return _ticker_get_store("levels", sym, resp)
     except HTTPException:
         raise
     except Exception as e:
@@ -2106,7 +2116,9 @@ def fundamentals_symbol(symbol: str):
                 row["price_suspect_reason"] = reason
         except Exception:  # noqa: BLE001 — advisory flag must never break the card
             pass
-        return _ticker_get_store("fundamentals", sym, {"status": "ok", "data": row})
+        # Real feed, not a constant: `vendor` is the branch that actually served (GESH-8).
+        return _ticker_get_store("fundamentals", sym,
+                                 {"status": "ok", "data": row, "source": vendor})
     except HTTPException:
         raise
     except Exception as e:
@@ -2124,13 +2136,17 @@ def analyst_symbol(symbol: str):
     try:
         import market_data
         row = market_data.rh_analyst(sym)
+        vendor = "robinhood"
         if not row:
             data = market_data.get_analyst_targets([sym]) or {}
             yf_row = data.get(sym)
             row = yf_row if (yf_row and not yf_row.get("error")) else None
+            vendor = "yfinance"
         if not row:
             raise HTTPException(status_code=404, detail="No analyst data")
-        return _ticker_get_store("analyst", sym, {"status": "ok", "data": row})
+        # Real feed, not a constant (GESH-8).
+        return _ticker_get_store("analyst", sym,
+                                 {"status": "ok", "data": row, "source": vendor})
     except HTTPException:
         raise
     except Exception as e:
@@ -2149,11 +2165,21 @@ def news_symbol(symbol: str):
     try:
         import news_agent
         # Alpaca first (VPN-safe, key-gated); RSS fallback (blocked on the owner's VPN).
-        items = news_agent._fetch_alpaca_news(sym) or news_agent._fetch_all_news(sym) or []
+        # Split the `or` chain so the feed that ACTUALLY served is observable (GESH-8)
+        # rather than inferred — Alpaca first (VPN-safe), RSS fallback.
+        items = news_agent._fetch_alpaca_news(sym)
+        feed = "alpaca" if items else None
+        if not items:
+            items = news_agent._fetch_all_news(sym)
+            feed = "rss" if items else None
+        items = items or []
         trimmed = [{"title": it.get("title", ""), "url": it.get("url", ""),
                     "source": it.get("source", ""), "published": it.get("published", "")}
                    for it in items[:8]]
-        return _ticker_get_store("news", sym, {"status": "ok", "data": trimmed})
+        resp = {"status": "ok", "data": trimmed}
+        if feed:                      # omitted entirely when nothing served
+            resp["source"] = feed
+        return _ticker_get_store("news", sym, resp)
     except HTTPException:
         raise
     except Exception as e:
