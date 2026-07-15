@@ -36,53 +36,63 @@ def test_stamp_survives_copy():
     assert price_source.frame_source(f.copy()) == "robinhood"
 
 
-# ── the provenance block contract ─────────────────────────────────────────────
+# ── the reconciled decision_quality block, fed by REAL provenance ─────────────
+# The unified block/shape comes from decision_quality.py (Codex's PR #65); what these
+# lock is that it is fed OBSERVED feed identity rather than the hardcoded
+# ["price_source", "rh_fundamentals_52w"] constant it originally shipped with — a value
+# that was identical whether Yahoo or the RH fallback served the number.
+
+def _meta(source=None, substituted=False):
+    return {"source": source, "substituted": substituted}
+
 
 def test_data_sources_never_defaults_to_a_feed():
-    """The core honesty rule: unknown source → [] + degraded, NEVER a guessed feed."""
-    blk = server._price_provenance(None, False, False, "")
+    """The core honesty rule: unattributable → no feed named, and degraded."""
+    blk = server._quality_block(_meta(None), False, "")
     assert blk["data_sources"] == []
-    assert blk["decision_degraded"] is True          # unattributable IS a degraded state
+    assert blk["decision_degraded"] is True
+    assert any("unattributable" in r for r in blk["reasons"])
 
 
-def test_single_feed_reported():
-    blk = server._price_provenance("yahoo", False, False, "")
-    assert blk["data_sources"] == ["yahoo"]
+def test_real_feed_is_named_not_a_constant():
+    blk = server._quality_block(_meta("yahoo"), False, "")
+    assert blk["data_sources"] == ["yahoo"]          # the feed, not "price_source"
     assert blk["decision_degraded"] is False
-    assert blk["price_quality"]["suspect"] is False
+    assert blk["price_quality"] == "ok"
 
 
 def test_robinhood_fallback_is_not_degraded_on_its_own():
     """RH is a legitimate feed, not a defect — degraded is reserved for numbers we
     have a concrete reason to distrust."""
-    blk = server._price_provenance("robinhood", False, False, "")
+    blk = server._quality_block(_meta("robinhood"), False, "")
     assert blk["data_sources"] == ["robinhood"]
     assert blk["decision_degraded"] is False
 
 
 def test_mixed_splice_reports_both_feeds():
-    blk = server._price_provenance("yahoo+robinhood", False, False, "")
+    blk = server._quality_block(_meta("yahoo+robinhood"), False, "")
     assert blk["data_sources"] == ["yahoo", "robinhood"]
 
 
-def test_suspect_quote_degrades():
-    blk = server._price_provenance("yahoo", False, True, "far below 52-wk low")
+def test_suspect_quote_degrades_and_names_the_52wk_check():
+    blk = server._quality_block(_meta("yahoo"), True, "far below the 52-wk low")
     assert blk["decision_degraded"] is True
-    assert blk["price_quality"]["suspect"] is True
-    assert "52-wk" in blk["price_quality"]["reason"]
+    assert blk["price_quality"] == "suspect"
+    assert "rh_fundamentals_52w" in blk["data_sources"]   # named only because it ran
+    assert any("52-wk" in r for r in blk["reasons"])
 
 
 def test_bad_tick_substitution_is_reported_and_degrades():
     """The guard can return a prior close / the median instead of the latest quote.
     That substitution used to be invisible."""
-    blk = server._price_provenance("yahoo", True, False, "")
-    assert blk["price_quality"]["bad_tick_substituted"] is True
+    blk = server._quality_block(_meta("yahoo", substituted=True), False, "")
     assert blk["decision_degraded"] is True
+    assert any("bad tick" in r for r in blk["reasons"])
 
 
-def test_extra_sources_merge_without_duplicates():
-    blk = server._price_provenance("yahoo", False, False, "", extra_sources=("yahoo", "robinhood"))
-    assert blk["data_sources"] == ["yahoo", "robinhood"]
+def test_52wk_feed_not_claimed_when_check_did_not_run():
+    blk = server._quality_block(_meta("yahoo"), False, "")
+    assert "rh_fundamentals_52w" not in blk["data_sources"]
 
 
 # ── end-to-end: the source read off the real frame ────────────────────────────
@@ -140,5 +150,6 @@ def test_levels_endpoint_carries_provenance(client, monkeypatch):
                                                          "swing_high_60d": 1, "swing_low_60d": 1,
                                                          "setup": {}, "note": ""}, raising=False)
     d = client.get("/api/levels/NVDA").json()["data"]
-    assert d["data_sources"] == ["yahoo"]
-    assert d["decision_degraded"] is False
+    dq = d["decision_quality"]
+    assert dq["data_sources"] == ["yahoo"]          # observed feed, not a constant
+    assert dq["decision_degraded"] is False

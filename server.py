@@ -308,6 +308,7 @@ def _login_clear(ip: str, email: str) -> None:
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
 import fair_value                       # canonical fair-value % (Codex #2)
 import price_sanity                     # cross-source price quality + strict mode (Codex #3)
+import decision_quality                 # unified degraded-decision block (Codex #6)
 from auth import login, logout
 from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
@@ -2011,8 +2012,14 @@ def levels_symbol(symbol: str):
                 if isinstance(data.get("setup"), dict):
                     data["setup"]["actionable"] = False
                     data["setup"]["warning"] = f"Quote quality is suspect — {reason}"
-        if isinstance(data, dict):
-            data.update(_price_provenance(pmeta["source"], pmeta["substituted"], suspect, reason))
+        # Unified degraded-decision block (Codex #6): one consistent shape for the
+        # dashboard, logs, and audit — no data (px None) is itself a degraded input.
+        # data_sources carries the feed that ACTUALLY served the bars (read off the
+        # frame), not a constant — see _decision_sources.
+        decision_quality.attach(
+            data,
+            _quality_block(pmeta, suspect, reason, degraded=px is None),
+            context=f"levels:{sym}")
         return _ticker_get_store("levels", sym, {"status": "ok", "data": data})
     except HTTPException:
         raise
@@ -2291,34 +2298,49 @@ def _price_quality(sym: str, price) -> tuple[bool, str]:
         return False, ""
 
 
-def _price_provenance(quote_source, substituted, suspect, reason, extra_sources=()) -> dict:
-    """The structured degraded-decision block (Codex #6).
+def _decision_sources(quote_source: str | None, *extra: str) -> list[str]:
+    """The feeds that DEMONSTRABLY served this decision — never a guess.
 
-    Honesty contract — the whole point of this field:
-      * `data_sources` lists ONLY feeds that demonstrably served bars for the number in
-        THIS response, read off the frame that produced it. An empty list means
-        UNATTRIBUTABLE and is NEVER defaulted to a feed name; guessing "yahoo" from
-        config would be exactly the fabrication this block exists to surface.
-      * `decision_degraded` covers "we have a concrete reason to distrust this number":
-        a cross-source-suspect quote, a silent bad-tick substitution, or an
-        unattributable source. Being served by the Robinhood FALLBACK is NOT degraded
-        on its own — RH is a legitimate feed, not a defect.
-      * `price_quality` reuses the existing 52-wk cross-check; no new logic here.
+    `quote_source` is read off the frame that produced the quote
+    (price_source.frame_source), so it names the feed that actually ran: "yahoo",
+    "robinhood", or both on a splice. An UNATTRIBUTABLE quote contributes nothing
+    rather than a default feed name — naming a feed we didn't observe would be exactly
+    the fabrication this field exists to surface.
 
-    Note: distinct from `_ticker_get_store`'s `source` field, which is FRESHNESS
-    (live-vs-cached, GESH-4) — not feed identity. Do not conflate the two.
+    Note: distinct from `_ticker_get_store`'s `source`, which is FRESHNESS
+    (live-vs-cached, GESH-4), not feed identity. Do not conflate the two.
     """
     feeds: list[str] = [f for f in (quote_source or "").split("+") if f]
-    for s in extra_sources:
-        for f in (s or "").split("+"):
-            if f and f not in feeds:
-                feeds.append(f)
-    return {
-        "price_quality": {"suspect": bool(suspect), "reason": reason or None,
-                          "bad_tick_substituted": bool(substituted)},
-        "data_sources": feeds,
-        "decision_degraded": bool(suspect or substituted or not feeds),
-    }
+    for e in extra:
+        if e and e not in feeds:
+            feeds.append(e)
+    return feeds
+
+
+def _quality_block(pmeta: dict, suspect: bool, reason: str, *,
+                   degraded: bool = False, as_of=None) -> dict:
+    """decision_quality.build() fed with REAL provenance (Codex #6).
+
+    A decision is degraded when we have a concrete reason to distrust the number:
+    a cross-source-suspect quote, a silent bad-tick substitution, an unattributable
+    source, or the caller's own reason. Being served by the Robinhood FALLBACK is NOT
+    degraded on its own — RH is a legitimate feed, not a defect.
+    """
+    src = pmeta.get("source")
+    substituted = bool(pmeta.get("substituted"))
+    # rh_fundamentals_52w is named only when the 52-wk cross-check actually ran.
+    sources = _decision_sources(src, "rh_fundamentals_52w" if reason or suspect else "")
+    block = decision_quality.build(
+        price_suspect=suspect, reason=reason,
+        degraded=bool(degraded or substituted or not src),
+        data_sources=sources, as_of=as_of)
+    if substituted:
+        block["reasons"].append(
+            "latest quote rejected as a bad tick — a prior in-band close was "
+            "substituted, so this is not the last traded price")
+    if not src:
+        block["reasons"].append("price feed unattributable — source could not be verified")
+    return block
 
 
 @app.post("/api/analyze-ticker", dependencies=[Depends(require_customer_or_owner)])
@@ -2380,10 +2402,12 @@ async def analyze_ticker_endpoint(request: Request):
             # · <time>" and never let it hide under a global "LIVE" banner (GESH-4/5).
             if isinstance(card, dict):
                 card["generated_at"] = _dt.now(_tz.utc).isoformat()
-                # Structured degraded-decision provenance (Codex #6) — which feed
-                # actually grounded this card, and whether we distrust that number.
-                card.update(_price_provenance(pmeta["source"], pmeta["substituted"],
-                                              suspect, reason))
+                # Unified degraded-decision block (Codex #6): same shape the /api/levels
+                # setup and the dashboard/audit read, plus a structured degraded log.
+                decision_quality.attach(
+                    card,
+                    _quality_block(pmeta, suspect, reason, as_of=card["generated_at"]),
+                    context=f"analyze-ticker:{sym}")
             _ticker_card_store(sym, card)
             auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card, "cached": False}
