@@ -139,7 +139,14 @@ def _customer_client(monkeypatch, card=None, boom=None, price=195.0):
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server, "_latest_close", lambda sym: price, raising=True)
+    # Patch the seam the handler ACTUALLY calls: /api/analyze-ticker resolves its
+    # grounding quote via _latest_close_meta (Codex #6 added the provenance tuple),
+    # and _latest_close is now only a thin wrapper over it. Stubbing the wrapper left
+    # the endpoint fetching a LIVE price — invisible to conftest's `_no_network`,
+    # because yfinance fetches through curl_cffi and never opens a Python socket.
+    monkeypatch.setattr(server, "_latest_close_meta",
+                        lambda sym: (price, {"source": "yahoo", "substituted": False}),
+                        raising=True)
 
     def _fake(sym, current_price=None, regime_context=None):
         if boom:
@@ -275,7 +282,9 @@ def test_concurrent_same_symbol_spends_one_llm_call(monkeypatch):
         _time.sleep(0.05)                     # long enough for the follower to queue
         return {**_CARD, "symbol": sym}
     monkeypatch.setattr(server, "deep_analyze_ticker", _slow, raising=True)
-    monkeypatch.setattr(server, "_latest_close", lambda s: 195.0, raising=True)
+    monkeypatch.setattr(server, "_latest_close_meta",           # the seam the handler calls
+                        lambda s: (195.0, {"source": "yahoo", "substituted": False}),
+                        raising=True)
 
     # Call the endpoint function directly (its Depends auth gate is route-level and
     # covered by the route tests above) so both coroutines share one event loop.

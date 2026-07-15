@@ -147,8 +147,12 @@ def client(monkeypatch):
 
 def test_endpoint(client, monkeypatch):
     server, c = client
-    # the endpoint now fetches the canonical quote and passes current_price=… in
-    monkeypatch.setattr(server, "_latest_close", lambda s: 100.0, raising=True)
+    # the endpoint now fetches the canonical quote and passes current_price=… in —
+    # through _latest_close_meta, so patch that seam, not the thin _latest_close
+    # wrapper (same trap as test_levels_endpoint_entry_binds_to_latest_close below).
+    monkeypatch.setattr(server, "_latest_close_meta",
+                        lambda s: (100.0, {"source": "yahoo", "substituted": False}),
+                        raising=True)
     monkeypatch.setattr("trade_levels.compute",
                         lambda sym, current_price=None: {"available": True, "symbol": sym, "price": 100.0,
                                      "support": [95.0], "resistance": [110.0],
