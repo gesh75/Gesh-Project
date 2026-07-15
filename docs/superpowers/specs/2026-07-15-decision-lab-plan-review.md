@@ -68,15 +68,15 @@ The first five paid concierge loops can run on a shared doc plus a signed hash a
 
 ---
 
-## 3. Founder capacity — the unpriced risk
+## 3. Founder capacity — an operational gate, not a blocker
 
-The plan budgets **12 founder-hours/week** of SLA-bound review (100 active contracts × 6 min + 2h exceptions), with a **7-day** review promise to paying customers.
+**Capacity is resolved:** GESH is the owner's free-time project and the hours are available. Do not treat throughput as a strategic risk. (An earlier draft of this review inferred a conflict from an unrelated day-job start date; that inference was wrong and is withdrawn.)
 
-`CLAUDE.md`: **Sr Manager, Network Operations at One Call starts Aug 10, 2026.** A 90-day experiment starting now runs straight through that date. This is a second part-time job with a customer-facing SLA landing on top of a new demanding role, and it appears **nowhere** in the strategy, the plan, or the kill gates — all of which measure *customer* behavior, never founder throughput.
+One operational safeguard is still worth keeping, because it protects *customers*, not the founder: the Lab makes a **7-day cited-review promise** to people who paid. If a review silently slips, the product's core claim — that someone is actually watching the thesis — is broken for that week.
 
-- Add a **founder-capacity kill gate**: if weekly review SLA breach exceeds X% in any 2-week window, halt enrollment. The plan already computes `manual_total_minutes` — gate on it.
-- Price the honesty: 20 × $99 = **$1,980 for ~156 hours ≈ $12.70/hr**. That's fine as a *learning purchase*; it is not revenue, and the doc should say so plainly so nobody mistakes seat count for traction.
-- Consider 10 seats, not 20. Half the halo-contaminated data, half the SLA exposure, same lesson.
+- Add an **SLA gate**: if the weekly cited review breaches 7 days for any active contract, halt new enrollment until the queue is clear. The plan already computes `manual_total_minutes` and a due queue with SLA breaches — gate on what it already measures.
+- 20 seats is fine on capacity. The reason to consider fewer is **§1, not hours**: every seat is halo-contaminated data, so 10 seats may teach the same lesson with half the noise.
+- Keep the money honest in the doc: 20 × $99 = **$1,980**. That's a *learning purchase*, not revenue — worth stating plainly so seat count never gets mistaken for traction.
 
 ---
 
