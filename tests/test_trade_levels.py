@@ -164,10 +164,14 @@ def test_endpoint(client, monkeypatch):
 
 
 def test_levels_endpoint_entry_binds_to_latest_close(client, monkeypatch):
-    """GESH-1 integration: the /api/levels ENTRY must equal the canonical _latest_close
-    quote ($394.76), NOT trade_levels' own 6mo last bar ($396.18)."""
+    """GESH-1 integration: the /api/levels ENTRY must equal the canonical quote
+    ($394.76), NOT trade_levels' own 6mo last bar ($396.18)."""
     server, c = client
-    monkeypatch.setattr(server, "_latest_close", lambda s: 394.76, raising=True)
+    # the endpoint resolves the quote through _latest_close_meta (Codex #6 added the
+    # provenance tuple); patch that seam, not the thin _latest_close wrapper.
+    monkeypatch.setattr(server, "_latest_close_meta",
+                        lambda s: (394.76, {"source": "yahoo", "substituted": False}),
+                        raising=True)
 
     class _PS:
         @staticmethod

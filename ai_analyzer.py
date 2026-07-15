@@ -196,7 +196,15 @@ _HOLDING_ANALYSIS_ITEM = {
     "type": "object",
     "properties": {
         "symbol": {"type": "string"},
-        "company_type": {"type": "string"},
+        # A plain-language DESCRIPTOR of the business, not a taxonomy value. The
+        # Fundamentals card's `sector` is a vendor CLASSIFICATION (Robinhood's, non-GICS);
+        # this is model prose with no taxonomy behind it. Rendering the two side by side
+        # unlabeled made them read as competing sector values (GESH-6). No enum here on
+        # purpose — the model was never given a taxonomy to conform to.
+        "company_type": {"type": "string", "description":
+                         "Short plain-language descriptor of what the business does "
+                         "(e.g. 'Mega-cap consumer tech'). A descriptor, NOT a GICS or "
+                         "vendor sector classification."},
         "scores": {
             "type": "object",
             "properties": {

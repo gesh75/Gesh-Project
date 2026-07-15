@@ -42,6 +42,34 @@ logger = logging.getLogger(__name__)
 
 _OHLCV_FIELDS = ("Open", "High", "Low", "Close", "Volume")
 
+# ── Source attestation (Codex #6) ─────────────────────────────────────────────
+# This adapter routes Yahoo-primary → Robinhood-fallback and used to DISCARD which
+# branch won: the outcome existed only as local control flow and a log line, so no
+# caller could say which feed produced a number. Any "data_sources" field would then
+# have been a guess from config — exactly the fabrication such a field exists to stop.
+#
+# The source rides on the frame via pandas' `.attrs`, which survives `.copy()` (so the
+# TTL cache is source-transparent for free) and is absent on a plain frame (so a
+# monkeypatched test degrades to "unattributable", never to a WRONG claim). Values are
+# immutable strings, never lists, so a shared attrs dict can't be mutated by a caller.
+_SRC_ATTR = "gesh_price_source"
+
+
+def _stamp(frame, source: str):
+    """Record which feed produced `frame`. Returns the frame for inline use."""
+    if frame is not None:
+        frame.attrs[_SRC_ATTR] = source
+    return frame
+
+
+def frame_source(frame) -> str | None:
+    """The feed that produced `frame` — "yahoo" | "robinhood" | "yahoo+robinhood".
+
+    None means UNATTRIBUTABLE (e.g. a frame this module never stamped). Callers must
+    surface that as unknown and must NOT default it to a feed name.
+    """
+    return getattr(frame, "attrs", {}).get(_SRC_ATTR)
+
 # In-process TTL cache for historical-bar downloads. The daily chain fetches the
 # same symbol+window from multiple engines (consensus, kelly, monte_carlo, regime);
 # caching the period-based historical frame cuts redundant Yahoo hits and 401/crumb
@@ -338,7 +366,7 @@ def rh_fallback(
     if single:
         logger.info("price_source: served %s from Robinhood fallback (%d bars)",
                     sym_list[0], len(frames.get(sym_list[0], [])))
-        return frames.get(sym_list[0])
+        return _stamp(frames.get(sym_list[0]), "robinhood")
 
     # Multi-symbol → MultiIndex (field, ticker) like yfinance group_by="column".
     pieces = {
@@ -350,7 +378,7 @@ def rh_fallback(
     out.columns = pd.MultiIndex.from_tuples(out.columns, names=["Price", "Ticker"])
     logger.info("price_source: served %d/%d symbols from Robinhood fallback",
                 len(frames), len(sym_list))
-    return out
+    return _stamp(out, "robinhood")
 
 
 # ─── Universal entry point ────────────────────────────────────────────────────
@@ -457,7 +485,7 @@ def _yf_download_uncached(
 
     usable = _usable_yahoo_symbols(raw, sym_list)
     if len(usable) == len(sym_list):
-        return raw                                    # every symbol has real data
+        return _stamp(raw, "yahoo")                   # every symbol has real data
 
     missing = [s for s in sym_list if s not in usable]
     fb_arg: str | list[str] = missing[0] if (single and missing) else missing
@@ -477,7 +505,7 @@ def _yf_download_uncached(
         return None
 
     if fb is None:                                    # partial Yahoo, RH unavailable
-        return raw
+        return _stamp(raw, "yahoo")
     try:                                              # splice RH bars into the Yahoo frame
         # RH bars are tz-aware UTC, Yahoo bars are tz-naive — combine_first refuses to
         # join across tz-awareness. Normalize BOTH to naive daily, then dedupe (cannot
@@ -508,10 +536,10 @@ def _yf_download_uncached(
         combined = raw_c.combine_first(fb_c)
         logger.info("price_source: filled %d Yahoo-missing symbol(s) from RH: %s",
                     len(missing), ", ".join(missing))
-        return combined
+        return _stamp(combined, "yahoo+robinhood")
     except Exception as e:  # noqa: BLE001 — merge failure must not break the run
         logger.debug("price_source: RH/Yahoo merge failed (%s) — returning Yahoo frame", e)
-        return raw
+        return _stamp(raw, "yahoo")
 
 
 def _last_sessions(bars: pd.DataFrame, days: int) -> pd.DataFrame:
