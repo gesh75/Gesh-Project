@@ -6,6 +6,20 @@
 # Exit 0 = fresh live_portfolio_snapshot.json written; non-zero = caller should fall back.
 set -uo pipefail
 
+# ── launchd environment guard (rule #55 + #56) ────────────────────────────────
+# #55: launchd's PATH omits Homebrew, where the claude CLI lives.
+# #56: the claude CLI stores its OAuth token in the macOS KEYCHAIN (there is no
+#      ~/.claude/.credentials.json). Reading it requires USER to be set — with
+#      HOME+PATH alone, `claude mcp list` reports robinhood-trading as
+#      "! Needs authentication" and `claude -p` silently writes no dump.
+#      Verified 2026-07-14: HOME+PATH → Needs authentication;
+#      HOME+PATH+USER → Connected (TMPDIR and LOGNAME make no difference).
+#      This was the 2026-07-12..14 step-1/5 outage: the MCP path looked "expired"
+#      but the token was fine — the process just couldn't reach the Keychain.
+# Never assume the caller's env; derive both here.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export USER="${USER:-$(id -un)}"
+
 DIR="$HOME/Projects/gesh-project"
 CLAUDE="/opt/homebrew/bin/claude"
 ACCT="${GESH_RH_ACCOUNT:-557370533}"   # main portfolio account
