@@ -1992,26 +1992,27 @@ def levels_symbol(symbol: str):
         # bad-tick-guarded 1mo last close), instead of trade_levels' independent 6mo
         # last bar. This eliminates the "$396.18 vs $394.76" divergence (GESH-1).
         # On a data outage _latest_close is None → compute falls back to its own series.
-        px = _latest_close(sym)
+        px, pmeta = _latest_close_meta(sym)
         data = trade_levels.compute(sym, current_price=px)
         # A setup grounded on a cross-source-suspect quote must never look tradeable
         # (Codex #3 / GESH-9). Strict mode refuses outright; the warn-only default
         # returns the levels but flags the setup non-actionable, which the dashboard
         # already renders as a red "no actionable setup" banner (GESH-2).
-        if px is not None:
-            suspect, reason = _price_quality(sym, px)
-            if suspect:
-                if price_sanity.strict_reject_enabled():
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"Price rejected as unreliable — {reason}. "
-                               "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
-                if isinstance(data, dict):
-                    data["price_suspect"] = True
-                    data["price_suspect_reason"] = reason
-                    if isinstance(data.get("setup"), dict):
-                        data["setup"]["actionable"] = False
-                        data["setup"]["warning"] = f"Quote quality is suspect — {reason}"
+        suspect, reason = _price_quality(sym, px) if px is not None else (False, "")
+        if suspect:
+            if price_sanity.strict_reject_enabled():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Price rejected as unreliable — {reason}. "
+                           "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
+            if isinstance(data, dict):
+                data["price_suspect"] = True
+                data["price_suspect_reason"] = reason
+                if isinstance(data.get("setup"), dict):
+                    data["setup"]["actionable"] = False
+                    data["setup"]["warning"] = f"Quote quality is suspect — {reason}"
+        if isinstance(data, dict):
+            data.update(_price_provenance(pmeta["source"], pmeta["substituted"], suspect, reason))
         return _ticker_get_store("levels", sym, {"status": "ok", "data": data})
     except HTTPException:
         raise
@@ -2152,20 +2153,30 @@ def news_symbol(symbol: str):
         raise _server_error(e)
 
 
-def _latest_close(sym: str) -> float | None:
-    """VPN-safe latest daily close for grounding the single-ticker research card —
-    reuses the chart's RH-fallback-backed price_source path (not raw yfinance).
-    Returns None when the ticker has no data, so the caller 404s rather than let
-    the model fabricate a price."""
+def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
+    """`_latest_close` plus the PROVENANCE of the number it returns (Codex #6).
+
+    Returns (price, {"source": str|None, "substituted": bool}).
+      * source      — the feed that actually served the bars ("yahoo" | "robinhood" |
+                      "yahoo+robinhood"), read off the frame. None = unattributable;
+                      callers must surface that as unknown, never default it to a feed.
+      * substituted — True when the bad-tick guard below returned something OTHER than
+                      the latest close (a prior in-band close, or the 20-bar median).
+                      That substitution was previously SILENT and indistinguishable
+                      from a real quote, which is its own honesty gap.
+    """
+    meta: dict = {"source": None, "substituted": False}
     try:
         import price_source
         raw = price_source.yf_download(sym, period="1mo", interval="1d",
                                        auto_adjust=True, progress=False)
         if raw is None or getattr(raw, "empty", True):
-            return None
+            return None, meta
+        # Read the source BEFORE the frame is discarded by the .squeeze() below.
+        meta["source"] = price_source.frame_source(raw)
         closes = raw["Close"].squeeze().dropna()
         if len(closes) == 0:
-            return None
+            return None, meta
         import numpy as np
         arr = np.array(closes).flatten().astype(float)
         last = round(float(arr[-1]), 2)
@@ -2177,13 +2188,22 @@ def _latest_close(sym: str) -> float | None:
         if len(arr) >= 5:
             med = float(np.median(arr[-20:]))
             if med > 0 and not (med * 0.5 <= last <= med * 2.0):
+                meta["substituted"] = True
                 for v in arr[-2::-1]:
                     if med * 0.5 <= float(v) <= med * 2.0:
-                        return round(float(v), 2)
-                return round(med, 2)
-        return last
+                        return round(float(v), 2), meta
+                return round(med, 2), meta
+        return last, meta
     except Exception:
-        return None
+        return None, meta
+
+
+def _latest_close(sym: str) -> float | None:
+    """VPN-safe latest daily close for grounding the single-ticker research card —
+    reuses the chart's RH-fallback-backed price_source path (not raw yfinance).
+    Returns None when the ticker has no data, so the caller 404s rather than let
+    the model fabricate a price. Behavior-identical wrapper over _latest_close_meta."""
+    return _latest_close_meta(sym)[0]
 
 
 # ── Per-customer daily quotas on the LLM-spend surfaces ────────────────────────
@@ -2271,6 +2291,36 @@ def _price_quality(sym: str, price) -> tuple[bool, str]:
         return False, ""
 
 
+def _price_provenance(quote_source, substituted, suspect, reason, extra_sources=()) -> dict:
+    """The structured degraded-decision block (Codex #6).
+
+    Honesty contract — the whole point of this field:
+      * `data_sources` lists ONLY feeds that demonstrably served bars for the number in
+        THIS response, read off the frame that produced it. An empty list means
+        UNATTRIBUTABLE and is NEVER defaulted to a feed name; guessing "yahoo" from
+        config would be exactly the fabrication this block exists to surface.
+      * `decision_degraded` covers "we have a concrete reason to distrust this number":
+        a cross-source-suspect quote, a silent bad-tick substitution, or an
+        unattributable source. Being served by the Robinhood FALLBACK is NOT degraded
+        on its own — RH is a legitimate feed, not a defect.
+      * `price_quality` reuses the existing 52-wk cross-check; no new logic here.
+
+    Note: distinct from `_ticker_get_store`'s `source` field, which is FRESHNESS
+    (live-vs-cached, GESH-4) — not feed identity. Do not conflate the two.
+    """
+    feeds: list[str] = [f for f in (quote_source or "").split("+") if f]
+    for s in extra_sources:
+        for f in (s or "").split("+"):
+            if f and f not in feeds:
+                feeds.append(f)
+    return {
+        "price_quality": {"suspect": bool(suspect), "reason": reason or None,
+                          "bad_tick_substituted": bool(substituted)},
+        "data_sources": feeds,
+        "decision_degraded": bool(suspect or substituted or not feeds),
+    }
+
+
 @app.post("/api/analyze-ticker", dependencies=[Depends(require_customer_or_owner)])
 async def analyze_ticker_endpoint(request: Request):
     """Rich single-ticker AI research card for ANY ticker — the customer-facing,
@@ -2309,7 +2359,7 @@ async def analyze_ticker_endpoint(request: Request):
             _check_customer_quota(_session_email(request), "ticker_card")
             # Ground the valuation on a REAL quote: no price = unknown ticker / data
             # outage → 404 rather than let the model fabricate a price and card.
-            price = await asyncio.to_thread(_latest_close, sym)
+            price, pmeta = await asyncio.to_thread(_latest_close_meta, sym)
             if price is None:
                 raise HTTPException(status_code=404, detail="No market data for this ticker")
             # Cross-source price quality is checked BEFORE the spend so strict mode can
@@ -2330,6 +2380,10 @@ async def analyze_ticker_endpoint(request: Request):
             # · <time>" and never let it hide under a global "LIVE" banner (GESH-4/5).
             if isinstance(card, dict):
                 card["generated_at"] = _dt.now(_tz.utc).isoformat()
+                # Structured degraded-decision provenance (Codex #6) — which feed
+                # actually grounded this card, and whether we distrust that number.
+                card.update(_price_provenance(pmeta["source"], pmeta["substituted"],
+                                              suspect, reason))
             _ticker_card_store(sym, card)
             auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card, "cached": False}
