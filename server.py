@@ -308,6 +308,7 @@ def _login_clear(ip: str, email: str) -> None:
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
 import fair_value                       # canonical fair-value % (Codex #2)
 import price_sanity                     # cross-source price quality + strict mode (Codex #3)
+import decision_quality                 # unified degraded-decision block (Codex #6)
 from auth import login, logout
 from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
@@ -1992,20 +1993,27 @@ def levels_symbol(symbol: str):
         # (Codex #3 / GESH-9). Strict mode refuses outright; the warn-only default
         # returns the levels but flags the setup non-actionable, which the dashboard
         # already renders as a red "no actionable setup" banner (GESH-2).
-        if px is not None:
-            suspect, reason = _price_quality(sym, px)
-            if suspect:
-                if price_sanity.strict_reject_enabled():
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"Price rejected as unreliable — {reason}. "
-                               "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
-                if isinstance(data, dict):
-                    data["price_suspect"] = True
-                    data["price_suspect_reason"] = reason
-                    if isinstance(data.get("setup"), dict):
-                        data["setup"]["actionable"] = False
-                        data["setup"]["warning"] = f"Quote quality is suspect — {reason}"
+        suspect, reason = _price_quality(sym, px) if px is not None else (False, "")
+        if suspect:
+            if price_sanity.strict_reject_enabled():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Price rejected as unreliable — {reason}. "
+                           "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
+            if isinstance(data, dict):
+                data["price_suspect"] = True
+                data["price_suspect_reason"] = reason
+                if isinstance(data.get("setup"), dict):
+                    data["setup"]["actionable"] = False
+                    data["setup"]["warning"] = f"Quote quality is suspect — {reason}"
+        # Unified degraded-decision block (Codex #6): one consistent shape for the
+        # dashboard, logs, and audit — no data (px None) is itself a degraded input.
+        decision_quality.attach(
+            data,
+            decision_quality.build(price_suspect=suspect, reason=reason,
+                                   degraded=px is None,
+                                   data_sources=["price_source", "rh_fundamentals_52w"]),
+            context=f"levels:{sym}")
         return _ticker_get_store("levels", sym, {"status": "ok", "data": data})
     except HTTPException:
         raise
@@ -2315,6 +2323,14 @@ async def analyze_ticker_endpoint(request: Request):
             # · <time>" and never let it hide under a global "LIVE" banner (GESH-4/5).
             if isinstance(card, dict):
                 card["generated_at"] = _dt.now(_tz.utc).isoformat()
+                # Unified degraded-decision block (Codex #6): same shape the /api/levels
+                # setup and the dashboard/audit read, plus a structured degraded log.
+                decision_quality.attach(
+                    card,
+                    decision_quality.build(price_suspect=suspect, reason=reason,
+                                           data_sources=["price_source", "rh_fundamentals_52w"],
+                                           as_of=card["generated_at"]),
+                    context=f"analyze-ticker:{sym}")
             _ticker_card_store(sym, card)
             auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card, "cached": False}
