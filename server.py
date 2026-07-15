@@ -307,6 +307,7 @@ def _login_clear(ip: str, email: str) -> None:
 
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
 import fair_value                       # canonical fair-value % (Codex #2)
+import price_sanity                     # cross-source price quality + strict mode (Codex #3)
 from auth import login, logout
 from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
 from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
@@ -1370,6 +1371,10 @@ def run_deep_analysis():
         mkt = get_all_market_data(symbols)
 
         analysis = deep_analyze_portfolio(payload, regime_context=regime_context)
+        # Canonicalize fair-value % BEFORE it is persisted/returned (Codex #4), so the
+        # stored history and the response carry the same convention Kelly recomputes on
+        # read — otherwise old and new conventions coexist in reports and history.
+        analysis = fair_value.canonicalize_analysis(analysis)
 
         # Log to SQLite. Deep analysis is user-triggered (not a poll), so we
         # always write the analysis here regardless of the throttle. But NEVER
@@ -1982,8 +1987,28 @@ def levels_symbol(symbol: str):
         # last bar. This eliminates the "$396.18 vs $394.76" divergence (GESH-1).
         # On a data outage _latest_close is None → compute falls back to its own series.
         px = _latest_close(sym)
-        return _ticker_get_store("levels", sym,
-                                 {"status": "ok", "data": trade_levels.compute(sym, current_price=px)})
+        data = trade_levels.compute(sym, current_price=px)
+        # A setup grounded on a cross-source-suspect quote must never look tradeable
+        # (Codex #3 / GESH-9). Strict mode refuses outright; the warn-only default
+        # returns the levels but flags the setup non-actionable, which the dashboard
+        # already renders as a red "no actionable setup" banner (GESH-2).
+        if px is not None:
+            suspect, reason = _price_quality(sym, px)
+            if suspect:
+                if price_sanity.strict_reject_enabled():
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Price rejected as unreliable — {reason}. "
+                               "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
+                if isinstance(data, dict):
+                    data["price_suspect"] = True
+                    data["price_suspect_reason"] = reason
+                    if isinstance(data.get("setup"), dict):
+                        data["setup"]["actionable"] = False
+                        data["setup"]["warning"] = f"Quote quality is suspect — {reason}"
+        return _ticker_get_store("levels", sym, {"status": "ok", "data": data})
+    except HTTPException:
+        raise
     except Exception as e:
         raise _server_error(e)
 
@@ -2272,10 +2297,17 @@ async def analyze_ticker_endpoint(request: Request):
             price = await asyncio.to_thread(_latest_close, sym)
             if price is None:
                 raise HTTPException(status_code=404, detail="No market data for this ticker")
-            card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
-            # Mark the DECISION output when the grounding quote is cross-source-suspect
-            # (Codex #3) — the card was built on this price, so the user must see it.
+            # Cross-source price quality is checked BEFORE the spend so strict mode can
+            # refuse to build a decision on a broken feed at zero LLM cost (Codex #3).
             suspect, reason = await asyncio.to_thread(_price_quality, sym, price)
+            if suspect and price_sanity.strict_reject_enabled():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Price rejected as unreliable — {reason}. "
+                           "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
+            card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
+            # Warn-only default: mark the DECISION output when the grounding quote is
+            # cross-source-suspect — the card was built on this price, so the user must see it.
             if suspect and isinstance(card, dict):
                 card["price_suspect"] = True
                 card["price_suspect_reason"] = reason
@@ -2478,7 +2510,10 @@ def _deep_analyze_for_book(
             )
             if truncated and cap < truncated["analyzed"]:
                 truncated["analyzed"] = cap
-            return analysis
+            # Canonicalize on the way out (Codex #4) — this result is persisted via
+            # save_book_analysis and rendered in /mybook/report, so it must carry the
+            # same FV convention Kelly recomputes on read.
+            return fair_value.canonicalize_analysis(analysis)
         except RuntimeError as e:
             if "truncated" in str(e).lower() and cap != caps[-1]:
                 logger.warning(

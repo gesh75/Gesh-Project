@@ -13,6 +13,20 @@ egregious error fires, never normal volatility or a fresh 52-week low.
 from __future__ import annotations
 
 import math
+import os
+
+
+def strict_reject_enabled() -> bool:
+    """True when GESH_REJECT_SUSPECT_PRICES opts into STRICT price quality.
+
+    Default (unset) keeps the advisory behavior this module was built for: flag the
+    quote, let the decision through, let the user judge. In strict mode a suspect quote
+    instead BLOCKS the decision paths that would be built on it (AI card, trade setup),
+    so a broken feed can't silently ground a recommendation — and the LLM spend is
+    skipped entirely because the check runs before it.
+    """
+    return os.getenv("GESH_REJECT_SUSPECT_PRICES", "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 def _positive(x) -> float | None:

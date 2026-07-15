@@ -168,6 +168,12 @@ try:
         payload,
         regime_context=regime_summary + override_context + diversification_context,
     )
+    # Canonicalize the fair-value % at the WRITE boundary (Codex #4): the model's own
+    # pct_diff uses a non-deterministic convention, and Kelly recomputes the canonical
+    # one on read — so without this the report, engine_results.json, and the analysis
+    # history would disagree with the sizing decision. Idempotent + fail-safe.
+    import fair_value  # noqa: E402 — this repo's copy (the trading sibling has none)
+    ai_result = fair_value.canonicalize_analysis(ai_result)
     print(f"{_t()} [ai] Done. Score={ai_result.get('portfolio_score',0)}  Risk={ai_result.get('risk_score',0)}")
     print(f"[ai] Verdict: {ai_result.get('portfolio_verdict','?')}")
 
