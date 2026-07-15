@@ -171,6 +171,17 @@ try:
     print(f"{_t()} [ai] Done. Score={ai_result.get('portfolio_score',0)}  Risk={ai_result.get('risk_score',0)}")
     print(f"[ai] Verdict: {ai_result.get('portfolio_verdict','?')}")
 
+    # Persist the CANONICAL fair-value % (Codex #4) BEFORE the engine_results.json dump
+    # and the DB log_analysis below — so the printable report (gen_report2 reads
+    # fv.pct_diff) and /api/history match the dashboard/Kelly, which recompute it at
+    # read time. Best-effort: a cosmetic normalization must never break the chain.
+    # (trading/ has no fair_value.py, so this resolves to THIS repo's copy.)
+    try:
+        import fair_value as _fv
+        _fv.normalize_holdings_fair_values(ai_result)
+    except Exception as _fv_err:
+        print(f"[ai] fair-value normalize skipped: {_fv_err}")
+
     # Save back to engine_results.json
     eng['ai_result'] = ai_result
     eng['ai_result_ran_at'] = __import__('datetime').datetime.now(

@@ -31,3 +31,35 @@ def canonical_pct_diff(fair_value: dict | None) -> float:
     if not math.isfinite(est) or not math.isfinite(cur) or cur == 0:
         return 0.0
     return round((est - cur) / abs(cur) * 100, 2)
+
+
+def normalize_holdings_fair_values(analysis: dict | None) -> dict | None:
+    """Rewrite every holding's `fair_value.pct_diff` to the CANONICAL value, in place.
+
+    Kelly and the dashboard already recompute the % at READ time (canonical_pct_diff /
+    daFvPct), but the PERSISTED analysis — DB history and the printable report — kept
+    the raw model `pct_diff`, so one run could show two different over/undervaluation
+    numbers depending on which surface you read (Codex #4). Normalizing once at WRITE
+    time makes the stored record self-consistent with every reader.
+
+    Only rewrites a holding whose `fair_value` carries finite estimate + non-zero
+    current (the real schema shape) — a legacy/bare `{pct_diff: ...}` is left untouched
+    so we never clobber directional info into the fail-safe 0.0. Returns `analysis`
+    (mutated); a no-op for a non-dict or a run with no holdings_analysis.
+    """
+    if not isinstance(analysis, dict):
+        return analysis
+    for ha in analysis.get("holdings_analysis") or []:
+        if not isinstance(ha, dict):
+            continue
+        fv = ha.get("fair_value")
+        if not isinstance(fv, dict):
+            continue
+        try:
+            est = float(fv.get("estimate"))
+            cur = float(fv.get("current"))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(est) and math.isfinite(cur) and cur != 0:
+            fv["pct_diff"] = canonical_pct_diff(fv)
+    return analysis

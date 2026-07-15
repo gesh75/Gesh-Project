@@ -1375,6 +1375,10 @@ def run_deep_analysis():
         # always write the analysis here regardless of the throttle. But NEVER
         # persist a snapshot-sourced (offline) equity value as a live tick — that
         # would corrupt the equity curve / ECG with stale data (mirrors /api/portfolio).
+        # Persist the canonical fair-value % so DB history + reports match the
+        # dashboard/Kelly (which recompute it at read time) — not the raw model
+        # value that could disagree surface-to-surface (Codex #4).
+        analysis = fair_value.normalize_holdings_fair_values(analysis)
         try:
             run_id = log_analysis(MODEL, payload, analysis)
             if not payload.get("offline"):

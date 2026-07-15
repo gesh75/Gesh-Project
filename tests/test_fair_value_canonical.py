@@ -46,3 +46,42 @@ def test_js_daFvPct_uses_same_formula():
     body = m.group(0)
     assert "fv.estimate-fv.current" in body.replace(" ", "")
     assert "Math.abs(fv.current)" in body
+
+
+# ── write-time persistence (Codex #4): normalize pct_diff before it is stored ──
+
+def test_normalize_rewrites_persisted_pct_diff_to_canonical():
+    # A model that shipped a contradictory +88 pct_diff must be persisted as the
+    # canonical (overvalued, negative) value so reports/history match the dashboard.
+    analysis = {"holdings_analysis": [
+        {"symbol": "TSLA", "verdict": "TRIM",
+         "fair_value": {"estimate": 210.0, "current": 394.0, "status": "OVERVALUED",
+                        "pct_diff": 88.0}}]}
+    out = fv.normalize_holdings_fair_values(analysis)
+    stored = out["holdings_analysis"][0]["fair_value"]["pct_diff"]
+    assert stored == fv.canonical_pct_diff({"estimate": 210.0, "current": 394.0})
+    assert stored < 0                                        # not the model's +88
+
+
+def test_normalize_is_noop_without_estimate_current():
+    # A bare/legacy fair_value (only pct_diff) is left untouched — never clobbered to 0.
+    analysis = {"holdings_analysis": [
+        {"symbol": "X", "fair_value": {"pct_diff": -8.2}}]}
+    fv.normalize_holdings_fair_values(analysis)
+    assert analysis["holdings_analysis"][0]["fair_value"]["pct_diff"] == -8.2
+
+
+def test_normalize_handles_missing_or_malformed_holdings():
+    assert fv.normalize_holdings_fair_values(None) is None
+    assert fv.normalize_holdings_fair_values({}) == {}
+    # holdings without a dict fair_value must not raise
+    a = {"holdings_analysis": [{"symbol": "Y"}, {"symbol": "Z", "fair_value": None}, "junk"]}
+    assert fv.normalize_holdings_fair_values(a) is a
+
+
+def test_normalize_is_idempotent():
+    analysis = {"holdings_analysis": [
+        {"fair_value": {"estimate": 130.0, "current": 103.0, "pct_diff": 999.0}}]}
+    once = fv.normalize_holdings_fair_values(analysis)["holdings_analysis"][0]["fair_value"]["pct_diff"]
+    twice = fv.normalize_holdings_fair_values(analysis)["holdings_analysis"][0]["fair_value"]["pct_diff"]
+    assert once == twice
