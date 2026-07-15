@@ -50,6 +50,7 @@ Start script: `start_gesh_main.sh` (plist handles log output to `/tmp/gesh_main.
 | `com.gesh.main` | RunAtLoad | `start_gesh_main.sh` | `/tmp/gesh_main.log` | the :9000 server |
 | `com.gesh.daily-analysis` | 10:30 ET Mon–Fri | `run_daily_analysis.sh` | `/tmp/gesh_fullchain.log` | daily analysis chain |
 | `com.gesh.onboarding-sweep` | every 15 min (`StartInterval 900`) | `sweep_onboarding.sh` | `/tmp/gesh_onboarding_sweep.log` | re-send onboarding magic links to paid-but-un-onboarded subscribers (`billing.resend_owed_onboarding`; idempotent) |
+| `com.gesh.dashboard-snapshot` | every 30 min (`StartInterval 1800`), market-hours-guarded | `refresh_dashboard_snapshot.sh` | `/tmp/gesh_dashboard_snapshot.log` | intraday MCP refresh of `live_portfolio_snapshot.json` (the :9000 `/api/portfolio` offline fallback) — keeps the dashboard live via the Robinhood MCP (`fetch_snapshot_mcp.sh`, no robin_stocks/MFA) instead of only the 10:30 chain. Off-hours ticks are a cheap no-op; `GESH_SNAPSHOT_FORCE=1` bypasses the guard for an ad-hoc run |
 
 ```bash
 # Restart this service
