@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -65,13 +65,26 @@ CACHE_TTL_H = 6  # hours
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 
+def _utc_now() -> datetime:
+    """Timezone-aware UTC now — datetime.utcnow() is deprecated (Codex #7)."""
+    return datetime.now(timezone.utc)
+
+
+def _parse_ts(raw: str) -> datetime:
+    """Parse a stored ISO timestamp as AWARE UTC. Caches written before the utcnow()
+    migration hold NAIVE strings, and aware-minus-naive raises — so treat a naive
+    stamp as the UTC it always was, keeping legacy caches valid."""
+    ts = datetime.fromisoformat(raw)
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
 def _cache_valid() -> bool:
     if not CACHE_FILE.exists():
         return False
     try:
         data = json.loads(CACHE_FILE.read_text())
-        fetched = datetime.fromisoformat(data["fetched_at"])
-        return (datetime.utcnow() - fetched).total_seconds() < CACHE_TTL_H * 3600
+        fetched = _parse_ts(data["fetched_at"])
+        return (_utc_now() - fetched).total_seconds() < CACHE_TTL_H * 3600
     except Exception:
         return False
 
@@ -236,7 +249,7 @@ def get_macro_regime(force_refresh: bool = False) -> dict[str, Any]:
         "rate_trend":    "STABLE",
         "data_source":   "yfinance",
         "summary":       "",
-        "fetched_at":    datetime.utcnow().isoformat(),
+        "fetched_at":    _utc_now().isoformat(),
     }
 
     fed_funds     = _fetch_fed_funds()
