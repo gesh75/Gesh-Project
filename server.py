@@ -1213,6 +1213,14 @@ def _ticker_get_cached(bucket: str, sym: str) -> dict | None:
 
 
 def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
+    # Stamp a coarse freshness signal so each Analyze widget can label its OWN state
+    # (live ≤5min vs cached/delayed) rather than the page making one global LIVE-vs-
+    # CACHED claim (GESH-4). as_of = fetch time; a cache HIT returns this same stamp,
+    # so the widget always reflects the true data age. setdefault: never clobber a
+    # payload that already carries its own as_of/source.
+    if isinstance(resp, dict) and "price" not in resp:   # skip the tiny _cached_close blob
+        resp.setdefault("as_of", _dt.now(_tz.utc).isoformat())
+        resp.setdefault("source", "live")
     with _ticker_get_lock:
         _ticker_get_cache[(bucket, sym)] = (time.monotonic(), resp)
     return resp
@@ -1968,8 +1976,14 @@ def levels_symbol(symbol: str):
         return cached
     try:
         import trade_levels
+        # Bind the trade-setup ENTRY (and the header quote) to the SAME canonical
+        # quote the chart / AI card / portfolio table use (_latest_close — the
+        # bad-tick-guarded 1mo last close), instead of trade_levels' independent 6mo
+        # last bar. This eliminates the "$396.18 vs $394.76" divergence (GESH-1).
+        # On a data outage _latest_close is None → compute falls back to its own series.
+        px = _latest_close(sym)
         return _ticker_get_store("levels", sym,
-                                 {"status": "ok", "data": trade_levels.compute(sym)})
+                                 {"status": "ok", "data": trade_levels.compute(sym, current_price=px)})
     except Exception as e:
         raise _server_error(e)
 
@@ -2238,7 +2252,7 @@ async def analyze_ticker_endpoint(request: Request):
     card = _ticker_card_get(sym)
     if card is not None:
         auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
-        return {"status": "ok", "data": card}
+        return {"status": "ok", "data": card, "cached": True}
     try:
         # Single-flight per symbol: the ~15s LLM call means concurrent first
         # requests are the norm for a hot ticker — followers wait on the leader's
@@ -2249,7 +2263,7 @@ async def analyze_ticker_endpoint(request: Request):
             card = _ticker_card_get(sym)
             if card is not None:
                 auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
-                return {"status": "ok", "data": card}
+                return {"status": "ok", "data": card, "cached": True}
             # Quota gate sits AFTER the cache re-check (cached hits are free) and
             # BEFORE any spend — a capped user costs nothing, not even the quote.
             _check_customer_quota(_session_email(request), "ticker_card")
@@ -2265,9 +2279,13 @@ async def analyze_ticker_endpoint(request: Request):
             if suspect and isinstance(card, dict):
                 card["price_suspect"] = True
                 card["price_suspect_reason"] = reason
+            # Stamp when the AI card was generated so the UI can tag it "AI-GENERATED
+            # · <time>" and never let it hide under a global "LIVE" banner (GESH-4/5).
+            if isinstance(card, dict):
+                card["generated_at"] = _dt.now(_tz.utc).isoformat()
             _ticker_card_store(sym, card)
             auth_users.log_usage(_session_email(request), "ticker_card", sym)
-            return {"status": "ok", "data": card}
+            return {"status": "ok", "data": card, "cached": False}
     except HTTPException:
         raise
     except Exception as e:

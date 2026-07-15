@@ -565,6 +565,20 @@ def run_consensus_holding(
     n         = active_count
     raw_score = weighted_sum / weight_total if weight_total > 0 else 0
     confidence = n / max(len(NODE_WEIGHTS), 1)
+    # `confidence` above is DATA COVERAGE (share of nodes with live data), not the
+    # strength of the call — surfacing it as "confidence" made a near-neutral HOLD read
+    # as "80% confident" (GESH-3). Expose honest, separate provenance metrics:
+    #  • data_coverage — coverage against the VOTABLE universe (can reach 100%)
+    #  • conviction    — how far the weighted vote sits from neutral (|raw_score| vs the
+    #                    0.55 STRONG threshold); invariant-free, tracks verdict strength
+    #  • tilt          — for a HOLD, whether the discarded count leans bearish/bullish
+    votable = sum(1 for k in votes if k not in _skip)
+    data_coverage = round(n / max(votable, 1) * 100, 0)
+    _av = abs(raw_score)
+    conviction = round(min(_av / 0.55, 1.0) * 100, 0)
+    conviction_label = "STRONG" if _av >= 0.55 else "MODERATE" if _av >= 0.25 else "WEAK"
+    tilt = (("bearish" if bearish > bullish else "bullish" if bullish > bearish else "balanced")
+            if _av < 0.25 else None)
 
     if n < 4:
         verdict = "INSUFFICIENT DATA"
@@ -590,7 +604,11 @@ def run_consensus_holding(
         "verdict":       verdict,
         "verdict_color": verdict_color,
         "raw_score":     round(raw_score, 3),
-        "confidence":    round(confidence * 100, 0),
+        "confidence":    round(confidence * 100, 0),   # back-compat (== data coverage vs all nodes)
+        "data_coverage": data_coverage,                # coverage vs the votable universe (GESH-3)
+        "conviction":    conviction,                   # call strength from |raw_score| (GESH-3)
+        "conviction_label": conviction_label,
+        "tilt":          tilt,                         # for a HOLD: bearish/bullish/balanced lean
         "bullish":       bullish,
         "bearish":       bearish,
         "neutral":       neutral,

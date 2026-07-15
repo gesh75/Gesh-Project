@@ -16,6 +16,8 @@ from __future__ import annotations
 import numpy as np
 
 _STOP_BUFFER = 0.005      # 0.5% below the support level for the stop
+_MIN_RR = 1.0             # reward:risk below this → setup is NOT actionable (flagged)
+_MIN_REWARD_PCT = 0.25    # target must clear at least this % above entry to be actionable
 
 
 def _swing_levels(high: np.ndarray, low: np.ndarray, left: int = 3, right: int = 3):
@@ -32,28 +34,52 @@ def _swing_levels(high: np.ndarray, low: np.ndarray, left: int = 3, right: int =
     return highs, lows
 
 
-def compute(symbol: str, close=None, high=None, low=None) -> dict:
+def compute(symbol: str, close=None, high=None, low=None, current_price=None) -> dict:
     """Support/resistance + a long-setup (entry/stop/target/RR) for `symbol`.
-    Fetches 6mo daily OHLCV via price_source when arrays aren't supplied."""
+    Fetches 6mo daily OHLCV via price_source when arrays aren't supplied.
+
+    `current_price`, when supplied (finite, > 0), binds the setup ENTRY (and the
+    returned `price`) to the caller's authoritative live quote — so the trade setup
+    matches the rest of the Analyze page (single source of truth) rather than this
+    function's own 6mo last-daily-close. Pivots always use the last completed bar."""
     try:
         if close is None or high is None or low is None:
+            import pandas as pd
             import price_source
             raw = price_source.yf_download(symbol, period="6mo", interval="1d",
                                            auto_adjust=True, progress=False)
             if raw is None or len(raw) < 20:
                 return {"available": False, "reason": "insufficient price data"}
-            close = raw["Close"].squeeze().dropna().values.astype(float)
-            high = raw["High"].squeeze().dropna().values.astype(float)
-            low = raw["Low"].squeeze().dropna().values.astype(float)
+            # Joint row-wise alignment: drop rows where ANY of Close/High/Low is NaN
+            # so the three arrays stay bar-aligned. Dropping each column independently
+            # can shift them and silently misalign the OHLC bars.
+            ohlc = pd.DataFrame({"Close": raw["Close"].squeeze(),
+                                 "High": raw["High"].squeeze(),
+                                 "Low": raw["Low"].squeeze()}).dropna()
+            if len(ohlc) < 20:
+                return {"available": False, "reason": "insufficient price data"}
+            close = ohlc["Close"].to_numpy(dtype=float)
+            high = ohlc["High"].to_numpy(dtype=float)
+            low = ohlc["Low"].to_numpy(dtype=float)
         close = np.asarray(close, dtype=float)
         high = np.asarray(high, dtype=float)
         low = np.asarray(low, dtype=float)
         if len(close) < 20:
             return {"available": False, "reason": "insufficient price data"}
 
-        price = float(close[-1])
-        h, low_bar, c = float(high[-1]), float(low[-1]), price
-        if not np.isfinite([price, h, low_bar]).all():
+        last_close = float(close[-1])
+        h, low_bar, c = float(high[-1]), float(low[-1]), last_close  # pivots use last bar
+        # Entry binds to the caller's authoritative live quote when supplied, else the
+        # last completed daily close (back-compat: every array-based caller passes none).
+        price = last_close
+        if current_price is not None:
+            try:
+                cp = float(current_price)
+                if np.isfinite(cp) and cp > 0:
+                    price = cp
+            except (TypeError, ValueError):
+                pass
+        if not np.isfinite([price, h, low_bar, last_close]).all():
             return {"available": False, "reason": "non-finite price data"}
         if price <= 0:
             return {"available": False, "reason": "non-positive price"}
@@ -93,6 +119,17 @@ def compute(symbol: str, close=None, high=None, low=None) -> dict:
         risk = entry - stop
         reward = target - entry
         rr = round(reward / risk, 2) if risk > 0 else None
+        reward_pct = round((reward / entry) * 100, 2) if entry else None
+        # A setup whose reward:risk is below _MIN_RR — or whose target is a few-cent
+        # micro-tick above entry (reward_pct < _MIN_REWARD_PCT) — is mathematically
+        # degenerate (e.g. the observed 0.01× R:R with target 5¢ above entry). We keep
+        # the levels for context (available stays True) but FLAG the setup non-actionable
+        # so the UI never renders it as a tradeable long.
+        actionable = (rr is not None and rr >= _MIN_RR
+                      and reward_pct is not None and reward_pct >= _MIN_REWARD_PCT)
+        warning = None if actionable else (
+            f"Reward:risk {rr}× is below {_MIN_RR:.1f}× — target only {reward_pct}% above "
+            "entry; not an actionable setup at current levels.")
 
         return {
             "available": True, "symbol": symbol.upper(), "price": entry,
@@ -104,7 +141,8 @@ def compute(symbol: str, close=None, high=None, low=None) -> dict:
             "setup": {"entry": entry, "stop": stop, "target": target,
                       "risk_reward": rr,
                       "risk_pct": round((risk / entry) * 100, 2) if entry else None,
-                      "reward_pct": round((reward / entry) * 100, 2) if entry else None},
+                      "reward_pct": reward_pct,
+                      "actionable": actionable, "warning": warning},
             "note": ("Educational trade-setup levels (long bias) — not advice. "
                      "Entry at last close, stop below nearest support, target at "
                      "nearest resistance."),

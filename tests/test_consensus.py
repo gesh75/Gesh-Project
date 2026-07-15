@@ -163,6 +163,30 @@ def test_strong_sell_all_bearish(monkeypatch):
     assert res["verdict_color"] == "red"
 
 
+# ── GESH-3: conviction/coverage provenance (the "confident HOLD" fix) ────────────
+
+def test_conviction_high_for_strong_call(monkeypatch):
+    _set_votes(monkeypatch, {label: _bull for label in _LABEL_TO_FUNC})
+    res = _run()
+    assert res["verdict"] == "STRONG BUY"
+    assert res["conviction"] >= 90 and res["conviction_label"] == "STRONG"
+    # data_coverage (share of votable nodes with live data) is DISTINCT from conviction
+    assert res["data_coverage"] >= 80
+
+
+def test_near_neutral_hold_is_low_conviction_with_tilt(monkeypatch):
+    # 1 bull vs 2 bear (rest neutral) → weighted mean near zero → HOLD, but the count
+    # leans bearish. Conviction must reflect the WEAK call, not the high coverage —
+    # this is the exact "HOLD @ conf 80%" misread from the TSLA review.
+    _set_votes(monkeypatch, {"Momentum": _bull, "Fundamentals": _bear, "Analyst": _bear})
+    res = _run()
+    assert res["verdict"] == "HOLD"
+    assert res["conviction"] <= 45
+    assert res["conviction_label"] in ("WEAK", "MODERATE")
+    assert res["tilt"] == "bearish"
+    assert res["data_coverage"] >= 80        # high coverage, low conviction — the point
+
+
 def test_insufficient_data_when_few_active(monkeypatch):
     """Only 3 nodes vote (< 4) -> INSUFFICIENT DATA regardless of score."""
     votes = {"Rel.Strength": _bull, "Trend": _bull, "Volume": _bull}

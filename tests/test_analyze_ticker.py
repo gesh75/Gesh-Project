@@ -161,6 +161,21 @@ def test_route_customer_allowed_returns_200(monkeypatch):
     assert body["data"]["symbol"] == "AAPL"          # _safe_symbol uppercased
 
 
+def test_analyze_ticker_reports_cached_and_generated_at(monkeypatch):
+    """GESH-4: the AI card is stamped generated_at + a cached flag, so the UI can tag
+    it 'AI-GENERATED · <time>' instead of hiding it under a global 'LIVE' banner."""
+    from datetime import datetime
+    c = _customer_client(monkeypatch)
+    r1 = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
+    b1 = r1.json()
+    assert b1["cached"] is False
+    datetime.fromisoformat(b1["data"]["generated_at"])      # parses as ISO 8601
+    r2 = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})   # cache hit, no spend
+    b2 = r2.json()
+    assert b2["cached"] is True
+    assert b2["data"]["generated_at"] == b1["data"]["generated_at"]  # same cached card
+
+
 def test_route_prose_not_masked_for_customer(monkeypatch):
     """The masking middleware must NOT redact this public per-share prose: a
     customer sees the real "$180", not "$•••"."""
