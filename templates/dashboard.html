@@ -2757,6 +2757,26 @@ function buildSuspectBadge(reason){
   return `<div style="background:rgba(255,184,0,.12);border:1px solid rgba(255,184,0,.4);border-radius:6px;padding:7px 10px;margin:2px 0 8px;font-size:12px;color:var(--yellow)">⚠ Price may be unreliable — ${daEsc(reason)}</div>`;
 }
 
+// Per-card provenance line: "<feed> · <age>" (GESH-8). Both parts are OMITTED when the
+// server didn't supply them — `source` is only sent by endpoints that observed which
+// feed actually served, so a card with no verified feed says nothing rather than
+// asserting one. Age is derived from as_of (fetch time), which is what makes a card
+// honestly readable as live-vs-cached.
+function buildMetaLine(env){
+  const src=env&&env.source, at=env&&env.as_of;
+  if(!src&&!at) return '';
+  let age='';
+  if(at){
+    try{
+      const m=Math.round((Date.now()-new Date(at).getTime())/60000);
+      if(!isNaN(m)&&m>=0) age = m<1?'just now' : (m<60?m+'m ago' : Math.round(m/60)+'h ago');
+    }catch(e){ age=''; }
+  }
+  const parts=[]; if(src) parts.push(src); if(age) parts.push(age);
+  if(!parts.length) return '';
+  return `<div style="font-size:11px;color:var(--muted);opacity:.7;margin-top:6px" title="Which feed served this card, and how old the data is.">${daEsc(parts.join(' · '))}</div>`;
+}
+
 // ── Company-name → ticker typeahead (Analyze box) ─────────────────────────────
 let _symSearchTimer=null;
 function hideSymbolDropdown(){ const d=$('symbol-dropdown'); if(d){ d.style.display='none'; d.innerHTML=''; } }
@@ -2874,7 +2894,7 @@ async function analyzeTicker(raw){
           <div style="background:var(--card2);border:1px solid var(--green);border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">TARGET</div><div style="font-size:17px;font-weight:700;color:var(--green)">$${daEsc(st.target)}</div></div>
           <div style="background:var(--card2);border:1px solid ${rrColor};border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted)">RISK:REWARD</div><div style="font-size:17px;font-weight:700;color:${rrColor}">${st.risk_reward!=null?daEsc(st.risk_reward)+'×':'—'}</div></div>
         </div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.5">${daEsc(lv.note||'')}</div></div>`;
+        <div style="font-size:12px;color:var(--muted);line-height:1.5">${daEsc(lv.note||'')}</div>${buildMetaLine(lev)}</div>`;
     }
     // Earnings card (EPS beat/miss) — a Chart.js bar chart drawn after paint.
     let earnHtml='';
@@ -2896,9 +2916,9 @@ async function analyzeTicker(raw){
         <div class="card"><div style="${T}">Price Cycle (FFT)</div>
           ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
         <div class="card"><div style="${T}">Fundamentals</div>
-          ${fu&&fu.price_suspect?buildSuspectBadge(fu.price_suspect_reason):''}${fu?buildPERow(fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu?buildRangeRow(fu.low_52,fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow(fu.sector_source?'Sector ('+fu.sector_source+')':'Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
+          ${fu&&fu.price_suspect?buildSuspectBadge(fu.price_suspect_reason):''}${fu?buildPERow(fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu?buildRangeRow(fu.low_52,fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow(fu.sector_source?'Sector ('+fu.sector_source+')':'Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}${buildMetaLine(fund)}</div>
         <div class="card"><div style="${T}">Analyst Ratings</div>
-          ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', an.num_buy+' / '+an.num_hold+' / '+an.num_sell):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+an.target_mean):''}${an&&an.upside_pct!=null?buildRow('Upside', an.upside_pct+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?an.num_analysts:'—')}</div>
+          ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', an.num_buy+' / '+an.num_hold+' / '+an.num_sell):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+an.target_mean):''}${an&&an.upside_pct!=null?buildRow('Upside', an.upside_pct+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?an.num_analysts:'—')}${buildMetaLine(anl)}</div>
       </div>
       <div class="card" style="margin-top:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
