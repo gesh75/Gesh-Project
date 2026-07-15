@@ -432,6 +432,12 @@ _MASK_EXEMPT_PREFIXES = (
     # Masking would redact the customer's own dollars back at them. Responses are
     # built exclusively from customer_positions + live prices: zero owner data.
     "/api/mybook",
+    # PUBLIC market news — RSS/Alpaca HEADLINES only (title/url/source/published).
+    # The mask redacts by SEMANTIC PATH, and "title" was never enrolled as a KEEP
+    # key, so public analyst price targets ("...raises PT to $290") were redacted to
+    # "$•••" — pure loss with nothing protected, since the customer reads the same PT
+    # on Yahoo (GESH-7). The sentiment SCORE stays owner-only and is never in this body.
+    "/api/news",
 )
 _MONEY_KEYS = {
     "equity", "cash", "deployable", "settled_cash", "buying_power",
@@ -2062,13 +2068,22 @@ def fundamentals_symbol(symbol: str):
         return cached
     try:
         import market_data
+        # Track WHICH vendor actually served this row. `sector` is a vendor
+        # CLASSIFICATION from a defined taxonomy (Robinhood's is non-GICS — it calls
+        # TSLA "Consumer Durables"), not an absolute truth, and the two vendors do not
+        # agree. The branch is known right here, so the source is reported truthfully
+        # rather than guessed (GESH-6).
         row = market_data.rh_fundamentals(sym)
+        vendor = "robinhood"
         if not row:
             import fundamental_agent
             rows = fundamental_agent._fetch_fundamentals_batch([sym])
             row = rows[0] if rows and not rows[0].get("error") else None
+            vendor = "yfinance"
         if not row:
             raise HTTPException(status_code=404, detail="No fundamentals")
+        if row.get("sector"):
+            row["sector_source"] = vendor
         # Cross-source sanity: the 52-wk range here is RH-sourced; compare it to the
         # (differently-sourced) price feed. A price implausibly outside the band flags
         # a whole-series feed error the median bad-tick guard can't see (e.g. NFLX

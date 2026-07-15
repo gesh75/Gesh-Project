@@ -207,7 +207,6 @@ COVERED: dict[str, str] = {
     "/api/earnings/{symbol}": "/api/earnings/NVDA",
     "/api/fundamentals/{symbol}": "/api/fundamentals/NVDA",
     "/api/analyst/{symbol}": "/api/analyst/NVDA",
-    "/api/news/{symbol}": "/api/news/NVDA",
     "/api/watchlist": "/api/watchlist",
     "/api/gemini/status": "/api/gemini/status",
     "/api/config": "/api/config",
@@ -244,6 +243,15 @@ EXCLUDED: dict[str, str] = {
                             "internally cached, identical for every viewer",
     "/api/long-term-macro/cached": "cached variant of /api/long-term-macro — same public "
                                    "macro sentiment, no owner or customer dollars",
+    "/api/news/{symbol}": "PUBLIC market news headlines (title/url/source/published) from "
+                          "RSS/Alpaca — mask-EXEMPT by design (GESH-7): the mask redacts by "
+                          "semantic path and 'title' is a KEEP-class value, so public analyst "
+                          "price targets were being redacted to '$•••' while protecting "
+                          "nothing. The owner-only sentiment SCORE is never in this body. "
+                          "The no-owner-data contract is locked by "
+                          "tests/test_news_public_contract.py (payload keys are allow-listed, "
+                          "so this route is NOT unguarded — it is guarded by shape instead of "
+                          "by masking)",
 }
 
 

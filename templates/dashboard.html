@@ -2896,7 +2896,7 @@ async function analyzeTicker(raw){
         <div class="card"><div style="${T}">Price Cycle (FFT)</div>
           ${buildRow('Dominant cycle', cyc.period_days!=null?Math.round(cyc.period_days)+'d':'n/a')}${buildRow('Phase', fc&&fc.phase_label?fc.phase_label:'n/a')}${buildRow('Direction', fc?(fc.is_rising?'Rising ↑':'Falling ↓'):'n/a')}${buildRow('Signal', fc?fc.signal:'n/a')}</div>
         <div class="card"><div style="${T}">Fundamentals</div>
-          ${fu&&fu.price_suspect?buildSuspectBadge(fu.price_suspect_reason):''}${fu?buildPERow(fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu?buildRangeRow(fu.low_52,fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow('Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
+          ${fu&&fu.price_suspect?buildSuspectBadge(fu.price_suspect_reason):''}${fu?buildPERow(fu.pe_ratio):''}${fu&&fu.pb_ratio!=null?buildRow('P/B ratio', fu.pb_ratio):''}${fu&&capStr?buildRow('Market cap', capStr):''}${fu?buildRangeRow(fu.low_52,fu.high_52):''}${fu&&fu.dividend_yield!=null?buildRow('Dividend yield', fu.dividend_yield+'%'):''}${fu&&fu.sector?buildRow(fu.sector_source?'Sector ('+fu.sector_source+')':'Sector', fu.sector):''}${fu&&fu.momentum_gap?buildRow('Momentum gap', fu.momentum_gap):''}${!fu?buildRow('Fundamentals','n/a'):''}</div>
         <div class="card"><div style="${T}">Analyst Ratings</div>
           ${buildRow('Consensus', an&&an.recommendation?an.recommendation:'n/a')}${an&&an.num_buy!=null?buildRow('Buy / Hold / Sell', an.num_buy+' / '+an.num_hold+' / '+an.num_sell):''}${an&&an.target_mean!=null?buildRow('Mean target', '$'+an.target_mean):''}${an&&an.upside_pct!=null?buildRow('Upside', an.upside_pct+'%'):''}${buildRow('# analysts', an&&an.num_analysts!=null?an.num_analysts:'—')}</div>
       </div>
@@ -2936,7 +2936,7 @@ function buildAICard(h){
       <div class="hdr">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span class="da-holding vrd" style="${daVerdictStyle(h.verdict)}">${daEsc(h.verdict||'—')}</span>
-          <span style="font-size:12px;color:var(--muted)">${daEsc(h.company_type||'')}</span>
+          ${h.company_type?`<span style="font-size:12px;color:var(--muted)" title="An AI-written descriptor of the business — NOT a sector classification. The Fundamentals card's Sector row carries the vendor taxonomy value.">${daEsc(h.company_type)} <span style="opacity:.6">· AI descriptor</span></span>`:''}
         </div>
         <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
           FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>

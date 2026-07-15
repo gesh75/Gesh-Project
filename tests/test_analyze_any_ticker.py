@@ -80,6 +80,36 @@ def test_fundamentals_prefers_robinhood(monkeypatch):
     assert r.json()["data"]["sector"] == "Tech"
 
 
+# ── GESH-6: `sector` is a VENDOR classification — attribute it to the real vendor ──
+# The two vendors disagree (RH is non-GICS: it calls TSLA "Consumer Durables"), so the
+# UI must say whose taxonomy it is. The endpoint knows which branch fired, so the source
+# is reported, never guessed.
+
+def test_sector_attributed_to_robinhood_when_rh_serves(monkeypatch):
+    monkeypatch.setattr("market_data.rh_fundamentals",
+                        lambda s: {"pe_ratio": 30.5, "sector": "Consumer Durables"},
+                        raising=False)
+    r = _client(monkeypatch).get("/api/fundamentals/TSLA")
+    assert r.json()["data"]["sector_source"] == "robinhood"
+
+
+def test_sector_attributed_to_yfinance_on_fallback(monkeypatch):
+    monkeypatch.setattr("market_data.rh_fundamentals", lambda s: None, raising=False)
+    monkeypatch.setattr("fundamental_agent._fetch_fundamentals_batch",
+                        lambda syms: [{"symbol": syms[0], "sector": "Consumer Cyclical"}],
+                        raising=False)
+    r = _client(monkeypatch).get("/api/fundamentals/TSLA")
+    assert r.json()["data"]["sector_source"] == "yfinance"
+
+
+def test_no_sector_source_claimed_when_no_sector(monkeypatch):
+    """Never attribute a taxonomy we didn't actually receive."""
+    monkeypatch.setattr("market_data.rh_fundamentals",
+                        lambda s: {"pe_ratio": 30.5}, raising=False)
+    r = _client(monkeypatch).get("/api/fundamentals/NVDA")
+    assert "sector_source" not in r.json()["data"]
+
+
 def test_rh_fundamentals_maps_robinhood_fields(monkeypatch):
     import market_data
     fake = [{"pe_ratio": "30.50", "pb_ratio": "12.0", "market_cap": "1200000000000",
