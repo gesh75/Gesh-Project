@@ -234,6 +234,9 @@ COVERED: dict[str, str] = {
 EXCLUDED: dict[str, str] = {
     "/api/ollama/status": "410 Gone — endpoint permanently removed; carries no data",
     "/api/me": "returns only a session role string (owner|customer) — no owner financial data",
+    "/api/preferences": "returns only the caller's own two email-preference booleans "
+                        "(alerts_opt_out/digest_opt_out) — no owner financial data, no other "
+                        "customer's data; per-user isolation locked by tests/test_preferences.py",
     "/api/symbol-search": "public reference data (ticker + company name) from the Alpaca "
                           "asset universe — no owner positions/dollars, no LLM",
     "/api/usage/summary": "OWNER-ONLY metering view (403s customer sessions — locked by "

@@ -731,6 +731,41 @@ def watchlist_remove(symbol: str, request: Request):
     return {"status": "ok", "data": auth_users.get_watch(email)}
 
 
+def _preferences_payload(email: str) -> dict:
+    return {"alerts_opt_out": auth_users.get_alerts_opt_out(email),
+            "digest_opt_out": auth_users.get_digest_opt_out(email)}
+
+
+@app.get("/api/preferences")
+def preferences_get(request: Request):
+    """The 're-enable from the dashboard' path the unsubscribe pages promise.
+    Returns only the caller's own two email-preference booleans — no owner or
+    other-customer data (leak sweep: see EXCLUDED in
+    tests/test_customer_leak_sweep.py)."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"status": "ok", "data": _preferences_payload(email)}
+
+
+@app.post("/api/preferences")
+async def preferences_set(request: Request):
+    """Flip alerts_opt_out / digest_opt_out for the caller. Only keys present in
+    the body are changed — an absent key leaves that flag untouched."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if "alerts_opt_out" in body:
+        auth_users.set_alerts_opt_out(email, bool(body["alerts_opt_out"]))
+    if "digest_opt_out" in body:
+        auth_users.set_digest_opt_out(email, bool(body["digest_opt_out"]))
+    return {"status": "ok", "data": _preferences_payload(email)}
+
+
 def _cookie_secure() -> bool:
     """Whether to set the Secure flag on the session cookie. Defaults to True (production
     is HTTPS); set GESH_COOKIE_SECURE=0 ONLY for local plain-HTTP dev. This prevents the
