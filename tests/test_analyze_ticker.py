@@ -176,6 +176,18 @@ def test_analyze_ticker_reports_cached_and_generated_at(monkeypatch):
     assert b2["data"]["generated_at"] == b1["data"]["generated_at"]  # same cached card
 
 
+def test_card_always_carries_provenance_block(monkeypatch):
+    """Every card gets a provenance block — timestamp, model, price feed, and a
+    suspect flag — so the UI can render trust signals on it (feature 2)."""
+    c = _customer_client(monkeypatch)
+    r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
+    card = r.json()["data"]
+    p = card["provenance"]
+    assert p["generated_at"] and p["model"]
+    assert p["suspect"] in (True, False)
+    assert "price_source" in p and "price_as_of" in p     # keys present even when None
+
+
 def test_route_prose_not_masked_for_customer(monkeypatch):
     """The masking middleware must NOT redact this public per-share prose: a
     customer sees the real "$180", not "$•••"."""

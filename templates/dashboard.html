@@ -2994,6 +2994,19 @@ function buildAICard(h){
       </div>`).join('')}
       ${h.analyst_note?`<div style="font-size:13px;color:var(--accent);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">💡 ${daEsc(h.analyst_note)}</div>`:''}
     </div>
+    ${buildProvenanceStrip(h)}
+  </div>`;
+}
+
+// Provenance strip (feature 2): timestamp + model + price feed + suspect flag —
+// always present on a card so trust signals never depend on parsing prose.
+function buildProvenanceStrip(card){
+  const p=card.provenance||{};
+  const pvSrc=p.price_source?daEsc(p.price_source):'unattributed';
+  const pvWhen=p.generated_at?new Date(p.generated_at).toLocaleString():'—';
+  const pvWarn=p.suspect?`<span style="color:var(--red)">&#9888; ${daEsc(p.suspect_reason||'price cross-source suspect')}</span>`:'';
+  return `<div class="prov-strip" style="font-size:11px;color:var(--muted);border-top:1px solid var(--border);margin-top:10px;padding-top:6px">
+    AI-generated ${daEsc(pvWhen)} &middot; model ${daEsc(p.model||'—')} &middot; price feed: ${pvSrc} ${pvWarn}
   </div>`;
 }
 

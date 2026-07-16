@@ -2448,6 +2448,17 @@ async def analyze_ticker_endpoint(request: Request):
                     card,
                     _quality_block(pmeta, suspect, reason, as_of=card["generated_at"]),
                     context=f"analyze-ticker:{sym}")
+                # Provenance strip (feature 2): a compact, ALWAYS-present block the
+                # UI renders under every card — timestamp, model, price feed, and
+                # the suspect flag so trust signals never depend on parsing prose.
+                card["provenance"] = {
+                    "generated_at": card.get("generated_at"),
+                    "price_source": pmeta.get("source"),
+                    "price_as_of": card.get("generated_at"),
+                    "model": MODEL,
+                    "suspect": bool(suspect),
+                    "suspect_reason": reason if suspect else None,
+                }
             _ticker_card_store(sym, card)
             auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card, "cached": False}
