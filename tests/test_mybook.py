@@ -648,3 +648,56 @@ def test_analyze_book_partial_engine_failure_still_returns(client, monkeypatch):
     assert r.status_code == 200
     assert "error" in r.json()["data"]["kelly"]
     assert r.json()["data"]["analysis"]["portfolio_score"] == 71
+
+
+# ─── report staleness guard (audit 2026-07-15 Test 4) ────────────────────────
+# The report renders CURRENT positions next to the LAST persisted analysis. When
+# the book changed after that analysis ran, the report used to pair a 40-stock
+# book with a single-stock analysis with no warning — every portfolio-level
+# number silently wrong. The renderer must flag that mismatch.
+
+_STALE_MARK = "Analysis out of date"
+
+
+def test_report_flags_stale_analysis_when_book_changed(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    _stub_engines(server, monkeypatch)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    assert _mybook_analyze(c).status_code == 200          # persists w/ fingerprint
+    c.post("/api/mybook", json={"symbol": "AAPL", "shares": 5})   # book changes
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert _STALE_MARK in r.text
+
+
+def test_report_no_stale_flag_when_book_unchanged(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    _stub_engines(server, monkeypatch)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    assert _mybook_analyze(c).status_code == 200
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert _STALE_MARK not in r.text
+
+
+def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monkeypatch, au):
+    """Rows persisted before the fingerprint existed still get the guard via a
+    symbol-set comparison against the analysis's own recorded book."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.set_position("cust@x.com", "AAPL", 5)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {}, "kelly": {},
+        "book": {"positions": [{"symbol": "NVDA"}], "total_equity": 1000.0,
+                 "unpriced": []}})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert _STALE_MARK in r.text
