@@ -2969,6 +2969,7 @@ function buildAICard(h){
           FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>
         </div>
       </div>
+      <div class="sig-spark-slot"></div>
       <div class="da-sbars">
         ${skeys.map(k=>{const v=Math.max(0,Math.min(100,Number(sc[k])||0));return `<div class="da-sbar">
           <span class="nm">${daEsc(k.slice(0,3).toUpperCase())}</span>
@@ -3011,6 +3012,23 @@ function buildProvenanceStrip(card){
   const pvWarn=p.suspect?`<span style="color:var(--red)">&#9888; ${daEsc(p.suspect_reason||'price cross-source suspect')}</span>`:'';
   return `<div class="prov-strip" style="font-size:11px;color:var(--muted);border-top:1px solid var(--border);margin-top:10px;padding-top:6px">
     AI-generated ${daEsc(pvWhen)} &middot; model ${daEsc(p.model||'—')} &middot; price feed: ${pvSrc} ${pvWarn}
+  </div>`;
+}
+
+// Signal sparkline (feature 3): 30-day consensus verdict/score trend, fed by
+// GET /api/signals/history/{symbol} (signal_history.py — set by T1/T2, read-only
+// here). Numeric-only inline SVG — the polyline points are pure arithmetic on
+// `score`, never raw HTML, so only the trailing verdict label needs daEsc.
+function buildSignalSparkline(hist){
+  const sigRows=(hist&&hist.history)||[];
+  if(sigRows.length<2) return '';
+  const sigScores=sigRows.map(p=>Number(p.score)||0);
+  const sigMin=Math.min(...sigScores), sigMax=Math.max(...sigScores), sigSpan=(sigMax-sigMin)||1;
+  const sigPts=sigScores.map((s,i)=>`${(i/(sigScores.length-1)*120).toFixed(1)},${(28-((s-sigMin)/sigSpan)*24).toFixed(1)}`).join(' ');
+  const sigLast=sigRows[sigRows.length-1];
+  return `<div class="sig-spark" style="display:flex;align-items:center;gap:8px;margin-top:6px">
+    <svg width="120" height="30" viewBox="0 0 120 30"><polyline points="${sigPts}" fill="none" stroke="var(--accent)" stroke-width="1.5"/></svg>
+    <span style="font-size:11px;color:var(--muted)">30d consensus &middot; now <b>${daEsc(String(sigLast.verdict||''))}</b></span>
   </div>`;
 }
 
@@ -3064,7 +3082,22 @@ async function analyzeAI(sym){
     }
     h._cached=!!(j&&j.cached);   // AI-GENERATED pill notes when served from cache (GESH-4)
     el.innerHTML=buildAICard(h);
+    loadSignalSparkline(sym, el);
   }catch(e){ el.innerHTML=''; }
+}
+
+// Signal sparkline enhancement (feature 3, single-ticker Analyze path only —
+// NOT the book-analysis holdings list): fetched separately from the AI card so a
+// slow/cold sparkline never blocks the card render. Degrades silently — the
+// placeholder `.sig-spark-slot` just stays empty on any failure.
+async function loadSignalSparkline(sym, el){
+  try{
+    const res=await fetch('/api/signals/history/'+encodeURIComponent(sym)).catch(()=>null);
+    if(!res||!res.ok) return;
+    const j=await res.json().catch(()=>null);
+    const slot=el&&el.querySelector('.sig-spark-slot');
+    if(slot) slot.innerHTML=buildSignalSparkline(j&&j.data);
+  }catch(e){ /* non-critical enhancement — fail silently */ }
 }
 
 // ── My Portfolio: the customer's OWN book → deep AI + Kelly + Monte Carlo ─────

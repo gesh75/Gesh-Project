@@ -222,6 +222,7 @@ COVERED: dict[str, str] = {
     "/api/yield/landscape": "/api/yield/landscape",
     "/api/security/health": "/api/security/health",
     "/api/volatility/compare/{symbol}": "/api/volatility/compare/NVDA",
+    "/api/signals/history/{symbol}": "/api/signals/history/NVDA",
 }
 # GET /api routes deliberately not swept, each with a reason.
 EXCLUDED: dict[str, str] = {
