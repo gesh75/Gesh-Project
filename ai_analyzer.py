@@ -249,7 +249,29 @@ _HOLDING_ANALYSIS_ITEM = {
             "required": ["3m", "12m", "rationale"]
         },
         "verdict": {"type": "string"},
-        "analyst_note": {"type": "string"}
+        "analyst_note": {"type": "string"},
+        # Retention feature: the strongest argument AGAINST the verdict, plus
+        # concrete conditions that would flip it — steelmanned, never a strawman,
+        # and tied to observable numbers/events so it can't degrade into vibes.
+        "bear_case": {
+            "type": "object",
+            "properties": {
+                "thesis": {"type": "string", "description":
+                           "The single strongest argument AGAINST your verdict, "
+                           "2-3 sentences, grounded in the same data you used — "
+                           "steelman it, do not strawman."},
+                "invalidators": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description":
+                        "2-4 concrete OBSERVABLE conditions that would flip this "
+                        "verdict, each tied to a number or event, e.g. 'gross "
+                        "margin prints below 70% next quarter' — never vague "
+                        "('sentiment worsens')."
+                }
+            },
+            "required": ["thesis", "invalidators"]
+        }
     },
     "required": ["symbol", "company_type", "scores", "snowflake_summary", "fair_value", "risks", "rewards", "prediction", "verdict", "analyst_note"]
 }
@@ -483,7 +505,11 @@ def deep_analyze_ticker(
             "deep_analyze_ticker: tool output truncated at max_tokens — "
             "raise max_tokens or tighten TICKER_ANALYSIS_SCHEMA."
         )
-    return _extract_tool_input(message, "deep_analyze_ticker")
+    card = _extract_tool_input(message, "deep_analyze_ticker")
+    # Defensive default: the schema asks for bear_case but a model can still omit
+    # it — never let a missing key surface as a KeyError on the customer surface.
+    card.setdefault("bear_case", {"thesis": "", "invalidators": []})
+    return card
 
 
 

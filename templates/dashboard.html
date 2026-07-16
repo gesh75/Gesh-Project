@@ -2993,6 +2993,7 @@ function buildAICard(h){
         <span style="color:var(--muted2)">${daEsc((r&&r.text)||'')}</span>
       </div>`).join('')}
       ${h.analyst_note?`<div style="font-size:13px;color:var(--accent);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">💡 ${daEsc(h.analyst_note)}</div>`:''}
+      ${buildBearCase(h)}
     </div>
     ${buildProvenanceStrip(h)}
   </div>`;
@@ -3007,6 +3008,19 @@ function buildProvenanceStrip(card){
   const pvWarn=p.suspect?`<span style="color:var(--red)">&#9888; ${daEsc(p.suspect_reason||'price cross-source suspect')}</span>`:'';
   return `<div class="prov-strip" style="font-size:11px;color:var(--muted);border-top:1px solid var(--border);margin-top:10px;padding-top:6px">
     AI-generated ${daEsc(pvWhen)} &middot; model ${daEsc(p.model||'—')} &middot; price feed: ${pvSrc} ${pvWarn}
+  </div>`;
+}
+
+// Bear case (feature 4): the strongest argument AGAINST the verdict, plus
+// concrete observable invalidators — steelmanned, never fabricated when absent.
+function buildBearCase(card){
+  const bcObj=card.bear_case||{};
+  if(!bcObj.thesis) return '';
+  const bcInv=(bcObj.invalidators||[]).map(x=>`<li>${daEsc(String(x))}</li>`).join('');
+  return `<div style="margin-top:10px;border-left:3px solid var(--red);padding:8px 12px;background:var(--card2)">
+    <div style="font-size:12px;font-weight:600;color:var(--red)">BEAR CASE — what the other side sees</div>
+    <p style="font-size:12.5px;margin:6px 0">${daEsc(bcObj.thesis)}</p>
+    ${bcInv?`<div style="font-size:11px;color:var(--muted)">Would change this verdict:</div><ul style="font-size:12px;margin:4px 0 0 16px">${bcInv}</ul>`:''}
   </div>`;
 }
 
