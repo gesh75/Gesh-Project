@@ -786,6 +786,38 @@ def test_mybook_summary_survives_missing_signal_history(client, monkeypatch, au)
     assert r.status_code == 200 and r.json()["data"]["top_changes"] == []
 
 
+# ─── book table signal columns (CONSENSUS / KELLY Δ / RISK) ─────────────────
+
+def test_mybook_payload_carries_signal_and_kelly_columns(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    import signal_history as sh
+    sh.record_snapshots([{"symbol": "NVDA", "verdict": "BUY", "score": 0.3,
+                          "confidence": 80}], date="2026-07-16")
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {}, "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "current_pct": 2.5, "optimal_pct": 5.4}]},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook").json()["data"]
+    assert d["signals"]["NVDA"]["verdict"] == "BUY"
+    assert d["kelly_deltas"]["NVDA"] == {"action": "ADD", "delta_pp": 2.9}
+    assert d["analysis_stale"] is False
+
+
+def test_mybook_signal_columns_fail_soft(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1})
+    d = c.get("/api/mybook").json()["data"]
+    assert d["signals"] == {} or "NVDA" in d["signals"]   # empty history is fine
+    assert d["kelly_deltas"] == {}                        # no analysis yet
+
+
 def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monkeypatch, au):
     """Rows persisted before the fingerprint existed still get the guard via a
     symbol-set comparison against the analysis's own recorded book."""

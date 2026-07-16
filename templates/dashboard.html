@@ -3144,11 +3144,30 @@ async function analyzeAI(sym){
 }
 
 // ── My Portfolio: the customer's OWN book → deep AI + Kelly + Monte Carlo ─────
+// Book table signal columns (Task 5) — the plain holdings table duplicates the
+// broker; these are the columns only GESH can provide. Each has an explicit
+// empty state so a missing signal_history row or absent analysis never reads
+// as a blank cell (fail-soft, matches the /api/mybook contract).
+function buildConsensusCell(sig){
+  if(!sig||!sig.verdict) return `<span style="color:var(--muted)">—</span>`;
+  return `<span style="${daVerdictStyle(sig.verdict)};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700" title="as of ${daEsc(String(sig.date||''))}">${daEsc(sig.verdict)}</span>`;
+}
+function buildKellyDeltaCell(kd){
+  if(!kd||!kd.action) return `<span style="color:var(--muted);font-size:12px">run analysis</span>`;
+  const dpp=Number(kd.delta_pp)||0;
+  const color=kd.action==='ADD'?'var(--green)':kd.action==='TRIM'?'var(--red)':'var(--muted)';
+  return `<span style="color:${color};font-weight:700">${daEsc(kd.action)} ${dpp>=0?'+':'−'}${Math.abs(dpp).toFixed(1)}pp</span>`;
+}
+function buildRiskCell(isRisky){
+  return isRisky ? `<span style="color:var(--yellow)" title="Flagged in your last portfolio risk review">⚠</span>` : `<span style="color:var(--muted)">—</span>`;
+}
 async function loadMyBook(){
   const el=document.getElementById('mybook-list'); if(!el) return;
   try{
     const j=await fetch('/api/mybook').then(r=>r.ok?r.json():null).catch(()=>null);
     const d=(j&&j.data)||{}; const pos=d.positions||[]; const eqw=!!d.equal_weight;
+    const signals=d.signals||{}; const kellyDeltas=d.kelly_deltas||{};
+    const riskySet=new Set(d.risky_symbols||[]);
     if(!pos.length&&!(d.unpriced||[]).length){ el.innerHTML='<span style="color:var(--muted);font-size:12px">No positions yet — add a ticker above, or use 📋 Bulk import to paste your whole list.</span>'; return; }
 
     // Customer book stats (parity with owner overview)
@@ -3167,14 +3186,18 @@ async function loadMyBook(){
     }
 
     const eqwBanner=eqw?`<div style="margin-bottom:8px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--hover);font-size:12px;color:var(--muted2)">⚖️ <b>Equal-weight</b> — position sizes are private, so every name is weighted equally (1/N). <b>🗑 Clear</b> above to start fresh, then bulk-import <i>with</i> share counts (e.g. AAPL 120) or add via the form for real weighting.</div>`:'';
-    el.innerHTML= bookStats + eqwBanner +`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+    const staleHeaderNote=d.analysis_stale?`<div style="margin-bottom:8px;font-size:12px;color:var(--yellow)">⚠ CONSENSUS / KELLY Δ columns reflect an analysis that predates your current book — re-run <b>Analyze My Portfolio</b> for fresher numbers.</div>`:'';
+    el.innerHTML= bookStats + eqwBanner + staleHeaderNote +`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT','CONSENSUS','KELLY Δ','RISK',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
       <tbody>${pos.map(p=>`<tr style="border-bottom:1px dashed var(--border)">
         <td style="padding:8px 10px;font-weight:700;color:var(--accent)"><span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer" title="Deep research on ${daEsc(p.symbol)}">${daEsc(p.symbol)}</span></td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${eqw?'—':daEsc(p.quantity)}</td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
         <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${eqw?'—':'$'+daFmt(p.equity,2)}</td>
         <td style="padding:8px 10px;text-align:right;color:var(--muted2)">${daFmt(p.portfolio_percentage,1)}%</td>
+        <td style="padding:8px 10px;text-align:right">${buildConsensusCell(signals[p.symbol])}</td>
+        <td style="padding:8px 10px;text-align:right">${buildKellyDeltaCell(kellyDeltas[p.symbol])}</td>
+        <td style="padding:8px 10px;text-align:right">${buildRiskCell(riskySet.has(p.symbol))}</td>
         <td style="padding:8px 10px;text-align:right"><span onclick="mybookRemove('${daEsc(p.symbol)}')" style="cursor:pointer;color:var(--muted)" title="Remove">✕</span> <span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer;color:var(--accent);font-size:11px" title="Deep AI">🔍</span></td>
       </tr>`).join('')}</tbody></table></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:13px">

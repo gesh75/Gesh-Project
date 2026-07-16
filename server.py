@@ -2570,11 +2570,47 @@ def mybook_get(request: Request):
     try:
         ew = auth_users.get_equal_weight(email)
         payload = _customer_book_payload(auth_users.get_positions(email), equal_weight=ew)
+        # The book table earns its place with signal columns GESH alone can
+        # provide (research: brokerages already do plain holdings tracking
+        # better). Both maps are fail-soft: a missing signal_history table or
+        # absent analysis renders an empty state, never a 500 (Task 5).
+        syms = [h["symbol"] for h in payload["holdings"]] + payload["unpriced"]
+        signals: dict[str, dict] = {}
+        try:
+            import signal_history
+            for s in syms:
+                hist = signal_history.get_history(s, days=1)
+                if hist:
+                    signals[s] = {"verdict": hist[-1]["verdict"], "date": hist[-1]["date"]}
+        except Exception:  # noqa: BLE001 — the table is optional context, never a 500
+            pass
+        saved = auth_users.get_latest_book_analysis(email)
+        kelly_deltas: dict[str, dict] = {}
+        risky_symbols: list[str] = []
+        stale = _analysis_stale_for(email, saved)
+        if saved:
+            for k in (saved.get("kelly") or {}).get("holdings") or []:
+                if k.get("symbol") in syms and k.get("action"):
+                    kelly_deltas[k["symbol"]] = {
+                        "action": k["action"],
+                        "delta_pp": round((k.get("optimal_pct") or 0)
+                                          - (k.get("current_pct") or 0), 1)}
+            risk_syms: set[str] = set()
+            for r in ((saved.get("analysis") or {}).get("portfolio_risks") or []):
+                txt = str(r.get("text") or "").upper()
+                for s in syms:
+                    if s in txt:
+                        risk_syms.add(s)
+            risky_symbols = sorted(risk_syms)
         return {"status": "ok", "data": {
             "positions": payload["holdings"],
             "total_equity": payload["equity_summary"]["portfolio_equity"],
             "unpriced": payload["unpriced"],
             "equal_weight": ew,
+            "signals": signals,
+            "kelly_deltas": kelly_deltas,
+            "analysis_stale": stale,
+            "risky_symbols": risky_symbols,
         }}
     except Exception as e:
         raise _server_error(e)
