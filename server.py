@@ -3008,6 +3008,49 @@ async def mybook_deploy_cash(request: Request):
                                      "leftover": round(cash - spent, 2)}}
 
 
+@app.get("/api/mybook/summary")
+def mybook_summary(request: Request):
+    """Hero payload for the customer Home pane: value, what changed, one next
+    action. Cached/DB reads only — this endpoint must stay instant and free."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    positions = auth_users.get_positions(email)
+    watch = auth_users.get_watch(email)
+    ew = auth_users.get_equal_weight(email)
+    # Equal-weight books never expose real dollars (sizes are private by design) —
+    # the hero shows position count prominently instead (see buildHomeHero).
+    total = 0.0 if ew else sum(
+        p["shares"] * (_cached_close(p["symbol"]) or 0) for p in positions)
+    saved = auth_users.get_latest_book_analysis(email)
+    stale = _analysis_stale_for(email, saved)
+    top_changes: list[dict] = []
+    try:
+        import signal_history
+        syms = sorted({p["symbol"] for p in positions} | set(watch))
+        flips = signal_history.detect_confirmed_flips(syms, persistence_days=2)
+        top_changes = [{"symbol": f["symbol"], "prior_verdict": f["prior_verdict"],
+                        "new_verdict": f["new_verdict"], "date": f["confirmed_since"]}
+                       for f in flips[:3]]
+    except Exception:  # noqa: BLE001 — hero must render without signal history
+        pass
+    if not positions:
+        action = {"label": "Add your holdings", "target": "book"}
+    elif not saved:
+        action = {"label": "Analyze my portfolio", "target": "analyze"}
+    elif stale:
+        action = {"label": "Re-run analysis — your book changed", "target": "analyze"}
+    else:
+        action = {"label": "View your report", "target": "report"}
+    return {"status": "ok", "data": {
+        "total_equity": round(total, 2), "positions_count": len(positions),
+        "watch_count": len(watch),
+        "last_verdict": ((saved or {}).get("analysis") or {}).get("portfolio_verdict"),
+        "analysis_stale": stale,
+        "analyzed_at": (saved or {}).get("_saved_at"),
+        "top_changes": top_changes, "next_action": action}}
+
+
 def _render_book_report(email: str) -> str:
     """Standalone, print-friendly HTML report of the customer's book + their LAST
     persisted analysis. Server-side rendered with every dynamic string escaped —

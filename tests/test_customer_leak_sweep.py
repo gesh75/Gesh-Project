@@ -236,6 +236,11 @@ EXCLUDED: dict[str, str] = {
                    "owner data, mask-EXEMPT by design (masking would redact the customer's "
                    "own dollars back at them); per-user isolation + raw-dollar contract "
                    "locked by tests/test_mybook.py",
+    "/api/mybook/summary": "Home hero payload derived exclusively from the CUSTOMER's own "
+                           "positions/watchlist/analysis — zero owner data. Covered by the "
+                           "same '/api/mybook' mask-exempt prefix (masking would redact the "
+                           "customer's own total_equity back at them); shape/isolation "
+                           "locked by tests/test_mybook.py",
     "/api/trading/gate-status": "OWNER-ONLY paper-trading order cap (require_api_key); "
                                 "reads owner trade_log counts — not a customer surface",
     "/api/long-term-macro": "public macro sentiment overlay (VIX / Fear-&-Greed / aggregate "

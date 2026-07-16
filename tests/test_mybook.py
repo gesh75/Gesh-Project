@@ -735,6 +735,57 @@ def test_deploy_cash_flags_stale_analysis(client, monkeypatch, au):
     assert d["stale"] is True
 
 
+# ─── customer Home hero (/api/mybook/summary) ────────────────────────────────
+
+def test_mybook_summary_shapes_hero_payload(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)          # NVDA=100 in this fixture
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {"portfolio_verdict": "HOLD"}, "kelly": {}, "monte_carlo": {},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["total_equity"] == 1000.0 and d["positions_count"] == 1
+    assert d["last_verdict"] == "HOLD" and d["analysis_stale"] is False
+    assert d["next_action"]["target"] == "report"
+    assert isinstance(d["top_changes"], list) and len(d["top_changes"]) <= 3
+
+
+def test_mybook_summary_next_action_ladder(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    # empty book → add holdings
+    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "book"
+    # book, no analysis → analyze
+    au.set_position("cust@x.com", "NVDA", 10)
+    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "analyze"
+    # stale analysis → re-run
+    au.save_book_analysis("cust@x.com", {"_fp": "other-book", "analysis": {},
+                                         "kelly": {}, "monte_carlo": {},
+                                         "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["analysis_stale"] is True and d["next_action"]["target"] == "analyze"
+
+
+def test_mybook_summary_survives_missing_signal_history(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    import builtins
+    real_import = builtins.__import__
+    def _no_sighist(name, *a, **k):
+        if name == "signal_history":
+            raise ImportError("simulated absence")
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", _no_sighist)
+    r = c.get("/api/mybook/summary")
+    assert r.status_code == 200 and r.json()["data"]["top_changes"] == []
+
+
 def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monkeypatch, au):
     """Rows persisted before the fingerprint existed still get the guard via a
     symbol-set comparison against the analysis's own recorded book."""

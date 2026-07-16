@@ -58,12 +58,14 @@ td,.sval,.num{font-variant-numeric:tabular-nums}
 .tab-btn.active .tab-icon{opacity:1}
 .tab-pane{display:none}.tab-pane.active{display:block}
 
-/* Force initial customer view to Analyze + My Book (no flash to overview or other tabs) */
+/* Force initial customer view to whichever customer pane is .active (no flash
+   to the owner Overview tab or a stray second pane — generalized so a customer
+   can have more than one real pane: Home (default) and Analyze/My Book). */
 body.customer .tab-pane { display: none !important; }
-body.customer #tab-analyze { display: block !important; }
+body.customer .tab-pane.active { display: block !important; }
 
-/* Pre-activate the Analyze nav item for customers */
-body.customer .nav-item[data-tab="analyze"] {
+/* Pre-activate the Home nav item for customers (their default landing tab) */
+body.customer .nav-item[data-tab="home"] {
   color: var(--accent);
   border-bottom-color: var(--accent);
   background: var(--card2);
@@ -429,6 +431,10 @@ body.customer .owner-only{display:none!important}
 /* While we haven't applied the role yet (prevents any flash of owner menu).
    The early inline script adds .role-known based on server data-initial-role. */
 body:not(.role-known) .owner-only { display: none !important; }
+/* Mirror of owner-only: nav items only a CUSTOMER session should see (e.g. the
+   Home hero tab) — hidden by default (owner is the default state) and hidden
+   again explicitly once the role is confirmed to be owner. */
+body:not(.customer) .customer-only { display: none !important; }
 .nav-badge{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:transparent;border:1px solid var(--border2);transition:all var(--t-fast)}
 .nav-badge.fresh{background:var(--green);border-color:var(--green);box-shadow:0 0 6px rgba(0,230,118,.5)}
 .nav-badge.stale{background:var(--amber);border-color:var(--amber)}
@@ -499,11 +505,16 @@ body:not(.role-known) .owner-only { display: none !important; }
       if (mb) mb.style.display = 'block';
       var ct = document.getElementById('customer-tools');
       if (ct) ct.style.display = 'block';
-      // Force initial active states for mybook experience
-      var analyzeNav = document.querySelector('.nav-item[data-tab="analyze"]');
-      if (analyzeNav) analyzeNav.classList.add('active');
-      var firstMy = document.querySelector('#mybook-nav .nav-item');
-      if (firstMy) firstMy.classList.add('active');
+      // Front the Home pane by default (customer dashboard simplification) —
+      // no flash of the Analyze tab or the owner Overview tab on first paint.
+      var panes = document.querySelectorAll('.tab-pane');
+      for (var i = 0; i < panes.length; i++) panes[i].classList.remove('active');
+      var homePane = document.getElementById('tab-home');
+      if (homePane) homePane.classList.add('active');
+      var navItems = document.querySelectorAll('.nav-item');
+      for (var j = 0; j < navItems.length; j++) navItems[j].classList.remove('active');
+      var homeNav = document.querySelector('.nav-item[data-tab="home"]');
+      if (homeNav) homeNav.classList.add('active');
     }
     document.body.classList.add('role-known');
   } catch(e){}
@@ -515,6 +526,9 @@ body:not(.role-known) .owner-only { display: none !important; }
 
   <div class="sb-group">
     <div class="sb-group-title">Research</div>
+    <button class="nav-item customer-only" data-tab="home" onclick="switchTab('home')" title="Your portfolio at a glance">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span class="nav-label">Home</span></button>
     <button class="nav-item" data-tab="analyze" onclick="switchTab('analyze')" title="Analyze any ticker">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
       <span class="nav-label">Analyze</span></button>
@@ -646,6 +660,17 @@ body:not(.role-known) .owner-only { display: none !important; }
 <div class="toast-wrap" id="toast-wrap"></div>
 
 <div class="main">
+
+  <!-- ═══ TAB: HOME (customer hero — book value, what changed, one next action) ═══ -->
+  <div class="tab-pane" id="tab-home">
+    <div class="card" style="margin-bottom:18px">
+      <div class="ch" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Your Portfolio</div>
+        <span class="badge b-cyan">One answer, above the fold</span>
+      </div>
+      <div id="home-hero"><div class="deep-placeholder"><div class="deep-ph-text">Loading your summary…</div></div></div>
+    </div>
+  </div>
 
   <!-- ═══ TAB: ANALYZE (customer research — any ticker, live) ═══ -->
   <div class="tab-pane" id="tab-analyze">
@@ -2635,6 +2660,7 @@ function switchTab(name, btn){
   // you scrolled up (observed on the Risk tab). Always land at the top on switch.
   window.scrollTo(0, 0);
   // lazy-load data per tab (cached results render by default → never empty)
+  if(name==='home'){ if(typeof loadHomeHero==='function') loadHomeHero(); }
   if(name==='risk'){ loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
   if(name==='analysis'){ tryLoadCachedAnalysis(); }
   if(name==='signals'){ if(typeof loadCachedConsensus==='function') loadCachedConsensus(); if(typeof loadCachedKelly==='function') loadCachedKelly(); }
@@ -2713,7 +2739,7 @@ async function applyRoleNav(){
   if(role==='customer'){
     document.body.classList.add('customer');
     window.__isCustomer=true;
-    switchTab('analyze');
+    switchTab('home');
     // Show My Book nav and tools
     const mb = document.getElementById('mybook-nav');
     if (mb) mb.style.display = 'block';
@@ -2725,6 +2751,45 @@ async function applyRoleNav(){
   }
   loadWatchlist();
   loadMyBook();
+}
+
+// ── customer Home hero — one answer above the fold ────────────────────────────
+async function loadHomeHero(){
+  const el=document.getElementById('home-hero'); if(!el) return;
+  try{
+    const body=await (await fetch('/api/mybook/summary')).json();
+    el.innerHTML=buildHomeHero(body.data||{});
+  }catch(e){ el.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">Could not load your summary — retry shortly.</div></div>'; }
+}
+function buildHomeHero(d){
+  const changes=(d.top_changes||[]).map(t=>
+    `<li><b>${daEsc(t.symbol)}</b> ${daEsc(t.prior_verdict)} &rarr; <b>${daEsc(t.new_verdict)}</b> <span style="color:var(--muted)">(${daEsc(t.date)})</span></li>`).join('')
+    ||'<li style="color:var(--muted)">No confirmed signal changes on your names this week.</li>';
+  const staleNote=d.analysis_stale?`<div style="color:var(--yellow);font-size:12px">&#9888; Your last analysis predates your current book.</div>`:'';
+  // Equal-weight books report total_equity 0.0 (sizes are private by design —
+  // server never fakes a dollar figure onto a symbols-only book). When there
+  // ARE positions but the total reads exactly 0, lead with position count
+  // instead of a misleading "$0" headline number.
+  const eqWeight=Number(d.total_equity||0)===0 && Number(d.positions_count||0)>0;
+  const headline=eqWeight
+    ?`${Number(d.positions_count||0)} positions <span style="font-size:14px;color:var(--muted)">(equal-weight · sizes private)</span>`
+    :`$${Number(d.total_equity||0).toLocaleString()}`;
+  const act=d.next_action||{};
+  return `<div class="scard" style="padding:18px">
+    <div class="slabel">YOUR PORTFOLIO</div>
+    <div class="sval" style="font-size:28px">${headline}</div>
+    <div class="ssub">${Number(d.positions_count||0)} positions &middot; ${Number(d.watch_count||0)} watched &middot; last verdict: <b>${daEsc(String(d.last_verdict||'—'))}</b></div>
+    ${staleNote}
+    <div style="margin-top:12px;font-weight:600;font-size:13px">WHAT CHANGED</div>
+    <ul style="margin:6px 0 12px 16px;font-size:13px">${changes}</ul>
+    <button class="btn-analyze" onclick="homeAction('${daEsc(String(act.target||'analyze'))}')">${daEsc(String(act.label||'Analyze my portfolio'))}</button>
+  </div>`;
+}
+function homeAction(target){
+  if(target==='report'){ window.location='/mybook/report'; return; }
+  switchTab('analyze');
+  if(target==='book'&&typeof focusMyBookSection==='function') focusMyBookSection('overview');
+  if(target==='analyze'&&typeof mybookAnalyze==='function') mybookAnalyze();
 }
 
 // ── per-user watchlist (saved tickers on the Analyze tab) ─────────────────────

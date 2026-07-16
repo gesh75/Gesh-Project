@@ -66,3 +66,11 @@ def test_margin_panel_makes_no_lt_macro_node_claim():
         "The long-term-macro / margin-debt panel must not reference an 'LT_Macro' "
         "consensus node — it is an advisory long-term macro overlay, not a node."
     )
+
+
+def test_customer_home_pane_and_default_exist():
+    html = TEMPLATE.read_text()
+    assert 'id="tab-home"' in html
+    assert 'data-tab="home"' in html
+    assert "customer-only" in html            # role-gated nav class exists
+    assert "buildHomeHero" in html            # audited builder name
