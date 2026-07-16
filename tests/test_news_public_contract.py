@@ -78,3 +78,73 @@ def test_empty_news_is_clean_empty_list(client, monkeypatch):
     _stub_news(monkeypatch, [])
     r = client.get("/api/news/TSLA")
     assert r.status_code == 200 and r.json()["data"] == []
+
+
+# ─── news-as-sentiment chip (plan T4) ─────────────────────────────────────────
+# The customer ticker card gets a sentiment CHIP, not a feed. The chip data is
+# the CACHED news_sentiment row — a zero-cost DB read, never a live LLM call —
+# and ships under an allow-listed `sentiment` block. It must NEVER ship when the
+# cached row analyzed zero articles (the "never fabricate sentiment when
+# article_count=0" project rule).
+
+_ALLOWED_SENTIMENT_KEYS = {"score", "mood", "article_count", "as_of"}
+
+
+def _one_item():
+    return [{"title": "T", "url": "https://example.com/a",
+             "source": "s", "published": "p"}]
+
+
+def test_sentiment_chip_block_ships_from_cache_allow_listed(client, monkeypatch):
+    import news_agent
+    _stub_news(monkeypatch, _one_item())
+    monkeypatch.setattr(
+        news_agent, "_fresh_sentiment",
+        lambda sym: {"symbol": sym, "overall_sentiment": "POSITIVE",
+                     "sentiment_score": 42, "article_count": 6,
+                     "as_of": "2026-07-16 10:30:00", "cached": True},
+        raising=False)
+    r = client.get("/api/news/TSLA")
+    assert r.status_code == 200
+    s = r.json().get("sentiment")
+    assert s == {"score": 42, "mood": "POSITIVE", "article_count": 6,
+                 "as_of": "2026-07-16 10:30:00"}
+    assert set(s) <= _ALLOWED_SENTIMENT_KEYS
+
+
+def test_sentiment_block_absent_without_cached_row(client, monkeypatch):
+    import news_agent
+    _stub_news(monkeypatch, _one_item())
+    monkeypatch.setattr(news_agent, "_fresh_sentiment", lambda sym: None,
+                        raising=False)
+    r = client.get("/api/news/TSLA")
+    assert r.status_code == 200 and "sentiment" not in r.json()
+
+
+def test_zero_article_sentiment_never_ships(client, monkeypatch):
+    """article_count=0 rows are fabricated-by-definition — the block must not ship."""
+    import news_agent
+    import server as _server
+    _stub_news(monkeypatch, _one_item())
+    monkeypatch.setattr(
+        news_agent, "_fresh_sentiment",
+        lambda sym: {"overall_sentiment": "NEUTRAL", "sentiment_score": 0,
+                     "article_count": 0, "as_of": "2026-07-16 10:30:00"},
+        raising=False)
+    _server._ticker_get_cache.clear()          # bust the 5-min TTL cache
+    r = client.get("/api/news/TSLA")
+    assert r.status_code == 200 and "sentiment" not in r.json()
+
+
+def test_sentiment_lookup_failure_is_fail_soft(client, monkeypatch):
+    import news_agent
+    import server as _server
+    _stub_news(monkeypatch, _one_item())
+
+    def _boom(sym):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(news_agent, "_fresh_sentiment", _boom, raising=False)
+    _server._ticker_get_cache.clear()
+    r = client.get("/api/news/TSLA")
+    assert r.status_code == 200 and "sentiment" not in r.json()
+    assert r.json()["data"]                    # headlines still served

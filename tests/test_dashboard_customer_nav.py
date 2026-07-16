@@ -128,3 +128,16 @@ def test_customer_book_analysis_market_context_is_lead_and_fold():
     html = TEMPLATE.read_text()
     assert "buildLeadFold" in html            # audited build*-named helper
     assert "Full context" in html             # fold summary label
+
+
+# ─── news as attached sentiment — no generic feed for customers (plan T4) ─────
+
+def test_ticker_card_uses_news_chip_not_feed():
+    html = TEMPLATE.read_text()
+    assert "buildNewsChip" in html            # audited build*-named chip builder
+    assert "article_count" in html            # guards the zero-article rule
+    # the raw article-headline card on the shared Analyze pane is owner-only
+    idx = html.find("Recent News")
+    assert idx != -1, "Recent News card expected in the Analyze pane"
+    assert "owner-only" in html[max(0, idx - 300):idx], (
+        "the article feed must be scoped owner-only — customers get the chip")

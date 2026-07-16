@@ -2890,6 +2890,15 @@ function symbolSearch(q){
 document.addEventListener('click',e=>{ const w=$('analyze-input'); const d=$('symbol-dropdown');
   if(d&&w&&e.target!==w&&!d.contains(e.target)) hideSymbolDropdown(); });
 
+// News-as-sentiment chip (plan T4): one pill on the ticker-card header built
+// from the CACHED sentiment block of /api/news/{sym}. Renders NOTHING when
+// article_count is 0/absent — never fabricate sentiment (project rule).
+function buildNewsChip(n){
+  if(!n||!Number(n.article_count)) return '';
+  const s=Number(n.score)||0;
+  const color=s>15?'var(--green)':s<-15?'var(--red)':'var(--muted)';
+  return `<span title="news sentiment as of ${daEsc(String(n.as_of||''))}" style="border:1px solid ${color};color:${color};font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap">NEWS ${daEsc(String(n.mood||'NEUTRAL'))} &middot; ${s>0?'+':''}${daEsc(String(s))} (${Number(n.article_count)} articles)</span>`;
+}
 async function analyzeTicker(raw){
   // Charset mirrors the server's _SYMBOL_RE (^indices, forex =X, BRK.B, BTC-USD)
   // so a saved ^GSPC watchlist chip round-trips instead of collapsing to "GSPC".
@@ -2912,7 +2921,7 @@ async function analyzeTicker(raw){
       fetch(`/api/levels/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(`/api/earnings/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
     ]);
-    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[], mo=mom&&mom.data, lv=lev&&lev.data, ea=earn&&earn.data;
+    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[], nsent=(news&&news.sentiment)||null, mo=mom&&mom.data, lv=lev&&lev.data, ea=earn&&earn.data;
     if(!d && !rg && !fc && !fu){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">No data for '+daEsc(sym)+' — check the ticker and try again.</div></div>'; return; }
     const periods=['1d','5d','1mo','3mo','6mo','1y'];
     const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
@@ -2925,9 +2934,10 @@ async function analyzeTicker(raw){
       const voteChips=Object.entries(d.votes||{}).map(([n,v])=>voteChip(n,v)).join('');
       consHtml=`<div class="card" style="margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <span style="display:flex;align-items:baseline;gap:10px">
+          <span style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
             <span class="kelly-sym" style="font-size:24px">${daEsc(sym)}</span>
             ${px!=null?`<span style="font-size:16px;font-weight:600;color:var(--muted2)">$${daEsc(isFinite(px)?Number(px).toFixed(2):px)}</span>`:''}
+            ${buildNewsChip(nsent)}
           </span>
           <span class="cons-verdict ${chipClass}">${daEsc(d.verdict)}</span>
         </div>
@@ -3010,7 +3020,7 @@ async function analyzeTicker(raw){
         </div>
         <div id="analyze-chart" style="min-height:220px"></div>
       </div>
-      <div class="card" style="margin-top:16px"><div style="${T}">Recent News</div>
+      <div class="card owner-only" style="margin-top:16px"><div style="${T}">Recent News</div>
         ${nw.length?nw.map(n=>`<a href="${daEsc(safeUrl(n.url))}" target="_blank" rel="noopener noreferrer" style="display:block;padding:9px 0;border-bottom:1px solid var(--border);text-decoration:none">
           <div style="font-size:14px;color:var(--text)">${daEsc(n.title)}</div>
           <div style="font-size:12px;color:var(--muted)">${daEsc(n.source)}${n.published?' · '+daEsc(n.published):''}</div></a>`).join(''):'<div class="deep-ph-text" style="padding:20px 0;text-align:center">No recent news for this ticker.</div>'}</div>`;

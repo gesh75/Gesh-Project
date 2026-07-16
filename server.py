@@ -2203,6 +2203,23 @@ def news_symbol(symbol: str):
         resp = {"status": "ok", "data": trimmed}
         if feed:                      # omitted entirely when nothing served
             resp["source"] = feed
+        # News-as-sentiment chip (plan T4): attach the CACHED sentiment row — a
+        # zero-cost DB read, never a live LLM call, so the customer path stays
+        # free. Allow-listed sub-keys only (see tests/test_news_public_contract).
+        # Shipped ONLY when the cached row analyzed at least one article:
+        # sentiment over zero articles is fabricated by definition (project
+        # rule "never fabricate sentiment when article_count=0").
+        try:
+            cached_row = news_agent._fresh_sentiment(sym)
+            if cached_row and (cached_row.get("article_count") or 0) > 0:
+                resp["sentiment"] = {
+                    "score": cached_row.get("sentiment_score", 0),
+                    "mood": cached_row.get("overall_sentiment", "NEUTRAL"),
+                    "article_count": cached_row.get("article_count", 0),
+                    "as_of": cached_row.get("as_of"),
+                }
+        except Exception:  # noqa: BLE001 — the chip is optional context, never a 500
+            pass
         return _ticker_get_store("news", sym, resp)
     except HTTPException:
         raise
