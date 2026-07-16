@@ -74,6 +74,15 @@ _CARD = {
     "prediction": {"3m": "$185-205", "12m": "$170-230", "rationale": "Range-bound near fair value."},
     "verdict": "HOLD",
     "analyst_note": "Wall St target ~$210; our fair value is $180 — wait for a pullback.",
+    "bear_case": {
+        "thesis": "Services growth decelerates below 8% YoY while the multiple "
+                   "still prices in mid-teens growth, closing the gap to fair value "
+                   "from the other side.",
+        "invalidators": [
+            "Services revenue growth prints below 8% YoY next quarter",
+            "Gross margin falls below 44% for two consecutive quarters",
+        ],
+    },
 }
 
 
@@ -130,6 +139,60 @@ def test_ticker_schema_matches_internal_holding_card(monkeypatch):
         ai_analyzer.TICKER_ANALYSIS_SCHEMA == item
 
 
+def test_ticker_schema_includes_bear_case(monkeypatch):
+    """The tool schema must ask the model for a bear_case (thesis + observable
+    invalidators) — this rides the SAME single LLM call, no new spend."""
+    sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(_CARD)]))
+    ai_analyzer.deep_analyze_ticker("AAPL")
+    schema = sink["tools"][0]["input_schema"]
+    props = schema["properties"]
+    assert "bear_case" in props
+    bc_props = props["bear_case"]["properties"]
+    assert bc_props["thesis"]["type"] == "string"
+    assert bc_props["invalidators"]["type"] == "array"
+
+
+def test_deep_analyze_ticker_defaults_bear_case_when_model_omits_it(monkeypatch):
+    """Defensive default: a model response that omits bear_case must still reach
+    the customer with an empty-but-present scaffold, never a KeyError."""
+    card_without_bear_case = {k: v for k, v in _CARD.items() if k != "bear_case"}
+    _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(card_without_bear_case)]))
+    out = ai_analyzer.deep_analyze_ticker("AAPL")
+    assert out["bear_case"] == {"thesis": "", "invalidators": []}
+
+
+def test_portfolio_holdings_default_bear_case_when_model_omits_it(monkeypatch):
+    """bear_case lives in the SHARED per-holding schema, so deep_analyze_portfolio
+    (incl. the customer book analysis) is now also prompted for it — every holding
+    card must carry the same defensive scaffold when the model omits the field."""
+    holding_no_bc = {k: v for k, v in _CARD.items() if k != "bear_case"}
+    parsed = {
+        "portfolio_score": 60,
+        "portfolio_verdict": "HOLD",
+        "holdings_analysis": [holding_no_bc,
+                              {**holding_no_bc, "symbol": "NVDA"}],
+    }
+    _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
+    out = ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"},
+                                                           {"symbol": "NVDA"}]})
+    for h in out["holdings_analysis"]:
+        assert h["bear_case"] == {"thesis": "", "invalidators": []}
+
+
+def test_concise_portfolio_prompt_caps_bear_case(monkeypatch):
+    """The customer book analysis runs concise + token-budget-constrained (12000
+    max_tokens with a truncation retry ladder) — the brevity instruction must cap
+    bear_case output so the new field can't blow that budget."""
+    parsed = {"portfolio_score": 60, "portfolio_verdict": "HOLD",
+              "holdings_analysis": []}
+    sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
+    ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]},
+                                       concise=True)
+    user_msg = sink["messages"][0]["content"]
+    assert "bear_case" in user_msg           # concise mode explicitly caps the field
+    assert "BE CONCISE" in user_msg          # ...inside the existing brevity block
+
+
 # ─── Route: POST /api/analyze-ticker ─────────────────────────────────────────
 
 def _customer_client(monkeypatch, card=None, boom=None, price=195.0):
@@ -174,6 +237,29 @@ def test_analyze_ticker_reports_cached_and_generated_at(monkeypatch):
     b2 = r2.json()
     assert b2["cached"] is True
     assert b2["data"]["generated_at"] == b1["data"]["generated_at"]  # same cached card
+
+
+def test_card_always_carries_provenance_block(monkeypatch):
+    """Every card gets a provenance block — timestamp, model, price feed, and a
+    suspect flag — so the UI can render trust signals on it (feature 2)."""
+    c = _customer_client(monkeypatch)
+    r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
+    card = r.json()["data"]
+    p = card["provenance"]
+    assert p["generated_at"] and p["model"]
+    assert p["suspect"] in (True, False)
+    assert "price_source" in p and "price_as_of" in p     # keys present even when None
+
+
+def test_card_carries_bear_case_and_invalidators(monkeypatch):
+    """Every card carries a bear_case section (feature 4) — the strongest
+    argument against the verdict plus concrete, observable invalidators."""
+    c = _customer_client(monkeypatch)
+    r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
+    card = r.json()["data"]
+    assert card["bear_case"]["thesis"]
+    assert isinstance(card["bear_case"]["invalidators"], list)
+    assert len(card["bear_case"]["invalidators"]) >= 2
 
 
 def test_route_prose_not_masked_for_customer(monkeypatch):

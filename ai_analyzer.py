@@ -192,6 +192,9 @@ ticker everywhere it appears in your response."""
 # The per-holding research card — extracted so BOTH the portfolio deep-analysis
 # and the single-ticker customer card (TICKER_ANALYSIS_SCHEMA) share ONE definition
 # and can never drift apart (the frontend daRender markup renders both).
+# NOTE: any field added here is ALSO prompted on every holding in
+# deep_analyze_portfolio (incl. the token-budget-constrained customer book
+# analysis) — cap it in the `concise` brevity instruction below.
 _HOLDING_ANALYSIS_ITEM = {
     "type": "object",
     "properties": {
@@ -249,7 +252,29 @@ _HOLDING_ANALYSIS_ITEM = {
             "required": ["3m", "12m", "rationale"]
         },
         "verdict": {"type": "string"},
-        "analyst_note": {"type": "string"}
+        "analyst_note": {"type": "string"},
+        # Retention feature: the strongest argument AGAINST the verdict, plus
+        # concrete conditions that would flip it — steelmanned, never a strawman,
+        # and tied to observable numbers/events so it can't degrade into vibes.
+        "bear_case": {
+            "type": "object",
+            "properties": {
+                "thesis": {"type": "string", "description":
+                           "The single strongest argument AGAINST your verdict, "
+                           "2-3 sentences, grounded in the same data you used — "
+                           "steelman it, do not strawman."},
+                "invalidators": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description":
+                        "2-4 concrete OBSERVABLE conditions that would flip this "
+                        "verdict, each tied to a number or event, e.g. 'gross "
+                        "margin prints below 70% next quarter' — never vague "
+                        "('sentiment worsens')."
+                }
+            },
+            "required": ["thesis", "invalidators"]
+        }
     },
     "required": ["symbol", "company_type", "scores", "snowflake_summary", "fair_value", "risks", "rewards", "prediction", "verdict", "analyst_note"]
 }
@@ -359,8 +384,9 @@ def deep_analyze_portfolio(
     regime_block = f"\n\n{regime_context}" if regime_context else ""
     brevity = ("\n\nBE CONCISE — this is a fast interactive report on a larger book. "
                "For each holding give at most 2 short risks, 2 short rewards, and "
-               "one-line 3M/12M outlooks; a one-sentence snowflake_summary. No preamble "
-               "or repetition.") if concise else ""
+               "one-line 3M/12M outlooks; a one-sentence snowflake_summary; "
+               "bear_case: a one-sentence thesis and at most 2 invalidators. "
+               "No preamble or repetition.") if concise else ""
     _max_tokens = max_tokens if max_tokens is not None else 24000
 
     import copy
@@ -408,7 +434,14 @@ def deep_analyze_portfolio(
             "deep_analyze_portfolio: tool output truncated at max_tokens — "
             "the JSON is unusable; tighten DEEP_ANALYSIS_SCHEMA or raise max_tokens."
         )
-    return _extract_tool_input(message, "deep_analyze_portfolio")
+    result = _extract_tool_input(message, "deep_analyze_portfolio")
+    # Same defensive default as deep_analyze_ticker: bear_case is in the shared
+    # per-holding schema, but a model may omit it — every holding card must reach
+    # the renderer with the scaffold present, never raise on a missing key.
+    for holding in result.get("holdings_analysis") or []:
+        if isinstance(holding, dict):
+            holding.setdefault("bear_case", {"thesis": "", "invalidators": []})
+    return result
 
 
 # ─── Single-Ticker Deep Analysis (customer 'Analyze any ticker' card) ────────
@@ -483,7 +516,11 @@ def deep_analyze_ticker(
             "deep_analyze_ticker: tool output truncated at max_tokens — "
             "raise max_tokens or tighten TICKER_ANALYSIS_SCHEMA."
         )
-    return _extract_tool_input(message, "deep_analyze_ticker")
+    card = _extract_tool_input(message, "deep_analyze_ticker")
+    # Defensive default: the schema asks for bear_case but a model can still omit
+    # it — never let a missing key surface as a KeyError on the customer surface.
+    card.setdefault("bear_case", {"thesis": "", "invalidators": []})
+    return card
 
 
 
