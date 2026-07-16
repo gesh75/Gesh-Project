@@ -893,3 +893,157 @@ def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monk
     r = c.get("/mybook/report")
     assert r.status_code == 200
     assert _STALE_MARK in r.text
+
+
+# ─── progressive disclosure: conclusions first, mechanics folded (plan T2) ────
+
+def test_report_leads_with_conclusions_and_folds_mechanics(client, monkeypatch, au):
+    """/mybook/report must LEAD each engine section with one plain-language
+    conclusion line, then fold the raw tables behind <details> — nothing is
+    deleted, only folded (customer-dashboard-simplification plan, Task 2)."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {"median": 2100.0, "p5": 1500.0, "p95": 2600.0,
+                        "var_95": 300.0, "horizon_days": 21},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "TRIM",
+                                "current_pct": 50.0, "optimal_pct": 40.0}]},
+        "book": {"positions": [{"symbol": "NVDA"}], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "Worst plausible" in text and "$300" in text      # conclusion line
+    assert "<details>" in text and "How this was computed" in text
+    assert "1 sizing adjustment" in text and "NVDA TRIM" in text
+    # mechanics still present, just folded
+    assert "Median outcome" in text
+    # fresh book: the headline must NOT carry the staleness caveat (finding 3)
+    assert "re-run for current positions" not in text
+
+
+def test_report_conclusions_survive_empty_engines(client, monkeypatch, au):
+    """Empty Monte Carlo / Kelly blocks must still render a conclusion line and the
+    folded mechanics (with the existing 'unavailable' row), never a 500."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {}, "kelly": {}})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "0 sizing adjustments" in r.text
+    assert "How this was computed" in r.text
+
+
+def test_report_details_print_expanded_css(client, monkeypatch, au):
+    """Printed PDFs must include the folded mechanics — the report stylesheet
+    carries print rules that force <details> content to display."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "@media print" in r.text
+    assert "details" in r.text and "page-break-inside:avoid" in r.text
+
+
+# ─── structured-only AI output: lead + folded prose (plan T3) ─────────────────
+
+def test_lead_and_fold_splits_on_sentence_boundary():
+    import server
+    text = ("First sentence about the macro backdrop. " * 3
+            + "Later detail that belongs in the fold. " * 10)
+    lead, rest = server._lead_and_fold(text)
+    assert lead.endswith(".") and len(lead) <= 320
+    assert rest and rest in text
+
+
+def test_lead_and_fold_short_text_has_no_fold():
+    import server
+    lead, rest = server._lead_and_fold("Short and sweet.")
+    assert lead == "Short and sweet." and rest == ""
+    assert server._lead_and_fold("") == ("", "")
+    assert server._lead_and_fold(None) == ("", "")
+
+
+def test_lead_and_fold_no_boundary_returns_whole_text():
+    import server
+    text = "x" * 500                       # no sentence boundary anywhere
+    lead, rest = server._lead_and_fold(text)
+    assert lead == text and rest == ""
+
+
+def test_report_folds_long_market_context(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD",
+                     "market_context": "Lead sentence here. " + ("Filler detail. " * 40),
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {}, "kelly": {}, "book": {"positions": [], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "Lead sentence here." in text
+    assert text.count("Filler detail.") >= 1 and "Full context" in text
+
+
+def test_gemini_commentary_rejects_customer_sessions(client, monkeypatch):
+    """Structured-only AI output for customers (plan T3): the free-form gemini
+    commentary surfaces stay OWNER-only. A customer session gets 403 from the
+    require_api_key gate before any handler or model code can run — the live,
+    non-vacuous guarantee behind the template-level nav check."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    for path in ("/api/gemini/analyze", "/api/gemini/market-commentary"):
+        assert c.post(path, json={}).status_code == 403, path
+
+
+def test_report_kelly_headline_names_largest_delta_not_first_row(client, monkeypatch, au):
+    """Kelly holdings arrive sorted by optimal_pct DESC, not by adjustment size —
+    'largest' must be selected by |optimal_pct - current_pct|, or a 0.1pp trim
+    can headline over a 14pp add (PR #79 review, finding 1)."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {},
+        "kelly": {"holdings": [
+            # first by list order (highest optimal_pct) but the SMALLER delta:
+            {"symbol": "NVDA", "action": "TRIM", "current_pct": 50.0, "optimal_pct": 49.9},
+            {"symbol": "AAPL", "action": "ADD", "current_pct": 2.0, "optimal_pct": 16.0},
+        ]},
+        "book": {"positions": [{"symbol": "NVDA"}], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "2 sizing adjustments" in text
+    assert "largest: AAPL ADD" in text
+    assert "largest: NVDA TRIM" not in text
+
+
+def test_report_mc_conclusion_carries_stale_caveat(client, monkeypatch, au):
+    """The Monte Carlo headline mixes the SAVED analysis's VaR with TODAY'S live
+    book total — when the analysis is stale the conclusion line itself must say
+    so; the separate banner is skippable, the headline is not (finding 3)."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": "other-book",                    # stale by fingerprint
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {"var_95": 300.0, "horizon_days": 21},
+        "kelly": {}, "book": {"positions": [], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "Worst plausible" in text
+    assert "re-run for current positions" in text

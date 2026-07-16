@@ -2179,9 +2179,15 @@ def analyst_symbol(symbol: str):
 
 @app.get("/api/news/{symbol}")
 def news_symbol(symbol: str):
-    """Recent news HEADLINES for ANY ticker (RSS, NO LLM — the sentiment *score*
-    stays owner-only so the customer analyze path stays zero-cost). Returns the
-    trimmed top-8 items (title/url/source/published); [] when none."""
+    """Recent news HEADLINES for ANY ticker (RSS/Alpaca, NO LLM — the customer
+    path never triggers a live sentiment run, so it stays zero-cost). Returns the
+    trimmed top-8 items (title/url/source/published); [] when none.
+
+    Since plan T4 the response also carries an intentionally CUSTOMER-VISIBLE
+    `sentiment` chip block — read from the cached news_sentiment table only
+    (never a live LLM call), allow-listed to score/mood/article_count/as_of,
+    gated server-side on article_count>0 (never fabricate sentiment over zero
+    articles), and never shipping the raw analysis text."""
     sym = _safe_symbol(symbol)
     cached = _ticker_get_cached("news", sym)
     if cached:
@@ -2203,6 +2209,23 @@ def news_symbol(symbol: str):
         resp = {"status": "ok", "data": trimmed}
         if feed:                      # omitted entirely when nothing served
             resp["source"] = feed
+        # News-as-sentiment chip (plan T4): attach the CACHED sentiment row — a
+        # zero-cost DB read, never a live LLM call, so the customer path stays
+        # free. Allow-listed sub-keys only (see tests/test_news_public_contract).
+        # Shipped ONLY when the cached row analyzed at least one article:
+        # sentiment over zero articles is fabricated by definition (project
+        # rule "never fabricate sentiment when article_count=0").
+        try:
+            cached_row = news_agent._fresh_sentiment(sym)
+            if cached_row and (cached_row.get("article_count") or 0) > 0:
+                resp["sentiment"] = {
+                    "score": cached_row.get("sentiment_score", 0),
+                    "mood": cached_row.get("overall_sentiment", "NEUTRAL"),
+                    "article_count": cached_row.get("article_count", 0),
+                    "as_of": cached_row.get("as_of"),
+                }
+        except Exception:  # noqa: BLE001 — the chip is optional context, never a 500
+            pass
         return _ticker_get_store("news", sym, resp)
     except HTTPException:
         raise
@@ -3125,6 +3148,19 @@ def mybook_summary(request: Request):
         "top_changes": top_changes, "next_action": action}}
 
 
+def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
+    """First-sentence(s) lead + folded remainder, split on a sentence boundary.
+    Customer surfaces show structured leads, not walls of model prose (plan T3).
+    Returns (lead, rest); rest is "" when the text is short or has no boundary."""
+    t = " ".join(str(text or "").split())
+    if len(t) <= max_lead:
+        return t, ""
+    cut = t.find(". ", max_lead)
+    if cut == -1:
+        return t, ""
+    return t[:cut + 1], t[cut + 2:]
+
+
 def _render_book_report(email: str) -> str:
     """Standalone, print-friendly HTML report of the customer's book + their LAST
     persisted analysis. Server-side rendered with every dynamic string escaped —
@@ -3205,18 +3241,57 @@ def _render_book_report(email: str) -> str:
             f"<td style='padding:6px 12px;color:#555'>{e(s.get('assessment', ''))}</td></tr>"
             for s in (d.get("sector_breakdown") or []))
         sector_block = (f"<h2>Sector breakdown</h2><table>{sectors}</table>") if sectors else ""
+        # Conclusions first, mechanics folded (plan T2): each engine section LEADS
+        # with one plain-language line; the raw tables stay complete but move
+        # behind <details>. Nothing is deleted — fold, don't remove.
+        adjustments = [k for k in (ky.get("holdings") or [])
+                       if k.get("action") in ("ADD", "TRIM")]
+        # "largest" = biggest |optimal - current| gap. The holdings list arrives
+        # sorted by optimal_pct DESC, so taking the first row would headline a
+        # 0.1pp trim over a 14pp add (PR #79 review, finding 1).
+        top_adj = max(adjustments,
+                      key=lambda k: abs((k.get("optimal_pct") or 0)
+                                        - (k.get("current_pct") or 0)),
+                      default=None)
+        n_adj = len(adjustments)
+        kelly_conclusion = (
+            f"{n_adj} sizing adjustment{'s' if n_adj != 1 else ''} suggested"
+            + (f" — largest: {e(str(top_adj.get('symbol', '')))} "
+               f"{e(str(top_adj.get('action', '')))}." if top_adj else "."))
+        mc_var = mc.get("var_95", 0) or 0
+        # The headline pairs the SAVED analysis's VaR dollars with TODAY'S live
+        # book total — when the analysis is stale that mix understates risk, so
+        # the caveat rides on the conclusion line itself (the banner above is
+        # skippable; the headline is not — finding 3).
+        mc_stale_note = (" (from your last analysis — re-run for current positions)"
+                         if stale else "")
+        mc_conclusion = (
+            f"Worst plausible {e(str(mc.get('horizon_days') or 21))}-day stretch "
+            f"(95% confidence): &minus;${mc_var:,.0f} on your ${total:,.0f} book."
+            f"{mc_stale_note}")
+        # Structured-only AI output (plan T3): one bold takeaway sentence, the
+        # rest of the model prose folded — never a free-standing wall of text.
+        ctx_lead, ctx_rest = _lead_and_fold(str(d.get("market_context", "")))
+        ctx_html = (
+            f"<p style='color:#444;line-height:1.6'><b>{e(ctx_lead)}</b></p>"
+            + (f"<details><summary>Full context</summary>"
+               f"<p style='color:#444;line-height:1.6'>{e(ctx_rest)}</p></details>"
+               if ctx_rest else ""))
         body = f"""
   <h2>AI Verdict: {e(str(d.get('portfolio_verdict', '—')))}</h2>
   <table>{row('Portfolio score', d.get('portfolio_score', '—'))}{row('Risk score', d.get('risk_score', '—'))}
   {row('Diversification', d.get('diversification_score', '—'))}{row('Portfolio type', d.get('portfolio_type', '—'))}</table>
-  <p style='color:#444;line-height:1.6'>{e(str(d.get('market_context', '')))}</p>
+  {ctx_html}
   {('<h2>Key risks</h2><ul>' + risks + '</ul>') if risks else ''}
   {sector_block}
-  <h2>Monte Carlo ({e(str(mc.get('horizon_days') or 21))} trading days)</h2>
+  <h2>Risk check</h2><p style='color:#111;line-height:1.6'><b>{mc_conclusion}</b></p>
+  <details><summary>How this was computed — Monte Carlo ({e(str(mc.get('horizon_days') or 21))} trading days)</summary>
   <table>{row('Median outcome', '$' + format(mc.get('median', 0) or 0, ',.0f'))}
   {row('P5 – P95', '$' + format(mc.get('p5', 0) or 0, ',.0f') + ' – $' + format(mc.get('p95', 0) or 0, ',.0f'))}
-  {row('VaR 95%', '$' + format(mc.get('var_95', 0) or 0, ',.0f'))}</table>
-  <h2>Kelly sizing</h2><table>{kelly_rows or row('Status', 'unavailable')}</table>
+  {row('VaR 95%', '$' + format(mc_var, ',.0f'))}</table></details>
+  <h2>Position sizing</h2><p style='color:#111;line-height:1.6'><b>{kelly_conclusion}</b></p>
+  <details><summary>How this was computed — Kelly sizing</summary>
+  <table>{kelly_rows or row('Status', 'unavailable')}</table></details>
   <h2>Per-holding research</h2>{cards}
   <p style='color:#888;font-size:12px'>Analysis generated {e(str(saved.get('_saved_at', ''))[:16])} UTC.</p>"""
     else:
@@ -3225,7 +3300,9 @@ def _render_book_report(email: str) -> str:
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>GESH — Portfolio Report</title>
 <style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:860px;margin:32px auto;padding:0 20px;color:#111}}
 h1{{margin:0}}h2{{margin-top:28px}}table{{border-collapse:collapse}}
-tr:nth-child(even){{background:#f6f6f6}}@media print{{a{{display:none}}}}</style></head><body>
+tr:nth-child(even){{background:#f6f6f6}}
+details{{margin:8px 0;page-break-inside:avoid}}details summary{{cursor:pointer;color:#555;font-size:13px}}
+@media print{{a{{display:none}}details{{display:block}}details>*{{display:block}}}}</style></head><body>
 <div style='border-bottom:3px solid #111;padding-bottom:10px;display:flex;justify-content:space-between;align-items:baseline'>
 <h1>GESH <span style='font-weight:300'>Portfolio Report</span></h1>
 <span style='color:#666;font-size:13px'>AI portfolio intelligence · 11-node consensus · verified signals</span></div>

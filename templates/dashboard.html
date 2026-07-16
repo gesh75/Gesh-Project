@@ -2890,6 +2890,15 @@ function symbolSearch(q){
 document.addEventListener('click',e=>{ const w=$('analyze-input'); const d=$('symbol-dropdown');
   if(d&&w&&e.target!==w&&!d.contains(e.target)) hideSymbolDropdown(); });
 
+// News-as-sentiment chip (plan T4): one pill on the ticker-card header built
+// from the CACHED sentiment block of /api/news/{sym}. Renders NOTHING when
+// article_count is 0/absent — never fabricate sentiment (project rule).
+function buildNewsChip(n){
+  if(!n||!Number(n.article_count)) return '';
+  const s=Number(n.score)||0;
+  const color=s>15?'var(--green)':s<-15?'var(--red)':'var(--muted)';
+  return `<span title="news sentiment as of ${daEsc(String(n.as_of||''))}" style="border:1px solid ${color};color:${color};font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap">NEWS ${daEsc(String(n.mood||'NEUTRAL'))} &middot; ${s>0?'+':''}${daEsc(String(s))} (${Number(n.article_count)} articles)</span>`;
+}
 async function analyzeTicker(raw){
   // Charset mirrors the server's _SYMBOL_RE (^indices, forex =X, BRK.B, BTC-USD)
   // so a saved ^GSPC watchlist chip round-trips instead of collapsing to "GSPC".
@@ -2912,7 +2921,7 @@ async function analyzeTicker(raw){
       fetch(`/api/levels/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
       fetch(`/api/earnings/${enc}`).then(r=>r.ok?r.json():null).catch(()=>null),
     ]);
-    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[], mo=mom&&mom.data, lv=lev&&lev.data, ea=earn&&earn.data;
+    const d=cons&&cons.data, rg=reg&&reg.data, fc=fft&&fft.data, fu=fund&&fund.data, an=anl&&anl.data, nw=(news&&news.data)||[], nsent=(news&&news.sentiment)||null, mo=mom&&mom.data, lv=lev&&lev.data, ea=earn&&earn.data;
     if(!d && !rg && !fc && !fu){ box.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">No data for '+daEsc(sym)+' — check the ticker and try again.</div></div>'; return; }
     const periods=['1d','5d','1mo','3mo','6mo','1y'];
     const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
@@ -2925,9 +2934,10 @@ async function analyzeTicker(raw){
       const voteChips=Object.entries(d.votes||{}).map(([n,v])=>voteChip(n,v)).join('');
       consHtml=`<div class="card" style="margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <span style="display:flex;align-items:baseline;gap:10px">
+          <span style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
             <span class="kelly-sym" style="font-size:24px">${daEsc(sym)}</span>
             ${px!=null?`<span style="font-size:16px;font-weight:600;color:var(--muted2)">$${daEsc(isFinite(px)?Number(px).toFixed(2):px)}</span>`:''}
+            ${buildNewsChip(nsent)}
           </span>
           <span class="cons-verdict ${chipClass}">${daEsc(d.verdict)}</span>
         </div>
@@ -3010,7 +3020,7 @@ async function analyzeTicker(raw){
         </div>
         <div id="analyze-chart" style="min-height:220px"></div>
       </div>
-      <div class="card" style="margin-top:16px"><div style="${T}">Recent News</div>
+      <div class="card owner-only" style="margin-top:16px"><div style="${T}">Recent News</div>
         ${nw.length?nw.map(n=>`<a href="${daEsc(safeUrl(n.url))}" target="_blank" rel="noopener noreferrer" style="display:block;padding:9px 0;border-bottom:1px solid var(--border);text-decoration:none">
           <div style="font-size:14px;color:var(--text)">${daEsc(n.title)}</div>
           <div style="font-size:12px;color:var(--muted)">${daEsc(n.source)}${n.published?' · '+daEsc(n.published):''}</div></a>`).join(''):'<div class="deep-ph-text" style="padding:20px 0;text-align:center">No recent news for this ticker.</div>'}</div>`;
@@ -3339,6 +3349,21 @@ function mybookPrefill(sym){
   s.value=sym; sh.focus();
   s.scrollIntoView({behavior:'smooth',block:'center'});
 }
+// Structured-only AI output on customer surfaces (plan T3): bold one-sentence
+// lead + the rest of the model prose folded behind <details>. Mirrors the
+// server's _lead_and_fold (same 220-char sentence-boundary split). All leaves
+// daEsc'd — audited build*-named helper.
+function buildLeadFold(text,maxLead=220){
+  const t=String(text||'').split(/\s+/).filter(Boolean).join(' ');
+  if(!t) return '';
+  let lead=t, rest='';
+  if(t.length>maxLead){
+    const cut=t.indexOf('. ',maxLead);
+    if(cut!==-1){ lead=t.slice(0,cut+1); rest=t.slice(cut+2); }
+  }
+  return `<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55"><b>${daEsc(lead)}</b></div>`
+    +(rest?`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">Full context</summary><div style="font-size:13px;color:var(--muted2);line-height:1.55;margin-top:6px">${daEsc(rest)}</div></details>`:'');
+}
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
@@ -3372,6 +3397,19 @@ async function mybookAnalyze(){
     const d=j&&j.data;
     if(!d||!d.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now — try again in a minute.</div></div>'; return; }
     const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[];
+    // Conclusions first (plan T2): one plain-language line per engine; the raw
+    // stat rows fold behind <details>. Leads are plain text — daEsc'd at render.
+    const mcLead=mc.error?'Monte Carlo unavailable right now.'
+      :('Worst plausible '+(mc.horizon_days||21)+'-day stretch (95% confidence): −$'+daFmt(mc.var_95,0)+' on your book.');
+    const kAdj=kh.filter(k=>k.action==='ADD'||k.action==='TRIM');
+    // "largest" = biggest |optimal-current| gap — the holdings list is sorted by
+    // optimal_pct DESC, so the first row is NOT the largest adjustment (PR #79).
+    const kAdjTop=kAdj.reduce((b,k)=>{
+      const dv=Math.abs((k.optimal_pct||0)-(k.current_pct||0));
+      return (!b||dv>b.dv)?{sym:k.symbol,act:k.action||'',dv}:b;},null);
+    const kellyLead=(ky.error||!kh.length)?'Kelly sizing unavailable right now.'
+      :(kAdj.length+' sizing adjustment'+(kAdj.length!==1?'s':'')+' suggested'
+        +(kAdjTop?' — largest: '+kAdjTop.sym+' '+kAdjTop.act:'')+'.');
     const risks=(a.portfolio_risks||[]).map(r=>{
       const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
       return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;
@@ -3383,13 +3421,15 @@ async function mybookAnalyze(){
           <span style="font-size:13px;color:var(--muted)">${daEsc(a.portfolio_type||'')}</span></div>
         ${buildRow('Portfolio score', a.portfolio_score!=null?a.portfolio_score+' / 100':'—')}${buildRow('Risk score', a.risk_score!=null?a.risk_score+' / 100':'—')}${buildRow('Diversification', a.diversification_score!=null?a.diversification_score+' / 100':'—')}
         ${a.holdings_truncated?`<div style="font-size:12px;color:var(--muted);margin-top:10px">ℹ️ Detailed AI cards cover your ${daEsc(a.holdings_truncated.analyzed)} largest holdings; all ${daEsc(a.holdings_truncated.total)} feed the risk &amp; Kelly math.</div>`:''}
-        ${a.market_context?`<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55">${daEsc(a.market_context)}</div>`:''}
+        ${a.market_context?buildLeadFold(a.market_context):''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">
-        <div class="card"><div style="${T}">Monte Carlo (${daEsc(mc.horizon_days||21)} trading days, ${daEsc(mc.n_sims||1000)} sims)</div>
-          ${mc.error?buildRow('Status','unavailable'):buildRow('Median outcome','$'+daFmt(mc.median,0))+buildRow('P5 – P95','$'+daFmt(mc.p5,0)+' – $'+daFmt(mc.p95,0))+buildRow('VaR 95%','$'+daFmt(mc.var_95,0)+' ('+daFmt(mc.var_95_pct,1)+'%)')+buildRow('Prob. of profit',daFmt(mc.prob_profit_pct,0)+'%')+buildRow('Regime',mc.regime||'—')}</div>
-        <div class="card"><div style="${T}">Kelly Sizing</div>
-          ${ky.error||!kh.length?buildRow('Status','unavailable'):buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div>
+        <div class="card"><div style="${T}">Risk Check</div>
+          <div style="font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.55;font-weight:600">${daEsc(mcLead)}</div>
+          ${mc.error?'':`<details><summary style="cursor:pointer;font-size:12px;color:var(--muted)">How this was computed — Monte Carlo (${daEsc(mc.horizon_days||21)} trading days, ${daEsc(mc.n_sims||1000)} sims)</summary><div style="margin-top:8px">${buildRow('Median outcome','$'+daFmt(mc.median,0))+buildRow('P5 – P95','$'+daFmt(mc.p5,0)+' – $'+daFmt(mc.p95,0))+buildRow('VaR 95%','$'+daFmt(mc.var_95,0)+' ('+daFmt(mc.var_95_pct,1)+'%)')+buildRow('Prob. of profit',daFmt(mc.prob_profit_pct,0)+'%')+buildRow('Regime',mc.regime||'—')}</div></details>`}</div>
+        <div class="card"><div style="${T}">Position Sizing</div>
+          <div style="font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.55;font-weight:600">${daEsc(kellyLead)}</div>
+          ${ky.error||!kh.length?'':`<details><summary style="cursor:pointer;font-size:12px;color:var(--muted)">How this was computed — Kelly sizing</summary><div style="margin-top:8px">${buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div></details>`}</div>
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }

@@ -307,6 +307,7 @@ def _fresh_sentiment(symbol: str, max_age_hours: int = NEWS_CACHE_HOURS) -> dict
             "rolling_score": rolling,
             "impact_level": row[2],
             "article_count": analysis.get("article_count", 0),
+            "as_of": str(created),
             "analysis": analysis,
             "cached": True,
         }
