@@ -89,6 +89,7 @@ def main(dry_run: bool = False) -> dict:
             per_customer.setdefault(email, []).append(f)
 
     sent = 0
+    attempted = 0
     with _alert_con() as con:
         for email, their_flips in sorted(per_customer.items()):
             fresh = [f for f in their_flips if not con.execute(
@@ -96,16 +97,34 @@ def main(dry_run: bool = False) -> dict:
                 (email, f["symbol"], today)).fetchone()]
             if not fresh or dry_run:
                 continue
+            attempted += 1
             subject = "GESH: signal change on " + ", ".join(f["symbol"] for f in fresh)
             if email_sender.send_email(email, subject, _build_email(email, fresh)):
                 sent += 1
                 for f in fresh:
                     con.execute("INSERT OR IGNORE INTO alert_log (email, symbol, date) "
                                 "VALUES (?,?,?)", (email, f["symbol"], today))
-    return {"symbols_snapshotted": len(snapshots), "flips": len(flips), "emails_sent": sent}
+    result = {"symbols_snapshotted": len(snapshots), "flips": len(flips), "emails_sent": sent}
+    # Visibility guard (rule: silent no-op != quiet day) — under launchd, RESEND_API_KEY
+    # can be unset even though there were emails to send; make that distinguishable in
+    # the JSON summary instead of looking identical to "no flips today".
+    if attempted and not email_sender.is_configured():
+        result["email_delivery"] = "DISABLED — RESEND_API_KEY unset"
+    return result
 
 
 if __name__ == "__main__":
     import json
     import sys
+
+    # launchd does not inherit the shell env, so RESEND_API_KEY/EMAIL_FROM/APP_BASE_URL
+    # are unset unless loaded here. Same guarded convention as run_engines2.py/run_ai2.py
+    # — deliberately NOT at module level, so importing this module in tests never leaks
+    # a real .env (see tests/test_watch_endpoint.py for the class of bug that guards).
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).parent / '.env')
+    except Exception:
+        pass
+
     print(json.dumps(main(dry_run="--dry-run" in sys.argv)))

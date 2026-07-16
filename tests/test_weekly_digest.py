@@ -65,6 +65,33 @@ def test_digest_never_calls_llm(au, monkeypatch):
     assert not hasattr(job, "deep_analyze_portfolio")     # structural: no LLM import
 
 
+def test_summary_flags_disabled_email_delivery_when_key_unset(au, monkeypatch):
+    """RESEND_API_KEY unset -> email_sender takes the DEV NO-OP path silently.
+    Under launchd (no shell env inheritance) this happens for real, so the
+    digest's summary must say so instead of looking like a quiet week."""
+    import run_weekly_digest as job
+    monkeypatch.setattr(job, "auth_users", au, raising=True)
+    monkeypatch.setattr(job, "_close_for", lambda sym: 100.0, raising=True)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    au.set_position("a@x.com", "NVDA", 10)
+    _seed_flip("NVDA")
+    # do NOT monkeypatch send_email — exercise the real DEV NO-OP path
+    summary = job.main()
+    assert summary["emails_sent"] == 0
+    assert summary["email_delivery"] == "DISABLED — RESEND_API_KEY unset"
+
+
+def test_summary_omits_email_delivery_marker_when_no_customers(au, monkeypatch):
+    """No eligible customers -> nothing was attempted, so the marker must NOT
+    appear."""
+    import run_weekly_digest as job
+    monkeypatch.setattr(job, "auth_users", au, raising=True)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    summary = job.main()
+    assert summary["emails_sent"] == 0
+    assert "email_delivery" not in summary
+
+
 def test_one_customer_failure_does_not_sink_the_run(au, monkeypatch):
     """Fail-soft per customer: a compose/DB error for one customer must not kill
     the digest for everyone after them in the loop (transient SQLite failures on

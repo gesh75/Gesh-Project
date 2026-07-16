@@ -72,20 +72,40 @@ def _compose(email: str) -> str | None:
 
 def main(dry_run: bool = False) -> dict:
     sent = 0
+    attempted = 0
     customers = _customers()
     for email in customers:
         try:  # fail-soft per customer — one bad compose/send must not sink the run
             html = _compose(email)
             if not html or dry_run:
                 continue
+            attempted += 1
             if email_sender.send_email(email, "Your GESH weekly digest", html):
                 sent += 1
         except Exception as e:  # noqa: BLE001 — same isolation pattern as run_signal_alerts
             logger.warning("weekly digest failed for %s: %s", email, e)
-    return {"customers": len(customers), "emails_sent": sent}
+    result = {"customers": len(customers), "emails_sent": sent}
+    # Visibility guard (rule: silent no-op != quiet week) — under launchd, RESEND_API_KEY
+    # can be unset even though there were digests to send; make that distinguishable in
+    # the JSON summary instead of looking identical to "no customers this week".
+    if attempted and not email_sender.is_configured():
+        result["email_delivery"] = "DISABLED — RESEND_API_KEY unset"
+    return result
 
 
 if __name__ == "__main__":
     import json
     import sys
+    from pathlib import Path
+
+    # launchd does not inherit the shell env, so RESEND_API_KEY/EMAIL_FROM/APP_BASE_URL
+    # are unset unless loaded here. Same guarded convention as run_engines2.py/run_ai2.py
+    # — deliberately NOT at module level, so importing this module in tests never leaks
+    # a real .env (see tests/test_watch_endpoint.py for the class of bug that guards).
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).parent / '.env')
+    except Exception:
+        pass
+
     print(json.dumps(main(dry_run="--dry-run" in sys.argv)))

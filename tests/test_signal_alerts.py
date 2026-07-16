@@ -78,6 +78,38 @@ def test_job_is_idempotent_per_day(au, monkeypatch):
     assert len(sent) == 1
 
 
+def test_summary_flags_disabled_email_delivery_when_key_unset(au, monkeypatch):
+    """RESEND_API_KEY unset -> email_sender takes the DEV NO-OP path silently
+    (returns False, sends nothing). Under launchd (no shell env inheritance)
+    this happens for real, so the job's summary must say so — otherwise a
+    silent no-op looks identical to "no flips today" in the logs."""
+    import run_signal_alerts as job
+    monkeypatch.setattr(job, "auth_users", au, raising=True)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    au.add_watch("a@x.com", "NVDA")
+    for d in ("2026-07-13", "2026-07-14"):
+        sh.record_snapshots([{"symbol": "NVDA", "verdict": "BUY"}], date=d)
+    for d in ("2026-07-15", "2026-07-16"):
+        sh.record_snapshots([{"symbol": "NVDA", "verdict": "HOLD"}], date=d)
+    monkeypatch.setattr(job, "_consensus_for", lambda syms: [], raising=True)
+    # do NOT monkeypatch send_email — exercise the real DEV NO-OP path
+    summary = job.main()
+    assert summary["emails_sent"] == 0
+    assert summary["email_delivery"] == "DISABLED — RESEND_API_KEY unset"
+
+
+def test_summary_omits_email_delivery_marker_on_quiet_day(au, monkeypatch):
+    """No flips -> nothing was attempted, so the marker must NOT appear (a quiet
+    day is not the same failure mode as a misconfigured key)."""
+    import run_signal_alerts as job
+    monkeypatch.setattr(job, "auth_users", au, raising=True)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.setattr(job, "_consensus_for", lambda syms: [], raising=True)
+    summary = job.main()
+    assert summary["emails_sent"] == 0
+    assert "email_delivery" not in summary
+
+
 def test_unsubscribe_route_flips_flag(au, monkeypatch):
     from starlette.testclient import TestClient
 
