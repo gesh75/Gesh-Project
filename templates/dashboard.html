@@ -58,12 +58,14 @@ td,.sval,.num{font-variant-numeric:tabular-nums}
 .tab-btn.active .tab-icon{opacity:1}
 .tab-pane{display:none}.tab-pane.active{display:block}
 
-/* Force initial customer view to Analyze + My Book (no flash to overview or other tabs) */
+/* Force initial customer view to whichever customer pane is .active (no flash
+   to the owner Overview tab or a stray second pane — generalized so a customer
+   can have more than one real pane: Home (default) and Analyze/My Book). */
 body.customer .tab-pane { display: none !important; }
-body.customer #tab-analyze { display: block !important; }
+body.customer .tab-pane.active { display: block !important; }
 
-/* Pre-activate the Analyze nav item for customers */
-body.customer .nav-item[data-tab="analyze"] {
+/* Pre-activate the Home nav item for customers (their default landing tab) */
+body.customer .nav-item[data-tab="home"] {
   color: var(--accent);
   border-bottom-color: var(--accent);
   background: var(--card2);
@@ -429,6 +431,10 @@ body.customer .owner-only{display:none!important}
 /* While we haven't applied the role yet (prevents any flash of owner menu).
    The early inline script adds .role-known based on server data-initial-role. */
 body:not(.role-known) .owner-only { display: none !important; }
+/* Mirror of owner-only: nav items only a CUSTOMER session should see (e.g. the
+   Home hero tab) — hidden by default (owner is the default state) and hidden
+   again explicitly once the role is confirmed to be owner. */
+body:not(.customer) .customer-only { display: none !important; }
 .nav-badge{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:transparent;border:1px solid var(--border2);transition:all var(--t-fast)}
 .nav-badge.fresh{background:var(--green);border-color:var(--green);box-shadow:0 0 6px rgba(0,230,118,.5)}
 .nav-badge.stale{background:var(--amber);border-color:var(--amber)}
@@ -499,11 +505,16 @@ body:not(.role-known) .owner-only { display: none !important; }
       if (mb) mb.style.display = 'block';
       var ct = document.getElementById('customer-tools');
       if (ct) ct.style.display = 'block';
-      // Force initial active states for mybook experience
-      var analyzeNav = document.querySelector('.nav-item[data-tab="analyze"]');
-      if (analyzeNav) analyzeNav.classList.add('active');
-      var firstMy = document.querySelector('#mybook-nav .nav-item');
-      if (firstMy) firstMy.classList.add('active');
+      // Front the Home pane by default (customer dashboard simplification) —
+      // no flash of the Analyze tab or the owner Overview tab on first paint.
+      var panes = document.querySelectorAll('.tab-pane');
+      for (var i = 0; i < panes.length; i++) panes[i].classList.remove('active');
+      var homePane = document.getElementById('tab-home');
+      if (homePane) homePane.classList.add('active');
+      var navItems = document.querySelectorAll('.nav-item');
+      for (var j = 0; j < navItems.length; j++) navItems[j].classList.remove('active');
+      var homeNav = document.querySelector('.nav-item[data-tab="home"]');
+      if (homeNav) homeNav.classList.add('active');
     }
     document.body.classList.add('role-known');
   } catch(e){}
@@ -515,6 +526,9 @@ body:not(.role-known) .owner-only { display: none !important; }
 
   <div class="sb-group">
     <div class="sb-group-title">Research</div>
+    <button class="nav-item customer-only" data-tab="home" onclick="switchTab('home')" title="Your portfolio at a glance">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      <span class="nav-label">Home</span></button>
     <button class="nav-item" data-tab="analyze" onclick="switchTab('analyze')" title="Analyze any ticker">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
       <span class="nav-label">Analyze</span></button>
@@ -647,6 +661,17 @@ body:not(.role-known) .owner-only { display: none !important; }
 
 <div class="main">
 
+  <!-- ═══ TAB: HOME (customer hero — book value, what changed, one next action) ═══ -->
+  <div class="tab-pane" id="tab-home">
+    <div class="card" style="margin-bottom:18px">
+      <div class="ch" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Your Portfolio</div>
+        <span class="badge b-cyan">One answer, above the fold</span>
+      </div>
+      <div id="home-hero"><div class="deep-placeholder"><div class="deep-ph-text">Loading your summary…</div></div></div>
+    </div>
+  </div>
+
   <!-- ═══ TAB: ANALYZE (customer research — any ticker, live) ═══ -->
   <div class="tab-pane" id="tab-analyze">
     <div class="card" style="margin-bottom:18px">
@@ -705,6 +730,17 @@ body:not(.role-known) .owner-only { display: none !important; }
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Your positions stay private to your account. Valued from public quotes; nothing here connects to a broker.</div>
       <div id="mybook-list" style="margin-bottom:12px"></div>
       <div id="mybook-results"></div>
+
+      <div class="card" style="margin-top:16px">
+        <div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px">💵 Where Does New Cash Go?</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Ranks your last <b>Analyze My Portfolio</b> Kelly gaps against a cash amount — advisory only, no live spend. Run an analysis first so there's something to rank against.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+          <input id="deploy-cash-amount" placeholder="Cash to deploy ($)" type="number" min="0" step="any"
+                 style="width:180px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
+          <button class="btn-analyze" onclick="deployCash()">Where should this go?</button>
+        </div>
+        <div id="deploy-cash-results"></div>
+      </div>
     </div>
   </div>
 
@@ -2624,6 +2660,7 @@ function switchTab(name, btn){
   // you scrolled up (observed on the Risk tab). Always land at the top on switch.
   window.scrollTo(0, 0);
   // lazy-load data per tab (cached results render by default → never empty)
+  if(name==='home'){ if(typeof loadHomeHero==='function') loadHomeHero(); }
   if(name==='risk'){ loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
   if(name==='analysis'){ tryLoadCachedAnalysis(); }
   if(name==='signals'){ if(typeof loadCachedConsensus==='function') loadCachedConsensus(); if(typeof loadCachedKelly==='function') loadCachedKelly(); }
@@ -2702,7 +2739,7 @@ async function applyRoleNav(){
   if(role==='customer'){
     document.body.classList.add('customer');
     window.__isCustomer=true;
-    switchTab('analyze');
+    switchTab('home');
     // Show My Book nav and tools
     const mb = document.getElementById('mybook-nav');
     if (mb) mb.style.display = 'block';
@@ -2714,6 +2751,45 @@ async function applyRoleNav(){
   }
   loadWatchlist();
   loadMyBook();
+}
+
+// ── customer Home hero — one answer above the fold ────────────────────────────
+async function loadHomeHero(){
+  const el=document.getElementById('home-hero'); if(!el) return;
+  try{
+    const body=await (await fetch('/api/mybook/summary')).json();
+    el.innerHTML=buildHomeHero(body.data||{});
+  }catch(e){ el.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">Could not load your summary — retry shortly.</div></div>'; }
+}
+function buildHomeHero(d){
+  const changes=(d.top_changes||[]).map(t=>
+    `<li><b>${daEsc(t.symbol)}</b> ${daEsc(t.prior_verdict)} &rarr; <b>${daEsc(t.new_verdict)}</b> <span style="color:var(--muted)">(${daEsc(t.date)})</span></li>`).join('')
+    ||'<li style="color:var(--muted)">No confirmed signal changes on your names this week.</li>';
+  const staleNote=d.analysis_stale?`<div style="color:var(--yellow);font-size:12px">&#9888; Your last analysis predates your current book.</div>`:'';
+  // Equal-weight books report total_equity 0.0 (sizes are private by design —
+  // server never fakes a dollar figure onto a symbols-only book). When there
+  // ARE positions but the total reads exactly 0, lead with position count
+  // instead of a misleading "$0" headline number.
+  const eqWeight=Number(d.total_equity||0)===0 && Number(d.positions_count||0)>0;
+  const headline=eqWeight
+    ?`${Number(d.positions_count||0)} positions <span style="font-size:14px;color:var(--muted)">(equal-weight · sizes private)</span>`
+    :`$${Number(d.total_equity||0).toLocaleString()}`;
+  const act=d.next_action||{};
+  return `<div class="scard" style="padding:18px">
+    <div class="slabel">YOUR PORTFOLIO</div>
+    <div class="sval" style="font-size:28px">${headline}</div>
+    <div class="ssub">${Number(d.positions_count||0)} positions &middot; ${Number(d.watch_count||0)} watched &middot; last verdict: <b>${daEsc(String(d.last_verdict||'—'))}</b></div>
+    ${staleNote}
+    <div style="margin-top:12px;font-weight:600;font-size:13px">WHAT CHANGED</div>
+    <ul style="margin:6px 0 12px 16px;font-size:13px">${changes}</ul>
+    <button class="btn-analyze" onclick="homeAction('${daEsc(String(act.target||'analyze'))}')">${daEsc(String(act.label||'Analyze my portfolio'))}</button>
+  </div>`;
+}
+function homeAction(target){
+  if(target==='report'){ window.location='/mybook/report'; return; }
+  switchTab('analyze');
+  if(target==='book'&&typeof focusMyBookSection==='function') focusMyBookSection('overview');
+  if(target==='analyze'&&typeof mybookAnalyze==='function') mybookAnalyze();
 }
 
 // ── per-user watchlist (saved tickers on the Analyze tab) ─────────────────────
@@ -3102,11 +3178,30 @@ async function loadSignalSparkline(sym, el){
 }
 
 // ── My Portfolio: the customer's OWN book → deep AI + Kelly + Monte Carlo ─────
+// Book table signal columns (Task 5) — the plain holdings table duplicates the
+// broker; these are the columns only GESH can provide. Each has an explicit
+// empty state so a missing signal_history row or absent analysis never reads
+// as a blank cell (fail-soft, matches the /api/mybook contract).
+function buildConsensusCell(sig){
+  if(!sig||!sig.verdict) return `<span style="color:var(--muted)">—</span>`;
+  return `<span style="${daVerdictStyle(sig.verdict)};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700" title="as of ${daEsc(String(sig.date||''))}">${daEsc(sig.verdict)}</span>`;
+}
+function buildKellyDeltaCell(kd){
+  if(!kd||!kd.action) return `<span style="color:var(--muted);font-size:12px">run analysis</span>`;
+  const dpp=Number(kd.delta_pp)||0;
+  const color=kd.action==='ADD'?'var(--green)':kd.action==='TRIM'?'var(--red)':'var(--muted)';
+  return `<span style="color:${color};font-weight:700">${daEsc(kd.action)} ${dpp>=0?'+':'−'}${Math.abs(dpp).toFixed(1)}pp</span>`;
+}
+function buildRiskCell(isRisky){
+  return isRisky ? `<span style="color:var(--yellow)" title="Flagged in your last portfolio risk review">⚠</span>` : `<span style="color:var(--muted)">—</span>`;
+}
 async function loadMyBook(){
   const el=document.getElementById('mybook-list'); if(!el) return;
   try{
     const j=await fetch('/api/mybook').then(r=>r.ok?r.json():null).catch(()=>null);
     const d=(j&&j.data)||{}; const pos=d.positions||[]; const eqw=!!d.equal_weight;
+    const signals=d.signals||{}; const kellyDeltas=d.kelly_deltas||{};
+    const riskySet=new Set(d.risky_symbols||[]);
     if(!pos.length&&!(d.unpriced||[]).length){ el.innerHTML='<span style="color:var(--muted);font-size:12px">No positions yet — add a ticker above, or use 📋 Bulk import to paste your whole list.</span>'; return; }
 
     // Customer book stats (parity with owner overview)
@@ -3125,14 +3220,18 @@ async function loadMyBook(){
     }
 
     const eqwBanner=eqw?`<div style="margin-bottom:8px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--hover);font-size:12px;color:var(--muted2)">⚖️ <b>Equal-weight</b> — position sizes are private, so every name is weighted equally (1/N). <b>🗑 Clear</b> above to start fresh, then bulk-import <i>with</i> share counts (e.g. AAPL 120) or add via the form for real weighting.</div>`:'';
-    el.innerHTML= bookStats + eqwBanner +`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
-      <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+    const staleHeaderNote=d.analysis_stale?`<div style="margin-bottom:8px;font-size:12px;color:var(--yellow)">⚠ CONSENSUS / KELLY Δ columns reflect an analysis that predates your current book — re-run <b>Analyze My Portfolio</b> for fresher numbers.</div>`:'';
+    el.innerHTML= bookStats + eqwBanner + staleHeaderNote +`<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT','CONSENSUS','KELLY Δ','RISK',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
       <tbody>${pos.map(p=>`<tr style="border-bottom:1px dashed var(--border)">
         <td style="padding:8px 10px;font-weight:700;color:var(--accent)"><span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer" title="Deep research on ${daEsc(p.symbol)}">${daEsc(p.symbol)}</span></td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${eqw?'—':daEsc(p.quantity)}</td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
         <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${eqw?'—':'$'+daFmt(p.equity,2)}</td>
         <td style="padding:8px 10px;text-align:right;color:var(--muted2)">${daFmt(p.portfolio_percentage,1)}%</td>
+        <td style="padding:8px 10px;text-align:right">${buildConsensusCell(signals[p.symbol])}</td>
+        <td style="padding:8px 10px;text-align:right">${buildKellyDeltaCell(kellyDeltas[p.symbol])}</td>
+        <td style="padding:8px 10px;text-align:right">${buildRiskCell(riskySet.has(p.symbol))}</td>
         <td style="padding:8px 10px;text-align:right"><span onclick="mybookRemove('${daEsc(p.symbol)}')" style="cursor:pointer;color:var(--muted)" title="Remove">✕</span> <span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer;color:var(--accent);font-size:11px" title="Deep AI">🔍</span></td>
       </tr>`).join('')}</tbody></table></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:13px">
@@ -3294,6 +3393,44 @@ async function mybookAnalyze(){
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
+}
+
+// "Where does new cash go?" — LLM-free Kelly-gap proportional cash deployment,
+// ranked from the customer's LAST persisted "Analyze My Portfolio" run.
+async function deployCash(){
+  const box=document.getElementById('deploy-cash-results'); if(!box) return;
+  const input=document.getElementById('deploy-cash-amount');
+  const cash=Number(input&&input.value);
+  if(!cash||cash<=0){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Enter a cash amount above $0.</div>'; return; }
+  box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Calculating…</div>';
+  try{
+    const r=await fetch('/api/mybook/deploy-cash',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cash})});
+    const j=await r.json().catch(()=>null);
+    if(r.status===401){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">🔒 Sign in to unlock this.</div>'; return; }
+    if(r.status===404){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Run <b>🧠 Analyze My Portfolio</b> above first — this ranks against your last Kelly sizing.</div>'; return; }
+    if(!r.ok){ box.innerHTML=`<div class="deep-ph-text" style="padding:10px 0">${daEsc(String((j&&j.detail)||'Could not calculate — try again.'))}</div>`; return; }
+    box.innerHTML=buildDeployCashCard((j&&j.data)||{});
+  }catch(e){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Network error — try again.</div>'; }
+}
+function buildDeployCashCard(d){
+  const staleWarn=d.stale?`<div style="color:var(--yellow);font-size:12px;margin-bottom:8px">&#9888; Your last analysis predates your current book — re-run <b>Analyze My Portfolio</b> for fresher sizing.</div>`:'';
+  const cashRows=(d.allocations||[]).map(a=>
+    `<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:7px 10px;font-weight:700;color:var(--accent)">${daEsc(a.symbol)}</td>
+      <td style="padding:7px 10px;text-align:right">${daFmt(a.weight_pct,1)}%</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700">$${daFmt(a.dollars,2)}</td>
+      <td style="padding:7px 10px;text-align:right">${daEsc(a.shares)}</td>
+      <td style="padding:7px 10px;color:var(--muted2);font-size:12px">${daEsc(a.rationale||'')}</td>
+    </tr>`).join('');
+  const cashBody=cashRows
+    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','WEIGHT','$','SHARES','WHY'].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${cashRows}</tbody></table></div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">No ADD gaps to deploy against right now — every Kelly recommendation is HOLD/TRIM.</div>';
+  return `${staleWarn}${cashBody}
+    <div style="margin-top:10px;font-size:12px;color:var(--muted)">Leftover uncommitted: $${daFmt(d.leftover,2)}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Advisory only — not financial advice. Based on your last persisted Kelly sizing, not a live order.</div>`;
 }
 
 // Earnings EPS actual-vs-estimate grouped bar chart (data → Chart.js canvas API,

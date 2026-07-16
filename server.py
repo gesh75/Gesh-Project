@@ -2590,11 +2590,53 @@ def mybook_get(request: Request):
     try:
         ew = auth_users.get_equal_weight(email)
         payload = _customer_book_payload(auth_users.get_positions(email), equal_weight=ew)
+        # The book table earns its place with signal columns GESH alone can
+        # provide (research: brokerages already do plain holdings tracking
+        # better). Both maps are fail-soft: a missing signal_history table or
+        # absent analysis renders an empty state, never a 500 (Task 5).
+        syms = [h["symbol"] for h in payload["holdings"]] + payload["unpriced"]
+        signals: dict[str, dict] = {}
+        try:
+            import signal_history
+            for s in syms:
+                hist = signal_history.get_history(s, days=1)
+                if hist:
+                    signals[s] = {"verdict": hist[-1]["verdict"], "date": hist[-1]["date"]}
+        except Exception:  # noqa: BLE001 — the table is optional context, never a 500
+            pass
+        saved = auth_users.get_latest_book_analysis(email)
+        kelly_deltas: dict[str, dict] = {}
+        risky_symbols: list[str] = []
+        stale = _analysis_stale_for(email, saved)
+        if saved:
+            for k in (saved.get("kelly") or {}).get("holdings") or []:
+                if k.get("symbol") in syms and k.get("action"):
+                    kelly_deltas[k["symbol"]] = {
+                        "action": k["action"],
+                        "delta_pp": round((k.get("optimal_pct") or 0)
+                                          - (k.get("current_pct") or 0), 1)}
+            risk_syms: set[str] = set()
+            for r in ((saved.get("analysis") or {}).get("portfolio_risks") or []):
+                # Whole-word AND case-sensitive against the ORIGINAL text: real
+                # tickers are English words (ON, SO, ALL, NOW, IT, T), so a
+                # substring test — or even a word-boundary match on uppercased
+                # text — would flag an ON holding on "based on weakening
+                # margins". Risk prose writes tickers uppercase; the lowercase
+                # English word never matches the uppercase symbol.
+                txt = str(r.get("text") or "")
+                for s in syms:
+                    if re.search(rf"\b{re.escape(s)}\b", txt):
+                        risk_syms.add(s)
+            risky_symbols = sorted(risk_syms)
         return {"status": "ok", "data": {
             "positions": payload["holdings"],
             "total_equity": payload["equity_summary"]["portfolio_equity"],
             "unpriced": payload["unpriced"],
             "equal_weight": ew,
+            "signals": signals,
+            "kelly_deltas": kelly_deltas,
+            "analysis_stale": stale,
+            "risky_symbols": risky_symbols,
         }}
     except Exception as e:
         raise _server_error(e)
@@ -2967,6 +3009,122 @@ async def mybook_bulk(request: Request):
             "replaced": replace, "data": mybook_get(request)["data"]}
 
 
+def _analysis_stale_for(email: str, saved: dict | None) -> bool:
+    """Same fingerprint check the report uses: has the book changed since the
+    LAST persisted analysis was computed? A row with no `_fp` (never analyzed,
+    or a legacy pre-fingerprint row) is never flagged stale here — callers that
+    care about legacy rows do their own symbol-set comparison (see the report)."""
+    if not saved or not saved.get("_fp"):
+        return False
+    positions = auth_users.get_positions(email)
+    ew = auth_users.get_equal_weight(email)
+    fp_now = _book_fingerprint(positions) + ("|ew" if ew else "")
+    return saved["_fp"] != fp_now
+
+
+@app.post("/api/mybook/deploy-cash")
+async def mybook_deploy_cash(request: Request):
+    """'Where does new cash go?' — ranks the customer's LAST persisted Kelly ADD
+    gaps against a cash amount. Pure arithmetic on cached data: no LLM, no quota.
+    Advisory only; mirrors the report's staleness fingerprint so out-of-date
+    sizing is labeled, never silently served."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        cash = float((body or {}).get("cash"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="cash must be a number") from None
+    if not (0 < cash <= 10_000_000):
+        raise HTTPException(status_code=400, detail="cash out of range")
+    try:
+        saved = auth_users.get_latest_book_analysis(email)
+        if not saved:
+            raise HTTPException(status_code=404,
+                                detail="No analysis yet — run Analyze My Portfolio first")
+        stale = _analysis_stale_for(email, saved)
+        # Normalize once: legacy persisted rows can carry current_pct/optimal_pct
+        # as None or omit them entirely — `or 0` covers both (dict.get defaults
+        # only cover absent keys, not explicit None).
+        adds = []
+        for k in (saved.get("kelly") or {}).get("holdings") or []:
+            cur = float(k.get("current_pct") or 0)
+            opt = float(k.get("optimal_pct") or 0)
+            if k.get("action") == "ADD" and opt > cur:
+                adds.append({"symbol": k["symbol"], "current_pct": cur, "optimal_pct": opt})
+        gaps = {k["symbol"]: k["optimal_pct"] - k["current_pct"] for k in adds}
+        total_gap = sum(gaps.values())
+        allocations, spent = [], 0.0
+        for k in sorted(adds, key=lambda x: gaps[x["symbol"]], reverse=True):
+            sym = k["symbol"]
+            price = _cached_close(sym)
+            if not price or price <= 0 or total_gap <= 0:
+                continue
+            dollars = round(cash * gaps[sym] / total_gap, 2)
+            shares = int(dollars // price)
+            if shares < 1:
+                continue
+            allocations.append({"symbol": sym,
+                                "weight_pct": round(gaps[sym] / total_gap * 100, 1),
+                                "dollars": dollars, "shares": shares, "price": price,
+                                "rationale": f"Kelly gap {k['current_pct']:.1f}% → {k['optimal_pct']:.1f}%"})
+            spent += shares * price
+        return {"status": "ok", "data": {"cash": cash, "stale": stale,
+                                         "allocations": allocations,
+                                         "leftover": round(cash - spent, 2)}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/mybook/summary")
+def mybook_summary(request: Request):
+    """Hero payload for the customer Home pane: value, what changed, one next
+    action. Cached/DB reads only — this endpoint must stay instant and free."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    positions = auth_users.get_positions(email)
+    watch = auth_users.get_watch(email)
+    ew = auth_users.get_equal_weight(email)
+    # Equal-weight books never expose real dollars (sizes are private by design) —
+    # the hero shows position count prominently instead (see buildHomeHero).
+    total = 0.0 if ew else sum(
+        p["shares"] * (_cached_close(p["symbol"]) or 0) for p in positions)
+    saved = auth_users.get_latest_book_analysis(email)
+    stale = _analysis_stale_for(email, saved)
+    top_changes: list[dict] = []
+    try:
+        import signal_history
+        syms = sorted({p["symbol"] for p in positions} | set(watch))
+        flips = signal_history.detect_confirmed_flips(syms, persistence_days=2)
+        top_changes = [{"symbol": f["symbol"], "prior_verdict": f["prior_verdict"],
+                        "new_verdict": f["new_verdict"], "date": f["confirmed_since"]}
+                       for f in flips[:3]]
+    except Exception:  # noqa: BLE001 — hero must render without signal history
+        pass
+    if not positions:
+        action = {"label": "Add your holdings", "target": "book"}
+    elif not saved:
+        action = {"label": "Analyze my portfolio", "target": "analyze"}
+    elif stale:
+        action = {"label": "Re-run analysis — your book changed", "target": "analyze"}
+    else:
+        action = {"label": "View your report", "target": "report"}
+    return {"status": "ok", "data": {
+        "total_equity": round(total, 2), "positions_count": len(positions),
+        "watch_count": len(watch),
+        "last_verdict": ((saved or {}).get("analysis") or {}).get("portfolio_verdict"),
+        "analysis_stale": stale,
+        "analyzed_at": (saved or {}).get("_saved_at"),
+        "top_changes": top_changes, "next_action": action}}
+
+
 def _render_book_report(email: str) -> str:
     """Standalone, print-friendly HTML report of the customer's book + their LAST
     persisted analysis. Server-side rendered with every dynamic string escaped —
@@ -3035,9 +3193,11 @@ def _render_book_report(email: str) -> str:
             f"<p style='margin:4px 0;color:#666;font-size:13px'>3M: {e((h.get('prediction') or {}).get('3m', ''))} · "
             f"12M: {e((h.get('prediction') or {}).get('12m', ''))}</p>"
             for h in (d.get("holdings_analysis") or []))
+        # `or 0` (not just a .get default) — a persisted row can carry an
+        # explicit None, which the :.1f format would crash on.
         kelly_rows = "".join(
             row(f"{k.get('symbol', '')} · {k.get('action', '')}",
-                f"{k.get('current_pct', 0):.1f}% → {k.get('optimal_pct', 0):.1f}%")
+                f"{(k.get('current_pct') or 0):.1f}% → {(k.get('optimal_pct') or 0):.1f}%")
             for k in (ky.get("holdings") or [])[:15])
         sectors = "".join(
             f"<tr><td style='padding:6px 12px'>{e(s.get('sector', ''))}</td>"

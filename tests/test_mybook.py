@@ -565,6 +565,25 @@ def test_report_includes_sector_breakdown_and_track_record_link(client, monkeypa
     assert 'href=\'/track-record\'' in r.text
 
 
+def test_report_tolerates_none_valued_kelly_pcts(client, monkeypatch, au):
+    """A persisted Kelly row can carry current_pct/optimal_pct as explicit None —
+    dict.get('x', 0) only covers ABSENT keys, so the :.1f format used to crash
+    the whole report. Values must be normalized with `or 0`."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "current_pct": None, "optimal_pct": None}]}})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "0.0% → 0.0%" in r.text
+
+
 def test_usage_summary_endpoint_owner_only(client, monkeypatch):
     server, c = client
     _as(server, monkeypatch, "cust@x.com")          # customer session
@@ -682,6 +701,179 @@ def test_report_no_stale_flag_when_book_unchanged(client, monkeypatch):
     r = c.get("/mybook/report")
     assert r.status_code == 200
     assert _STALE_MARK not in r.text
+
+
+# ─── "Where does new cash go?" — Kelly-gap proportional cash deployment ──────
+
+def test_deploy_cash_allocates_proportionally_to_kelly_gaps(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {"portfolio_verdict": "HOLD", "holdings_analysis": [],
+                     "portfolio_risks": []},
+        "kelly": {"holdings": [
+            {"symbol": "NVDA", "action": "ADD", "current_pct": 2.0, "optimal_pct": 6.0},
+            {"symbol": "AAPL", "action": "ADD", "current_pct": 3.0, "optimal_pct": 5.0},
+            {"symbol": "MU",   "action": "TRIM", "current_pct": 9.0, "optimal_pct": 4.0}]},
+        "monte_carlo": {}, "book": {"positions": [], "unpriced": []}})
+    r = c.post("/api/mybook/deploy-cash", json={"cash": 3000})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["stale"] is False
+    by = {a["symbol"]: a for a in d["allocations"]}
+    assert set(by) == {"NVDA", "AAPL"}                     # TRIM rows never receive cash
+    assert by["NVDA"]["dollars"] > by["AAPL"]["dollars"]   # 4pp gap beats 2pp gap
+    # client fixture prices NVDA=100, AAPL=200
+    assert by["NVDA"]["shares"] == int(by["NVDA"]["dollars"] // 100)
+
+
+def test_deploy_cash_requires_analysis_and_valid_cash(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post("/api/mybook/deploy-cash", json={"cash": 1000}).status_code == 404
+    assert c.post("/api/mybook/deploy-cash", json={"cash": -5}).status_code == 400
+    assert c.post("/api/mybook/deploy-cash", json={}).status_code == 400
+
+
+def test_deploy_cash_flags_stale_analysis(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": "some-other-book",
+        "analysis": {}, "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "current_pct": 1.0, "optimal_pct": 3.0}]},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.post("/api/mybook/deploy-cash", json={"cash": 1000}).json()["data"]
+    assert d["stale"] is True
+
+
+def test_deploy_cash_tolerates_legacy_kelly_rows_missing_current_pct(client, monkeypatch, au):
+    """Legacy persisted analyses can carry Kelly rows with current_pct/optimal_pct
+    absent or None — the allocator must normalize them to 0, not 500."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {}, "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "optimal_pct": 4.0}]},   # current_pct ABSENT
+        "book": {"positions": [], "unpriced": []}})
+    r = c.post("/api/mybook/deploy-cash", json={"cash": 1000})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    by = {a["symbol"]: a for a in d["allocations"]}
+    assert "NVDA" in by and by["NVDA"]["shares"] >= 1
+
+
+# ─── customer Home hero (/api/mybook/summary) ────────────────────────────────
+
+def test_mybook_summary_shapes_hero_payload(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)          # NVDA=100 in this fixture
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {"portfolio_verdict": "HOLD"}, "kelly": {}, "monte_carlo": {},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["total_equity"] == 1000.0 and d["positions_count"] == 1
+    assert d["last_verdict"] == "HOLD" and d["analysis_stale"] is False
+    assert d["next_action"]["target"] == "report"
+    assert isinstance(d["top_changes"], list) and len(d["top_changes"]) <= 3
+
+
+def test_mybook_summary_next_action_ladder(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    # empty book → add holdings
+    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "book"
+    # book, no analysis → analyze
+    au.set_position("cust@x.com", "NVDA", 10)
+    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "analyze"
+    # stale analysis → re-run
+    au.save_book_analysis("cust@x.com", {"_fp": "other-book", "analysis": {},
+                                         "kelly": {}, "monte_carlo": {},
+                                         "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["analysis_stale"] is True and d["next_action"]["target"] == "analyze"
+
+
+def test_mybook_summary_survives_missing_signal_history(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    import builtins
+    real_import = builtins.__import__
+    def _no_sighist(name, *a, **k):
+        if name == "signal_history":
+            raise ImportError("simulated absence")
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", _no_sighist)
+    r = c.get("/api/mybook/summary")
+    assert r.status_code == 200 and r.json()["data"]["top_changes"] == []
+
+
+# ─── book table signal columns (CONSENSUS / KELLY Δ / RISK) ─────────────────
+
+def test_mybook_payload_carries_signal_and_kelly_columns(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    import signal_history as sh
+    sh.record_snapshots([{"symbol": "NVDA", "verdict": "BUY", "score": 0.3,
+                          "confidence": 80}], date="2026-07-16")
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {}, "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "current_pct": 2.5, "optimal_pct": 5.4}]},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook").json()["data"]
+    assert d["signals"]["NVDA"]["verdict"] == "BUY"
+    assert d["kelly_deltas"]["NVDA"] == {"action": "ADD", "delta_pp": 2.9}
+    assert d["analysis_stale"] is False
+
+
+def test_mybook_signal_columns_fail_soft(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1})
+    d = c.get("/api/mybook").json()["data"]
+    assert d["signals"] == {} or "NVDA" in d["signals"]   # empty history is fine
+    assert d["kelly_deltas"] == {}                        # no analysis yet
+
+
+def test_mybook_risky_symbols_use_word_boundaries(client, monkeypatch, au):
+    """Real tickers are English words (ON, SO, ALL, NOW, IT, T) — a naive
+    substring match would flag an ON holding on the risk text 'based on
+    weakening margins'. Only whole-word symbol mentions count."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "ON", 5)      # onsemi — unpriced in fixture, still in syms
+    au.set_position("cust@x.com", "AAPL", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {"portfolio_risks": [
+            {"text": "based on weakening margins for AAPL", "severity": "HIGH"}]},
+        "monte_carlo": {}, "kelly": {},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook").json()["data"]
+    assert d["risky_symbols"] == ["AAPL"]       # ON must NOT match "based on"
 
 
 def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monkeypatch, au):
