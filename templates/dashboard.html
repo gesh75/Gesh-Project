@@ -3372,6 +3372,14 @@ async function mybookAnalyze(){
     const d=j&&j.data;
     if(!d||!d.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now — try again in a minute.</div></div>'; return; }
     const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[];
+    // Conclusions first (plan T2): one plain-language line per engine; the raw
+    // stat rows fold behind <details>. Leads are plain text — daEsc'd at render.
+    const mcLead=mc.error?'Monte Carlo unavailable right now.'
+      :('Worst plausible '+(mc.horizon_days||21)+'-day stretch (95% confidence): −$'+daFmt(mc.var_95,0)+' on your book.');
+    const kAdj=kh.filter(k=>k.action==='ADD'||k.action==='TRIM');
+    const kellyLead=(ky.error||!kh.length)?'Kelly sizing unavailable right now.'
+      :(kAdj.length+' sizing adjustment'+(kAdj.length!==1?'s':'')+' suggested'
+        +(kAdj.length?' — largest: '+kAdj[0].symbol+' '+(kAdj[0].action||''):'')+'.');
     const risks=(a.portfolio_risks||[]).map(r=>{
       const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
       return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;
@@ -3386,10 +3394,12 @@ async function mybookAnalyze(){
         ${a.market_context?`<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55">${daEsc(a.market_context)}</div>`:''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">
-        <div class="card"><div style="${T}">Monte Carlo (${daEsc(mc.horizon_days||21)} trading days, ${daEsc(mc.n_sims||1000)} sims)</div>
-          ${mc.error?buildRow('Status','unavailable'):buildRow('Median outcome','$'+daFmt(mc.median,0))+buildRow('P5 – P95','$'+daFmt(mc.p5,0)+' – $'+daFmt(mc.p95,0))+buildRow('VaR 95%','$'+daFmt(mc.var_95,0)+' ('+daFmt(mc.var_95_pct,1)+'%)')+buildRow('Prob. of profit',daFmt(mc.prob_profit_pct,0)+'%')+buildRow('Regime',mc.regime||'—')}</div>
-        <div class="card"><div style="${T}">Kelly Sizing</div>
-          ${ky.error||!kh.length?buildRow('Status','unavailable'):buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div>
+        <div class="card"><div style="${T}">Risk Check</div>
+          <div style="font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.55;font-weight:600">${daEsc(mcLead)}</div>
+          ${mc.error?'':`<details><summary style="cursor:pointer;font-size:12px;color:var(--muted)">How this was computed — Monte Carlo (${daEsc(mc.horizon_days||21)} trading days, ${daEsc(mc.n_sims||1000)} sims)</summary><div style="margin-top:8px">${buildRow('Median outcome','$'+daFmt(mc.median,0))+buildRow('P5 – P95','$'+daFmt(mc.p5,0)+' – $'+daFmt(mc.p95,0))+buildRow('VaR 95%','$'+daFmt(mc.var_95,0)+' ('+daFmt(mc.var_95_pct,1)+'%)')+buildRow('Prob. of profit',daFmt(mc.prob_profit_pct,0)+'%')+buildRow('Regime',mc.regime||'—')}</div></details>`}</div>
+        <div class="card"><div style="${T}">Position Sizing</div>
+          <div style="font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.55;font-weight:600">${daEsc(kellyLead)}</div>
+          ${ky.error||!kh.length?'':`<details><summary style="cursor:pointer;font-size:12px;color:var(--muted)">How this was computed — Kelly sizing</summary><div style="margin-top:8px">${buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div></details>`}</div>
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }

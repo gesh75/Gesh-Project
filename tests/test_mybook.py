@@ -893,3 +893,59 @@ def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monk
     r = c.get("/mybook/report")
     assert r.status_code == 200
     assert _STALE_MARK in r.text
+
+
+# ─── progressive disclosure: conclusions first, mechanics folded (plan T2) ────
+
+def test_report_leads_with_conclusions_and_folds_mechanics(client, monkeypatch, au):
+    """/mybook/report must LEAD each engine section with one plain-language
+    conclusion line, then fold the raw tables behind <details> — nothing is
+    deleted, only folded (customer-dashboard-simplification plan, Task 2)."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {"median": 2100.0, "p5": 1500.0, "p95": 2600.0,
+                        "var_95": 300.0, "horizon_days": 21},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "TRIM",
+                                "current_pct": 50.0, "optimal_pct": 40.0}]},
+        "book": {"positions": [{"symbol": "NVDA"}], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "Worst plausible" in text and "$300" in text      # conclusion line
+    assert "<details>" in text and "How this was computed" in text
+    assert "1 sizing adjustment" in text and "NVDA TRIM" in text
+    # mechanics still present, just folded
+    assert "Median outcome" in text
+
+
+def test_report_conclusions_survive_empty_engines(client, monkeypatch, au):
+    """Empty Monte Carlo / Kelly blocks must still render a conclusion line and the
+    folded mechanics (with the existing 'unavailable' row), never a 500."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {}, "kelly": {}})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "0 sizing adjustments" in r.text
+    assert "How this was computed" in r.text
+
+
+def test_report_details_print_expanded_css(client, monkeypatch, au):
+    """Printed PDFs must include the folded mechanics — the report stylesheet
+    carries print rules that force <details> content to display."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "@media print" in r.text
+    assert "details" in r.text and "page-break-inside:avoid" in r.text

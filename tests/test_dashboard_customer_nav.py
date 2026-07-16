@@ -74,3 +74,13 @@ def test_customer_home_pane_and_default_exist():
     assert 'data-tab="home"' in html
     assert "customer-only" in html            # role-gated nav class exists
     assert "buildHomeHero" in html            # audited builder name
+
+
+def test_customer_book_analysis_leads_with_conclusions():
+    """The dashboard's customer book-analysis renderer mirrors the report's
+    conclusions-first pattern: one plain-language line per engine, mechanics
+    behind <details> (plan T2)."""
+    html = TEMPLATE.read_text()
+    assert "Worst plausible" in html                  # Monte Carlo conclusion line
+    assert "sizing adjustment" in html                # Kelly conclusion line
+    assert "How this was computed" in html            # fold summary label
