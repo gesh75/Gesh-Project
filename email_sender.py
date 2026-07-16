@@ -26,6 +26,14 @@ def _from_address() -> str:
     return os.getenv("EMAIL_FROM", "GESH <onboarding@example.com>")
 
 
+def is_configured() -> bool:
+    """True when a real Resend API key is present — i.e. send_email will actually
+    attempt delivery instead of silently taking the DEV NO-OP path. Callers that
+    schedule email jobs (e.g. run_signal_alerts.py, run_weekly_digest.py) use this
+    to distinguish "no key configured" from "nothing to send" in their summaries."""
+    return bool(os.getenv("RESEND_API_KEY", "").strip())
+
+
 def send_email(to: str, subject: str, html: str) -> bool:
     """Send one HTML email. Returns True on a 2xx from Resend, False otherwise
     (including the no-key dev path). Never raises — email failure must not 500 a webhook."""

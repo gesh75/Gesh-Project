@@ -670,6 +670,10 @@ body:not(.customer) .customer-only { display: none !important; }
       </div>
       <div id="home-hero"><div class="deep-placeholder"><div class="deep-ph-text">Loading your summary…</div></div></div>
     </div>
+    <div class="card" style="margin-bottom:18px">
+      <div class="ch" style="font-size:13px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)">Email preferences</div>
+      <div id="home-prefs" style="margin-top:10px"></div>
+    </div>
   </div>
 
   <!-- ═══ TAB: ANALYZE (customer research — any ticker, live) ═══ -->
@@ -2660,7 +2664,7 @@ function switchTab(name, btn){
   // you scrolled up (observed on the Risk tab). Always land at the top on switch.
   window.scrollTo(0, 0);
   // lazy-load data per tab (cached results render by default → never empty)
-  if(name==='home'){ if(typeof loadHomeHero==='function') loadHomeHero(); }
+  if(name==='home'){ if(typeof loadHomeHero==='function') loadHomeHero(); if(typeof loadPreferences==='function') loadPreferences(); }
   if(name==='risk'){ loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
   if(name==='analysis'){ tryLoadCachedAnalysis(); }
   if(name==='signals'){ if(typeof loadCachedConsensus==='function') loadCachedConsensus(); if(typeof loadCachedKelly==='function') loadCachedKelly(); }
@@ -2790,6 +2794,40 @@ function homeAction(target){
   switchTab('analyze');
   if(target==='book'&&typeof focusMyBookSection==='function') focusMyBookSection('overview');
   if(target==='analyze'&&typeof mybookAnalyze==='function') mybookAnalyze();
+}
+
+// ── email preferences — the "re-enable from the dashboard" the unsubscribe
+// pages promise. Two checkboxes, GET/POST /api/preferences (session-scoped). ──
+async function loadPreferences(){
+  const el=document.getElementById('home-prefs'); if(!el) return;
+  try{
+    const body=await (await fetch('/api/preferences')).json();
+    el.innerHTML=buildPreferencesBlock(body.data||{});
+  }catch(e){ el.innerHTML='<div style="color:var(--muted);font-size:13px">Could not load preferences — retry shortly.</div>'; }
+}
+function buildPreferencesBlock(d){
+  const alertsChecked=d.alerts_opt_out?'':' checked';
+  const digestChecked=d.digest_opt_out?'':' checked';
+  return `<div style="display:flex;flex-direction:column;gap:8px">
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+      <input type="checkbox" id="pref-alerts"${alertsChecked} style="accent-color:#00d4ff" onchange="setPreference('alerts_opt_out',this.checked)">
+      Signal-change alert emails
+    </label>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+      <input type="checkbox" id="pref-digest"${digestChecked} style="accent-color:#00d4ff" onchange="setPreference('digest_opt_out',this.checked)">
+      Weekly digest email
+    </label>
+  </div>`;
+}
+// `key` is one of 'alerts_opt_out'/'digest_opt_out'; `receiving` is the checkbox's
+// new checked state (true = "I want these emails"), so the POSTed flag is its
+// inverse (opt_out = !receiving).
+async function setPreference(key, receiving){
+  const body={}; body[key]=!receiving;
+  try{
+    await fetch('/api/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(window.toast) toast('Preferences updated','success');
+  }catch(e){ if(window.toast) toast('Could not update preferences','error'); }
 }
 
 // ── per-user watchlist (saved tickers on the Analyze tab) ─────────────────────

@@ -809,6 +809,42 @@ def test_mybook_summary_next_action_ladder(client, monkeypatch, au):
     assert d["analysis_stale"] is True and d["next_action"]["target"] == "analyze"
 
 
+def test_mybook_summary_flags_stale_for_legacy_analysis_with_changed_symbols(client, monkeypatch, au):
+    """Finding #2: /api/mybook/summary used to return analysis_stale=False for any
+    legacy (pre-fingerprint) row, while /mybook/report independently ran its own
+    symbol-set fallback and could flag the SAME row stale — the hero said "fresh",
+    the report said "out of date". Both must now agree via the shared
+    _analysis_stale_for helper."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.set_position("cust@x.com", "AAPL", 5)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD"}, "monte_carlo": {}, "kelly": {},
+        "book": {"positions": [{"symbol": "NVDA"}], "total_equity": 1000.0,
+                 "unpriced": []}})   # legacy row: no _fp, recorded only NVDA
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["analysis_stale"] is True
+    assert d["next_action"]["target"] == "analyze"
+
+
+def test_mybook_summary_not_stale_for_legacy_analysis_with_unchanged_symbols(client, monkeypatch, au):
+    """Same legacy (no-_fp) row, but the recorded symbol set still matches the
+    current book exactly — not stale."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD"}, "monte_carlo": {}, "kelly": {},
+        "book": {"positions": [{"symbol": "NVDA"}], "total_equity": 1000.0,
+                 "unpriced": []}})
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["analysis_stale"] is False
+    assert d["next_action"]["target"] == "report"
+
+
 def test_mybook_summary_survives_missing_signal_history(client, monkeypatch, au):
     server, c = client
     _as(server, monkeypatch, "cust@x.com")
