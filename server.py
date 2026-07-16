@@ -2179,9 +2179,15 @@ def analyst_symbol(symbol: str):
 
 @app.get("/api/news/{symbol}")
 def news_symbol(symbol: str):
-    """Recent news HEADLINES for ANY ticker (RSS, NO LLM — the sentiment *score*
-    stays owner-only so the customer analyze path stays zero-cost). Returns the
-    trimmed top-8 items (title/url/source/published); [] when none."""
+    """Recent news HEADLINES for ANY ticker (RSS/Alpaca, NO LLM — the customer
+    path never triggers a live sentiment run, so it stays zero-cost). Returns the
+    trimmed top-8 items (title/url/source/published); [] when none.
+
+    Since plan T4 the response also carries an intentionally CUSTOMER-VISIBLE
+    `sentiment` chip block — read from the cached news_sentiment table only
+    (never a live LLM call), allow-listed to score/mood/article_count/as_of,
+    gated server-side on article_count>0 (never fabricate sentiment over zero
+    articles), and never shipping the raw analysis text."""
     sym = _safe_symbol(symbol)
     cached = _ticker_get_cached("news", sym)
     if cached:
@@ -3240,16 +3246,29 @@ def _render_book_report(email: str) -> str:
         # behind <details>. Nothing is deleted — fold, don't remove.
         adjustments = [k for k in (ky.get("holdings") or [])
                        if k.get("action") in ("ADD", "TRIM")]
-        top_adj = adjustments[0] if adjustments else None
+        # "largest" = biggest |optimal - current| gap. The holdings list arrives
+        # sorted by optimal_pct DESC, so taking the first row would headline a
+        # 0.1pp trim over a 14pp add (PR #79 review, finding 1).
+        top_adj = max(adjustments,
+                      key=lambda k: abs((k.get("optimal_pct") or 0)
+                                        - (k.get("current_pct") or 0)),
+                      default=None)
         n_adj = len(adjustments)
         kelly_conclusion = (
             f"{n_adj} sizing adjustment{'s' if n_adj != 1 else ''} suggested"
             + (f" — largest: {e(str(top_adj.get('symbol', '')))} "
                f"{e(str(top_adj.get('action', '')))}." if top_adj else "."))
         mc_var = mc.get("var_95", 0) or 0
+        # The headline pairs the SAVED analysis's VaR dollars with TODAY'S live
+        # book total — when the analysis is stale that mix understates risk, so
+        # the caveat rides on the conclusion line itself (the banner above is
+        # skippable; the headline is not — finding 3).
+        mc_stale_note = (" (from your last analysis — re-run for current positions)"
+                         if stale else "")
         mc_conclusion = (
             f"Worst plausible {e(str(mc.get('horizon_days') or 21))}-day stretch "
-            f"(95% confidence): &minus;${mc_var:,.0f} on your ${total:,.0f} book.")
+            f"(95% confidence): &minus;${mc_var:,.0f} on your ${total:,.0f} book."
+            f"{mc_stale_note}")
         # Structured-only AI output (plan T3): one bold takeaway sentence, the
         # rest of the model prose folded — never a free-standing wall of text.
         ctx_lead, ctx_rest = _lead_and_fold(str(d.get("market_context", "")))

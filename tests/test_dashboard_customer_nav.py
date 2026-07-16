@@ -84,6 +84,9 @@ def test_customer_book_analysis_leads_with_conclusions():
     assert "Worst plausible" in html                  # Monte Carlo conclusion line
     assert "sizing adjustment" in html                # Kelly conclusion line
     assert "How this was computed" in html            # fold summary label
+    # the "largest" headline pick is by |optimal-current| delta, not list order
+    # (the list is sorted by optimal_pct DESC — PR #79 review, finding 1)
+    assert "kAdjTop" in html and "Math.abs((k.optimal_pct||0)-(k.current_pct||0))" in html
 
 
 # ─── structured-only AI output on customer surfaces (plan T3) ─────────────────

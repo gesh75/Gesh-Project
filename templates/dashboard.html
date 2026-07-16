@@ -3402,9 +3402,14 @@ async function mybookAnalyze(){
     const mcLead=mc.error?'Monte Carlo unavailable right now.'
       :('Worst plausible '+(mc.horizon_days||21)+'-day stretch (95% confidence): −$'+daFmt(mc.var_95,0)+' on your book.');
     const kAdj=kh.filter(k=>k.action==='ADD'||k.action==='TRIM');
+    // "largest" = biggest |optimal-current| gap — the holdings list is sorted by
+    // optimal_pct DESC, so the first row is NOT the largest adjustment (PR #79).
+    const kAdjTop=kAdj.reduce((b,k)=>{
+      const dv=Math.abs((k.optimal_pct||0)-(k.current_pct||0));
+      return (!b||dv>b.dv)?{sym:k.symbol,act:k.action||'',dv}:b;},null);
     const kellyLead=(ky.error||!kh.length)?'Kelly sizing unavailable right now.'
       :(kAdj.length+' sizing adjustment'+(kAdj.length!==1?'s':'')+' suggested'
-        +(kAdj.length?' — largest: '+kAdj[0].symbol+' '+(kAdj[0].action||''):'')+'.');
+        +(kAdjTop?' — largest: '+kAdjTop.sym+' '+kAdjTop.act:'')+'.');
     const risks=(a.portfolio_risks||[]).map(r=>{
       const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
       return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;

@@ -919,6 +919,8 @@ def test_report_leads_with_conclusions_and_folds_mechanics(client, monkeypatch, 
     assert "1 sizing adjustment" in text and "NVDA TRIM" in text
     # mechanics still present, just folded
     assert "Median outcome" in text
+    # fresh book: the headline must NOT carry the staleness caveat (finding 3)
+    assert "re-run for current positions" not in text
 
 
 def test_report_conclusions_survive_empty_engines(client, monkeypatch, au):
@@ -1002,3 +1004,46 @@ def test_gemini_commentary_rejects_customer_sessions(client, monkeypatch):
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     for path in ("/api/gemini/analyze", "/api/gemini/market-commentary"):
         assert c.post(path, json={}).status_code == 403, path
+
+
+def test_report_kelly_headline_names_largest_delta_not_first_row(client, monkeypatch, au):
+    """Kelly holdings arrive sorted by optimal_pct DESC, not by adjustment size —
+    'largest' must be selected by |optimal_pct - current_pct|, or a 0.1pp trim
+    can headline over a 14pp add (PR #79 review, finding 1)."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {},
+        "kelly": {"holdings": [
+            # first by list order (highest optimal_pct) but the SMALLER delta:
+            {"symbol": "NVDA", "action": "TRIM", "current_pct": 50.0, "optimal_pct": 49.9},
+            {"symbol": "AAPL", "action": "ADD", "current_pct": 2.0, "optimal_pct": 16.0},
+        ]},
+        "book": {"positions": [{"symbol": "NVDA"}], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "2 sizing adjustments" in text
+    assert "largest: AAPL ADD" in text
+    assert "largest: NVDA TRIM" not in text
+
+
+def test_report_mc_conclusion_carries_stale_caveat(client, monkeypatch, au):
+    """The Monte Carlo headline mixes the SAVED analysis's VaR with TODAY'S live
+    book total — when the analysis is stale the conclusion line itself must say
+    so; the separate banner is skippable, the headline is not (finding 3)."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": "other-book",                    # stale by fingerprint
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {"var_95": 300.0, "horizon_days": 21},
+        "kelly": {}, "book": {"positions": [], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "Worst plausible" in text
+    assert "re-run for current positions" in text
