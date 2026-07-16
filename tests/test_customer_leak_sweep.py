@@ -93,11 +93,17 @@ _CHART_DF = pd.DataFrame(
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     """In-process app with all data seams seeded (owner sentinels where a real
     endpoint would carry owner dollars; static market fixtures elsewhere)."""
     monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
     monkeypatch.setattr(server, "_customer_scale_factor", lambda: SCALE)
+    # /api/signals/history/{symbol} reads signal_history, whose `from db import
+    # DB_PATH` defaults to the cwd-relative PRODUCTION gesh_financial.db — and its
+    # connection helper runs CREATE TABLE IF NOT EXISTS even on reads. Isolate it
+    # like the auth DB, or the sweep writes DDL into the live DB (conftest's
+    # "zero real DB writes" contract).
+    monkeypatch.setattr("signal_history.DB_PATH", tmp_path / "sig_sweep.db", raising=False)
 
     # broad server-module seams
     monkeypatch.setattr(server, "build_data_payload", lambda *a, **k: _owner_payload())
@@ -222,6 +228,7 @@ COVERED: dict[str, str] = {
     "/api/yield/landscape": "/api/yield/landscape",
     "/api/security/health": "/api/security/health",
     "/api/volatility/compare/{symbol}": "/api/volatility/compare/NVDA",
+    "/api/signals/history/{symbol}": "/api/signals/history/NVDA",
 }
 # GET /api routes deliberately not swept, each with a reason.
 EXCLUDED: dict[str, str] = {

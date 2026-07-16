@@ -2210,6 +2210,26 @@ def news_symbol(symbol: str):
         raise _server_error(e)
 
 
+@app.get("/api/signals/history/{symbol}", dependencies=[Depends(require_customer_or_owner)])
+def signals_history(symbol: str):
+    """30-day consensus verdict/score series for the card sparkline (feature 3).
+    Mechanical read of signal_history — no LLM, no quota. Session-gated (same
+    require_customer_or_owner as the ticker card) since it is customer-facing;
+    empty history is a normal answer, never a 500."""
+    sym = _safe_symbol(symbol)
+    cached = _ticker_get_cached("sighist", sym)
+    if cached:
+        return cached
+    try:
+        import signal_history
+        data = {"symbol": sym, "history": signal_history.get_history(sym, days=30)}
+        return _ticker_get_store("sighist", sym, {"status": "ok", "data": data})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
 def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
     """`_latest_close` plus the PROVENANCE of the number it returns (Codex #6).
 
