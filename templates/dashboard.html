@@ -2947,7 +2947,8 @@ async function analyzeTicker(raw){
 // Rich Claude research card — the money-free per-ticker subset of the internal
 // deep analysis. POSTed separately (LLM ~15s) so the fast mechanical cards render
 // first; fills #analyze-ai on arrival, degrades silently if the model is unavailable.
-function buildAICard(h){
+function buildAICard(h,opts){
+  const withSpark=!!(opts&&opts.spark);   // sparkline slot: single-ticker Analyze flow only
   const sc=h.scores||{}, fv=h.fair_value||{};
   const skeys=['valuation','growth','health','momentum','dividend'];
   const fvv=daFairValue(fv);
@@ -2969,7 +2970,7 @@ function buildAICard(h){
           FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>
         </div>
       </div>
-      <div class="sig-spark-slot"></div>
+      ${withSpark?'<div class="sig-spark-slot"></div>':''}
       <div class="da-sbars">
         ${skeys.map(k=>{const v=Math.max(0,Math.min(100,Number(sc[k])||0));return `<div class="da-sbar">
           <span class="nm">${daEsc(k.slice(0,3).toUpperCase())}</span>
@@ -3081,7 +3082,7 @@ async function analyzeAI(sym){
       return;
     }
     h._cached=!!(j&&j.cached);   // AI-GENERATED pill notes when served from cache (GESH-4)
-    el.innerHTML=buildAICard(h);
+    el.innerHTML=buildAICard(h,{spark:true});   // sparkline slot only on this single-ticker path
     loadSignalSparkline(sym, el);
   }catch(e){ el.innerHTML=''; }
 }
