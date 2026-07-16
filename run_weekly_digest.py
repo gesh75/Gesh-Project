@@ -74,11 +74,14 @@ def main(dry_run: bool = False) -> dict:
     sent = 0
     customers = _customers()
     for email in customers:
-        html = _compose(email)
-        if not html or dry_run:
-            continue
-        if email_sender.send_email(email, "Your GESH weekly digest", html):
-            sent += 1
+        try:  # fail-soft per customer — one bad compose/send must not sink the run
+            html = _compose(email)
+            if not html or dry_run:
+                continue
+            if email_sender.send_email(email, "Your GESH weekly digest", html):
+                sent += 1
+        except Exception as e:  # noqa: BLE001 — same isolation pattern as run_signal_alerts
+            logger.warning("weekly digest failed for %s: %s", email, e)
     return {"customers": len(customers), "emails_sent": sent}
 
 

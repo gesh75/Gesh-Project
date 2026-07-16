@@ -63,3 +63,28 @@ def test_digest_skips_opted_out_and_empty_customers(au, monkeypatch):
 def test_digest_never_calls_llm(au, monkeypatch):
     import run_weekly_digest as job
     assert not hasattr(job, "deep_analyze_portfolio")     # structural: no LLM import
+
+
+def test_one_customer_failure_does_not_sink_the_run(au, monkeypatch):
+    """Fail-soft per customer: a compose/DB error for one customer must not kill
+    the digest for everyone after them in the loop (transient SQLite failures on
+    gesh_financial.db are a documented reality in this repo)."""
+    import run_weekly_digest as job
+    monkeypatch.setattr(job, "auth_users", au, raising=True)
+    au.set_position("boom@x.com", "NVDA", 10)   # sorts first — fails
+    au.set_position("ok@x.com", "NVDA", 10)     # sorts second — must still get theirs
+    real_compose = job._compose
+
+    def _flaky_compose(email):
+        if email == "boom@x.com":
+            raise RuntimeError("database disk image is malformed")
+        return real_compose(email)
+
+    monkeypatch.setattr(job, "_compose", _flaky_compose, raising=True)
+    monkeypatch.setattr(job, "_close_for", lambda sym: 100.0, raising=True)
+    sent = []
+    monkeypatch.setattr(job.email_sender, "send_email",
+                        lambda to, subject, html: sent.append(to) or True)
+    out = job.main()
+    assert sent == ["ok@x.com"]
+    assert out["emails_sent"] == 1

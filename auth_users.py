@@ -488,6 +488,8 @@ def _ensure_user_row(con, em: str) -> None:
     rows (add_watch/set_position never touch `users`) — an unusable random
     password satisfies the NOT NULL constraint; they still authenticate via
     magic link / billing provisioning, never this placeholder."""
+    if con.execute("SELECT 1 FROM users WHERE email=?", (em,)).fetchone():
+        return   # common case — skip the 200k-round PBKDF2 hash entirely
     con.execute(
         "INSERT OR IGNORE INTO users (email, password_hash, is_active, created_at) "
         "VALUES (?,?,1,?)",
