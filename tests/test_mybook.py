@@ -684,6 +684,57 @@ def test_report_no_stale_flag_when_book_unchanged(client, monkeypatch):
     assert _STALE_MARK not in r.text
 
 
+# ─── "Where does new cash go?" — Kelly-gap proportional cash deployment ──────
+
+def test_deploy_cash_allocates_proportionally_to_kelly_gaps(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {"portfolio_verdict": "HOLD", "holdings_analysis": [],
+                     "portfolio_risks": []},
+        "kelly": {"holdings": [
+            {"symbol": "NVDA", "action": "ADD", "current_pct": 2.0, "optimal_pct": 6.0},
+            {"symbol": "AAPL", "action": "ADD", "current_pct": 3.0, "optimal_pct": 5.0},
+            {"symbol": "MU",   "action": "TRIM", "current_pct": 9.0, "optimal_pct": 4.0}]},
+        "monte_carlo": {}, "book": {"positions": [], "unpriced": []}})
+    r = c.post("/api/mybook/deploy-cash", json={"cash": 3000})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["stale"] is False
+    by = {a["symbol"]: a for a in d["allocations"]}
+    assert set(by) == {"NVDA", "AAPL"}                     # TRIM rows never receive cash
+    assert by["NVDA"]["dollars"] > by["AAPL"]["dollars"]   # 4pp gap beats 2pp gap
+    # client fixture prices NVDA=100, AAPL=200
+    assert by["NVDA"]["shares"] == int(by["NVDA"]["dollars"] // 100)
+
+
+def test_deploy_cash_requires_analysis_and_valid_cash(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post("/api/mybook/deploy-cash", json={"cash": 1000}).status_code == 404
+    assert c.post("/api/mybook/deploy-cash", json={"cash": -5}).status_code == 400
+    assert c.post("/api/mybook/deploy-cash", json={}).status_code == 400
+
+
+def test_deploy_cash_flags_stale_analysis(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": "some-other-book",
+        "analysis": {}, "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "current_pct": 1.0, "optimal_pct": 3.0}]},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.post("/api/mybook/deploy-cash", json={"cash": 1000}).json()["data"]
+    assert d["stale"] is True
+
+
 def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monkeypatch, au):
     """Rows persisted before the fingerprint existed still get the guard via a
     symbol-set comparison against the analysis's own recorded book."""

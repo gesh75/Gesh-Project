@@ -2947,6 +2947,67 @@ async def mybook_bulk(request: Request):
             "replaced": replace, "data": mybook_get(request)["data"]}
 
 
+def _analysis_stale_for(email: str, saved: dict | None) -> bool:
+    """Same fingerprint check the report uses: has the book changed since the
+    LAST persisted analysis was computed? A row with no `_fp` (never analyzed,
+    or a legacy pre-fingerprint row) is never flagged stale here — callers that
+    care about legacy rows do their own symbol-set comparison (see the report)."""
+    if not saved or not saved.get("_fp"):
+        return False
+    positions = auth_users.get_positions(email)
+    ew = auth_users.get_equal_weight(email)
+    fp_now = _book_fingerprint(positions) + ("|ew" if ew else "")
+    return saved["_fp"] != fp_now
+
+
+@app.post("/api/mybook/deploy-cash")
+async def mybook_deploy_cash(request: Request):
+    """'Where does new cash go?' — ranks the customer's LAST persisted Kelly ADD
+    gaps against a cash amount. Pure arithmetic on cached data: no LLM, no quota.
+    Advisory only; mirrors the report's staleness fingerprint so out-of-date
+    sizing is labeled, never silently served."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        cash = float((body or {}).get("cash"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="cash must be a number") from None
+    if not (0 < cash <= 10_000_000):
+        raise HTTPException(status_code=400, detail="cash out of range")
+    saved = auth_users.get_latest_book_analysis(email)
+    if not saved:
+        raise HTTPException(status_code=404,
+                            detail="No analysis yet — run Analyze My Portfolio first")
+    stale = _analysis_stale_for(email, saved)
+    adds = [k for k in (saved.get("kelly") or {}).get("holdings") or []
+            if k.get("action") == "ADD"
+            and (k.get("optimal_pct") or 0) > (k.get("current_pct") or 0)]
+    gaps = {k["symbol"]: k["optimal_pct"] - k["current_pct"] for k in adds}
+    total_gap = sum(gaps.values())
+    allocations, spent = [], 0.0
+    for k in sorted(adds, key=lambda x: gaps[x["symbol"]], reverse=True):
+        sym = k["symbol"]
+        price = _cached_close(sym)
+        if not price or price <= 0 or total_gap <= 0:
+            continue
+        dollars = round(cash * gaps[sym] / total_gap, 2)
+        shares = int(dollars // price)
+        if shares < 1:
+            continue
+        allocations.append({"symbol": sym, "weight_pct": round(gaps[sym] / total_gap * 100, 1),
+                            "dollars": dollars, "shares": shares, "price": price,
+                            "rationale": f"Kelly gap {k['current_pct']:.1f}% → {k['optimal_pct']:.1f}%"})
+        spent += shares * price
+    return {"status": "ok", "data": {"cash": cash, "stale": stale,
+                                     "allocations": allocations,
+                                     "leftover": round(cash - spent, 2)}}
+
+
 def _render_book_report(email: str) -> str:
     """Standalone, print-friendly HTML report of the customer's book + their LAST
     persisted analysis. Server-side rendered with every dynamic string escaped —

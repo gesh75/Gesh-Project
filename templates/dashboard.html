@@ -705,6 +705,17 @@ body:not(.role-known) .owner-only { display: none !important; }
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Your positions stay private to your account. Valued from public quotes; nothing here connects to a broker.</div>
       <div id="mybook-list" style="margin-bottom:12px"></div>
       <div id="mybook-results"></div>
+
+      <div class="card" style="margin-top:16px">
+        <div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px">💵 Where Does New Cash Go?</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Ranks your last <b>Analyze My Portfolio</b> Kelly gaps against a cash amount — advisory only, no live spend. Run an analysis first so there's something to rank against.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+          <input id="deploy-cash-amount" placeholder="Cash to deploy ($)" type="number" min="0" step="any"
+                 style="width:180px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
+          <button class="btn-analyze" onclick="deployCash()">Where should this go?</button>
+        </div>
+        <div id="deploy-cash-results"></div>
+      </div>
     </div>
   </div>
 
@@ -3260,6 +3271,44 @@ async function mybookAnalyze(){
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
+}
+
+// "Where does new cash go?" — LLM-free Kelly-gap proportional cash deployment,
+// ranked from the customer's LAST persisted "Analyze My Portfolio" run.
+async function deployCash(){
+  const box=document.getElementById('deploy-cash-results'); if(!box) return;
+  const input=document.getElementById('deploy-cash-amount');
+  const cash=Number(input&&input.value);
+  if(!cash||cash<=0){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Enter a cash amount above $0.</div>'; return; }
+  box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Calculating…</div>';
+  try{
+    const r=await fetch('/api/mybook/deploy-cash',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cash})});
+    const j=await r.json().catch(()=>null);
+    if(r.status===401){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">🔒 Sign in to unlock this.</div>'; return; }
+    if(r.status===404){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Run <b>🧠 Analyze My Portfolio</b> above first — this ranks against your last Kelly sizing.</div>'; return; }
+    if(!r.ok){ box.innerHTML=`<div class="deep-ph-text" style="padding:10px 0">${daEsc(String((j&&j.detail)||'Could not calculate — try again.'))}</div>`; return; }
+    box.innerHTML=buildDeployCashCard((j&&j.data)||{});
+  }catch(e){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Network error — try again.</div>'; }
+}
+function buildDeployCashCard(d){
+  const staleWarn=d.stale?`<div style="color:var(--yellow);font-size:12px;margin-bottom:8px">&#9888; Your last analysis predates your current book — re-run <b>Analyze My Portfolio</b> for fresher sizing.</div>`:'';
+  const cashRows=(d.allocations||[]).map(a=>
+    `<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:7px 10px;font-weight:700;color:var(--accent)">${daEsc(a.symbol)}</td>
+      <td style="padding:7px 10px;text-align:right">${daFmt(a.weight_pct,1)}%</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700">$${daFmt(a.dollars,2)}</td>
+      <td style="padding:7px 10px;text-align:right">${daEsc(a.shares)}</td>
+      <td style="padding:7px 10px;color:var(--muted2);font-size:12px">${daEsc(a.rationale||'')}</td>
+    </tr>`).join('');
+  const cashBody=cashRows
+    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','WEIGHT','$','SHARES','WHY'].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${cashRows}</tbody></table></div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">No ADD gaps to deploy against right now — every Kelly recommendation is HOLD/TRIM.</div>';
+  return `${staleWarn}${cashBody}
+    <div style="margin-top:10px;font-size:12px;color:var(--muted)">Leftover uncommitted: $${daFmt(d.leftover,2)}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Advisory only — not financial advice. Based on your last persisted Kelly sizing, not a live order.</div>`;
 }
 
 // Earnings EPS actual-vs-estimate grouped bar chart (data → Chart.js canvas API,
