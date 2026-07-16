@@ -2207,7 +2207,21 @@ def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
             return None, meta
         # Read the source BEFORE the frame is discarded by the .squeeze() below.
         meta["source"] = price_source.frame_source(raw)
-        closes = raw["Close"].squeeze().dropna()
+        close_obj = raw["Close"]
+        # Contamination guard: a single-symbol request must never be priced off a
+        # multi-ticker frame by flattening it — position [-1] would be whichever
+        # ticker sorts last, not `sym` (the audited NVDA-priced-as-TSLA book).
+        # Select this symbol's column or refuse.
+        if getattr(close_obj, "ndim", 1) > 1:
+            cols = list(getattr(close_obj, "columns", []))
+            if sym in cols:
+                close_obj = close_obj[sym]
+            elif len(cols) == 1 and (not isinstance(cols[0], str)
+                                     or cols[0].upper() in (sym.upper(), "CLOSE")):
+                close_obj = close_obj[cols[0]]   # unlabeled/neutral single column
+            else:
+                return None, meta               # labeled with a DIFFERENT ticker
+        closes = close_obj.squeeze().dropna()
         if len(closes) == 0:
             return None, meta
         import numpy as np
@@ -2743,6 +2757,11 @@ def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> No
             raise HTTPException(status_code=404,
                                 detail="No market data for any symbol on your book")
         result = _run_book_engines(payload)
+        # Stamp the book fingerprint this analysis was computed FOR — persisted via
+        # save_book_analysis so /mybook/report can detect that the book has since
+        # changed and flag the analysis as stale instead of silently pairing new
+        # positions with old scores (audit 2026-07-15 Test 4).
+        result["_fp"] = fp
         with _mybook_lock:
             _mybook_cache[email] = (time.monotonic(), fp, result)
             for k in [k for k, (ts, _, _) in _mybook_cache.items()
@@ -2899,9 +2918,27 @@ def _render_book_report(email: str) -> str:
     this page bypasses the dashboard's audited JS builders."""
     import html as _h
     ew = auth_users.get_equal_weight(email)
-    book = _customer_book_payload(auth_users.get_positions(email), equal_weight=ew)
+    positions = auth_users.get_positions(email)
+    book = _customer_book_payload(positions, equal_weight=ew)
     saved = auth_users.get_latest_book_analysis(email)
     e = _h.escape
+
+    # Staleness check: the Positions table above is always CURRENT, but the saved
+    # analysis may predate a book edit — rendering them side by side unflagged made
+    # every portfolio-level number silently wrong (audit 2026-07-15 Test 4). New
+    # analyses carry the exact book fingerprint (`_fp`); legacy rows fall back to
+    # comparing the symbol set the analysis recorded against today's book.
+    stale = False
+    if saved:
+        saved_fp = saved.get("_fp")
+        if saved_fp:
+            stale = saved_fp != _book_fingerprint(positions) + ("|ew" if ew else "")
+        else:
+            saved_syms = {str(p.get("symbol")) for p in
+                          ((saved.get("book") or {}).get("positions") or [])
+                          if p.get("symbol")}
+            cur_syms = {h["symbol"] for h in book["holdings"]} | set(book["unpriced"])
+            stale = bool(saved_syms) and saved_syms != cur_syms
 
     def row(label, val):
         return (f"<tr><td style='padding:6px 12px;color:#555'>{e(str(label))}</td>"
@@ -2919,6 +2956,17 @@ def _render_book_report(email: str) -> str:
                    f"{len(book['holdings'])} priced names is weighted equally (1/N). "
                    f"Dollar values are illustrative, not real holdings.")
                   if ew else f"<b>Total: ${total:,.2f}</b>")
+
+    stale_banner = ""
+    if stale:
+        stale_banner = (
+            "<div style='background:#fff3cd;border:1px solid #d39e00;border-radius:6px;"
+            "padding:12px 16px;margin:18px 0'><b>&#9888; Analysis out of date</b> — your "
+            "positions changed after this analysis was generated"
+            f" ({e(str(saved.get('_saved_at', ''))[:16])} UTC). The scores, Monte Carlo, "
+            "Kelly sizing and per-holding research below reflect the OLD portfolio, not the "
+            "positions listed above. Re-run <b>Analyze My Portfolio</b> on the dashboard, "
+            "then reload this report.</div>")
 
     body = ""
     if saved:
@@ -2972,6 +3020,7 @@ tr:nth-child(even){{background:#f6f6f6}}@media print{{a{{display:none}}}}</style
 <th style='padding:6px 12px'>Shares</th><th style='padding:6px 12px'>Price</th>
 <th style='padding:6px 12px'>Value</th><th style='padding:6px 12px'>Weight</th></tr>{pos_rows}</table>
 <p>{total_html}{(' · No price data: ' + e(', '.join(book['unpriced']))) if book['unpriced'] else ''}</p>
+{stale_banner}
 {body}
 <hr><p style='color:#888;font-size:12px'>Informational and educational only — not financial advice.
 All trading decisions remain your responsibility. Generated by GESH Financial Observability ·

@@ -96,6 +96,13 @@ def fetch_daily_ohlcv(symbol: str, span: str = "year") -> dict[str, list[float]]
     results = payload.get("results") or []
     if not results or not results[0]:
         return None
+    # Contamination guard: trust the response only if its echoed symbol matches
+    # the request — a mismatched echo means these bars belong to another ticker.
+    echoed = str(results[0].get("symbol") or "").upper()
+    if echoed and echoed != symbol.upper():
+        logger.warning("robinhood_quotes: historicals echoed %s for a %s request — discarding",
+                       echoed, symbol)
+        return None
     bars = results[0].get("historicals") or []
     # "date" carries each bar's begins_at timestamp (raw string, unparsed — kept
     # pandas-free per this module's stdlib-only design) so callers can rebuild a

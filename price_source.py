@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import pickle  # noqa: S403  # nosec B403 — loads only the user's own RH session file (fixed 0600 path)
+import threading
 import time
 
 import pandas as pd
@@ -78,6 +79,16 @@ def frame_source(frame) -> str | None:
 # callers can't mutate the shared frame.
 _YF_CACHE: dict[tuple, tuple[float, "pd.DataFrame"]] = {}
 _YF_CACHE_TTL_S = float(os.getenv("YF_CACHE_TTL_S", "600"))
+
+# yfinance.download() is NOT thread-safe: it resets and fills the module-global
+# yfinance.shared._DFS, and its completion check is `while len(shared._DFS) <
+# len(tickers)` — so two concurrent single-ticker downloads can hand thread A the
+# frame thread B fetched, with the ticker column level already dropped (nothing
+# downstream can tell). Observed live 2026-07-15: a cold 40-symbol book warm
+# (ThreadPoolExecutor in server._customer_book_payload) priced NVDA with TSLA's
+# bars. Every yf.download call must hold this lock; the RH fallback path has no
+# shared state and stays parallel.
+_YF_DOWNLOAD_LOCK = threading.Lock()
 
 # Mirror fetch_live_snapshot.py — the canonical session pickle location.
 _PICKLE_PATH = os.path.expanduser("~/.tokens/robinhoodrobinhood_session.pickle")
@@ -469,16 +480,17 @@ def _yf_download_uncached(
 
     raw: pd.DataFrame | None = None
     try:
-        raw = yf.download(
-            symbols,
-            period=period,
-            start=start,
-            end=end,
-            interval=interval,
-            auto_adjust=auto_adjust,
-            progress=progress,
-            **kwargs,
-        )
+        with _YF_DOWNLOAD_LOCK:   # yfinance shared._DFS is process-global (see lock def)
+            raw = yf.download(
+                symbols,
+                period=period,
+                start=start,
+                end=end,
+                interval=interval,
+                auto_adjust=auto_adjust,
+                progress=progress,
+                **kwargs,
+            )
     except Exception as e:  # noqa: BLE001
         logger.debug("price_source: Yahoo download failed (%s) — trying RH", e)
         raw = None
