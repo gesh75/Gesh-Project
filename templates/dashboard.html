@@ -3339,6 +3339,21 @@ function mybookPrefill(sym){
   s.value=sym; sh.focus();
   s.scrollIntoView({behavior:'smooth',block:'center'});
 }
+// Structured-only AI output on customer surfaces (plan T3): bold one-sentence
+// lead + the rest of the model prose folded behind <details>. Mirrors the
+// server's _lead_and_fold (same 220-char sentence-boundary split). All leaves
+// daEsc'd — audited build*-named helper.
+function buildLeadFold(text,maxLead=220){
+  const t=String(text||'').split(/\s+/).filter(Boolean).join(' ');
+  if(!t) return '';
+  let lead=t, rest='';
+  if(t.length>maxLead){
+    const cut=t.indexOf('. ',maxLead);
+    if(cut!==-1){ lead=t.slice(0,cut+1); rest=t.slice(cut+2); }
+  }
+  return `<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55"><b>${daEsc(lead)}</b></div>`
+    +(rest?`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">Full context</summary><div style="font-size:13px;color:var(--muted2);line-height:1.55;margin-top:6px">${daEsc(rest)}</div></details>`:'');
+}
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
@@ -3391,7 +3406,7 @@ async function mybookAnalyze(){
           <span style="font-size:13px;color:var(--muted)">${daEsc(a.portfolio_type||'')}</span></div>
         ${buildRow('Portfolio score', a.portfolio_score!=null?a.portfolio_score+' / 100':'—')}${buildRow('Risk score', a.risk_score!=null?a.risk_score+' / 100':'—')}${buildRow('Diversification', a.diversification_score!=null?a.diversification_score+' / 100':'—')}
         ${a.holdings_truncated?`<div style="font-size:12px;color:var(--muted);margin-top:10px">ℹ️ Detailed AI cards cover your ${daEsc(a.holdings_truncated.analyzed)} largest holdings; all ${daEsc(a.holdings_truncated.total)} feed the risk &amp; Kelly math.</div>`:''}
-        ${a.market_context?`<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55">${daEsc(a.market_context)}</div>`:''}
+        ${a.market_context?buildLeadFold(a.market_context):''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">
         <div class="card"><div style="${T}">Risk Check</div>

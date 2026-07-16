@@ -84,3 +84,47 @@ def test_customer_book_analysis_leads_with_conclusions():
     assert "Worst plausible" in html                  # Monte Carlo conclusion line
     assert "sizing adjustment" in html                # Kelly conclusion line
     assert "How this was computed" in html            # fold summary label
+
+
+# ─── structured-only AI output on customer surfaces (plan T3) ─────────────────
+
+_PANE_RE = re.compile(r'<div class="tab-pane[^"]*" id="tab-([\w-]+)"')
+
+
+def _find_all(html: str, needle: str) -> list[int]:
+    return [m.start() for m in re.finditer(re.escape(needle), html)]
+
+
+def _enclosing_pane_is_owner_only(html: str, pos: int) -> bool:
+    """True iff the nearest preceding tab-pane opener's nav button is owner-only.
+    Positions before any pane (or in the shared <script> after them, which the
+    last pane would misattribute) are NOT provably owner-gated → False."""
+    script_start = html.find("<script")
+    panes = [(m.start(), m.group(1)) for m in _PANE_RE.finditer(html)]
+    enclosing = None
+    for start, pane_id in panes:
+        if start <= pos:
+            enclosing = pane_id
+    if enclosing is None or (script_start != -1 and pos >= script_start):
+        return False
+    btn = re.search(rf'<button[^>]*data-tab="{enclosing}"[^>]*>', html)
+    return bool(btn and "owner-only" in btn.group(0))
+
+
+def test_customer_nav_has_no_commentary_surfaces():
+    """Free-form model commentary must never be reachable from a customer surface.
+    Every gemini/ollama commentary trigger (currently zero exist) must sit inside
+    an owner-only-gated pane; the live enforcement is the server-side 403 guard
+    (tests/test_mybook.py::test_gemini_commentary_rejects_customer_sessions)."""
+    html = TEMPLATE.read_text()
+    for needle in ("gemini/analyze", "gemini/market-commentary", "ollama/analyze"):
+        for pos in _find_all(html, needle):
+            assert _enclosing_pane_is_owner_only(html, pos), needle
+
+
+def test_customer_book_analysis_market_context_is_lead_and_fold():
+    """The dashboard's customer book-analysis market-context render uses the same
+    lead + folded-prose pattern as the report (audited builder + fold label)."""
+    html = TEMPLATE.read_text()
+    assert "buildLeadFold" in html            # audited build*-named helper
+    assert "Full context" in html             # fold summary label

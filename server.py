@@ -3125,6 +3125,19 @@ def mybook_summary(request: Request):
         "top_changes": top_changes, "next_action": action}}
 
 
+def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
+    """First-sentence(s) lead + folded remainder, split on a sentence boundary.
+    Customer surfaces show structured leads, not walls of model prose (plan T3).
+    Returns (lead, rest); rest is "" when the text is short or has no boundary."""
+    t = " ".join(str(text or "").split())
+    if len(t) <= max_lead:
+        return t, ""
+    cut = t.find(". ", max_lead)
+    if cut == -1:
+        return t, ""
+    return t[:cut + 1], t[cut + 2:]
+
+
 def _render_book_report(email: str) -> str:
     """Standalone, print-friendly HTML report of the customer's book + their LAST
     persisted analysis. Server-side rendered with every dynamic string escaped —
@@ -3220,11 +3233,19 @@ def _render_book_report(email: str) -> str:
         mc_conclusion = (
             f"Worst plausible {e(str(mc.get('horizon_days') or 21))}-day stretch "
             f"(95% confidence): &minus;${mc_var:,.0f} on your ${total:,.0f} book.")
+        # Structured-only AI output (plan T3): one bold takeaway sentence, the
+        # rest of the model prose folded — never a free-standing wall of text.
+        ctx_lead, ctx_rest = _lead_and_fold(str(d.get("market_context", "")))
+        ctx_html = (
+            f"<p style='color:#444;line-height:1.6'><b>{e(ctx_lead)}</b></p>"
+            + (f"<details><summary>Full context</summary>"
+               f"<p style='color:#444;line-height:1.6'>{e(ctx_rest)}</p></details>"
+               if ctx_rest else ""))
         body = f"""
   <h2>AI Verdict: {e(str(d.get('portfolio_verdict', '—')))}</h2>
   <table>{row('Portfolio score', d.get('portfolio_score', '—'))}{row('Risk score', d.get('risk_score', '—'))}
   {row('Diversification', d.get('diversification_score', '—'))}{row('Portfolio type', d.get('portfolio_type', '—'))}</table>
-  <p style='color:#444;line-height:1.6'>{e(str(d.get('market_context', '')))}</p>
+  {ctx_html}
   {('<h2>Key risks</h2><ul>' + risks + '</ul>') if risks else ''}
   {sector_block}
   <h2>Risk check</h2><p style='color:#111;line-height:1.6'><b>{mc_conclusion}</b></p>

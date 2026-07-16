@@ -949,3 +949,56 @@ def test_report_details_print_expanded_css(client, monkeypatch, au):
     assert r.status_code == 200
     assert "@media print" in r.text
     assert "details" in r.text and "page-break-inside:avoid" in r.text
+
+
+# ─── structured-only AI output: lead + folded prose (plan T3) ─────────────────
+
+def test_lead_and_fold_splits_on_sentence_boundary():
+    import server
+    text = ("First sentence about the macro backdrop. " * 3
+            + "Later detail that belongs in the fold. " * 10)
+    lead, rest = server._lead_and_fold(text)
+    assert lead.endswith(".") and len(lead) <= 320
+    assert rest and rest in text
+
+
+def test_lead_and_fold_short_text_has_no_fold():
+    import server
+    lead, rest = server._lead_and_fold("Short and sweet.")
+    assert lead == "Short and sweet." and rest == ""
+    assert server._lead_and_fold("") == ("", "")
+    assert server._lead_and_fold(None) == ("", "")
+
+
+def test_lead_and_fold_no_boundary_returns_whole_text():
+    import server
+    text = "x" * 500                       # no sentence boundary anywhere
+    lead, rest = server._lead_and_fold(text)
+    assert lead == text and rest == ""
+
+
+def test_report_folds_long_market_context(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD",
+                     "market_context": "Lead sentence here. " + ("Filler detail. " * 40),
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {}, "kelly": {}, "book": {"positions": [], "unpriced": []}})
+    text = c.get("/mybook/report").text
+    assert "Lead sentence here." in text
+    assert text.count("Filler detail.") >= 1 and "Full context" in text
+
+
+def test_gemini_commentary_rejects_customer_sessions(client, monkeypatch):
+    """Structured-only AI output for customers (plan T3): the free-form gemini
+    commentary surfaces stay OWNER-only. A customer session gets 403 from the
+    require_api_key gate before any handler or model code can run — the live,
+    non-vacuous guarantee behind the template-level nav check."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    for path in ("/api/gemini/analyze", "/api/gemini/market-commentary"):
+        assert c.post(path, json={}).status_code == 403, path
