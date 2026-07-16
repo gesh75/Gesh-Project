@@ -52,6 +52,8 @@ PUBLIC_PREFIXES = (
     # Payment surface: pricing page + provider webhook + post-checkout landing must be
     # reachable WITHOUT a session (the webhook is signature-gated, not cookie-gated).
     "/pricing", "/api/billing/webhook", "/billing/success",
+    # Email opt-out links (link-in-email, HMAC-token-gated — not cookie-gated).
+    "/alerts/unsubscribe", "/digest/unsubscribe",
 )
 
 
@@ -224,11 +226,22 @@ _BILLING_COLUMNS = {
                                      # event — drives monotonic ordering (drops stale events)
 }
 
+# Email preference columns (retention features, 2026-07-16). Same idempotent-ALTER
+# migration pattern as _BILLING_COLUMNS — existing gesh_auth.db files pick these up
+# on next connect without a manual migration step.
+_PREF_COLUMNS = {
+    "alerts_opt_out": "INTEGER NOT NULL DEFAULT 0",   # signal-change alert emails
+    "digest_opt_out": "INTEGER NOT NULL DEFAULT 0",   # weekly digest emails
+}
+
 
 def _migrate(con) -> None:
-    """Add any missing billing columns (idempotent — safe on every connect)."""
+    """Add any missing billing/preference columns (idempotent — safe on every connect)."""
     have = {r["name"] for r in con.execute("PRAGMA table_info(users)").fetchall()}
     for col, decl in _BILLING_COLUMNS.items():
+        if col not in have:
+            con.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
+    for col, decl in _PREF_COLUMNS.items():
         if col not in have:
             con.execute(f"ALTER TABLE users ADD COLUMN {col} {decl}")
     # One account per subscription (multi-worker safety): a partial UNIQUE index makes the DB
@@ -465,6 +478,77 @@ def list_owed_onboarding(limit: int = 100) -> list[dict[str, Any]]:
             (max(1, int(limit)),),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── email preferences (signal alerts / weekly digest opt-out) ──────────────────
+
+def _ensure_user_row(con, em: str) -> None:
+    """Guarantee a `users` row exists for `em` so a preference UPDATE isn't a
+    silent no-op. Pre-provision alpha customers only exist via watchlist/book
+    rows (add_watch/set_position never touch `users`) — an unusable random
+    password satisfies the NOT NULL constraint; they still authenticate via
+    magic link / billing provisioning, never this placeholder."""
+    if con.execute("SELECT 1 FROM users WHERE email=?", (em,)).fetchone():
+        return   # common case — skip the 200k-round PBKDF2 hash entirely
+    con.execute(
+        "INSERT OR IGNORE INTO users (email, password_hash, is_active, created_at) "
+        "VALUES (?,?,1,?)",
+        (em, hash_password(secrets.token_urlsafe(24)), datetime.now(timezone.utc).isoformat()))
+
+
+def set_alerts_opt_out(email: str, flag: bool) -> None:
+    em = _norm(email)
+    if not em:
+        return
+    with _conn() as con:
+        # users row may not exist for pre-provision alpha emails — upsert-lite
+        _ensure_user_row(con, em)
+        con.execute("UPDATE users SET alerts_opt_out=? WHERE email=?", (int(flag), em))
+
+
+def get_alerts_opt_out(email: str) -> bool:
+    em = _norm(email)
+    with _conn() as con:
+        row = con.execute("SELECT alerts_opt_out FROM users WHERE email=?", (em,)).fetchone()
+    return bool(row and row["alerts_opt_out"])
+
+
+def set_digest_opt_out(email: str, flag: bool) -> None:
+    em = _norm(email)
+    if not em:
+        return
+    with _conn() as con:
+        _ensure_user_row(con, em)
+        con.execute("UPDATE users SET digest_opt_out=? WHERE email=?", (int(flag), em))
+
+
+def get_digest_opt_out(email: str) -> bool:
+    em = _norm(email)
+    with _conn() as con:
+        row = con.execute("SELECT digest_opt_out FROM users WHERE email=?", (em,)).fetchone()
+    return bool(row and row["digest_opt_out"])
+
+
+def all_customer_symbols() -> set[str]:
+    """Union of every user's watchlist + book symbols — the alert/snapshot universe."""
+    with _conn() as con:
+        w = con.execute("SELECT DISTINCT symbol FROM watchlist").fetchall()
+        p = con.execute("SELECT DISTINCT symbol FROM customer_positions").fetchall()
+    return {r["symbol"] for r in w} | {r["symbol"] for r in p}
+
+
+def customers_watching(symbol: str) -> list[str]:
+    """Active, non-opted-out emails with `symbol` on watchlist OR book."""
+    sym = str(symbol).upper().strip()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT DISTINCT s.email FROM ("
+            "  SELECT email, symbol FROM watchlist"
+            "  UNION SELECT email, symbol FROM customer_positions) s "
+            "LEFT JOIN users u ON u.email = s.email "
+            "WHERE s.symbol=? AND COALESCE(u.alerts_opt_out, 0)=0 "
+            "  AND COALESCE(u.is_active, 1)=1 ORDER BY s.email", (sym,)).fetchall()
+    return [r["email"] for r in rows]
 
 
 # ── gate decision (pure, testable) ──────────────────────────────────────────────

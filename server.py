@@ -936,6 +936,30 @@ def terms_page():
     return legal_pages.render_terms_html()
 
 
+@app.get("/alerts/unsubscribe", response_class=HTMLResponse)
+def alerts_unsubscribe(token: str = ""):
+    """One-click opt-out from signal-change alert emails. Public (link-in-email),
+    gated by a typed 30-day HMAC token — a session/magic token is rejected."""
+    email = auth_users.verify_token(token, expected_typ="alerts_unsub")
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
+    auth_users.set_alerts_opt_out(email, True)
+    return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive GESH "
+                        "signal-change alerts. You can re-enable them from the dashboard.</p>")
+
+
+@app.get("/digest/unsubscribe", response_class=HTMLResponse)
+def digest_unsubscribe(token: str = ""):
+    """One-click opt-out from the weekly customer digest. Public (link-in-email),
+    gated by a typed 30-day HMAC token — a session/magic token is rejected."""
+    email = auth_users.verify_token(token, expected_typ="digest_unsub")
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
+    auth_users.set_digest_opt_out(email, True)
+    return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive the GESH "
+                        "weekly digest. You can re-enable it from the dashboard.</p>")
+
+
 @app.get("/progress", response_class=HTMLResponse)
 def progress_page():
     """Internal founder cockpit — weekly autonomy-gate burndown to the Sep alpha.
