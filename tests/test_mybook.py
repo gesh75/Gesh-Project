@@ -565,6 +565,25 @@ def test_report_includes_sector_breakdown_and_track_record_link(client, monkeypa
     assert 'href=\'/track-record\'' in r.text
 
 
+def test_report_tolerates_none_valued_kelly_pcts(client, monkeypatch, au):
+    """A persisted Kelly row can carry current_pct/optimal_pct as explicit None —
+    dict.get('x', 0) only covers ABSENT keys, so the :.1f format used to crash
+    the whole report. Values must be normalized with `or 0`."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 1)
+    au.save_book_analysis("cust@x.com", {
+        "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
+                     "holdings_analysis": [], "portfolio_risks": []},
+        "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "current_pct": None, "optimal_pct": None}]}})
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "0.0% → 0.0%" in r.text
+
+
 def test_usage_summary_endpoint_owner_only(client, monkeypatch):
     server, c = client
     _as(server, monkeypatch, "cust@x.com")          # customer session
@@ -735,6 +754,26 @@ def test_deploy_cash_flags_stale_analysis(client, monkeypatch, au):
     assert d["stale"] is True
 
 
+def test_deploy_cash_tolerates_legacy_kelly_rows_missing_current_pct(client, monkeypatch, au):
+    """Legacy persisted analyses can carry Kelly rows with current_pct/optimal_pct
+    absent or None — the allocator must normalize them to 0, not 500."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {}, "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "NVDA", "action": "ADD",
+                                "optimal_pct": 4.0}]},   # current_pct ABSENT
+        "book": {"positions": [], "unpriced": []}})
+    r = c.post("/api/mybook/deploy-cash", json={"cash": 1000})
+    assert r.status_code == 200
+    d = r.json()["data"]
+    by = {a["symbol"]: a for a in d["allocations"]}
+    assert "NVDA" in by and by["NVDA"]["shares"] >= 1
+
+
 # ─── customer Home hero (/api/mybook/summary) ────────────────────────────────
 
 def test_mybook_summary_shapes_hero_payload(client, monkeypatch, au):
@@ -816,6 +855,25 @@ def test_mybook_signal_columns_fail_soft(client, monkeypatch):
     d = c.get("/api/mybook").json()["data"]
     assert d["signals"] == {} or "NVDA" in d["signals"]   # empty history is fine
     assert d["kelly_deltas"] == {}                        # no analysis yet
+
+
+def test_mybook_risky_symbols_use_word_boundaries(client, monkeypatch, au):
+    """Real tickers are English words (ON, SO, ALL, NOW, IT, T) — a naive
+    substring match would flag an ON holding on the risk text 'based on
+    weakening margins'. Only whole-word symbol mentions count."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "ON", 5)      # onsemi — unpriced in fixture, still in syms
+    au.set_position("cust@x.com", "AAPL", 10)
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {"portfolio_risks": [
+            {"text": "based on weakening margins for AAPL", "severity": "HIGH"}]},
+        "monte_carlo": {}, "kelly": {},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook").json()["data"]
+    assert d["risky_symbols"] == ["AAPL"]       # ON must NOT match "based on"
 
 
 def test_report_flags_stale_for_legacy_analysis_without_fingerprint(client, monkeypatch, au):

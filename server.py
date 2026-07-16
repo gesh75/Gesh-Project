@@ -2597,9 +2597,15 @@ def mybook_get(request: Request):
                                           - (k.get("current_pct") or 0), 1)}
             risk_syms: set[str] = set()
             for r in ((saved.get("analysis") or {}).get("portfolio_risks") or []):
-                txt = str(r.get("text") or "").upper()
+                # Whole-word AND case-sensitive against the ORIGINAL text: real
+                # tickers are English words (ON, SO, ALL, NOW, IT, T), so a
+                # substring test — or even a word-boundary match on uppercased
+                # text — would flag an ON holding on "based on weakening
+                # margins". Risk prose writes tickers uppercase; the lowercase
+                # English word never matches the uppercase symbol.
+                txt = str(r.get("text") or "")
                 for s in syms:
-                    if s in txt:
+                    if re.search(rf"\b{re.escape(s)}\b", txt):
                         risk_syms.add(s)
             risky_symbols = sorted(risk_syms)
         return {"status": "ok", "data": {
@@ -3015,33 +3021,45 @@ async def mybook_deploy_cash(request: Request):
         raise HTTPException(status_code=400, detail="cash must be a number") from None
     if not (0 < cash <= 10_000_000):
         raise HTTPException(status_code=400, detail="cash out of range")
-    saved = auth_users.get_latest_book_analysis(email)
-    if not saved:
-        raise HTTPException(status_code=404,
-                            detail="No analysis yet — run Analyze My Portfolio first")
-    stale = _analysis_stale_for(email, saved)
-    adds = [k for k in (saved.get("kelly") or {}).get("holdings") or []
-            if k.get("action") == "ADD"
-            and (k.get("optimal_pct") or 0) > (k.get("current_pct") or 0)]
-    gaps = {k["symbol"]: k["optimal_pct"] - k["current_pct"] for k in adds}
-    total_gap = sum(gaps.values())
-    allocations, spent = [], 0.0
-    for k in sorted(adds, key=lambda x: gaps[x["symbol"]], reverse=True):
-        sym = k["symbol"]
-        price = _cached_close(sym)
-        if not price or price <= 0 or total_gap <= 0:
-            continue
-        dollars = round(cash * gaps[sym] / total_gap, 2)
-        shares = int(dollars // price)
-        if shares < 1:
-            continue
-        allocations.append({"symbol": sym, "weight_pct": round(gaps[sym] / total_gap * 100, 1),
-                            "dollars": dollars, "shares": shares, "price": price,
-                            "rationale": f"Kelly gap {k['current_pct']:.1f}% → {k['optimal_pct']:.1f}%"})
-        spent += shares * price
-    return {"status": "ok", "data": {"cash": cash, "stale": stale,
-                                     "allocations": allocations,
-                                     "leftover": round(cash - spent, 2)}}
+    try:
+        saved = auth_users.get_latest_book_analysis(email)
+        if not saved:
+            raise HTTPException(status_code=404,
+                                detail="No analysis yet — run Analyze My Portfolio first")
+        stale = _analysis_stale_for(email, saved)
+        # Normalize once: legacy persisted rows can carry current_pct/optimal_pct
+        # as None or omit them entirely — `or 0` covers both (dict.get defaults
+        # only cover absent keys, not explicit None).
+        adds = []
+        for k in (saved.get("kelly") or {}).get("holdings") or []:
+            cur = float(k.get("current_pct") or 0)
+            opt = float(k.get("optimal_pct") or 0)
+            if k.get("action") == "ADD" and opt > cur:
+                adds.append({"symbol": k["symbol"], "current_pct": cur, "optimal_pct": opt})
+        gaps = {k["symbol"]: k["optimal_pct"] - k["current_pct"] for k in adds}
+        total_gap = sum(gaps.values())
+        allocations, spent = [], 0.0
+        for k in sorted(adds, key=lambda x: gaps[x["symbol"]], reverse=True):
+            sym = k["symbol"]
+            price = _cached_close(sym)
+            if not price or price <= 0 or total_gap <= 0:
+                continue
+            dollars = round(cash * gaps[sym] / total_gap, 2)
+            shares = int(dollars // price)
+            if shares < 1:
+                continue
+            allocations.append({"symbol": sym,
+                                "weight_pct": round(gaps[sym] / total_gap * 100, 1),
+                                "dollars": dollars, "shares": shares, "price": price,
+                                "rationale": f"Kelly gap {k['current_pct']:.1f}% → {k['optimal_pct']:.1f}%"})
+            spent += shares * price
+        return {"status": "ok", "data": {"cash": cash, "stale": stale,
+                                         "allocations": allocations,
+                                         "leftover": round(cash - spent, 2)}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
 
 
 @app.get("/api/mybook/summary")
@@ -3155,9 +3173,11 @@ def _render_book_report(email: str) -> str:
             f"<p style='margin:4px 0;color:#666;font-size:13px'>3M: {e((h.get('prediction') or {}).get('3m', ''))} · "
             f"12M: {e((h.get('prediction') or {}).get('12m', ''))}</p>"
             for h in (d.get("holdings_analysis") or []))
+        # `or 0` (not just a .get default) — a persisted row can carry an
+        # explicit None, which the :.1f format would crash on.
         kelly_rows = "".join(
             row(f"{k.get('symbol', '')} · {k.get('action', '')}",
-                f"{k.get('current_pct', 0):.1f}% → {k.get('optimal_pct', 0):.1f}%")
+                f"{(k.get('current_pct') or 0):.1f}% → {(k.get('optimal_pct') or 0):.1f}%")
             for k in (ky.get("holdings") or [])[:15])
         sectors = "".join(
             f"<tr><td style='padding:6px 12px'>{e(s.get('sector', ''))}</td>"
