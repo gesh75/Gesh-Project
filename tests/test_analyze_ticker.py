@@ -161,6 +161,38 @@ def test_deep_analyze_ticker_defaults_bear_case_when_model_omits_it(monkeypatch)
     assert out["bear_case"] == {"thesis": "", "invalidators": []}
 
 
+def test_portfolio_holdings_default_bear_case_when_model_omits_it(monkeypatch):
+    """bear_case lives in the SHARED per-holding schema, so deep_analyze_portfolio
+    (incl. the customer book analysis) is now also prompted for it — every holding
+    card must carry the same defensive scaffold when the model omits the field."""
+    holding_no_bc = {k: v for k, v in _CARD.items() if k != "bear_case"}
+    parsed = {
+        "portfolio_score": 60,
+        "portfolio_verdict": "HOLD",
+        "holdings_analysis": [holding_no_bc,
+                              {**holding_no_bc, "symbol": "NVDA"}],
+    }
+    _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
+    out = ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"},
+                                                           {"symbol": "NVDA"}]})
+    for h in out["holdings_analysis"]:
+        assert h["bear_case"] == {"thesis": "", "invalidators": []}
+
+
+def test_concise_portfolio_prompt_caps_bear_case(monkeypatch):
+    """The customer book analysis runs concise + token-budget-constrained (12000
+    max_tokens with a truncation retry ladder) — the brevity instruction must cap
+    bear_case output so the new field can't blow that budget."""
+    parsed = {"portfolio_score": 60, "portfolio_verdict": "HOLD",
+              "holdings_analysis": []}
+    sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
+    ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]},
+                                       concise=True)
+    user_msg = sink["messages"][0]["content"]
+    assert "bear_case" in user_msg           # concise mode explicitly caps the field
+    assert "BE CONCISE" in user_msg          # ...inside the existing brevity block
+
+
 # ─── Route: POST /api/analyze-ticker ─────────────────────────────────────────
 
 def _customer_client(monkeypatch, card=None, boom=None, price=195.0):

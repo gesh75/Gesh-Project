@@ -192,6 +192,9 @@ ticker everywhere it appears in your response."""
 # The per-holding research card — extracted so BOTH the portfolio deep-analysis
 # and the single-ticker customer card (TICKER_ANALYSIS_SCHEMA) share ONE definition
 # and can never drift apart (the frontend daRender markup renders both).
+# NOTE: any field added here is ALSO prompted on every holding in
+# deep_analyze_portfolio (incl. the token-budget-constrained customer book
+# analysis) — cap it in the `concise` brevity instruction below.
 _HOLDING_ANALYSIS_ITEM = {
     "type": "object",
     "properties": {
@@ -381,8 +384,9 @@ def deep_analyze_portfolio(
     regime_block = f"\n\n{regime_context}" if regime_context else ""
     brevity = ("\n\nBE CONCISE — this is a fast interactive report on a larger book. "
                "For each holding give at most 2 short risks, 2 short rewards, and "
-               "one-line 3M/12M outlooks; a one-sentence snowflake_summary. No preamble "
-               "or repetition.") if concise else ""
+               "one-line 3M/12M outlooks; a one-sentence snowflake_summary; "
+               "bear_case: a one-sentence thesis and at most 2 invalidators. "
+               "No preamble or repetition.") if concise else ""
     _max_tokens = max_tokens if max_tokens is not None else 24000
 
     import copy
@@ -430,7 +434,14 @@ def deep_analyze_portfolio(
             "deep_analyze_portfolio: tool output truncated at max_tokens — "
             "the JSON is unusable; tighten DEEP_ANALYSIS_SCHEMA or raise max_tokens."
         )
-    return _extract_tool_input(message, "deep_analyze_portfolio")
+    result = _extract_tool_input(message, "deep_analyze_portfolio")
+    # Same defensive default as deep_analyze_ticker: bear_case is in the shared
+    # per-holding schema, but a model may omit it — every holding card must reach
+    # the renderer with the scaffold present, never raise on a missing key.
+    for holding in result.get("holdings_analysis") or []:
+        if isinstance(holding, dict):
+            holding.setdefault("bear_case", {"thesis": "", "invalidators": []})
+    return result
 
 
 # ─── Single-Ticker Deep Analysis (customer 'Analyze any ticker' card) ────────

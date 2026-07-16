@@ -2999,10 +2999,13 @@ function buildAICard(h){
   </div>`;
 }
 
-// Provenance strip (feature 2): timestamp + model + price feed + suspect flag —
-// always present on a card so trust signals never depend on parsing prose.
+// Provenance strip (feature 2): timestamp + model + price feed + suspect flag.
+// buildAICard is shared with the book-analysis holdings (no provenance attached),
+// so render ONLY when a real provenance block exists — an empty strip
+// ("model — · price feed: unattributed") is misleading, not honest.
 function buildProvenanceStrip(card){
-  const p=card.provenance||{};
+  if(!card||!card.provenance) return '';
+  const p=card.provenance;
   const pvSrc=p.price_source?daEsc(p.price_source):'unattributed';
   const pvWhen=p.generated_at?new Date(p.generated_at).toLocaleString():'—';
   const pvWarn=p.suspect?`<span style="color:var(--red)">&#9888; ${daEsc(p.suspect_reason||'price cross-source suspect')}</span>`:'';
