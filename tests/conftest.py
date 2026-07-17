@@ -89,6 +89,11 @@ def _clear_server_response_caches() -> None:
             state = getattr(srv, name, None)
             if state is not None:
                 state.clear()
+        # The ("close", sym) slice moved out of server into price_cache — same
+        # leak class: a close cached by one test must not price the next.
+        pc = sys.modules.get("price_cache")
+        if pc is not None:
+            pc.clear()
 
     _clear()
     yield

@@ -44,10 +44,12 @@ def _base_url() -> str:
 
 
 def _close_for(sym: str) -> float | None:
-    """Seam for tests; production imports the server's shared close cache lazily
-    (import inside the function so importing this module never drags in server)."""
-    from server import _cached_close
-    return _cached_close(sym)
+    """Seam for tests; production prices via the standalone price_cache module —
+    NEVER via server, whose import drags the whole FastAPI app + billing +
+    trading into this cron process (an unrelated import-time failure there used
+    to silently zero customers' book values)."""
+    import price_cache
+    return price_cache._cached_close(sym)
 
 
 def _customers() -> list[str]:

@@ -307,6 +307,7 @@ def _login_clear(ip: str, email: str) -> None:
 
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
 import fair_value                       # canonical fair-value % (Codex #2)
+import price_cache                      # shared close-price cache (also used by cron digest)
 import price_sanity                     # cross-source price quality + strict mode (Codex #3)
 import decision_quality                 # unified degraded-decision block (Codex #6)
 from auth import login, logout
@@ -1311,7 +1312,7 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
     # observation. Endpoints that KNOW which feed served the row set `source` explicitly
     # (setdefault yields to them); the rest omit it rather than assert something
     # unverified (GESH-8).
-    if isinstance(resp, dict) and "price" not in resp:   # skip the tiny _cached_close blob
+    if isinstance(resp, dict) and "price" not in resp:   # skip tiny price-only blobs
         resp.setdefault("as_of", _dt.now(_tz.utc).isoformat())
     with _ticker_get_lock:
         _ticker_get_cache[(bucket, sym)] = (time.monotonic(), resp)
@@ -2308,70 +2309,20 @@ def signals_history(symbol: str):
         raise _server_error(e)
 
 
-def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
-    """`_latest_close` plus the PROVENANCE of the number it returns (Codex #6).
-
-    Returns (price, {"source": str|None, "substituted": bool}).
-      * source      — the feed that actually served the bars ("yahoo" | "robinhood" |
-                      "yahoo+robinhood"), read off the frame. None = unattributable;
-                      callers must surface that as unknown, never default it to a feed.
-      * substituted — True when the bad-tick guard below returned something OTHER than
-                      the latest close (a prior in-band close, or the 20-bar median).
-                      That substitution was previously SILENT and indistinguishable
-                      from a real quote, which is its own honesty gap.
-    """
-    meta: dict = {"source": None, "substituted": False}
-    try:
-        import price_source
-        raw = price_source.yf_download(sym, period="1mo", interval="1d",
-                                       auto_adjust=True, progress=False)
-        if raw is None or getattr(raw, "empty", True):
-            return None, meta
-        # Read the source BEFORE the frame is discarded by the .squeeze() below.
-        meta["source"] = price_source.frame_source(raw)
-        close_obj = raw["Close"]
-        # Contamination guard: a single-symbol request must never be priced off a
-        # multi-ticker frame by flattening it — position [-1] would be whichever
-        # ticker sorts last, not `sym` (the audited NVDA-priced-as-TSLA book).
-        # Select this symbol's column or refuse.
-        if getattr(close_obj, "ndim", 1) > 1:
-            cols = list(getattr(close_obj, "columns", []))
-            if sym in cols:
-                close_obj = close_obj[sym]
-            elif len(cols) == 1 and (not isinstance(cols[0], str)
-                                     or cols[0].upper() in (sym.upper(), "CLOSE")):
-                close_obj = close_obj[cols[0]]   # unlabeled/neutral single column
-            else:
-                return None, meta               # labeled with a DIFFERENT ticker
-        closes = close_obj.squeeze().dropna()
-        if len(closes) == 0:
-            return None, meta
-        import numpy as np
-        arr = np.array(closes).flatten().astype(float)
-        last = round(float(arr[-1]), 2)
-        # Bad-tick guard: a single split-mismatched / partial quote (the observed
-        # NVDA $17.16 flash against a ~$205 book) poisons valuation, weights, and
-        # Kelly. If the latest close is wildly off the recent median (a real move
-        # stays inside 0.5×–2×), fall back to the most recent in-band close, or the
-        # median if none qualifies — never persist an obvious outlier.
-        if len(arr) >= 5:
-            med = float(np.median(arr[-20:]))
-            if med > 0 and not (med * 0.5 <= last <= med * 2.0):
-                meta["substituted"] = True
-                for v in arr[-2::-1]:
-                    if med * 0.5 <= float(v) <= med * 2.0:
-                        return round(float(v), 2), meta
-                return round(med, 2), meta
-        return last, meta
-    except Exception:
-        return None, meta
+# Close-price lookup lives in price_cache.py so cron consumers (run_weekly_digest)
+# can price a book without importing this app. Re-exported here — with thin
+# module-global wrappers below — so the historical monkeypatch seams
+# (server._latest_close_meta / server._latest_close / server._cached_close)
+# keep steering behavior exactly as before the extraction.
+_latest_close_meta = price_cache._latest_close_meta
 
 
 def _latest_close(sym: str) -> float | None:
     """VPN-safe latest daily close for grounding the single-ticker research card —
     reuses the chart's RH-fallback-backed price_source path (not raw yfinance).
     Returns None when the ticker has no data, so the caller 404s rather than let
-    the model fabricate a price. Behavior-identical wrapper over _latest_close_meta."""
+    the model fabricate a price. Resolves the module-global _latest_close_meta at
+    call time so patching that seam still steers this wrapper."""
     return _latest_close_meta(sym)[0]
 
 
@@ -2599,14 +2550,10 @@ async def analyze_ticker_endpoint(request: Request):
 
 def _cached_close(sym: str) -> float | None:
     """_latest_close with the shared 5-min per-ticker cache in front — valuing a
-    book re-reads every symbol, so repeat views must not re-fetch upstream."""
-    hit = _ticker_get_cached("close", sym)
-    if hit:
-        return hit.get("price")
-    price = _latest_close(sym)
-    if price is not None:
-        _ticker_get_store("close", sym, {"price": price})
-    return price
+    book re-reads every symbol, so repeat views must not re-fetch upstream.
+    Delegates to price_cache but passes THIS module's _latest_close, resolved at
+    call time, so tests monkeypatching server._latest_close keep steering it."""
+    return price_cache._cached_close(sym, fetch=_latest_close)
 
 
 def _customer_book_payload(positions: list[dict], equal_weight: bool = False) -> dict:
@@ -2622,7 +2569,7 @@ def _customer_book_payload(positions: list[dict], equal_weight: bool = False) ->
     # 100 sequential upstream fetches (~1-2s each) on every GET — parallel it's one
     # round-trip's worth. _cached_close is lock-guarded, so concurrent warms are safe.
     uncached = [p["symbol"] for p in positions
-                if _ticker_get_cached("close", p["symbol"]) is None]
+                if not price_cache.has_cached_close(p["symbol"])]
     if len(uncached) > 1:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as ex:
