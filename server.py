@@ -3415,6 +3415,30 @@ def usage_page(request: Request, days: int = 30):
             f"<td style='padding:6px 12px;color:#666'>{e(str(r['last_at'])[:16])}</td></tr>"
             for r in rows)
         live_llm = sum(r["count"] for r in rows if r["event"] in ("ticker_card", "book_analysis"))
+        # Job Health — launchd jobs print their JSON summary only to /tmp logs, so a
+        # failing/misconfigured job is invisible without this (Grok review 2026-07-17).
+        import job_health
+        job_runs = job_health.latest_runs()
+        job_rows = []
+        for label in ("com.gesh.signal-alerts", "com.gesh.weekly-digest"):
+            info = job_runs.get(label)
+            ran_at = info["ran_at"] if info else None
+            summary = info["summary"] if info else {}
+            flags = []
+            # Staleness only for the daily job — a >25h-old weekly digest is normal.
+            if label == "com.gesh.signal-alerts" and job_health.is_stale(ran_at):
+                flags.append("STALE")
+            if "DISABLED" in str(summary.get("email_delivery", "")):
+                flags.append("EMAIL DISABLED")
+            status = " · ".join(flags) if flags else ("OK" if info else "—")
+            color = "#c00" if flags else ("#2a7" if info else "#888")
+            # quote=False keeps the JSON readable in element content (never an attribute)
+            summary_html = e(_json.dumps(summary), quote=False) if info else "—"
+            job_rows.append(
+                f"<tr><td style='padding:6px 12px;font-weight:600'>{e(label)}</td>"
+                f"<td style='padding:6px 12px;color:{color};font-weight:700'>{e(status)}</td>"
+                f"<td style='padding:6px 12px;color:#666'>{e(str(ran_at)[:16]) if ran_at else 'never'}</td>"
+                f"<td style='padding:6px 12px;font-family:monospace;font-size:12px'>{summary_html}</td></tr>")
         return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>GESH — Usage</title><style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:900px;
 margin:32px auto;padding:0 20px;color:#111}}table{{border-collapse:collapse;width:100%}}
@@ -3423,6 +3447,10 @@ tr:nth-child(even){{background:#f6f6f6}}</style></head><body>
 <h1>Customer Usage — last {days} days</h1>
 <p style='color:#666'>{live_llm} live LLM calls billed across all customers ·
 window <a href='/usage?days=7'>7d</a> · <a href='/usage?days=30'>30d</a> · <a href='/usage?days=90'>90d</a></p>
+<h2>Job Health</h2>
+<table><tr><th>JOB</th><th>STATUS</th><th>LAST RUN (UTC)</th><th>LAST SUMMARY</th></tr>
+{''.join(job_rows)}</table>
+<h2>Usage</h2>
 <table><tr><th>EMAIL</th><th>TIER</th><th>EVENT</th><th>COUNT</th><th>LAST</th></tr>
 {body or "<tr><td colspan='5' style='padding:16px;color:#888'><em>No usage recorded yet.</em></td></tr>"}</table>
 </body></html>""")

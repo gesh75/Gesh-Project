@@ -14,9 +14,11 @@ from pathlib import Path
 
 import auth_users
 import email_sender
+import job_health
 import signal_history
 
 logger = logging.getLogger("signal_alerts")
+JOB_NAME = "com.gesh.signal-alerts"   # launchd label — the /usage health key
 PERSISTENCE_DAYS = 2
 UNSUB_TTL = 60 * 60 * 24 * 30   # 30-day unsubscribe links
 
@@ -113,8 +115,17 @@ def main(dry_run: bool = False) -> dict:
     return result
 
 
-if __name__ == "__main__":
+def _cli(argv: list[str]) -> None:
     import json
+
+    dry_run = "--dry-run" in argv
+    result = main(dry_run=dry_run)
+    if not dry_run:  # health ledger for /usage — record_job_run is fail-soft
+        job_health.record_job_run(JOB_NAME, result)
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
     import sys
 
     # launchd does not inherit the shell env, so RESEND_API_KEY/EMAIL_FROM/APP_BASE_URL
@@ -127,4 +138,4 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print(json.dumps(main(dry_run="--dry-run" in sys.argv)))
+    _cli(sys.argv[1:])
