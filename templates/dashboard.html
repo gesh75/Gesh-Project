@@ -1230,10 +1230,12 @@ body:not(.customer) .customer-only { display: none !important; }
       <div id="da-loading" style="display:none;padding:32px 20px;text-align:center">
         <div style="font-size:16px;font-weight:600;color:var(--accent);margin-bottom:8px">
           <span class="spin" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></span>
-          Running all engines — ~20–40 seconds…
+          Running all engines — <span id="da-elapsed">0s</span><span id="da-eta"></span>
         </div>
         <div style="font-size:13px;color:var(--muted);margin-bottom:12px" id="da-loading-msg">Fetching portfolio · building payload…</div>
         <div class="da-load-bar"><div class="da-load-fill" id="da-load-fill"></div></div>
+        <button class="da-btn-load" id="da-btn-cancel" onclick="daCancelAnalysis()"
+                style="margin-top:14px">Cancel</button>
       </div>
 
       <!-- Placeholder (before first run) -->
@@ -1799,13 +1801,21 @@ function renderDeepAnalysis(a, mkt, cached, cachedAt){
   },60);
 }
 
+let _deepCtl=null;
+function cancelDeepAnalysis(){
+  if(_deepCtl) _deepCtl.abort(new DOMException('cancelled by user','AbortError'));
+}
+
 async function runDeepAnalysis(){
   _cachedAnalysisLoaded=false; // allow re-cache after fresh run
   const btn=$('btn-deep'),cont=$('deep-container');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analyzing...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running AI deep analysis…<br><span style="font-size:13px">Generating snowflake scores, fair values, predictions</span></div></div>`;
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running AI deep analysis…<br><span style="font-size:13px">Generating snowflake scores, fair values, predictions</span><br><button class="da-btn-load" style="margin-top:12px" onclick="cancelDeepAnalysis()">Cancel</button></div></div>`;
+  // GESH-5: bound the wait. Without a deadline a hung Claude call spins forever.
+  _deepCtl=new AbortController();
+  const killer=setTimeout(()=>_deepCtl&&_deepCtl.abort(new DOMException('deadline','TimeoutError')),DA_DEADLINE_MS);
   try{
-    const r=await fetch('/api/deep-analysis',{method:'POST'});
+    const r=await fetch('/api/deep-analysis',{method:'POST',signal:_deepCtl.signal});
     if(r.status===401){
       const err=new Error('auth'); err.authRequired=true; throw err;
     }
@@ -1813,20 +1823,29 @@ async function runDeepAnalysis(){
     const j=await r.json();
     const a=j.analysis;
     const mkt=j.market||null;
-    renderDeepAnalysis(a, mkt);
+    // Warn-and-proceed: label a degraded/cached run rather than hiding or refusing it.
+    const degraded = !!(j && (j.degraded===true || j.status==='degraded'));
+    renderDeepAnalysis(a, mkt, j.cached===true, j.ran_at||null);
     _cachedAnalysisLoaded=true;
-    $('deep-ts').textContent=j.model+' · '+new Date().toLocaleTimeString();
-    toast('Deep analysis complete','success'); refreshSectionBadges();
+    $('deep-ts').textContent=(degraded?'⚠ degraded · ':'')+j.model+' · '+new Date().toLocaleTimeString();
+    toast(degraded?'Deep analysis ran on degraded inputs':'Deep analysis complete',
+          degraded?'error':'success', degraded?7000:undefined);
+    refreshSectionBadges();
   }catch(e){
     if(e&&e.authRequired){
       cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
       toast('Sign in to run a live Claude analysis','error',6000);
+    }else if(e&&e.name==='AbortError'){
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--muted)">Run cancelled — nothing was saved.</div></div>`;
+    }else if(e&&e.name==='TimeoutError'){
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Gave up after ${Math.round(DA_DEADLINE_MS/1000)}s.</strong><br>The deep-analysis engine did not return in time. Nothing was saved.</div></div>`;
+      toast('Deep analysis timed out','error');
     }else{
       cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(friendlyErr(e))}</div></div>`;
       toast('Deep analysis failed','error');
     }
     console.error(e);
-  }finally{btn.disabled=false;btn.innerHTML='↻ Re-analyze';}
+  }finally{clearTimeout(killer);_deepCtl=null;btn.disabled=false;btn.innerHTML='↻ Re-analyze';}
 }
 
 /* ── ECG ── */
@@ -3801,6 +3820,42 @@ function daRender(data, meta, kellyData, portData){
   $('da-results').style.display='block';
 }
 
+// ── GESH-5: run telemetry that only claims what it observed ──────────────────
+// The old loader asserted "~20–40 seconds" (a number nobody measured) and rotated a
+// fixed message list on a blind 5.5s timer — narrating "Running Kelly criterion
+// position sizing…" whether or not that was happening. It also had no cancel and no
+// deadline, so a hung Claude call span an infinite spinner. All three are replaced
+// with observable facts: real elapsed time, which fetches have actually settled, and
+// a typical duration derived ONLY from runs this browser genuinely timed.
+const DA_TIMING_KEY='gesh_da_run_ms';
+const DA_TIMING_KEEP=5;        // rolling window of observed runs
+const DA_TIMING_MIN=3;         // below this, make NO estimate rather than guess one
+const DA_DEADLINE_MS=300000;   // client backstop; the server's own 240s Claude timeout should fire first
+
+function daReadTimings(){
+  try{
+    const v=JSON.parse(localStorage.getItem(DA_TIMING_KEY)||'[]');
+    return Array.isArray(v)?v.filter(n=>typeof n==='number'&&isFinite(n)&&n>0):[];
+  }catch(e){ return []; }
+}
+function daRecordTiming(ms){
+  try{
+    const v=daReadTimings(); v.push(Math.round(ms));
+    localStorage.setItem(DA_TIMING_KEY,JSON.stringify(v.slice(-DA_TIMING_KEEP)));
+  }catch(e){/* private mode / quota — timing is a nicety, never break the run */}
+}
+function daTypicalMs(){
+  const v=daReadTimings();
+  if(v.length<DA_TIMING_MIN) return null;          // no evidence → no claim
+  const s=[...v].sort((a,b)=>a-b);
+  return s[Math.floor(s.length/2)];                // median of observed runs
+}
+
+let _daCtl=null;
+function daCancelAnalysis(){
+  if(_daCtl) _daCtl.abort(new DOMException('cancelled by user','AbortError'));
+}
+
 async function daRunAnalysis(){
   const btn=$('da-btn-run');
   btn.disabled=true; btn.innerHTML='<span class="spin" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></span> Analysing…';
@@ -3812,43 +3867,68 @@ async function daRunAnalysis(){
   const fill=$('da-load-fill');
   fill.style.animation='none'; fill.getBoundingClientRect(); fill.style.animation='';
 
-  const msgs=[
-    'Fetching portfolio · building payload…',
-    'Running regime detection across holdings…',
-    'Running Kelly criterion position sizing…',
-    'Sending to Claude deep-analysis engine…',
-    'Reconciling signals · building trade plan…'
-  ];
-  let mi=0;
-  const t=setInterval(()=>{mi=(mi+1)%msgs.length; $('da-loading-msg').textContent=msgs[mi];},5500);
+  // Name only what is genuinely outstanding; drop each as its fetch really settles.
+  const outstanding=new Set(['portfolio snapshot','Kelly sizing','Claude deep-analysis']);
+  const paint=()=>{
+    const el=$('da-loading-msg'); if(!el) return;
+    el.textContent = outstanding.size ? 'Waiting on: '+[...outstanding].join(' · ') : 'Rendering…';
+  };
+  const settled=(name)=>(r)=>{ outstanding.delete(name); paint(); return r; };
+  paint();
+
+  const t0=Date.now();
+  const typical=daTypicalMs();
+  const etaEl=$('da-eta');
+  if(etaEl) etaEl.textContent = typical
+    ? ` · typically ~${Math.round(typical/1000)}s on this machine`
+    : ' · timing this run (no estimate yet)';
+  const tick=setInterval(()=>{
+    const el=$('da-elapsed'); if(el) el.textContent=Math.round((Date.now()-t0)/1000)+'s';
+  },1000);
+
+  _daCtl = new AbortController();
+  const killer=setTimeout(()=>_daCtl&&_daCtl.abort(new DOMException('deadline','TimeoutError')),DA_DEADLINE_MS);
+  const sig={signal:_daCtl.signal};
 
   try{
     // Run deep analysis + Kelly + portfolio in parallel
     const [deepRes, kellyRes, portRes] = await Promise.all([
-      fetch('/api/deep-analysis',{method:'POST'}),
-      fetch('/api/kelly',{method:'POST'}),
-      fetch('/api/portfolio'),
+      fetch('/api/deep-analysis',{method:'POST',...sig}).then(settled('Claude deep-analysis')),
+      fetch('/api/kelly',{method:'POST',...sig}).then(settled('Kelly sizing')),
+      fetch('/api/portfolio',sig).then(settled('portfolio snapshot')),
     ]);
-    clearInterval(t);
     if(deepRes.status===401){ const err=new Error('auth'); err.authRequired=true; throw err; }
     if(!deepRes.ok) throw new Error(await deepRes.text());
     const deep   = await deepRes.json();
     const kelly  = kellyRes.ok  ? await kellyRes.json()  : null;
     const port   = portRes.ok   ? await portRes.json()   : null;
+    daRecordTiming(Date.now()-t0);   // only a run that actually completed counts
     const ts=new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
     $('da-ts').textContent=ts;
-    daRender(deep, `run #${deep.run_id||'—'} · ${deep.model||'—'} · ${ts}`, kelly, port);
+    // Warn-and-proceed: a degraded run is still worth showing, but it must SAY so.
+    // Blocking here would break the offline/snapshot fallback path on purpose built
+    // into /api/deep-analysis — the honest move is to label it, not refuse it.
+    const degraded = !!(deep && (deep.degraded===true || deep.status==='degraded' || deep.cached===true));
+    const meta = (degraded?'⚠ DEGRADED INPUTS — ':'')+
+                 `run #${deep.run_id||'—'} · ${deep.model||'—'} · ${ts}`;
+    daRender(deep, meta, kelly, port);
+    if(degraded && typeof toast==='function')
+      toast('Analysis ran on degraded/cached inputs — see the run label','error',7000);
     daLoadHistory();
   }catch(e){
-    clearInterval(t);
     $('da-placeholder').style.display='flex';
     if(e&&e.authRequired){
       $('da-placeholder').innerHTML=`<div class="deep-ph-icon">🔒</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Daily Analysis again.</div>`;
       if(typeof toast==='function') toast('Sign in to run a live Claude analysis','error',6000);
+    }else if(e&&e.name==='AbortError'){
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">✋</div><div class="deep-ph-text" style="color:var(--muted)">Run cancelled. Nothing was saved — click ▶ Run Daily Analysis to start again.</div>`;
+    }else if(e&&e.name==='TimeoutError'){
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⏱</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Gave up after ${Math.round(DA_DEADLINE_MS/1000)}s.</strong><br>The engines did not return in time. Nothing was saved — try again, or load a past run from the dropdown.</div>`;
     }else{
       $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>`;
     }
   }finally{
+    clearInterval(tick); clearTimeout(killer); _daCtl=null;
     $('da-loading').style.display='none';
     btn.disabled=false; btn.innerHTML='↻ Re-analyse';
   }
