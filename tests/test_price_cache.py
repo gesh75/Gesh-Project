@@ -16,6 +16,7 @@ Three contracts locked here:
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -122,7 +123,7 @@ def test_server_cached_close_stores_into_price_cache(monkeypatch):
 
 # ── 3. the cron consumer never imports server ─────────────────────────────────
 
-def test_weekly_digest_close_for_prices_without_server():
+def test_weekly_digest_close_for_prices_without_server(tmp_path):
     """run_weekly_digest._close_for used to `from server import _cached_close` —
     dragging the FastAPI app + billing + trading into a cron process, where any
     unrelated import-time failure silently zeroed customers' book values."""
@@ -135,7 +136,13 @@ def test_weekly_digest_close_for_prices_without_server():
         "assert 'server' not in sys.modules, '_close_for imported server'\n"
         "print('ISOLATED-OK')\n"
     )
+    # Fresh interpreter = conftest's in-process DB-path isolation does NOT apply;
+    # point both DB env knobs at throwaways so a future import-time DB touch in
+    # run_weekly_digest/auth_users/signal_history can never write real files.
+    env = {**os.environ,
+           "GESH_AUTH_DB": str(tmp_path / "auth.db"),
+           "GESH_DB_PATH": str(tmp_path / "gesh.db")}
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                         text=True, cwd=REPO, timeout=120)
+                         text=True, cwd=REPO, env=env, timeout=120)
     assert out.returncode == 0, out.stderr
     assert "ISOLATED-OK" in out.stdout
