@@ -49,6 +49,9 @@ _PBKDF2_ROUNDS = 200_000
 PUBLIC_PREFIXES = (
     "/login", "/auth/login", "/auth/logout", "/auth/magic", "/auth/request-link", "/static/",
     "/track-record", "/terms", "/disclaimer", "/healthz", "/favicon.ico",
+    # Congress-Watch: public informational page + its public-data API (STOCK Act
+    # disclosures — no owner/customer data, no execution). The shareable acquisition magnet.
+    "/congress-watch", "/api/congress",
     # Payment surface: pricing page + provider webhook + post-checkout landing must be
     # reachable WITHOUT a session (the webhook is signature-gated, not cookie-gated).
     "/pricing", "/api/billing/webhook", "/billing/success",

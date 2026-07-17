@@ -984,6 +984,36 @@ def track_record_page():
         raise _server_error(exc)
 
 
+@app.get("/congress-watch", response_class=HTMLResponse)
+def congress_watch_page():
+    """Public, shareable Congress-Trade-Watch page — the acquisition magnet extracted
+    from Autopilot's viral hook, but INFORMATIONAL only (public STOCK Act disclosures,
+    no execution, no advice; publisher-lane). Offline-safe empty state."""
+    try:
+        import congress_agent
+        return congress_agent.render_watch_html(congress_agent.load_watch_data())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/api/congress")
+def api_congress():
+    """Recent congressional disclosures + most-bought leaderboard (public data)."""
+    import congress_agent
+    return {"status": "ok", "data": {
+        "leaderboard": congress_agent.leaderboard().get("top_bought", []),
+        "recent": congress_agent.recent_activity(limit=40).get("trades", []),
+        "disclaimer": congress_agent.DISCLOSURE_LAG_NOTE,
+    }}
+
+
+@app.get("/api/congress/{symbol}")
+def api_congress_symbol(symbol: str):
+    """Congressional trades for one ticker — informational, attaches to the research card."""
+    import congress_agent
+    return {"status": "ok", "data": congress_agent.for_symbol(_safe_symbol(symbol))}
+
+
 @app.get("/terms", response_class=HTMLResponse)
 @app.get("/disclaimer", response_class=HTMLResponse)
 def terms_page():
