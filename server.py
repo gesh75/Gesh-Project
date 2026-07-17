@@ -1505,7 +1505,9 @@ def monte_carlo():
         holdings = payload["holdings"]
         eq_sum   = payload["equity_summary"]
         result   = run_monte_carlo(holdings, eq_sum)
-        resp = {"status": "ok", "data": result}
+        # _jsonable: same numpy-scalar hazard as /api/kelly (GBM percentiles are
+        # np.float64) — coerce before FastAPI's encoder sees it.
+        resp = {"status": "ok", "data": _jsonable(result)}
         if payload.get("offline"):
             resp["offline"] = True
         _save_engine_result("monte_carlo", resp)
@@ -1750,7 +1752,11 @@ def kelly_endpoint():
             print(f"Failed to fetch AI verdicts for Kelly: {err}")
 
         result         = run_kelly_analysis(holdings, total_equity, analyst_upside, ai_verdicts)
-        resp = {"status": "ok", "data": result, "total_equity": total_equity}
+        # _jsonable: kelly leans on numpy and can emit np.bool_/np.float64 scalars
+        # that FastAPI's encoder rejects ("'numpy.bool' object is not iterable" —
+        # the QA-observed 500 of 2026-07-17). The customer path already coerces;
+        # the owner endpoint must too.
+        resp = {"status": "ok", "data": _jsonable(result), "total_equity": total_equity}
         if payload.get("offline"):
             resp["offline"] = True
         _save_engine_result("kelly", resp)
