@@ -27,7 +27,7 @@ def test_get_volume_ratio_squeezes_multiindex_volume(monkeypatch):
     )
     frame.columns = cols
 
-    monkeypatch.setattr(sf.yf, "download", lambda *a, **k: frame)
+    monkeypatch.setattr(sf.price_source, "locked_yf_download", lambda *a, **k: frame)
     today, avg, ratio = sf._get_volume_ratio("XLK")
     assert today == pytest.approx(float(vol[-1]))
     assert avg > 0

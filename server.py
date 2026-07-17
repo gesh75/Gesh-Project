@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 import logging, re
 from collections import defaultdict, deque
+import price_source  # locked yf.download adapter (thread-safety)
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
 # Long-running uvicorn + yfinance + sqlite + robin_stocks tends to leak FDs
@@ -992,28 +993,90 @@ def terms_page():
     return legal_pages.render_terms_html()
 
 
-@app.get("/alerts/unsubscribe", response_class=HTMLResponse)
-def alerts_unsubscribe(token: str = ""):
-    """One-click opt-out from signal-change alert emails. Public (link-in-email),
-    gated by a typed 30-day HMAC token — a session/magic token is rejected."""
-    email = auth_users.verify_token(token, expected_typ="alerts_unsub")
-    if not email:
+# ── Unsubscribe: GET confirms, POST mutates (Codex P1, 2026-07-17) ────────────
+# Email security scanners and link-preview bots routinely FETCH every URL in an
+# email — a GET that mutates silently unsubscribed customers who never clicked.
+# Contract now: GET = confirmation page only (idempotent, safe); POST = the
+# actual opt-out. POST accepts the token via query string, JSON {token}, or an
+# RFC 8058 one-click body (mail providers POST "List-Unsubscribe=One-Click" with
+# the token still in the URL). The jobs' emails carry List-Unsubscribe[-Post].
+
+_UNSUB_KINDS = {
+    "alerts": ("alerts_unsub", "GESH signal-change alerts", "set_alerts_opt_out"),
+    "digest": ("digest_unsub", "the GESH weekly digest", "set_digest_opt_out"),
+}
+
+
+def _unsub_confirm_page(kind: str, token: str) -> HTMLResponse:
+    import json
+
+    typ, label, _setter = _UNSUB_KINDS[kind]
+    if not auth_users.verify_token(token, expected_typ=typ):
         raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
-    auth_users.set_alerts_opt_out(email, True)
-    return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive GESH "
-                        "signal-change alerts. You can re-enable them from the dashboard.</p>")
+    tok_js = json.dumps(token)          # JSON-string embedding — token is ours, escape anyway
+    return HTMLResponse(
+        f"<div style='font-family:system-ui,sans-serif;max-width:480px;margin:40px auto'>"
+        f"<h2>Unsubscribe from {label}?</h2>"
+        f"<p>Click confirm to stop these emails. You can re-enable them any time "
+        f"from your dashboard.</p>"
+        f"<button id='go' style='padding:10px 18px;font-size:15px'>Confirm unsubscribe</button>"
+        f"<p id='done' style='display:none;color:#0a7'>Unsubscribed. You can close this page.</p>"
+        f"<noscript><p>JavaScript is required to confirm — or use your email client's "
+        f"built-in unsubscribe button.</p></noscript>"
+        f"<script>document.getElementById('go').onclick=async()=>{{"
+        f"const r=await fetch(location.pathname,{{method:'POST',"
+        f"headers:{{'Content-Type':'application/json'}},"
+        f"body:JSON.stringify({{token:{tok_js}}})}});"
+        f"if(r.ok){{document.getElementById('go').style.display='none';"
+        f"document.getElementById('done').style.display='block';}}}};</script></div>")
+
+
+async def _unsub_perform(kind: str, request: Request, token_qs: str) -> JSONResponse:
+    typ, _label, setter_name = _UNSUB_KINDS[kind]
+    token = (token_qs or "").strip()
+    if not token:                       # JSON body (the confirm page's fetch)
+        try:
+            body = await request.json()
+            token = str(body.get("token") or "").strip()
+        except Exception:
+            token = ""
+    if not token:                       # RFC 8058 one-click: urlencoded body
+        try:
+            from urllib.parse import parse_qsl
+            raw = (await request.body()).decode("utf-8", "replace")
+            token = dict(parse_qsl(raw)).get("token", "").strip()
+        except Exception:
+            token = ""
+    email = auth_users.verify_token(token, expected_typ=typ)
+    if not email:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "detail": "Invalid or expired unsubscribe link"})
+    getattr(auth_users, setter_name)(email, True)
+    return JSONResponse(content={"ok": True})
+
+
+@app.get("/alerts/unsubscribe", response_class=HTMLResponse)
+def alerts_unsubscribe_confirm(token: str = ""):
+    """Confirmation page ONLY — never mutates (scanner/preview-safe)."""
+    return _unsub_confirm_page("alerts", token)
+
+
+@app.post("/alerts/unsubscribe")
+async def alerts_unsubscribe_do(request: Request, token: str = ""):
+    """The actual opt-out. Typed-token gated; accepts JSON / query / one-click bodies."""
+    return await _unsub_perform("alerts", request, token)
 
 
 @app.get("/digest/unsubscribe", response_class=HTMLResponse)
-def digest_unsubscribe(token: str = ""):
-    """One-click opt-out from the weekly customer digest. Public (link-in-email),
-    gated by a typed 30-day HMAC token — a session/magic token is rejected."""
-    email = auth_users.verify_token(token, expected_typ="digest_unsub")
-    if not email:
-        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
-    auth_users.set_digest_opt_out(email, True)
-    return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive the GESH "
-                        "weekly digest. You can re-enable it from the dashboard.</p>")
+def digest_unsubscribe_confirm(token: str = ""):
+    """Confirmation page ONLY — never mutates (scanner/preview-safe)."""
+    return _unsub_confirm_page("digest", token)
+
+
+@app.post("/digest/unsubscribe")
+async def digest_unsubscribe_do(request: Request, token: str = ""):
+    """The actual opt-out. Typed-token gated; accepts JSON / query / one-click bodies."""
+    return await _unsub_perform("digest", request, token)
 
 
 @app.get("/progress", response_class=HTMLResponse)
@@ -4076,10 +4139,9 @@ async def api_security_health():
 async def api_vol_compare(symbol: str):
     """Compare EWMA vs GARCH(1,1) volatility for a symbol."""
     try:
-        import yfinance as yf
         import numpy as np
         from volatility_models import compare_vol_models
-        data   = yf.download(symbol.upper(), period="1y", auto_adjust=True, progress=False)["Close"]
+        data   = price_source.locked_yf_download(symbol.upper(), period="1y", auto_adjust=True, progress=False)["Close"]
         if isinstance(data, __import__("pandas").DataFrame):
             data = data.iloc[:, 0]
         rets   = np.log(data / data.shift(1)).dropna()

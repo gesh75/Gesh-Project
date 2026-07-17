@@ -26,6 +26,7 @@ import numpy as np
 import yfinance as yf
 
 
+import price_source  # locked yf.download adapter (thread-safety)
 # ─── Benchmark mapping ────────────────────────────────────────────────────────
 
 SECTOR_BENCHMARKS: dict[str, str] = {
@@ -84,7 +85,7 @@ def get_alpha(ticker: str, period: str = "1mo") -> dict[str, Any]:
     peers = list({ticker, "SPY", sector_etf})
 
     try:
-        data = yf.download(peers, period=period, auto_adjust=True, progress=False)["Close"]
+        data = price_source.locked_yf_download(peers, period=period, auto_adjust=True, progress=False)["Close"]
         if isinstance(data, yf.Series if hasattr(yf, "Series") else type(None)):
             data = data.to_frame(name=peers[0])
 
@@ -151,7 +152,7 @@ def batch_alpha(
     all_symbols   = list({s for s in sector_map.values()} | set(tickers_upper) | {"SPY"})
 
     try:
-        data = yf.download(all_symbols, period=period, auto_adjust=True, progress=False)["Close"]
+        data = price_source.locked_yf_download(all_symbols, period=period, auto_adjust=True, progress=False)["Close"]
     except Exception:
         data = None
 

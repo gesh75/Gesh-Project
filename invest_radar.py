@@ -37,6 +37,7 @@ import math
 import statistics
 from datetime import datetime, timezone
 from typing import Any, Callable
+import price_source  # locked yf.download adapter (thread-safety)
 
 # ── tunables ──────────────────────────────────────────────────────────────────
 WEIGHTS: dict[str, float] = {
@@ -293,8 +294,7 @@ def _fetch_screened() -> list[dict]:
 def _fetch_price_frame(symbols: list[str]):
     """One batched 1y daily-close frame for vol + correlation. Returns a DataFrame or None."""
     try:
-        import yfinance as yf
-        raw = yf.download(list(dict.fromkeys(symbols)), period="1y",
+        raw = price_source.locked_yf_download(list(dict.fromkeys(symbols)), period="1y",
                           auto_adjust=True, progress=False, threads=False)
         if raw is None or len(raw) == 0:
             return None

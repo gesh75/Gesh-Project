@@ -90,6 +90,22 @@ _YF_CACHE_TTL_S = float(os.getenv("YF_CACHE_TTL_S", "600"))
 # shared state and stays parallel.
 _YF_DOWNLOAD_LOCK = threading.Lock()
 
+
+def locked_yf_download(*args, **kwargs):
+    """The ONLY sanctioned way to call ``yfinance.download`` outside this module.
+
+    Behavior-preserving: no cache, no Robinhood fallback — exactly
+    ``yf.download(*args, **kwargs)`` under the process-wide lock above. Exists
+    because the 2026-07-15 race fix only protected THIS module's wrapper while
+    ~10 other production call sites still called ``yf.download`` raw, so the
+    NVDA-priced-as-TSLA contamination could recur through any of them (Codex
+    review P1, 2026-07-17). A static test (tests/test_retention_p1s.py) forbids
+    raw ``yf.download(`` anywhere else in production code."""
+    import yfinance as yf  # lazy, matching this module's import-light convention
+    with _YF_DOWNLOAD_LOCK:
+        return yf.download(*args, **kwargs)
+
+
 # Mirror fetch_live_snapshot.py — the canonical session pickle location.
 _PICKLE_PATH = os.path.expanduser("~/.tokens/robinhoodrobinhood_session.pickle")
 

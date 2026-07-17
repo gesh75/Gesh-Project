@@ -10,7 +10,7 @@ import html as _html
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import auth_users
@@ -65,6 +65,32 @@ def _customers() -> list[str]:
     return [r["email"] for r in rows]
 
 
+def _week_window_start() -> str:
+    """Start (YYYY-MM-DD, inclusive) of the digest's flip window: the trailing
+    7 days. Covers the market week whether the digest fires Friday evening or
+    catches up over the weekend — 'this week' stays honest either way."""
+    return (datetime.now(timezone.utc) - timedelta(days=6)).strftime("%Y-%m-%d")
+
+
+def _book_line(email: str, positions: list, watch: list) -> str:
+    """The dollar line, honesty-guarded (Codex P1): a missing quote must NEVER
+    silently render as $0, and equal-weight (privacy) books have placeholder
+    shares whose dollars are not real — say so instead of inventing a number."""
+    if not positions:
+        return "<p>You are watching " + str(len(watch)) + " symbols.</p>"
+    if auth_users.get_equal_weight(email):
+        return (f"<p>Your book: {len(positions)} positions "
+                f"(private-size mode — dollar totals are not shown).</p>")
+    closes = {p["symbol"]: _close_for(p["symbol"]) for p in positions}
+    priced = [p for p in positions if closes[p["symbol"]] is not None]
+    if len(priced) < len(positions):
+        return (f"<p>Your book: {len(positions)} positions. Value unavailable this week "
+                f"— we could price only {len(priced)} of {len(positions)} holdings and "
+                f"won't show a partial total.</p>")
+    total = sum(p["shares"] * closes[p["symbol"]] for p in positions)
+    return f"<p>Your book: <b>${total:,.0f}</b> across {len(positions)} positions.</p>"
+
+
 def _compose(email: str) -> str | None:
     e = _html.escape
     positions = auth_users.get_positions(email)
@@ -72,18 +98,36 @@ def _compose(email: str) -> str | None:
     syms = sorted({p["symbol"] for p in positions} | set(watch))
     if not syms:
         return None
-    total = sum((p["shares"] * (_close_for(p["symbol"]) or 0)) for p in positions)
-    flips = signal_history.detect_confirmed_flips(syms, persistence_days=2)
+    # One batched warm instead of N cold serial fetches (the batch warmer holds
+    # the yf lock once); _close_for stays the per-symbol cached read + test seam.
+    try:
+        import price_cache
+        price_cache.warm_close_cache_batch([p["symbol"] for p in positions])
+    except Exception as warm_err:  # noqa: BLE001 — warm is an optimization, never fatal
+        logger.warning("batch close warm failed: %s", warm_err)
+    book_line = _book_line(email, positions, watch)
+    # Durable events for the WHOLE week (Codex P1) — the live detector only sees
+    # flips at the latest streak boundary, so Friday's compose used to omit
+    # anything confirmed Mon-Wed. Record first (idempotent): if the alerts job
+    # was down all week, the digest still captures today's boundary flip.
+    signal_history.record_confirmed_flips(syms, persistence_days=2)
+    flips = signal_history.flips_since(syms, _week_window_start())
     flip_rows = "".join(
         f"<tr><td style='padding:4px 10px;font-weight:600'>{e(f['symbol'])}</td>"
-        f"<td style='padding:4px 10px'>{e(f['prior_verdict'])} &rarr; <b>{e(f['new_verdict'])}</b></td></tr>"
+        f"<td style='padding:4px 10px'>{e(f['prior_verdict'])} &rarr; <b>{e(f['new_verdict'])}</b></td>"
+        f"<td style='padding:4px 10px;color:#888'>{e(f['confirmed_since'])}</td></tr>"
         for f in flips) or "<tr><td style='padding:4px 10px;color:#666'>No confirmed changes this week.</td></tr>"
     saved = auth_users.get_latest_book_analysis(email)
     verdict = e(str(((saved or {}).get("analysis") or {}).get("portfolio_verdict", "—")))
+    # Staleness label (Codex P1): pairing current positions with a verdict computed
+    # for a DIFFERENT book silently misleads — compare the analysis' symbol set.
+    saved_syms = {str(p.get("symbol")) for p in
+                  (((saved or {}).get("book") or {}).get("positions") or []) if p.get("symbol")}
+    cur_syms = {p["symbol"] for p in positions}
+    if saved and saved_syms and cur_syms and saved_syms != cur_syms:
+        verdict += " <span style='color:#c90'>(from an earlier version of your book — re-run analysis)</span>"
     tok = auth_users.issue_token(email, ttl=UNSUB_TTL, typ="digest_unsub")
     base = _base_url()
-    book_line = (f"<p>Your book: <b>${total:,.0f}</b> across {len(positions)} positions.</p>"
-                 if positions else "<p>You are watching " + str(len(watch)) + " symbols.</p>")
     return (f"<h2>Your GESH week — {datetime.now(timezone.utc).strftime('%b %d, %Y')}</h2>"
             f"{book_line}"
             f"<h3>Signal changes on your names</h3><table>{flip_rows}</table>"
@@ -109,7 +153,12 @@ def main(dry_run: bool = False) -> dict:
                 if not html or dry_run:           # dry-run never consumes the week
                     continue
                 attempted += 1
-                if email_sender.send_email(email, "Your GESH weekly digest", html):
+                unsub_tok = auth_users.issue_token(email, ttl=UNSUB_TTL, typ="digest_unsub")
+                unsub_headers = {
+                    "List-Unsubscribe": f"<{_base_url()}/digest/unsubscribe?token={unsub_tok}>",
+                    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+                if email_sender.send_email(email, "Your GESH weekly digest", html,
+                                           headers=unsub_headers):
                     sent += 1
                     con.execute("INSERT OR IGNORE INTO digest_log (email, iso_week) "
                                 "VALUES (?,?)", (email, week))
@@ -128,9 +177,22 @@ def _cli(argv: list[str]) -> None:
     import json
 
     dry_run = "--dry-run" in argv
+    # ET schedule gate (Codex P1): launchd ticks every 30 min; the decision — Friday
+    # 17:15 ET with the weekend as catch-up, once per ISO week — is made here in
+    # America/New_York. The old Friday-17:15 *local* calendar trigger fired at
+    # 10:15 ET and vanished entirely if the Mac was asleep (it never ran once).
+    if "--force" not in argv and not dry_run:
+        import schedule_gate
+        ok, reason = schedule_gate.should_run("digest")
+        if not ok:
+            print(json.dumps({"skipped": reason}))
+            return
     result = main(dry_run=dry_run)
     if not dry_run:  # health ledger for /usage — record_job_run is fail-soft
         job_health.record_job_run(JOB_NAME, result)
+        if "--force" not in argv:
+            import schedule_gate
+            schedule_gate.mark_ran("digest")   # only after a non-raising run
     print(json.dumps(result))
 
 

@@ -9,7 +9,7 @@ import html as _html
 import logging
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import auth_users
@@ -60,6 +60,16 @@ def _consensus_for(symbols: list[str]) -> list[dict]:
     return out
 
 
+def _unsub_headers(email: str) -> dict:
+    """RFC 8058 one-click unsubscribe headers. Mail providers POST to the URL
+    directly (Gmail/Yahoo list-unsubscribe buttons), which pairs with the
+    scanner-safe contract: GET renders a confirmation page, only POST mutates."""
+    tok = auth_users.issue_token(email, ttl=UNSUB_TTL, typ="alerts_unsub")
+    url = f"{_base_url()}/alerts/unsubscribe?token={tok}"
+    return {"List-Unsubscribe": f"<{url}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+
+
 def _build_email(email: str, flips: list[dict]) -> str:
     e = _html.escape
     rows = "".join(
@@ -78,12 +88,21 @@ def _build_email(email: str, flips: list[dict]) -> str:
             f"<a href='{base}/alerts/unsubscribe?token={tok}'>Unsubscribe from alerts</a></p>")
 
 
+RETRY_WINDOW_DAYS = 5   # deliver any still-unalerted flip confirmed in the last N days
+
+
 def main(dry_run: bool = False) -> dict:
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     symbols = sorted(auth_users.all_customer_symbols())
     snapshots = _consensus_for(symbols)
     signal_history.record_snapshots(snapshots)
-    flips = signal_history.detect_confirmed_flips(symbols, persistence_days=PERSISTENCE_DAYS)
+    # Durable events (Codex P1): flips are PERSISTED at detection time, and delivery
+    # reads the event table. alert_log keys on the flip's confirmed_date (not "today"),
+    # and a row is only written after a SUCCESSFUL send — so a failed send simply
+    # leaves the event undelivered and the next run retries it, instead of the flip
+    # scrolling past the streak boundary and being lost forever.
+    signal_history.record_confirmed_flips(symbols, persistence_days=PERSISTENCE_DAYS)
+    since = (datetime.now(timezone.utc) - timedelta(days=RETRY_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    flips = signal_history.flips_since(symbols, since)
 
     per_customer: dict[str, list[dict]] = {}
     for f in flips:
@@ -96,16 +115,17 @@ def main(dry_run: bool = False) -> dict:
         for email, their_flips in sorted(per_customer.items()):
             fresh = [f for f in their_flips if not con.execute(
                 "SELECT 1 FROM alert_log WHERE email=? AND symbol=? AND date=?",
-                (email, f["symbol"], today)).fetchone()]
+                (email, f["symbol"], f["confirmed_since"])).fetchone()]
             if not fresh or dry_run:
                 continue
             attempted += 1
             subject = "GESH: signal change on " + ", ".join(f["symbol"] for f in fresh)
-            if email_sender.send_email(email, subject, _build_email(email, fresh)):
+            if email_sender.send_email(email, subject, _build_email(email, fresh),
+                                       headers=_unsub_headers(email)):
                 sent += 1
                 for f in fresh:
                     con.execute("INSERT OR IGNORE INTO alert_log (email, symbol, date) "
-                                "VALUES (?,?,?)", (email, f["symbol"], today))
+                                "VALUES (?,?,?)", (email, f["symbol"], f["confirmed_since"]))
     result = {"symbols_snapshotted": len(snapshots), "flips": len(flips), "emails_sent": sent}
     # Visibility guard (rule: silent no-op != quiet day) — under launchd, RESEND_API_KEY
     # can be unset even though there were emails to send; make that distinguishable in
@@ -119,9 +139,22 @@ def _cli(argv: list[str]) -> None:
     import json
 
     dry_run = "--dry-run" in argv
+    # ET schedule gate (Codex P1): launchd now just ticks this script every 30 min;
+    # the run/skip decision is made HERE, explicitly in America/New_York, with
+    # catch-up (a post-wake tick still runs if today's window is open and unrun).
+    # --force bypasses for manual/diagnostic runs; --dry-run never consumes the day.
+    if "--force" not in argv and not dry_run:
+        import schedule_gate
+        ok, reason = schedule_gate.should_run("alerts")
+        if not ok:
+            print(json.dumps({"skipped": reason}))
+            return
     result = main(dry_run=dry_run)
     if not dry_run:  # health ledger for /usage — record_job_run is fail-soft
         job_health.record_job_run(JOB_NAME, result)
+        if "--force" not in argv:
+            import schedule_gate
+            schedule_gate.mark_ran("alerts")   # only after a non-raising run
     print(json.dumps(result))
 
 

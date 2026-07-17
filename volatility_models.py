@@ -29,6 +29,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from typing import Any
+import price_source  # locked yf.download adapter (thread-safety)
 
 
 # ─── EWMA ─────────────────────────────────────────────────────────────────────
@@ -151,9 +152,8 @@ def compare_vol_models(
 # ─── CLI test ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import yfinance as yf
     for ticker in ["NVDA", "MSTR", "SPY"]:
-        data   = yf.download(ticker, period="1y", auto_adjust=True, progress=False)["Close"]
+        data   = price_source.locked_yf_download(ticker, period="1y", auto_adjust=True, progress=False)["Close"]
         rets   = np.log(data / data.shift(1)).dropna()
         result = compare_vol_models(rets, ticker)
         print(

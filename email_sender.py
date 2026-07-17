@@ -34,9 +34,12 @@ def is_configured() -> bool:
     return bool(os.getenv("RESEND_API_KEY", "").strip())
 
 
-def send_email(to: str, subject: str, html: str) -> bool:
+def send_email(to: str, subject: str, html: str, headers: dict | None = None) -> bool:
     """Send one HTML email. Returns True on a 2xx from Resend, False otherwise
-    (including the no-key dev path). Never raises — email failure must not 500 a webhook."""
+    (including the no-key dev path). Never raises — email failure must not 500 a webhook.
+
+    `headers` are per-message SMTP headers passed through to Resend — used by the
+    retention jobs for RFC 8058 one-click unsubscribe (List-Unsubscribe[-Post])."""
     api_key = os.getenv("RESEND_API_KEY", "").strip()
     if not api_key:
         logger.warning("email_sender: RESEND_API_KEY unset — NOT sending to %s (subject=%r)",
@@ -44,10 +47,13 @@ def send_email(to: str, subject: str, html: str) -> bool:
         return False
     try:
         import requests  # local import: keeps module import-light + testable
+        payload: dict = {"from": _from_address(), "to": [to], "subject": subject, "html": html}
+        if headers:
+            payload["headers"] = headers
         resp = requests.post(
             _RESEND_ENDPOINT,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"from": _from_address(), "to": [to], "subject": subject, "html": html},
+            json=payload,
             timeout=15,
         )
         ok = 200 <= resp.status_code < 300
