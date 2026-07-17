@@ -214,19 +214,28 @@ Return ONLY valid JSON. No markdown. Use double-quotes only. No apostrophes in s
 scoring guide: +100=extremely bullish news, 0=neutral, -100=extremely bearish/crisis news."""
 
 
+def _public_articles(articles: list[dict], limit: int = 5) -> list[dict]:
+    """Allow-list article dicts to the 4 public headline fields — the shape the
+    dashboard "Recent News" card renders and /api/news/{symbol} trims to."""
+    return [{"title": a.get("title", ""), "url": a.get("url", ""),
+             "source": a.get("source", ""), "published": a.get("published", "")}
+            for a in articles[:limit]]
+
+
 def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
     """Run Claude analysis on a batch of news articles for one symbol."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key or not articles:
-        return {"symbol": symbol, "overall_sentiment": "NEUTRAL", "sentiment_score": 0, "article_count": 0}
+        return {"symbol": symbol, "overall_sentiment": "NEUTRAL", "sentiment_score": 0,
+                "article_count": 0, "articles": _public_articles(articles)}
 
-    client = anthropic.Anthropic(api_key=api_key)
     articles_text = "\n\n".join(
         f"[{i+1}] {a['title']}\nSource: {a['source']} | Published: {a['published']}\n{a['description']}"
         for i, a in enumerate(articles)
     )
 
     try:
+        client = anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1200,
@@ -240,10 +249,14 @@ def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
         raw = re.sub(r'^```(?:json)?\s*', '', raw.strip())
         raw = re.sub(r'\s*```$', '', raw)
         result = json.loads(raw)
-        result["articles"] = articles[:5]  # store first 5 articles for display
+        result["articles"] = _public_articles(articles)  # first 5 articles for display
         return result
     except Exception as e:
-        return {"symbol": symbol, "overall_sentiment": "NEUTRAL", "sentiment_score": 0, "error": str(e), "article_count": len(articles)}
+        # Keep the fetched headlines even when the model call fails — the cached
+        # row still has to feed the "Recent News" card via get_cached_articles().
+        return {"symbol": symbol, "overall_sentiment": "NEUTRAL", "sentiment_score": 0,
+                "error": str(e), "article_count": len(articles),
+                "articles": _public_articles(articles)}
 
 
 # ─── DB persistence ───────────────────────────────────────────────────────────
@@ -462,3 +475,45 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
 def get_news_history(symbols: list[str], days: int = 7) -> list[dict]:
     """Return stored sentiment from DB without fetching new news."""
     return _get_sentiment_history(symbols, days=days)
+
+
+def get_cached_articles(symbol: str, days: int = 7, limit: int = 8) -> list[dict]:
+    """Stored articles for `symbol` from cached news_sentiment rows — read-only,
+    no LLM, allow-listed to the 4 public headline fields. Feeds the dashboard
+    "Recent News" card when every live feed is empty (Alpaca key-gated, RSS
+    blocked on the owner's VPN). Newest rows first, deduped by title; never
+    raises — an unreadable cache is an empty feed, not a 500."""
+    try:
+        from agent_db import agent_db_path
+        db_path = str(agent_db_path())
+        if not os.path.exists(db_path):
+            return []
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT analysis_json FROM news_sentiment"
+                " WHERE symbol = ? AND created_at >= ? ORDER BY created_at DESC",
+                (symbol.upper(), cutoff),
+            ).fetchall()
+        finally:
+            conn.close()
+        seen: set[str] = set()
+        out: list[dict] = []
+        for (raw,) in rows:
+            try:
+                articles = (json.loads(raw) or {}).get("articles") or []
+            except Exception:
+                continue
+            for a in articles:
+                title = str(a.get("title") or "").strip()
+                if not title or title.lower() in seen:
+                    continue
+                seen.add(title.lower())
+                out.append({"title": title, "url": a.get("url", ""),
+                            "source": a.get("source", ""), "published": a.get("published", "")})
+                if len(out) >= limit:
+                    return out
+        return out
+    except Exception:
+        return []
