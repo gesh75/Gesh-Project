@@ -2583,15 +2583,14 @@ def _customer_book_payload(positions: list[dict], equal_weight: bool = False) ->
     ignored and every priced name is given an equal slice of a fixed notional — so
     weights are 1/N and the customer's real position sizes are never needed nor
     faked into the weighting. The absolute dollar figures are illustrative only."""
-    # Warm the close cache in parallel: a cold 100-position book valued serially is
-    # 100 sequential upstream fetches (~1-2s each) on every GET — parallel it's one
-    # round-trip's worth. _cached_close is lock-guarded, so concurrent warms are safe.
+    # Warm the close cache with ONE batched download: a cold 40-position book
+    # valued per-symbol is 40 upstream fetches serialized by the yfinance
+    # download lock — batched it's one round-trip. Anything the batch misses
+    # falls through to the per-symbol path in the loop below.
     uncached = [p["symbol"] for p in positions
                 if not price_cache.has_cached_close(p["symbol"])]
     if len(uncached) > 1:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as ex:
-            list(ex.map(_cached_close, uncached))
+        price_cache.warm_close_cache_batch(uncached)
     priced, unpriced = [], []
     for p in positions:
         price = _cached_close(p["symbol"])
