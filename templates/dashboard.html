@@ -1323,7 +1323,13 @@ function initChartSymbols(holdings){
   const sel=$('chart-sym');
   if(!sel) return;
   sel.innerHTML = chartSymbols.map(s=>`<option value="${daEsc(s)}">${daEsc(s)}</option>`).join('');
-  if(chartSymbols.length) loadChart();
+  // Load the chart only when the Overview pane is actually visible — the
+  // portfolio poll re-inits symbols on every tick, and auto-fetching here made
+  // a customer parked on Home fire /api/chart/<first-model-book-symbol>
+  // repeatedly for a chart they weren't looking at (QA 2026-07-17). switchTab
+  // lazy-loads it on first visit instead.
+  const ovPane=document.getElementById('tab-overview');
+  if(chartSymbols.length && ovPane && ovPane.classList.contains('active')) loadChart();
 }
 
 function setPeriod(p, btn){
@@ -2664,6 +2670,7 @@ function switchTab(name, btn){
   // you scrolled up (observed on the Risk tab). Always land at the top on switch.
   window.scrollTo(0, 0);
   // lazy-load data per tab (cached results render by default → never empty)
+  if(name==='overview'&&!priceChart&&typeof chartSymbols!=='undefined'&&chartSymbols.length){ loadChart(); }
   if(name==='home'){ if(typeof loadHomeHero==='function') loadHomeHero(); if(typeof loadPreferences==='function') loadPreferences(); }
   if(name==='risk'){ loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
   if(name==='analysis'){ tryLoadCachedAnalysis(); }
