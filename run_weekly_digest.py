@@ -9,7 +9,9 @@ from __future__ import annotations
 import html as _html
 import logging
 import os
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 import auth_users
 import email_sender
@@ -17,6 +19,24 @@ import signal_history
 
 logger = logging.getLogger("weekly_digest")
 UNSUB_TTL = 60 * 60 * 24 * 30
+
+# One digest per customer per ISO week — launchd can double-fire around
+# sleep/wake, and a duplicate email erodes the exact trust the digest exists to
+# build. Mirrors run_signal_alerts' alert_log (same DB, same lazy-DDL pattern).
+_DIGEST_DDL = """
+CREATE TABLE IF NOT EXISTS digest_log (
+    email    TEXT NOT NULL,
+    iso_week TEXT NOT NULL,
+    PRIMARY KEY (email, iso_week)
+);
+"""
+
+
+def _digest_con() -> sqlite3.Connection:
+    con = sqlite3.connect(Path(signal_history.DB_PATH))
+    con.row_factory = sqlite3.Row
+    con.execute(_DIGEST_DDL)
+    return con
 
 
 def _base_url() -> str:
@@ -74,16 +94,23 @@ def main(dry_run: bool = False) -> dict:
     sent = 0
     attempted = 0
     customers = _customers()
-    for email in customers:
-        try:  # fail-soft per customer — one bad compose/send must not sink the run
-            html = _compose(email)
-            if not html or dry_run:
-                continue
-            attempted += 1
-            if email_sender.send_email(email, "Your GESH weekly digest", html):
-                sent += 1
-        except Exception as e:  # noqa: BLE001 — same isolation pattern as run_signal_alerts
-            logger.warning("weekly digest failed for %s: %s", email, e)
+    week = datetime.now(timezone.utc).strftime("%G-W%V")
+    with _digest_con() as con:
+        for email in customers:
+            try:  # fail-soft per customer — one bad compose/send must not sink the run
+                if con.execute("SELECT 1 FROM digest_log WHERE email=? AND iso_week=?",
+                               (email, week)).fetchone():
+                    continue                      # double-fired job → already delivered
+                html = _compose(email)
+                if not html or dry_run:           # dry-run never consumes the week
+                    continue
+                attempted += 1
+                if email_sender.send_email(email, "Your GESH weekly digest", html):
+                    sent += 1
+                    con.execute("INSERT OR IGNORE INTO digest_log (email, iso_week) "
+                                "VALUES (?,?)", (email, week))
+            except Exception as e:  # noqa: BLE001 — same isolation pattern as run_signal_alerts
+                logger.warning("weekly digest failed for %s: %s", email, e)
     result = {"customers": len(customers), "emails_sent": sent}
     # Visibility guard (rule: silent no-op != quiet week) — under launchd, RESEND_API_KEY
     # can be unset even though there were digests to send; make that distinguishable in
