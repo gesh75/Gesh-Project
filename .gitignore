@@ -60,6 +60,13 @@ android */
 # sentiment_connector cwd-relative cache (Phase 5)
 .sentiment_cache.json
 
+# Fear & Greed and FINRA margin-debt caches (regenerated each run, same class as above)
+.fear_greed_cache.json
+.margin_debt_cache.json
+
+# VirtioFS/FUSE "deleted-but-open" artifacts on the macOS-shared mount
+.fuse_hidden*
+
 # Test/coverage artifacts (regenerated on each run — see pyproject.toml [tool.coverage])
 .coverage
 .coverage.*

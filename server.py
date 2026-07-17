@@ -766,12 +766,32 @@ async def preferences_set(request: Request):
     return {"status": "ok", "data": _preferences_payload(email)}
 
 
-def _cookie_secure() -> bool:
-    """Whether to set the Secure flag on the session cookie. Defaults to True (production
-    is HTTPS); set GESH_COOKIE_SECURE=0 ONLY for local plain-HTTP dev. This prevents the
-    session cookie shipping over plaintext on a TLS deploy because someone forgot to flip a
-    hardcoded False (M2)."""
-    return os.getenv("GESH_COOKIE_SECURE", "1").strip().lower() not in ("0", "false", "no", "off")
+def _cookie_secure(request: Request | None = None) -> bool:
+    """Whether to set the Secure flag on the session cookie.
+
+    Resolution order:
+      1. Explicit ``GESH_COOKIE_SECURE`` env override, when set to a non-empty value
+         (``0/false/no/off`` → insecure; anything else → secure). Reserve this for a
+         deliberate override; it forces the same answer for every request.
+      2. Otherwise derive per-request: a request that reached us over HTTPS — directly, or
+         via the Cloudflare tunnel's ``X-Forwarded-Proto: https`` — gets a Secure cookie; a
+         plain-HTTP ``localhost`` request does not. This secures real TLS users WITHOUT
+         locking the owner out of ``http://localhost`` — the exact tradeoff that previously
+         forced a blanket ``GESH_COOKIE_SECURE=0`` and shipped session cookies in clear to
+         paying users (M2).
+      3. No request context and no override → default secure (fail safe on a TLS deploy).
+
+    Trusting ``X-Forwarded-Proto`` is safe here because :9000 is only reachable through the
+    tunnel, which sets the header; direct internet clients cannot hit the port to spoof it."""
+    override = os.getenv("GESH_COOKIE_SECURE", "").strip()
+    if override:
+        return override.lower() not in ("0", "false", "no", "off")
+    if request is not None:
+        proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+        if proto:
+            return proto == "https"
+        return request.url.scheme == "https"
+    return True
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -808,7 +828,7 @@ async def auth_login(request: Request):
     resp.set_cookie(
         auth_users.COOKIE_NAME, auth_users.issue_token(email),
         httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
-        secure=_cookie_secure(),
+        secure=_cookie_secure(request),
     )
     return resp
 
@@ -821,7 +841,7 @@ def auth_logout():
 
 
 @app.get("/auth/magic")
-def auth_magic(token: str = ""):
+def auth_magic(request: Request, token: str = ""):
     """Passwordless login from the onboarding email's magic link.
 
     The URL token is SINGLE-USE: consume_magic_token validates + atomically spends it, so
@@ -842,7 +862,7 @@ def auth_magic(token: str = ""):
         auth_users.COOKIE_NAME,
         auth_users.issue_token(email, typ="session"),   # fresh SESSION token (not the magic one)
         httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
-        secure=_cookie_secure(),
+        secure=_cookie_secure(request),
     )
     return resp
 
