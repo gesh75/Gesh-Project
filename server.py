@@ -2264,6 +2264,18 @@ def news_symbol(symbol: str):
         if not items:
             items = news_agent._fetch_all_news(sym)
             feed = "rss" if items else None
+        if not items:
+            # Cached-article fallback (Recent News card fix): both live feeds are
+            # routinely empty on the owner box (Alpaca is key-gated, the RSS feeds
+            # are VPN-blocked), which left the card permanently blank. Serve the
+            # news agent's stored articles instead — a read-only DB lookup, no LLM,
+            # already allow-listed to the same 4 public headline fields.
+            try:
+                items = news_agent.get_cached_articles(sym)
+                feed = "cache" if items else None
+            except Exception:  # noqa: BLE001 — fallback is best-effort, never a 500
+                items = []
+                feed = None
         items = items or []
         trimmed = [{"title": it.get("title", ""), "url": it.get("url", ""),
                     "source": it.get("source", ""), "published": it.get("published", "")}
