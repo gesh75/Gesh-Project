@@ -386,9 +386,13 @@ app = FastAPI(title="Gesh Financial Observability", lifespan=lifespan)
 
 @app.middleware("http")
 async def _rate_limit_middleware(request: Request, call_next):
-    if request.url.path.startswith("/api/"):
+    # /congress-watch is the only public HTML page that triggers upstream fetches —
+    # it must be throttled too, not just /api/*, or anonymous cold-cache traffic can
+    # exhaust workers and the upstream quota.
+    path = request.url.path
+    if path.startswith("/api/") or path == "/congress-watch":
         ip = request.client.host if request.client else "unknown"
-        heavy = request.url.path.startswith(_HEAVY_PREFIXES)
+        heavy = path.startswith(_HEAVY_PREFIXES)
         if not _rate_ok(ip, heavy):
             return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded — slow down"})
     return await call_next(request)
@@ -998,12 +1002,19 @@ def congress_watch_page():
 
 @app.get("/api/congress")
 def api_congress():
-    """Recent congressional disclosures + most-bought leaderboard (public data)."""
+    """Recent congressional disclosures + most-bought leaderboard (public data).
+
+    Includes source provenance (chambers, fetched-at, degraded flag) so an
+    upstream outage is reported as degraded — never as successful empty data."""
     import congress_agent
+    lb = congress_agent.leaderboard()
     return {"status": "ok", "data": {
-        "leaderboard": congress_agent.leaderboard().get("top_bought", []),
+        "leaderboard": lb.get("top_bought", []),
+        "window": lb.get("window"),
         "recent": congress_agent.recent_activity(limit=40).get("trades", []),
         "disclaimer": congress_agent.DISCLOSURE_LAG_NOTE,
+        "attribution": congress_agent.FILING_ATTRIBUTION_NOTE,
+        "source": congress_agent.source_status(),
     }}
 
 
