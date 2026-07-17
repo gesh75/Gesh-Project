@@ -71,17 +71,23 @@ no tailored recommendation, sits squarely in that protected lane. That is the ex
   a CTA into `/pricing` and `/track-record`.
 - `GET /api/congress` — leaderboard + recent (public JSON).
 - `GET /api/congress/{symbol}` — per-ticker disclosures, to attach to the research card.
-- Data source is pluggable via `CONGRESS_DATA_URL`; defaults to the public house/senate stock-watcher
-  datasets; **degrades to an honest empty state** on any failure.
+- Data source (order): **FMP free tier** if `FMP_API_KEY` is set → operator-configured
+  `CONGRESS_DATA_URL` (any JSON-array URL) → none. **Degrades to an honest empty state** on any
+  failure, so it is safe to ship dark and light up when a key is added.
 - Tests: `tests/test_congress_agent.py` (6, offline) — normalization, buy-only leaderboard,
   per-symbol filter, offline/network-error empty states, and public-page XSS escaping.
 
-### Honest flags
-- **Verify the data source live.** The default stock-watcher URLs were *not* re-confirmed live during
-  this build (web-search classifier was down). The code is defensive (graceful empty state), but
-  before promoting the page, point `CONGRESS_DATA_URL` at a confirmed source (stock-watcher S3,
-  Finnhub `/stock/congressional-trading` — GESH already has the key — or Quiver) and check the page
-  renders real rows.
+### Data source — verified 2026-07-17 (this is the one real decision left)
+I checked live via the app's actual fetch path. The free-no-key options are **gone**:
+- **house/senate stock-watcher S3 buckets → 403** (both). No longer a usable default; removed.
+- **Finnhub `/stock/congressional-trading` → premium** ($11.99–$99.99/mo); GESH's key is free-tier → 403.
+- **Financial Modeling Prep (FMP) → dedicated House/Senate endpoints on the FREE tier (JSON).** ✅ the
+  recommended path. Wired: set `FMP_API_KEY` (free signup) and `/congress-watch` lights up. Until then
+  it renders a clean empty state (safe to ship dark).
+
+**So the feature is code-complete and safe; making it show real data is a 2-minute free FMP signup**
+(or a $12/mo Finnhub upgrade). Confirm FMP's field shape on first real response — `_norm` already maps
+its camelCase (`transactionDate`/`disclosureDate`/`firstName`+`lastName`), covered by a test.
 - **This solves distribution, not edge.** It gives GESH a free, viral, legal top-of-funnel it lacks.
   It does **not** create signal accuracy — pair it with the honest `/track-record` and the research
   tooling that already works.

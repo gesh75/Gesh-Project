@@ -72,6 +72,21 @@ def test_fetch_raw_degrades_on_network_error(monkeypatch):
     assert ca._fetch_raw() == []                       # degrades to empty, no exception
 
 
+def test_normalizes_fmp_camelcase_shape(monkeypatch):
+    # FMP free-tier feed uses camelCase + firstName/lastName — _norm must map it.
+    fmp = [{"symbol": "MSFT", "firstName": "Jane", "lastName": "Doe", "office": "Senate",
+            "type": "Purchase", "amount": "$1,001 - $15,000",
+            "transactionDate": "2026-06-20", "disclosureDate": "2026-07-14"}]
+    monkeypatch.setattr(ca, "_fetch_raw", lambda: fmp)
+    out = ca.for_symbol("MSFT")
+    assert out["count"] == 1
+    t = out["trades"][0]
+    assert t["politician"] == "Jane Doe"
+    assert t["is_buy"] is True
+    assert t["tx_date"] == "2026-06-20"
+    assert t["disclosed"] == "2026-07-14"
+
+
 def test_public_page_escapes_untrusted_strings():
     # Disclosure data is third-party; a malicious member/name must not inject script.
     html = ca.render_watch_html({"top_bought": [], "recent": [

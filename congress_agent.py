@@ -15,13 +15,21 @@ newsletter, not an adviser. Every payload carries the 45-day-lag disclaimer so t
 data is never mistaken for a live signal (which is also Autopilot's #1 substantive
 weakness: by the time a congressional trade is disclosed, the edge is stale).
 
-Data source is pluggable via CONGRESS_DATA_URL (a JSON array of transactions).
-Defaults to the public house/senate stock-watcher datasets. On ANY failure it
-returns an honest empty state — offline-safe, like every other GESH agent.
+Data source — VERIFIED 2026-07-17 (the free-no-key options are gone):
+  * The old house/senate stock-watcher S3 buckets now return 403 (checked via the
+    real fetch path) — they are NOT a reliable default anymore.
+  * Finnhub `/stock/congressional-trading` exists but is a PREMIUM endpoint
+    ($11.99–$99.99/mo); GESH's key is free-tier, so it 403s.
+  * **Financial Modeling Prep (FMP)** has dedicated congressional endpoints on its
+    FREE tier (JSON). This is the recommended working source — set FMP_API_KEY.
+Resolution order: FMP (if FMP_API_KEY set) → CONGRESS_DATA_URL (any JSON-array URL) →
+none. On ANY failure it returns an honest empty state — offline-safe, like every
+other GESH agent. The page renders a clean "no disclosures available" until a source
+is configured, so it is safe to ship dark and light up once a key is added.
 
-⚠ Verify the default source URLs are live before relying on them in prod; point
-CONGRESS_DATA_URL at your preferred source (Finnhub `/stock/congressional-trading`,
-Quiver, or the clerk disclosure feeds). The module degrades gracefully if they 404.
+⚠ The FMP endpoint + field mapping should be confirmed on first real response
+(_norm already handles FMP's camelCase aliases); the module degrades gracefully if
+the shape differs.
 """
 from __future__ import annotations
 
@@ -36,12 +44,18 @@ load_dotenv()
 
 HEADERS = {"User-Agent": "GeshFinancial/1.0 georgy75@gmail.com"}
 
-# Pluggable public sources, tried in order. Override the first via CONGRESS_DATA_URL.
-_SOURCES: tuple[str, ...] = tuple(u for u in (
-    os.getenv("CONGRESS_DATA_URL", "").strip(),
-    "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json",
-    "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json",
-) if u)
+# FMP free-tier congressional endpoints (activate with FMP_API_KEY). Latest senate +
+# house trades, JSON. The single confirmed FREE path as of 2026-07-17.
+_FMP_KEY = os.getenv("FMP_API_KEY", "").strip()
+_FMP_ENDPOINTS: tuple[str, ...] = (
+    "https://financialmodelingprep.com/api/v4/senate-trading-rss-feed?page=0&apikey={k}",
+    "https://financialmodelingprep.com/api/v4/senate-disclosure-rss-feed?page=0&apikey={k}",
+)
+
+# Operator-configured JSON-array source (e.g. a self-hosted dump or a working mirror).
+# No baked-in default: the old public S3 buckets 403 now (see module docstring), so a
+# silent default would only burn a request per refresh and imply a source that is dead.
+_SOURCES: tuple[str, ...] = tuple(u for u in (os.getenv("CONGRESS_DATA_URL", "").strip(),) if u)
 
 DISCLOSURE_LAG_NOTE = (
     "Congress discloses trades up to 45 days after they happen (STOCK Act). This is "
@@ -59,16 +73,25 @@ def _fetch_raw() -> list[dict]:
     if hit and now - hit[0] < _TTL:
         return hit[1]
     rows: list[dict] = []
-    for url in _SOURCES:
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=12)
-            if r.ok:
-                data = r.json()
-                if isinstance(data, list) and data:
+    # 1) FMP free tier (keyed) — merge the senate + house latest feeds.
+    if _FMP_KEY:
+        for tmpl in _FMP_ENDPOINTS:
+            try:
+                r = requests.get(tmpl.format(k=_FMP_KEY), headers=HEADERS, timeout=12)
+                if r.ok and isinstance(data := r.json(), list):
+                    rows.extend(data)
+            except Exception:  # noqa: BLE001 — best-effort; degrade to empty
+                continue
+    # 2) Operator-configured JSON-array URL (fallback / self-host).
+    if not rows:
+        for url in _SOURCES:
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=12)
+                if r.ok and isinstance(data := r.json(), list) and data:
                     rows = data
                     break
-        except Exception:  # noqa: BLE001 — best-effort; degrade to empty
-            continue
+            except Exception:  # noqa: BLE001 — best-effort; degrade to empty
+                continue
     _CACHE["_raw"] = (now, rows)
     return rows
 
@@ -81,15 +104,18 @@ def _norm(txn: dict) -> dict | None:
     if not sym or sym in ("--", "N/A", "NONE"):
         return None
     action = str(txn.get("type") or txn.get("transaction") or "").lower()
+    fmp_name = " ".join(p for p in (txn.get("firstName"), txn.get("lastName")) if p).strip()
     return {
         "symbol": sym,
-        "politician": (txn.get("representative") or txn.get("senator")
-                       or txn.get("name") or "Unknown"),
+        "politician": (txn.get("representative") or txn.get("senator") or txn.get("name")
+                       or fmp_name or txn.get("office") or "Unknown"),
         "action": action,                                   # purchase / sale / exchange
         "is_buy": ("purchase" in action or "buy" in action),
         "amount": str(txn.get("amount") or txn.get("range") or ""),
-        "tx_date": str(txn.get("transaction_date") or txn.get("date") or ""),
-        "disclosed": str(txn.get("disclosure_date") or ""),
+        "tx_date": str(txn.get("transaction_date") or txn.get("transactionDate")
+                       or txn.get("date") or ""),
+        "disclosed": str(txn.get("disclosure_date") or txn.get("disclosureDate")
+                         or txn.get("dateRecieved") or ""),
     }
 
 
