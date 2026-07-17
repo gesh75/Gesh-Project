@@ -829,9 +829,12 @@ def test_mybook_summary_flags_stale_for_legacy_analysis_with_changed_symbols(cli
     assert d["next_action"]["target"] == "analyze"
 
 
-def test_mybook_summary_not_stale_for_legacy_analysis_with_unchanged_symbols(client, monkeypatch, au):
-    """Same legacy (no-_fp) row, but the recorded symbol set still matches the
-    current book exactly — not stale."""
+def test_mybook_summary_flags_any_legacy_analysis_without_fingerprint(client, monkeypatch, au):
+    """A legacy (no-_fp) row is ALWAYS stale, even when the recorded symbol set
+    matches today's book: without the fingerprint we cannot verify SHARE COUNTS,
+    and a same-symbols/different-shares book would otherwise read as fresh
+    (external review 2026-07-17). Honest answer: can't verify → stale, prompting
+    one re-run that mints a fingerprinted row."""
     server, c = client
     _as(server, monkeypatch, "cust@x.com")
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
@@ -841,8 +844,8 @@ def test_mybook_summary_not_stale_for_legacy_analysis_with_unchanged_symbols(cli
         "book": {"positions": [{"symbol": "NVDA"}], "total_equity": 1000.0,
                  "unpriced": []}})
     d = c.get("/api/mybook/summary").json()["data"]
-    assert d["analysis_stale"] is False
-    assert d["next_action"]["target"] == "report"
+    assert d["analysis_stale"] is True
+    assert d["next_action"]["target"] == "analyze"
 
 
 def test_mybook_summary_survives_missing_signal_history(client, monkeypatch, au):
@@ -942,6 +945,7 @@ def test_report_leads_with_conclusions_and_folds_mechanics(client, monkeypatch, 
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     au.set_position("cust@x.com", "NVDA", 10)
     au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),  # genuinely fresh
         "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
                      "holdings_analysis": [], "portfolio_risks": []},
         "monte_carlo": {"median": 2100.0, "p5": 1500.0, "p95": 2600.0,

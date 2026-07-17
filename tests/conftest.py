@@ -59,6 +59,19 @@ def _isolate_auth_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_signal_history_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point signal_history at a per-test throwaway DB — its `_conn()` runs
+    CREATE TABLE IF NOT EXISTS on EVERY connect (even reads), against the
+    cwd-relative PRODUCTION gesh_financial.db. Without this, any test touching
+    signals/alerts/digest/mybook columns writes DDL — and record_snapshots
+    stubs — into the live DB (observed 2026-07-17: a test overwrote the real
+    NVDA snapshot row). Same zero-real-DB-writes contract as the auth DB above."""
+    import signal_history
+    monkeypatch.setattr(signal_history, "DB_PATH", tmp_path / "signal_history_isolated.db",
+                        raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_response_caches() -> None:
     """server.py keeps process-wide TTL caches (/api/chart + the per-ticker analyze
     GETs) and the per-IP rate-limit ledger. Every TestClient shares the constant

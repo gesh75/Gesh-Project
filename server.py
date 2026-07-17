@@ -3089,26 +3089,22 @@ async def mybook_bulk(request: Request):
 
 def _analysis_stale_for(email: str, saved: dict | None) -> bool:
     """Has the book changed since the LAST persisted analysis was computed?
-    New analyses carry the exact book fingerprint (`_fp`); legacy rows (saved
-    before the fingerprint existed) fall back to comparing the symbol set the
-    analysis recorded (`saved["book"]["positions"]`) against today's book. This
-    is the SINGLE source of truth for staleness — /api/mybook/summary,
-    /api/mybook/deploy-cash, and the /mybook/report page all call this, so a
-    legacy analysis can't read fresh on the hero while the report flags it
-    stale for the identical data (audit finding #2)."""
+    New analyses carry the exact book fingerprint (`_fp`). Legacy rows (saved
+    before the fingerprint existed) are ALWAYS stale: a symbol-set comparison
+    was tried first, but it reads a same-symbols/different-shares book as fresh
+    — without the fingerprint the share counts are unverifiable, and "can't
+    verify" must surface as stale, not fresh (external review 2026-07-17).
+    Self-clearing: one re-run mints a fingerprinted row. This is the SINGLE
+    source of truth for staleness — /api/mybook/summary, /api/mybook/deploy-cash,
+    and the /mybook/report page all call this (audit finding #2)."""
     if not saved:
         return False
-    positions = auth_users.get_positions(email)
     saved_fp = saved.get("_fp")
-    if saved_fp:
-        ew = auth_users.get_equal_weight(email)
-        fp_now = _book_fingerprint(positions) + ("|ew" if ew else "")
-        return saved_fp != fp_now
-    saved_syms = {str(p.get("symbol")) for p in
-                  ((saved.get("book") or {}).get("positions") or [])
-                  if p.get("symbol")}
-    cur_syms = {p["symbol"] for p in positions}
-    return bool(saved_syms) and saved_syms != cur_syms
+    if not saved_fp:
+        return True
+    positions = auth_users.get_positions(email)
+    ew = auth_users.get_equal_weight(email)
+    return saved_fp != _book_fingerprint(positions) + ("|ew" if ew else "")
 
 
 @app.post("/api/mybook/deploy-cash")
