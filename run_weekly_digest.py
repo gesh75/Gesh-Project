@@ -15,9 +15,11 @@ from pathlib import Path
 
 import auth_users
 import email_sender
+import job_health
 import signal_history
 
 logger = logging.getLogger("weekly_digest")
+JOB_NAME = "com.gesh.weekly-digest"   # launchd label — the /usage health key
 UNSUB_TTL = 60 * 60 * 24 * 30
 
 # One digest per customer per ISO week — launchd can double-fire around
@@ -44,10 +46,12 @@ def _base_url() -> str:
 
 
 def _close_for(sym: str) -> float | None:
-    """Seam for tests; production imports the server's shared close cache lazily
-    (import inside the function so importing this module never drags in server)."""
-    from server import _cached_close
-    return _cached_close(sym)
+    """Seam for tests; production prices via the standalone price_cache module —
+    NEVER via server, whose import drags the whole FastAPI app + billing +
+    trading into this cron process (an unrelated import-time failure there used
+    to silently zero customers' book values)."""
+    import price_cache
+    return price_cache._cached_close(sym)
 
 
 def _customers() -> list[str]:
@@ -120,10 +124,18 @@ def main(dry_run: bool = False) -> dict:
     return result
 
 
-if __name__ == "__main__":
+def _cli(argv: list[str]) -> None:
     import json
+
+    dry_run = "--dry-run" in argv
+    result = main(dry_run=dry_run)
+    if not dry_run:  # health ledger for /usage — record_job_run is fail-soft
+        job_health.record_job_run(JOB_NAME, result)
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
     import sys
-    from pathlib import Path
 
     # launchd does not inherit the shell env, so RESEND_API_KEY/EMAIL_FROM/APP_BASE_URL
     # are unset unless loaded here. Same guarded convention as run_engines2.py/run_ai2.py
@@ -135,4 +147,4 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    print(json.dumps(main(dry_run="--dry-run" in sys.argv)))
+    _cli(sys.argv[1:])

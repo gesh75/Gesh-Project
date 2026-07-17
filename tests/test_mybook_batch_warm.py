@@ -5,9 +5,9 @@ price_source._YF_DOWNLOAD_LOCK (the yfinance shared._DFS race fix) serializes
 single-ticker downloads anyway — a cold 40-symbol bulk import degraded to 40
 sequential upstream fetches. The warm must instead issue ONE multi-symbol
 price_source.yf_download (a single batched call is internally safe: one
-shared._DFS reset), populate the ("close", sym) cache from the returned frame
-with the same bad-tick guard as server._latest_close_meta, and fall back to
-the per-symbol path only for symbols the batch failed to serve.
+shared._DFS reset), populate price_cache's close cache from the returned frame
+with the same bad-tick guard as _latest_close_meta, and fall back to the
+per-symbol path only for symbols the batch failed to serve.
 
 Same offline rules as the rest of the suite: yfinance is stubbed, no network.
 """
@@ -20,6 +20,7 @@ import time
 import pandas as pd
 import pytest
 
+import price_cache
 import price_source
 import server
 
@@ -51,10 +52,10 @@ def _positions(symbols: list[str]) -> list[dict]:
 
 @pytest.fixture(autouse=True)
 def _cold_caches():
-    server._ticker_get_cache.clear()
+    price_cache.clear()
     price_source._YF_CACHE.clear()
     yield
-    server._ticker_get_cache.clear()
+    price_cache.clear()
     price_source._YF_CACHE.clear()
 
 
@@ -169,7 +170,7 @@ def test_batch_warm_wall_time_40_symbol_cold_book(monkeypatch):
     assert threading.active_count() < 50     # sanity: pool wound down
 
     # AFTER — cold caches again, the new batched warm inside the payload builder.
-    server._ticker_get_cache.clear()
+    price_cache.clear()
     price_source._YF_CACHE.clear()
     t0 = time.perf_counter()
     payload = server._customer_book_payload(_positions(syms))
