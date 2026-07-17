@@ -270,6 +270,9 @@ def test_news_symbol_returns_trimmed_headlines(monkeypatch):
 def test_news_symbol_empty_is_ok_not_404(monkeypatch):
     monkeypatch.setattr("news_agent._fetch_alpaca_news", lambda sym, limit=8: [], raising=False)
     monkeypatch.setattr("news_agent._fetch_all_news", lambda sym, days_back=7: [], raising=False)
+    # Third fallback (Recent News fix): stored articles from the news DB — must be
+    # stubbed too or the test reads REAL cached articles from the developer's DB.
+    monkeypatch.setattr("news_agent.get_cached_articles", lambda sym: [], raising=False)
     r = _client(monkeypatch).get("/api/news/NVDA")
     assert r.status_code == 200
     assert r.json()["data"] == []
@@ -450,5 +453,6 @@ def test_news_envelope_claims_no_feed_when_nothing_served(monkeypatch):
     import news_agent
     monkeypatch.setattr(news_agent, "_fetch_alpaca_news", lambda s: [], raising=False)
     monkeypatch.setattr(news_agent, "_fetch_all_news", lambda s: [], raising=False)
+    monkeypatch.setattr(news_agent, "get_cached_articles", lambda s: [], raising=False)
     body = _client(monkeypatch).get("/api/news/NVDA").json()
     assert body["data"] == [] and "source" not in body
