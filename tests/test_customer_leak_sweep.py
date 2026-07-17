@@ -24,6 +24,7 @@ view=model_book, failing CLOSED (500) if scaling throws — so `view` present +
 from __future__ import annotations
 
 import json
+import re
 
 import pandas as pd
 import pytest
@@ -56,6 +57,19 @@ def _sentinel_strings() -> list[str]:
         vals.add(f"{v:.2f}")      # 2-dp      -> "509.70"
         vals.add(f"{v:,.2f}")     # grouped   -> "5,843.32"
     return sorted(vals)
+
+
+def _find_leaks(blob: str) -> list[str]:
+    """Boundary-aware sentinel search. A sentinel counts only when it is a whole
+    number token — not embedded in a larger one. Naive `s in blob` flaked in CI:
+    the rounded sentinel '6.08' substring-matched an unrelated indicator value
+    16.08. Lookarounds reject an adjacent digit/dot, plus a leading 'digit,'
+    (so '509.70' can't match inside a grouped '1,509.70'). Exact-value detection
+    is unchanged — every sentinel variant is still checked, fail-closed."""
+    return [
+        s for s in _sentinel_strings()
+        if re.search(r"(?<!\d,)(?<![\d.])" + re.escape(s) + r"(?![\d.])", blob)
+    ]
 
 
 def _owner_payload() -> dict:
@@ -307,7 +321,7 @@ def test_customer_get_masks_and_gates(monkeypatch, client, url):
     # the response actually routed through _scale_money.
     assert body.get("view") == "model_book", f"{url} missing model_book marker — bypassed masking"
     blob = json.dumps(body)
-    leaked = [s for s in _sentinel_strings() if s in blob]
+    leaked = _find_leaks(blob)
     assert not leaked, f"OWNER VALUE LEAKED at {url}: {leaked}"
 
 
@@ -330,7 +344,7 @@ def test_scale_money_masks_every_exact_sentinel():
     }
     out = server._scale_money(fixture, SCALE)
     blob = json.dumps(out)
-    survivors = [s for s in _sentinel_strings() if s in blob]
+    survivors = _find_leaks(blob)
     assert not survivors, f"sentinel(s) survived masking: {survivors}"
     # model-book values are present and correctly scaled
     assert out["equity_summary"]["total"] == pytest.approx(OWNER["total"] * SCALE)
@@ -357,7 +371,7 @@ def test_scale_money_masks_position_account_and_trade_dollars():
                                 "pnl_pct": 4.2}},
     }
     out = server._scale_money(fixture, SCALE)
-    survivors = [s for s in _sentinel_strings() if s in json.dumps(out)]
+    survivors = _find_leaks(json.dumps(out))
     assert not survivors, f"owner-$ sentinel survived masking: {survivors}"
     assert out["equity_summary"]["extended_hours_equity"] == pytest.approx(OWNER["xhours"] * SCALE)
     assert out["holdings"][0]["equity_change"] == pytest.approx(OWNER["pos_change"] * SCALE)
