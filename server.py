@@ -996,10 +996,13 @@ def terms_page():
 def alerts_unsubscribe(token: str = ""):
     """One-click opt-out from signal-change alert emails. Public (link-in-email),
     gated by a typed 30-day HMAC token — a session/magic token is rejected."""
-    email = auth_users.verify_token(token, expected_typ="alerts_unsub")
-    if not email:
+    # [CLAUDE 2026-07-18] immutable-user-ID migration: verify_token returns the
+    # UUID subject — resolve it to the user's CURRENT email before flipping flags.
+    _uid = auth_users.verify_token(token, expected_typ="alerts_unsub")
+    _user = auth_users.get_user_by_id(_uid) if _uid else None
+    if not _user:
         raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
-    auth_users.set_alerts_opt_out(email, True)
+    auth_users.set_alerts_opt_out(_user["email"], True)
     return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive GESH "
                         "signal-change alerts. You can re-enable them from the dashboard.</p>")
 
@@ -1008,10 +1011,12 @@ def alerts_unsubscribe(token: str = ""):
 def digest_unsubscribe(token: str = ""):
     """One-click opt-out from the weekly customer digest. Public (link-in-email),
     gated by a typed 30-day HMAC token — a session/magic token is rejected."""
-    email = auth_users.verify_token(token, expected_typ="digest_unsub")
-    if not email:
+    # [CLAUDE 2026-07-18] as above: UUID subject -> current email.
+    _uid = auth_users.verify_token(token, expected_typ="digest_unsub")
+    _user = auth_users.get_user_by_id(_uid) if _uid else None
+    if not _user:
         raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
-    auth_users.set_digest_opt_out(email, True)
+    auth_users.set_digest_opt_out(_user["email"], True)
     return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive the GESH "
                         "weekly digest. You can re-enable it from the dashboard.</p>")
 

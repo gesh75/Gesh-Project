@@ -1340,13 +1340,15 @@ def customers_watching(symbol: str) -> list[str]:
     """Active, non-opted-out emails with `symbol` on watchlist OR book."""
     sym = str(symbol).upper().strip()
     with _conn() as con:
+        # [CLAUDE 2026-07-18] immutable-user-ID migration: child tables key on
+        # user_id now — join through users to recover the current email.
         rows = con.execute(
-            "SELECT DISTINCT s.email FROM ("
-            "  SELECT email, symbol FROM watchlist"
-            "  UNION SELECT email, symbol FROM customer_positions) s "
-            "LEFT JOIN users u ON u.email = s.email "
+            "SELECT DISTINCT u.email FROM ("
+            "  SELECT user_id, symbol FROM watchlist"
+            "  UNION SELECT user_id, symbol FROM customer_positions) s "
+            "JOIN users u ON u.user_id = s.user_id "
             "WHERE s.symbol=? AND COALESCE(u.alerts_opt_out, 0)=0 "
-            "  AND COALESCE(u.is_active, 1)=1 ORDER BY s.email", (sym,)).fetchall()
+            "  AND COALESCE(u.is_active, 1)=1 ORDER BY u.email", (sym,)).fetchall()
     return [r["email"] for r in rows]
 
 
