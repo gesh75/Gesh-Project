@@ -72,9 +72,18 @@ def _week_window_start() -> str:
     return (datetime.now(timezone.utc) - timedelta(days=6)).strftime("%Y-%m-%d")
 
 
+def _valid_close(c) -> bool:
+    """A usable price is a REAL, finite, strictly-positive number. `is not None`
+    is not enough (Codex re-review): 0.0, NaN, +/-inf, a negative, or a bool all
+    pass a None-check and would render a false/garbage book value. Math-free NaN
+    test: NaN != NaN."""
+    return (isinstance(c, (int, float)) and not isinstance(c, bool)
+            and c == c and c not in (float("inf"), float("-inf")) and c > 0)
+
+
 def _book_line(email: str, positions: list, watch: list) -> str:
-    """The dollar line, honesty-guarded (Codex P1): a missing quote must NEVER
-    silently render as $0, and equal-weight (privacy) books have placeholder
+    """The dollar line, honesty-guarded (Codex P1): a missing/zero/NaN quote must
+    NEVER silently render as $0, and equal-weight (privacy) books have placeholder
     shares whose dollars are not real — say so instead of inventing a number."""
     if not positions:
         return "<p>You are watching " + str(len(watch)) + " symbols.</p>"
@@ -82,7 +91,7 @@ def _book_line(email: str, positions: list, watch: list) -> str:
         return (f"<p>Your book: {len(positions)} positions "
                 f"(private-size mode — dollar totals are not shown).</p>")
     closes = {p["symbol"]: _close_for(p["symbol"]) for p in positions}
-    priced = [p for p in positions if closes[p["symbol"]] is not None]
+    priced = [p for p in positions if _valid_close(closes[p["symbol"]])]
     if len(priced) < len(positions):
         return (f"<p>Your book: {len(positions)} positions. Value unavailable this week "
                 f"— we could price only {len(priced)} of {len(positions)} holdings and "
@@ -121,10 +130,23 @@ def _compose(email: str) -> str | None:
     verdict = e(str(((saved or {}).get("analysis") or {}).get("portfolio_verdict", "—")))
     # Staleness label (Codex P1): pairing current positions with a verdict computed
     # for a DIFFERENT book silently misleads — compare the analysis' symbol set.
-    saved_syms = {str(p.get("symbol")) for p in
-                  (((saved or {}).get("book") or {}).get("positions") or []) if p.get("symbol")}
-    cur_syms = {p["symbol"] for p in positions}
-    if saved and saved_syms and cur_syms and saved_syms != cur_syms:
+    # Compare (symbol, shares) — not just the symbol SET — so an economically
+    # different book (e.g. NVDA 1 → 100 shares, same tickers) is flagged stale
+    # too (Codex re-review). Falls back to symbol presence when a legacy saved
+    # row has no share count.
+    def _book_shape(rows) -> set:
+        out = set()
+        for p in rows or []:
+            sym = str(p.get("symbol") or "")
+            if not sym:
+                continue
+            sh = p.get("shares", p.get("quantity"))
+            out.add((sym, round(float(sh), 4)) if isinstance(sh, (int, float))
+                    and not isinstance(sh, bool) else (sym, None))
+        return out
+    saved_shape = _book_shape(((saved or {}).get("book") or {}).get("positions"))
+    cur_shape = _book_shape(positions)
+    if saved and saved_shape and cur_shape and saved_shape != cur_shape:
         verdict += " <span style='color:#c90'>(from an earlier version of your book — re-run analysis)</span>"
     tok = auth_users.issue_token(email, ttl=UNSUB_TTL, typ="digest_unsub")
     base = _base_url()
@@ -141,8 +163,13 @@ def _compose(email: str) -> str | None:
 def main(dry_run: bool = False) -> dict:
     sent = 0
     attempted = 0
+    failed = 0
     customers = _customers()
-    week = datetime.now(timezone.utc).strftime("%G-W%V")
+    # Dedup on the SAME ET period key the schedule gate uses — NOT UTC (Codex
+    # re-review): a Sunday-catch-up run keyed on UTC could write next week's
+    # number, then the real Friday run sees it already present and skips silently.
+    import schedule_gate
+    week = schedule_gate.period_key("digest")
     with _digest_con() as con:
         for email in customers:
             try:  # fail-soft per customer — one bad compose/send must not sink the run
@@ -162,9 +189,15 @@ def main(dry_run: bool = False) -> dict:
                     sent += 1
                     con.execute("INSERT OR IGNORE INTO digest_log (email, iso_week) "
                                 "VALUES (?,?)", (email, week))
+                else:
+                    failed += 1                   # eligible delivery that did NOT succeed
             except Exception as e:  # noqa: BLE001 — same isolation pattern as run_signal_alerts
+                failed += 1
                 logger.warning("weekly digest failed for %s: %s", email, e)
-    result = {"customers": len(customers), "emails_sent": sent}
+    # `failed` gates period-marking in _cli: a week is "done" ONLY when no eligible
+    # delivery failed, so the weekend catch-up actually RETRIES the failures
+    # (digest_log dedups anyone already delivered).
+    result = {"customers": len(customers), "emails_sent": sent, "failed": failed}
     # Visibility guard (rule: silent no-op != quiet week) — under launchd, RESEND_API_KEY
     # can be unset even though there were digests to send; make that distinguishable in
     # the JSON summary instead of looking identical to "no customers this week".
@@ -190,9 +223,12 @@ def _cli(argv: list[str]) -> None:
     result = main(dry_run=dry_run)
     if not dry_run:  # health ledger for /usage — record_job_run is fail-soft
         job_health.record_job_run(JOB_NAME, result)
-        if "--force" not in argv:
+        # Mark the ET period done ONLY when nothing eligible failed to send (Codex
+        # re-review): otherwise a False/errored send would consume the week and the
+        # weekend catch-up would never retry. digest_log makes the retry idempotent.
+        if "--force" not in argv and result.get("failed", 0) == 0:
             import schedule_gate
-            schedule_gate.mark_ran("digest")   # only after a non-raising run
+            schedule_gate.mark_ran("digest")
     print(json.dumps(result))
 
 
