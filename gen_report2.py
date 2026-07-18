@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """gen_report2.py — Build gesh_report.html from engine_results.json"""
-import json, math
+import json, math, os
 from pathlib import Path
 from datetime import datetime, timezone
 from html import escape as _esc   # the report body f-string is bound to `html`, so alias
+from run_manifest import report_output_path
 
 BASE = Path(__file__).parent
 with open(BASE / 'engine_results.json') as f:
@@ -906,6 +907,7 @@ new Chart(document.getElementById('kellyChart').getContext('2d'), {{
 </body>
 </html>'''
 
-out = BASE / 'gesh_report.html'
+requested = Path(os.environ.get('GESH_REPORT_OUTPUT') or BASE / 'gesh_report.html')
+out = report_output_path(BASE, eng, requested=requested)
 out.write_text(html)
 print(f"[report] Written → {out}  ({len(html):,} chars)")

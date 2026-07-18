@@ -32,12 +32,23 @@ import sys
 import time
 import traceback
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE))
 
 T0 = time.time()
+
+
+@dataclass(frozen=True, slots=True)
+class PaperGateOutcome:
+    """Immutable result contract for a gate preflight or completed batch."""
+
+    actionable: bool
+    paper_session: tuple[Mapping[str, object], ...] = ()
+    gate_results: tuple[Mapping[str, object], ...] = ()
+    reason: str | None = None
 
 
 def _t() -> str:
@@ -55,10 +66,21 @@ def degraded_skip(eng: dict, environ: Mapping[str, str] | None = None) -> str | 
     environ = os.environ if environ is None else environ
     if str(environ.get('GESH_DEGRADED', '')).strip().lower() in ('1', 'true', 'yes'):
         return 'GESH_DEGRADED set by the chain (stale snapshot)'
+    manifest = eng.get('run_manifest') or {}
+    if manifest.get('degraded'):
+        return f"run_manifest {manifest.get('run_id', 'unknown')} is degraded"
     if eng.get('degraded'):
         return (f"engine_results degraded provenance "
                 f"(snapshot_age_seconds={eng.get('snapshot_age_seconds')})")
     return None
+
+
+def preflight_outcome(
+    eng: dict, environ: Mapping[str, str] | None = None
+) -> PaperGateOutcome | None:
+    """Return an audit-only result for degraded inputs, else allow execution."""
+    reason = degraded_skip(eng, environ)
+    return PaperGateOutcome(actionable=False, reason=reason) if reason else None
 
 
 def build_confidence_map(consensus: dict, kelly: dict) -> dict[str, float]:
@@ -97,6 +119,7 @@ def gate_and_execute(
     gate_payload: dict,
     confidence_by_sym: dict[str, float],
     *,
+    quote_as_of_by_symbol: Mapping[str, str] | None = None,
     intent_builder,
     gate_evaluate,
     recorder,
@@ -120,7 +143,9 @@ def gate_and_execute(
             target_position_pct=_order_target_pct(a, holdings, total_eq),
             rationale=a.get('signal_reason'),
         )
-        verdict = gate_evaluate(intent, gate_payload)
+        symbol_payload = dict(gate_payload)
+        symbol_payload['as_of'] = (quote_as_of_by_symbol or {}).get(a['symbol'])
+        verdict = gate_evaluate(intent, symbol_payload)
         gate_results.append({
             'symbol':      a['symbol'],
             'action':      a['action'],
@@ -156,9 +181,9 @@ def main(results_path: str | Path | None = None) -> int:
     # ── Degraded entry guard: research-only run → no paper records at all ─────
     # Checked before chdir/dotenv/DB imports so the skip path has zero side
     # effects (nothing written back, no auto-close, no Telegram signal).
-    skip = degraded_skip(eng)
-    if skip:
-        print(f"{_t()} [gate] DEGRADED RUN — SKIPPING paper session + risk gate: {skip}")
+    preflight = preflight_outcome(eng)
+    if preflight:
+        print(f"{_t()} [gate] DEGRADED RUN — SKIPPING paper session + risk gate: {preflight.reason}")
         print(f"{_t()} [gate] research-only: no paper records, no gate audit, no Telegram signal")
         return 0
 
@@ -173,7 +198,6 @@ def main(results_path: str | Path | None = None) -> int:
     equity_sum = eng.get('equity_summary', {})
     kelly      = eng.get('kelly', {})
     regime_raw = eng.get('regime', {})
-    snap       = eng.get('snapshot', {})
     total_eq   = float(equity_sum.get('total') or equity_sum.get('portfolio_equity') or 0)
     cash       = float(equity_sum.get('cash') or 0)
 
@@ -266,8 +290,9 @@ def main(results_path: str | Path | None = None) -> int:
         from trading.contract import manual as manual_intent
         from trading.risk_gate import evaluate as risk_gate_evaluate
 
-        # The DATA_FRESH gate (#8) fails closed without a quote timestamp — inject
-        # the snapshot's fetch time as 'as_of' (snapshot exposes 'fetched_at').
+        # The DATA_FRESH gate (#8) fails closed without a provider quote timestamp.
+        # gate_and_execute injects each symbol's own manifest quote_as_of; the
+        # snapshot transport time is deliberately not treated as market freshness.
         # Baseline remap: in LIVE mode the DAILY_LOSS gate compares
         # equity_summary['portfolio_equity'] against 'adjusted_equity_previous_close'
         # — both must be on the SAME basis (full account equity); the snapshot's
@@ -282,7 +307,6 @@ def main(results_path: str | Path | None = None) -> int:
         gate_payload = {
             'holdings':       holdings,
             'equity_summary': gate_eqs,
-            'as_of':          snap.get('fetched_at') or eng.get('fetched_at'),
         }
         confidence_by_sym = build_confidence_map(
             eng.get('consensus') if isinstance(eng.get('consensus'), dict) else {},
@@ -290,6 +314,7 @@ def main(results_path: str | Path | None = None) -> int:
         )
         gate_results, paper_created = gate_and_execute(
             executable, holdings, total_eq, gate_payload, confidence_by_sym,
+            quote_as_of_by_symbol=(eng.get('run_manifest') or {}).get('quote_as_of') or {},
             intent_builder=manual_intent,
             gate_evaluate=risk_gate_evaluate,
             recorder=run_paper_session,
@@ -363,8 +388,8 @@ def main(results_path: str | Path | None = None) -> int:
     eng['gate_results']  = gate_results
     eng['trade_stats']   = trade_stats
 
-    with open(results_path, 'w') as f:
-        json.dump(eng, f, indent=2, default=str)
+    from run_manifest import atomic_write_json
+    atomic_write_json(results_path, eng)
 
     approved = sum(1 for g in gate_results if g['approved'])
     print(f"\n{_t()} [gate] Done — {len(gate_results)} gated ({approved} approved), "

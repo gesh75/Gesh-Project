@@ -13,45 +13,21 @@ def _t() -> str:
     return f"[t+{time.time() - T0:5.1f}s]"
 
 BASE    = Path(__file__).parent
-TRADING = Path(os.environ.get('GESH_TRADING_HOME',
-                               str(Path(__file__).parent.parent / 'gesh-project-trading')))
 sys.path.insert(0, str(BASE))
-sys.path.insert(0, str(TRADING))
 os.chdir(BASE)
+
+from run_manifest import (
+    RunManifest,
+    atomic_write_json,
+    manifest_from_snapshot,
+    snapshot_degraded_info,
+)
 
 try:
     from dotenv import load_dotenv
     load_dotenv(BASE / '.env')
 except Exception:
     pass
-
-DEGRADED_AFTER_S_DEFAULT = 3600.0
-
-def snapshot_degraded_info(snap: dict, threshold_s: float | None = None,
-                           *, now=None) -> dict:
-    """Degraded-run provenance stamp (duplicated in run_engines2.py — the two
-    copies are pinned to identical behavior by tests/test_degraded_provenance.py).
-    A run driven by a snapshot older than GESH_DEGRADED_AFTER_S (default 3600s)
-    is research-only; the stamp travels in engine_results.json so downstream
-    consumers (paper gate, report) can tell a stale-data run from a fresh one.
-    Unknown age counts as degraded (fail-safe)."""
-    from datetime import datetime, timezone
-    if threshold_s is None:
-        try:
-            threshold_s = float(os.environ.get('GESH_DEGRADED_AFTER_S', '')
-                                or DEGRADED_AFTER_S_DEFAULT)
-        except (TypeError, ValueError):
-            threshold_s = DEGRADED_AFTER_S_DEFAULT
-    now = now or datetime.now(timezone.utc)
-    try:
-        age_s = (now - datetime.fromisoformat(snap['fetched_at'])).total_seconds()
-    except (KeyError, TypeError, ValueError):
-        age_s = None
-    return {
-        'degraded': age_s is None or age_s > threshold_s,
-        'snapshot_age_seconds': None if age_s is None else int(age_s),
-        'snapshot_source': snap.get('source', 'UNKNOWN'),
-    }
 
 # ── Load engine results ───────────────────────────────────────────────────────
 with open(BASE / 'engine_results.json') as f:
@@ -61,6 +37,21 @@ with open(BASE / 'engine_results.json') as f:
 # persisted eng always carries an up-to-date degraded/age/source triple.
 _degraded_info = snapshot_degraded_info(eng.get('snapshot', {}))
 eng.update(_degraded_info)
+try:
+    _manifest = RunManifest.from_dict(eng['run_manifest'])
+except (KeyError, TypeError, ValueError):
+    _manifest = manifest_from_snapshot(eng.get('snapshot', {}))
+if _degraded_info['degraded'] and not _manifest.degraded:
+    _manifest = RunManifest.create(
+        run_id=_manifest.run_id,
+        source=_manifest.input_source,
+        snapshot_as_of=_manifest.snapshot_as_of,
+        now=_manifest.started_at,
+        degraded=True,
+        quote_as_of=_manifest.quote_as_of,
+    )
+eng['run_manifest'] = _manifest.to_dict()
+atomic_write_json(BASE / 'run_manifest.json', _manifest.to_dict())
 if _degraded_info['degraded']:
     print(f"[ai] DEGRADED RUN — snapshot age {_degraded_info['snapshot_age_seconds']}s "
           f"(source={_degraded_info['snapshot_source']}); research-only provenance stamped")
@@ -189,12 +180,7 @@ try:
     # Atomic write (temp + replace): the :9000 server reads this file while the
     # chain writes it — a bare open('w') exposes a truncated JSON mid-write.
     _out = BASE / 'engine_results.json'
-    _tmp = _out.with_name(_out.name + '.tmp')
-    with open(_tmp, 'w') as f:
-        json.dump(eng, f, indent=2, default=str)
-        f.flush()
-        os.fsync(f.fileno())          # durable before rename — not just atomic
-    os.replace(_tmp, _out)
+    atomic_write_json(_out, eng)
 
     # Also dump ai_result standalone for quick inspection
     with open('/tmp/ai_result2.json', 'w') as f:

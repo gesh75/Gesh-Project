@@ -8,6 +8,7 @@ Run with: /path/to/venv/bin/python3.14 fetch_live_snapshot.py
 import os, sys, json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 BASE_DIR = Path(__file__).parent
 sys.path.insert(0, str(BASE_DIR))
@@ -22,6 +23,28 @@ except Exception:
 OUTPUT = BASE_DIR / 'live_portfolio_snapshot.json'
 
 PICKLE_PATH = os.path.expanduser('~/.tokens/robinhoodrobinhood_session.pickle')
+
+
+def extract_live_quote(
+    quote: dict[str, Any], retrieved_at: datetime
+) -> tuple[float, dict[str, Any]]:
+    """Extract a price and its provider timestamp without freshness inflation."""
+    price = float(quote.get('last_trade_price') or quote.get('last_non_reg_trade_price') or 0)
+    for field in ('updated_at', 'venue_last_trade_time', 'last_trade_time'):
+        if quote.get(field):
+            return price, {
+                'quote_as_of': quote[field],
+                'provider': 'robinhood_live',
+                'session': 'robin_stocks',
+                'timestamp_basis': field,
+            }
+    return price, {
+        'quote_as_of': None,
+        'retrieved_at': retrieved_at.isoformat(),
+        'provider': 'robinhood_live',
+        'session': 'robin_stocks',
+        'timestamp_basis': 'unavailable',
+    }
 
 
 def _restore_session() -> bool:
@@ -129,6 +152,7 @@ def fetch():
     # Holdings
     positions = r.account.get_open_stock_positions()
     holdings  = []
+    quote_provenance = {}
     total_equity = 0.0
 
     for pos in positions:
@@ -138,8 +162,10 @@ def fetch():
                 continue
             instr = r.stocks.get_instrument_by_url(pos['instrument'])
             sym   = instr['symbol']
-            quote = r.stocks.get_latest_price(sym, includeExtendedHours=False)
-            price = float(quote[0]) if quote else 0.0
+            quotes = r.stocks.get_quotes(sym) or []
+            quote = quotes[0] if quotes else {}
+            price, quote_meta = extract_live_quote(quote, datetime.now(timezone.utc))
+            quote_provenance[sym] = quote_meta
             avg   = float(pos.get('average_buy_price', 0))
             eq    = price * qty
             total_equity += eq
@@ -160,6 +186,7 @@ def fetch():
     snapshot = {
         'fetched_at':    datetime.now(timezone.utc).isoformat(),
         'source':        'robinhood_live',
+        'quote_provenance': quote_provenance,
         'holdings':      holdings,
         'equity_summary': {
             'portfolio_equity':    round(total_equity, 2),       # positions market value
