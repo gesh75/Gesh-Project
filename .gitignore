@@ -1,5 +1,5 @@
 .env
-venv/
+/venv
 __pycache__/
 *.pyc
 *.db
@@ -39,6 +39,10 @@ engine_results.json
 
 # Retired/experimental code, kept on disk but out of git (reversible)
 _archive/
+
+# Local audit staging and auth-migration evidence — retain on disk, never publish
+_to_delete/
+*.pre-v2.bak.manifest.json
 
 # career-ops is an independent repo (own remote) — not tracked inside gesh-project
 career-ops/
