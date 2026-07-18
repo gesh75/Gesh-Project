@@ -816,8 +816,10 @@ async def auth_login(request: Request):
     email = (body.get("email") or "").strip()
     password = body.get("password") or ""
     if _login_blocked(ip, email):
+        # [CLAUDE Task3 2026-07-18] tell well-behaved clients when to come back
         return JSONResponse(status_code=429,
-                            content={"ok": False, "detail": "Too many login attempts — try again shortly"})
+                            content={"ok": False, "detail": "Too many login attempts — try again shortly"},
+                            headers={"Retry-After": str(LOGIN_FAIL_WINDOW)})
     # PBKDF2 is CPU-bound (~200k rounds); off-load so concurrent requests keep flowing.
     ok = await asyncio.to_thread(auth_users.verify_credentials, email, password)
     if not ok:
@@ -850,6 +852,18 @@ def auth_magic(request: Request, token: str = ""):
     session token for the cookie — the short-TTL URL token is never reused as the session.
     Redirect drops the token from the URL and sets Referrer-Policy: no-referrer so the
     landing nav can't leak it onward."""
+    # [CLAUDE Task3 2026-07-18] session-conflict guard: when the browser already
+    # holds a VALID session for a DIFFERENT user, refuse (409) WITHOUT consuming
+    # the magic token — clicking someone else's link must not silently swap the
+    # signed-in identity (and the link stays valid for its rightful owner).
+    _current = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+    if _current:
+        _subject_uid = auth_users.verify_token(token, expected_typ="magic")
+        _subject = auth_users.get_user_by_id(_subject_uid) if _subject_uid else None
+        if _subject and _subject["email"] != _current:
+            return HTMLResponse(status_code=409, content=(
+                "<h2>Already signed in</h2><p>This browser is signed in as a different "
+                "user. Sign out first, then open the link again.</p>"))
     email = auth_users.consume_magic_token(token)
     if not email:
         return RedirectResponse(url="/login?e=expired", status_code=302)
@@ -947,14 +961,38 @@ def billing_success():
     )
 
 
+WEBHOOK_MAX_BYTES = 262_144  # 256 KiB — real LS payloads are a few KiB
+
+
+async def _read_limited_body(request: Request, limit: int) -> bytes:
+    """[CLAUDE Task3 2026-07-18] Read a request body with a hard byte cap.
+
+    Rejects oversized payloads with 413 BEFORE any signature check or JSON parse
+    so an attacker cannot make the public webhook endpoint buffer arbitrary data."""
+    declared = request.headers.get("content-length")
+    try:
+        if declared is not None and int(declared) > limit:
+            raise HTTPException(status_code=413, detail="Request too large")
+    except ValueError:
+        raise HTTPException(status_code=411, detail="Invalid Content-Length")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise HTTPException(status_code=413, detail="Request too large")
+    return bytes(body)
+
+
 @app.post("/api/billing/webhook")
 async def billing_webhook(request: Request):
     """Lemon Squeezy webhook — signature-verified + idempotent. Provisions/revokes the
     auth_users account. Public (in PUBLIC_PREFIXES) because it carries its own HMAC auth."""
-    raw = await request.body()
+    raw = await _read_limited_body(request, WEBHOOK_MAX_BYTES)
     sig = request.headers.get("X-Signature")
     try:
-        payload = await request.json()
+        payload = _json.loads(raw)
+        if not isinstance(payload, dict):
+            payload = {}
     except Exception:
         payload = {}
     try:
