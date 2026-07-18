@@ -77,3 +77,15 @@ def test_quota_owner_is_exempt(monkeypatch):
     monkeypatch.setattr(server.auth_users, "usage_count_24h",
                         lambda e, ev: (_ for _ in ()).throw(AssertionError("owner must skip metering")))
     server._check_customer_quota("owner@x.com", "ticker_card")   # returns early, no raise
+
+
+def test_mybook_durable_state_read_fails_closed(monkeypatch):
+    monkeypatch.setattr(
+        server.auth_users,
+        "expire_stale_mybook_jobs",
+        lambda _seconds: (_ for _ in ()).throw(RuntimeError("auth db locked /private/path")),
+    )
+    with pytest.raises(HTTPException) as exc:
+        server._load_mybook_job_state("user-id")
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Analysis state temporarily unavailable — please retry shortly."

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """gen_report2.py — Build gesh_report.html from engine_results.json"""
-import json, math, os
-from pathlib import Path
+import json
+import os
 from datetime import datetime, timezone
 from html import escape as _esc   # the report body f-string is bound to `html`, so alias
+from pathlib import Path
+
 from run_manifest import report_output_path
 
 BASE = Path(__file__).parent

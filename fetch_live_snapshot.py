@@ -5,7 +5,9 @@ Fetches live Robinhood portfolio + prices and writes to live_portfolio_snapshot.
 Called by the GESH scheduled task before analysis to ensure fresh data.
 Run with: /path/to/venv/bin/python3.14 fetch_live_snapshot.py
 """
-import os, sys, json
+import json
+import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -74,9 +76,7 @@ def _restore_session() -> bool:
         print(f'[fetch_live] Pickle read error: {e}', flush=True)
         return False
     try:
-        from robin_stocks.robinhood.helper import (
-            set_login_state, update_session, request_get,
-        )
+        from robin_stocks.robinhood.helper import request_get, set_login_state, update_session
         from robin_stocks.robinhood.urls import positions_url
         set_login_state(True)
         update_session('Authorization', authorization)

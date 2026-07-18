@@ -283,14 +283,18 @@ def test_analyze_book_different_book_while_running_is_202_no_double_spend(client
     counters = _stub_engines(server, monkeypatch)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
-    # Simulate an analysis already in flight for a DIFFERENT book fingerprint.
-    with server._mybook_lock:
-        server._mybook_jobs["cust@x.com"] = {"fp": "some-other-book", "status": "running"}
+    # Simulate a durable analysis already in flight for a DIFFERENT fingerprint.
+    user_id = server.auth_users.resolve_user_id("cust@x.com")
+    job_id = "job-existing"
+    started = server.auth_users.start_mybook_job(
+        user_id, job_id, "some-other-book", "book_analysis", 10
+    )
+    assert started["accepted"]
     r = c.post("/api/mybook/analyze", json={})
     assert r.status_code == 202
     assert r.json()["status"] == "running"
     # the in-flight job is untouched (not overwritten) so the original run completes
-    assert server._mybook_jobs["cust@x.com"]["fp"] == "some-other-book"
+    assert server.auth_users.get_active_mybook_job(user_id)["fingerprint"] == "some-other-book"
     assert counters["llm"] == 0                       # no second worker → no double spend
 
 
@@ -626,19 +630,17 @@ def test_book_change_midrun_does_not_spawn_second_worker(client, monkeypatch):
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
     # Simulate an in-flight run for a DIFFERENT book fingerprint.
-    server._mybook_jobs["cust@x.com"] = {"fp": "STALE_FP", "status": "running"}
-    started: list = []
-    real_thread = server.threading.Thread
-
-    def _spy_thread(*a, **k):
-        started.append(k.get("args"))
-        return real_thread(*a, **k)
-
-    monkeypatch.setattr(server.threading, "Thread", _spy_thread)
+    user_id = server.auth_users.resolve_user_id("cust@x.com")
+    existing = server.auth_users.start_mybook_job(
+        user_id, "job-existing", "STALE_FP", "book_analysis", 10
+    )
+    assert existing["accepted"]
+    submitted: list = []
+    monkeypatch.setattr(server, "_submit_mybook_job", lambda *args: submitted.append(args))
     r = c.post("/api/mybook/analyze", json={})
     assert r.status_code == 202 and r.json()["status"] == "running"
-    assert started == [], "must not spawn a concurrent second worker while one runs"
-    assert server._mybook_jobs["cust@x.com"]["fp"] == "STALE_FP"   # untouched
+    assert submitted == [], "must not spawn a concurrent second worker while one runs"
+    assert server.auth_users.get_active_mybook_job(user_id)["fingerprint"] == "STALE_FP"
     assert counters["llm"] == 0
 
 
@@ -655,17 +657,11 @@ def test_quota_reserved_at_accept_time_not_in_worker(client, monkeypatch):
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
     assert _mybook_analyze(c).status_code == 200          # run #1 = at cap
     c.post("/api/mybook", json={"symbol": "NVDA", "shares": 20})   # new book, over cap
-    started: list = []
-    real_thread = server.threading.Thread
-
-    def _spy_thread(*a, **k):
-        started.append(1)
-        return real_thread(*a, **k)
-
-    monkeypatch.setattr(server.threading, "Thread", _spy_thread)
+    submitted: list = []
+    monkeypatch.setattr(server, "_submit_mybook_job", lambda *args: submitted.append(args))
     r = c.post("/api/mybook/analyze", json={})
     assert r.status_code == 429                            # immediate, from the handler
-    assert started == [], "over-cap request must not even create a worker thread"
+    assert submitted == [], "over-cap request must not submit a worker"
     assert counters["llm"] == 1
 
 

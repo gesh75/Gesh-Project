@@ -271,6 +271,31 @@ _CHILD_TABLE_DDL = {
             FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
         )
     """,
+    "mybook_jobs": """
+        CREATE TABLE {table} (
+            job_id      TEXT PRIMARY KEY NOT NULL,
+            user_id     TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            status      TEXT NOT NULL CHECK(status IN ('queued','running','done','failed')),
+            result_json TEXT,
+            error_code  TEXT,
+            delivered_at TEXT,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
+    "usage_reservations": """
+        CREATE TABLE {table} (
+            job_id      TEXT PRIMARY KEY NOT NULL,
+            user_id     TEXT NOT NULL,
+            event       TEXT NOT NULL,
+            state       TEXT NOT NULL CHECK(state IN ('reserved','completed','released')),
+            reserved_at TEXT NOT NULL,
+            completed_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
 }
 
 _CHILD_DATA_COLUMNS = {
@@ -279,6 +304,13 @@ _CHILD_DATA_COLUMNS = {
     "customer_analyses": ("result_json", "created_at"),
     "usage_events": ("event", "detail", "at"),
     "customer_book_prefs": ("equal_weight", "updated_at"),
+    "mybook_jobs": (
+        "job_id", "fingerprint", "status", "result_json", "error_code", "delivered_at",
+        "created_at", "updated_at",
+    ),
+    "usage_reservations": (
+        "job_id", "event", "state", "reserved_at", "completed_at",
+    ),
 }
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
@@ -910,6 +942,8 @@ def _schema_v2_ready(con: sqlite3.Connection) -> bool:
         "ux_users_user_id",
         "idx_customer_analyses_user_id",
         "idx_usage_events_at",
+        "ux_mybook_jobs_active_user",
+        "idx_usage_reservations_window",
     }
     if not required_indexes.issubset(indexes):
         return False
@@ -1050,6 +1084,14 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
         )
         con.execute(
             "CREATE INDEX IF NOT EXISTS idx_usage_events_at ON usage_events (at)"
+        )
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_mybook_jobs_active_user "
+            "ON mybook_jobs(user_id) WHERE status IN ('queued','running')"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_reservations_window "
+            "ON usage_reservations(user_id, event, state, reserved_at)"
         )
         con.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -1738,6 +1780,250 @@ def get_latest_book_analysis(email: str) -> dict | None:
 
 # ── usage metering (per-customer event counters — tier/billing groundwork) ─────
 
+def _usage_total_in_transaction(
+    con: sqlite3.Connection, user_id: str, event: str, cutoff: str
+) -> int:
+    historical = con.execute(
+        "SELECT COUNT(*) FROM usage_events WHERE user_id=? AND event=? AND at>=?",
+        (user_id, event, cutoff),
+    ).fetchone()[0]
+    reserved = con.execute(
+        "SELECT COUNT(*) FROM usage_reservations "
+        "WHERE user_id=? AND event=? AND state IN ('reserved','completed') AND reserved_at>=?",
+        (user_id, event, cutoff),
+    ).fetchone()[0]
+    return int(historical) + int(reserved)
+
+
+def _reserve_usage_in_transaction(
+    con: sqlite3.Connection, user_id: str, event: str, job_id: str, limit: int
+) -> bool:
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    if limit > 0 and _usage_total_in_transaction(con, user_id, event, cutoff) >= limit:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    con.execute(
+        "INSERT INTO usage_reservations "
+        "(job_id,user_id,event,state,reserved_at) VALUES (?,?,?,'reserved',?)",
+        (job_id, user_id, event, now),
+    )
+    return True
+
+
+def reserve_usage(user_id: str, event: str, job_id: str, limit: int) -> bool:
+    """Atomically reserve one rolling-window spend slot.
+
+    Reserved and completed rows both count. Released rows do not. ``BEGIN
+    IMMEDIATE`` serializes the count-and-insert across processes, closing the
+    quota race that an in-process lock cannot close.
+    """
+    if not _is_canonical_user_id(user_id) or not event or not job_id:
+        return False
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        return _reserve_usage_in_transaction(con, user_id, event, job_id, limit)
+
+
+def _transition_usage(job_id: str, target: str) -> bool:
+    if target not in ("completed", "released"):
+        raise ValueError("invalid reservation state")
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        cur = con.execute(
+            "UPDATE usage_reservations SET state=?, completed_at=? "
+            "WHERE job_id=? AND state='reserved'",
+            (target, now, job_id),
+        )
+        return cur.rowcount == 1
+
+
+def complete_usage(job_id: str) -> bool:
+    return _transition_usage(job_id, "completed")
+
+
+def release_usage(job_id: str) -> bool:
+    return _transition_usage(job_id, "released")
+
+
+def get_usage_reservation(job_id: str) -> dict[str, Any] | None:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM usage_reservations WHERE job_id=?", (job_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _job_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    job = dict(row)
+    raw = job.pop("result_json", None)
+    try:
+        job["result"] = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        job["result"] = None
+    return job
+
+
+def get_active_mybook_job(user_id: str) -> dict[str, Any] | None:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM mybook_jobs WHERE user_id=? AND status IN ('queued','running') "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    return _job_dict(row)
+
+
+def get_latest_mybook_job(user_id: str) -> dict[str, Any] | None:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM mybook_jobs WHERE user_id=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    return _job_dict(row)
+
+
+def expire_stale_mybook_jobs(max_age_seconds: int) -> int:
+    """Recover queued/running rows left behind by a process crash."""
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=max(1, max_age_seconds))
+    ).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        rows = con.execute(
+            "SELECT job_id FROM mybook_jobs "
+            "WHERE status IN ('queued','running') AND updated_at<?",
+            (cutoff,),
+        ).fetchall()
+        job_ids = [str(row["job_id"]) for row in rows]
+        if not job_ids:
+            return 0
+        placeholders = ",".join("?" for _ in job_ids)
+        con.execute(
+            f"UPDATE mybook_jobs SET status='failed',error_code='worker_expired',updated_at=? "
+            f"WHERE job_id IN ({placeholders})",
+            (now, *job_ids),
+        )
+        con.execute(
+            f"UPDATE usage_reservations SET state='released',completed_at=? "
+            f"WHERE state='reserved' AND job_id IN ({placeholders})",
+            (now, *job_ids),
+        )
+        return len(job_ids)
+
+
+def start_mybook_job(
+    user_id: str,
+    job_id: str,
+    fingerprint: str,
+    event: str,
+    limit: int,
+) -> dict[str, Any]:
+    """Atomically create one queued job and its spend reservation."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        active = con.execute(
+            "SELECT * FROM mybook_jobs WHERE user_id=? AND status IN ('queued','running') "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if active:
+            return {"accepted": False, "quota_exceeded": False, "job": _job_dict(active)}
+        if not _reserve_usage_in_transaction(con, user_id, event, job_id, limit):
+            return {"accepted": False, "quota_exceeded": True, "job": None}
+        con.execute(
+            "INSERT INTO mybook_jobs "
+            "(job_id,user_id,fingerprint,status,created_at,updated_at) "
+            "VALUES (?,?,?,'queued',?,?)",
+            (job_id, user_id, fingerprint, now, now),
+        )
+        row = con.execute("SELECT * FROM mybook_jobs WHERE job_id=?", (job_id,)).fetchone()
+        return {"accepted": True, "quota_exceeded": False, "job": _job_dict(row)}
+
+
+def mark_mybook_job_running(user_id: str, job_id: str, fingerprint: str) -> bool:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE mybook_jobs SET status='running', updated_at=? "
+            "WHERE user_id=? AND job_id=? AND fingerprint=? AND status='queued'",
+            (now, user_id, job_id, fingerprint),
+        )
+    return cur.rowcount == 1
+
+
+def finish_mybook_job(
+    user_id: str,
+    job_id: str,
+    fingerprint: str,
+    status: str,
+    *,
+    result: dict[str, Any] | None = None,
+    error_code: str | None = None,
+) -> bool:
+    """Publish only when ``job_id`` is still the user's newest generation."""
+    if status not in ("done", "failed"):
+        raise ValueError("terminal mybook status must be done or failed")
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        latest = con.execute(
+            "SELECT job_id FROM mybook_jobs WHERE user_id=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if not latest or latest["job_id"] != job_id:
+            return False
+        cur = con.execute(
+            "UPDATE mybook_jobs SET status=?, result_json=?, error_code=?, updated_at=? "
+            "WHERE user_id=? AND job_id=? AND fingerprint=? AND status IN ('queued','running')",
+            (
+                status,
+                json.dumps(result) if result is not None else None,
+                (error_code or "")[:64] or None,
+                now,
+                user_id,
+                job_id,
+                fingerprint,
+            ),
+        )
+        if cur.rowcount != 1:
+            return False
+        if status == "done" and result is not None:
+            con.execute(
+                "INSERT INTO customer_analyses (user_id,result_json,created_at) VALUES (?,?,?)",
+                (user_id, json.dumps(result), now),
+            )
+            con.execute(
+                "DELETE FROM customer_analyses WHERE user_id=? AND rowid NOT IN ("
+                "SELECT rowid FROM customer_analyses WHERE user_id=? "
+                "ORDER BY created_at DESC,rowid DESC LIMIT ?)",
+                (user_id, user_id, _MAX_ANALYSES_PER_USER),
+            )
+        con.execute(
+            "UPDATE usage_reservations SET state=?, completed_at=? "
+            "WHERE job_id=? AND state='reserved'",
+            ("completed" if status == "done" else "released", now, job_id),
+        )
+        return True
+
+
+def mark_mybook_job_delivered(user_id: str, job_id: str) -> bool:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE mybook_jobs SET delivered_at=?, updated_at=? "
+            "WHERE user_id=? AND job_id=? AND delivered_at IS NULL "
+            "AND status IN ('done','failed')",
+            (now, now, user_id, job_id),
+        )
+    return cur.rowcount == 1
+
 def log_usage(email: str | None, event: str, detail: str = "") -> None:
     """Fire-and-forget usage counter. NEVER raises — metering must not be able to
     break a product endpoint."""
@@ -1780,12 +2066,7 @@ def usage_count_24h(email: str, event: str) -> int:
         return 0
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     with _conn() as con:
-        row = con.execute(
-            "SELECT COUNT(*) AS n FROM usage_events "
-            "WHERE user_id=? AND event=? AND at >= ?",
-            (user_id, event, cutoff),
-        ).fetchone()
-    return int(row["n"])
+        return _usage_total_in_transaction(con, user_id, event, cutoff)
 
 
 def usage_summary(days: int = 30) -> list[dict]:
@@ -1794,12 +2075,17 @@ def usage_summary(days: int = 30) -> list[dict]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with _conn() as con:
         rows = con.execute(
-            "SELECT users.email, usage_events.event, COUNT(*) AS n, "
-            "MAX(usage_events.at) AS last_at FROM usage_events "
-            "JOIN users ON users.user_id = usage_events.user_id "
-            "WHERE usage_events.at >= ? GROUP BY users.email, usage_events.event "
-            "ORDER BY n DESC",
-            (cutoff,),
+            "SELECT email,event,COUNT(*) AS n,MAX(at) AS last_at FROM ("
+            " SELECT users.email AS email,usage_events.event AS event,usage_events.at AS at"
+            " FROM usage_events JOIN users ON users.user_id=usage_events.user_id"
+            " WHERE usage_events.at>=?"
+            " UNION ALL"
+            " SELECT users.email AS email,usage_reservations.event AS event,"
+            " usage_reservations.reserved_at AS at"
+            " FROM usage_reservations JOIN users ON users.user_id=usage_reservations.user_id"
+            " WHERE usage_reservations.state='completed' AND usage_reservations.reserved_at>=?"
+            ") GROUP BY email,event ORDER BY n DESC",
+            (cutoff, cutoff),
         ).fetchall()
     return [{"email": r["email"], "event": r["event"], "count": r["n"], "last_at": r["last_at"]}
             for r in rows]

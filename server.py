@@ -1,12 +1,23 @@
 from __future__ import annotations
+
+import asyncio
+import hmac
+import logging
+import math
+import os
+import re
+import threading
+import time
+import uuid
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-import asyncio, math, time, threading, uvicorn, os, hmac
-from fastapi import FastAPI, HTTPException, Request, Depends, Header, Query
+
+import uvicorn
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-import logging, re
-from collections import defaultdict, deque
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
 # Long-running uvicorn + yfinance + sqlite + robin_stocks tends to leak FDs
@@ -2431,6 +2442,16 @@ _QUOTA_DEFAULTS = {"ticker_card": 25, "book_analysis": 10}
 _TIER_QUOTA_MULT = {"observer": 1, "trader": 2, "desk": 5}
 
 
+def _customer_quota_limit(email: str | None, event: str) -> int:
+    """Return the tier-scaled limit; zero means unlimited/exempt."""
+    if not email or auth_users.is_owner(email):
+        return 0
+    base = int(os.getenv(f"QUOTA_DAILY_{event.upper()}", _QUOTA_DEFAULTS.get(event, 0)))
+    if base <= 0:
+        return 0
+    return base * _TIER_QUOTA_MULT.get(auth_users.get_tier(email), 1)
+
+
 def _check_customer_quota(email: str | None, event: str) -> None:
     """Raise 429 when the user's rolling-24h count of `event` has hit their
     tier-scaled cap.
@@ -2440,13 +2461,10 @@ def _check_customer_quota(email: str | None, event: str) -> None:
     old fail-open let a locked/corrupt usage table turn into unbounded API cost
     (the only other backstop, LLM_DAILY_BUDGET_USD, is off by default). Cached
     results still serve free, so a transient 503 does not blank the product."""
-    if not email or auth_users.is_owner(email):
-        return
     try:
-        base = int(os.getenv(f"QUOTA_DAILY_{event.upper()}", _QUOTA_DEFAULTS.get(event, 0)))
-        if base <= 0:
+        limit = _customer_quota_limit(email, event)
+        if limit <= 0:
             return
-        limit = base * _TIER_QUOTA_MULT.get(auth_users.get_tier(email), 1)
         used = auth_users.usage_count_24h(email, event)
     except Exception:
         logger.warning("quota metering unavailable (%s/%s) — denying spend (fail-closed)", email, event)
@@ -2817,7 +2835,52 @@ def mybook_clear(request: Request):
 _MYBOOK_TTL = 900  # 15 min
 _mybook_cache: dict[str, tuple[float, str, dict]] = {}
 _mybook_lock = threading.Lock()
-_mybook_jobs: dict[str, dict] = {}   # email -> {"fp", "status": running|done|error, "error"}
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+_MYBOOK_WORKERS = _positive_env_int("GESH_MYBOOK_WORKERS", 2)
+_MYBOOK_QUEUE = _positive_env_int("GESH_MYBOOK_QUEUE", _MYBOOK_WORKERS * 2)
+_mybook_executor = ThreadPoolExecutor(
+    max_workers=_MYBOOK_WORKERS, thread_name_prefix="gesh-mybook"
+)
+_mybook_slots = threading.BoundedSemaphore(_MYBOOK_WORKERS + _MYBOOK_QUEUE)
+
+
+def _submit_mybook_job(*args: object) -> bool:
+    """Submit without allowing an unbounded executor queue."""
+    if not _mybook_slots.acquire(blocking=False):
+        return False
+    try:
+        future = _mybook_executor.submit(_mybook_analyze_worker, *args)
+    except BaseException:
+        _mybook_slots.release()
+        raise
+    future.add_done_callback(lambda _future: _mybook_slots.release())
+    return True
+
+
+def _load_mybook_job_state(user_id: str) -> tuple[dict | None, dict | None]:
+    """Read durable state fail-closed without exposing database details."""
+    try:
+        auth_users.expire_stale_mybook_jobs(
+            _positive_env_int("GESH_MYBOOK_STALE_SECONDS", 7200)
+        )
+        return (
+            auth_users.get_active_mybook_job(user_id),
+            auth_users.get_latest_mybook_job(user_id),
+        )
+    except Exception as exc:
+        logger.warning("mybook durable state unavailable for %s: %s", user_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Analysis state temporarily unavailable — please retry shortly.",
+        )
 
 
 def _book_fingerprint(positions: list[dict]) -> str:
@@ -2904,21 +2967,39 @@ def _run_book_engines(payload: dict) -> dict:
     # Cap the DETAILED analysis first; its regime + analyst enrichment then runs only
     # over the analyzed names (the yfinance pulls scale with symbol count too).
     holdings = payload["holdings"]
-    analysis_payload, truncated = payload, None
+    coverage = {
+        "analyzed": min(len(holdings), _BOOK_ANALYSIS_MAX_HOLDINGS),
+        "total": len(holdings),
+    }
+    all_holdings_summary = [
+        {
+            "symbol": h.get("symbol"),
+            "equity": h.get("equity"),
+            "portfolio_percentage": h.get("portfolio_percentage"),
+        }
+        for h in holdings
+    ]
+    analysis_payload = {
+        **payload,
+        "all_holdings_summary": all_holdings_summary,
+        "detailed_coverage": coverage,
+    }
+    truncated = None
     if len(holdings) > _BOOK_ANALYSIS_MAX_HOLDINGS:
         top = sorted(holdings, key=lambda h: h.get("equity") or 0,
                      reverse=True)[:_BOOK_ANALYSIS_MAX_HOLDINGS]
         analysis_payload = {
-            **payload,
+            **analysis_payload,
             "holdings": top,
             "book_meta": {
                 "total_holdings": len(holdings),
                 "all_symbols": [h["symbol"] for h in holdings],
                 "analyzed_symbols": [h["symbol"] for h in top],
+                "portfolio_scope_source": "all_holdings_summary",
                 "note": (
                     f"Emit detailed per-holding cards for analyzed_symbols only "
                     f"({len(top)} of {len(holdings)}). Portfolio verdict, sector mix, "
-                    f"and diversification must reflect all_symbols."
+                    f"and diversification must be derived from all_holdings_summary."
                 ),
             },
         }
@@ -2953,21 +3034,25 @@ def _run_book_engines(payload: dict) -> dict:
     except Exception as e:
         kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
     return _jsonable({"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
+                      "detailed_coverage": coverage,
                       "book": {"positions": payload["holdings"],
                                "total_equity": payload["equity_summary"]["portfolio_equity"],
                                "unpriced": payload["unpriced"]}})
 
 
-def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> None:
-    """Run the engine suite in a daemon THREAD (not an asyncio task) so the
-    background analysis is independent of the request's event loop — a multi-minute
-    run survives the client/tunnel disconnect, and it behaves identically under
-    TestClient (whose per-request event loops would strand an asyncio task). The
-    outcome is written into _mybook_jobs / _mybook_cache under _mybook_lock, and the
-    poll of /api/mybook/analyze picks it up."""
+def _mybook_analyze_worker(
+    email: str,
+    user_id: str,
+    job_id: str,
+    fp: str,
+    positions: list[dict],
+    ew: bool,
+) -> None:
+    """Run one durably identified generation in the bounded worker pool."""
+    if not auth_users.mark_mybook_job_running(user_id, job_id, fp):
+        auth_users.release_usage(job_id)
+        return
     try:
-        # Quota was already reserved atomically at accept time (in the handler under
-        # _mybook_lock, before this thread was started) — no re-check here.
         payload = _customer_book_payload(positions, ew)
         if not payload["holdings"]:
             raise HTTPException(status_code=404,
@@ -2978,20 +3063,36 @@ def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> No
         # changed and flag the analysis as stale instead of silently pairing new
         # positions with old scores (audit 2026-07-15 Test 4).
         result["_fp"] = fp
+        result["_job_id"] = job_id
+
+        # A book edit while this generation was running makes the result audit-only.
+        # The paid reservation is completed, but no cache/analysis publication occurs.
+        current_positions = auth_users.get_positions(email)
+        current_ew = auth_users.get_equal_weight(email)
+        current_fp = _book_fingerprint(current_positions) + ("|ew" if current_ew else "")
+        if current_fp != fp:
+            auth_users.finish_mybook_job(user_id, job_id, fp, "done")
+            return
+
+        # finish_mybook_job compares the durable latest generation and persists the
+        # analysis in the same transaction before it releases the active-job slot.
+        if not auth_users.finish_mybook_job(
+            user_id, job_id, fp, "done", result=result
+        ):
+            return
         with _mybook_lock:
-            _mybook_cache[email] = (time.monotonic(), fp, result)
+            latest = auth_users.get_latest_mybook_job(user_id)
+            if not latest or latest.get("job_id") != job_id:
+                return
+            _mybook_cache[user_id] = (time.monotonic(), fp, result)
             for k in [k for k, (ts, _, _) in _mybook_cache.items()
                       if (time.monotonic() - ts) >= _MYBOOK_TTL]:
                 del _mybook_cache[k]
-            _mybook_jobs[email] = {"fp": fp, "status": "done"}
-        try:
-            auth_users.save_book_analysis(email, result)
-        except Exception:
-            pass
-        auth_users.log_usage(email, "book_analysis")
-    except BaseException as e:   # record ANY failure so the poller can surface it
-        with _mybook_lock:
-            _mybook_jobs[email] = {"fp": fp, "status": "error", "error": e}
+    except BaseException as exc:
+        code = f"HTTP_{exc.status_code}" if isinstance(exc, HTTPException) else type(exc).__name__
+        auth_users.finish_mybook_job(
+            user_id, job_id, fp, "failed", error_code=code
+        )
 
 
 @app.post("/api/mybook/analyze", dependencies=[Depends(require_customer_or_owner)])
@@ -3002,7 +3103,7 @@ async def mybook_analyze(request: Request):
     for _MYBOOK_TTL, single-flight per user. NOT logged to the owner's analysis
     history — this is the customer's data.
 
-    The engine suite can run for minutes, so it runs in a daemon thread: the first
+    The engine suite can run for minutes, so it runs in a bounded executor: the first
     call returns HTTP 202 {status: running} immediately and the client polls this
     same endpoint every few seconds until 200 (outlasting the Cloudflare tunnel's
     ~100s limit); a completed run warms the per-book cache so the poll returns it."""
@@ -3014,55 +3115,68 @@ async def mybook_analyze(request: Request):
         raise HTTPException(status_code=400, detail="Your book is empty — add positions first")
     ew = auth_users.get_equal_weight(email)
     fp = _book_fingerprint(positions) + ("|ew" if ew else "")
+    user_id = auth_users.resolve_user_id(email)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    active, latest = _load_mybook_job_state(user_id)
+    if active:
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "job_id": active["job_id"]},
+        )
+
+    if latest and latest.get("fingerprint") == fp and not latest.get("delivered_at"):
+        if latest.get("status") == "failed":
+            auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
+            if latest.get("error_code") == "HTTP_404":
+                raise HTTPException(status_code=404, detail="No market data for any symbol on your book")
+            raise HTTPException(status_code=500, detail="Book analysis failed — please retry.")
+        if latest.get("status") == "done" and latest.get("result") is not None:
+            auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
+            return {"status": "ok", "cached": False, "data": latest["result"]}
 
     with _mybook_lock:
-        job = _mybook_jobs.get(email)
-        # 1) SINGLE-FLIGHT IS PER-USER, not per-fingerprint. If ANY analysis is in
-        #    flight for this user, a new request (even for a freshly-edited book)
-        #    must NOT spawn a second concurrent worker — that would double-spend the
-        #    quota and let a slow stale run overwrite a newer result. The client
-        #    keeps polling; the new book runs once the current one finishes.
-        if job and job.get("status") == "running":
-            return JSONResponse(status_code=202, content={"status": "running"})
-        # 2) a finished / errored job for THIS exact book — handed back exactly once
-        #    (checked before the cache so the poll that completes a live run reports
-        #    it as live, not a cache hit — the worker already metered it).
-        if job and job.get("fp") == fp:
-            status = job.get("status")
-            if status == "error":
-                err = job.pop("error", None)
-                del _mybook_jobs[email]
-                if isinstance(err, HTTPException):
-                    raise err
-                raise _server_error(err if isinstance(err, Exception)
-                                    else RuntimeError(str(err)))
-            if status == "done":
-                del _mybook_jobs[email]           # completion is handed back exactly once
-                hit = _mybook_cache.get(email)
-                if hit and hit[1] == fp:
-                    return {"status": "ok", "cached": False, "data": hit[2]}
-                # cache entry vanished (evicted) → fall through and re-run
-        elif job:
-            # a finished / errored job for a DIFFERENT (now-stale) book — discard it
-            # so a fresh run for the current book can start cleanly.
-            _mybook_jobs.pop(email, None)
-        # 3) a genuine repeat view — fresh cached result for this exact book?
-        hit = _mybook_cache.get(email)
+        hit = _mybook_cache.get(user_id)
         if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
             auth_users.log_usage(email, "book_analysis_cached")
             return {"status": "ok", "cached": True, "data": hit[2]}
-        # 4) reserve quota ATOMICALLY (under the lock, before starting the worker) so
-        #    an over-cap call 429s immediately instead of a thread discovering the cap
-        #    minutes later — and combined with per-user single-flight (step 1 returns
-        #    202 for ANY in-flight run, whatever the fingerprint), no two runs can
-        #    slip past the check→log window. Raises HTTPException(429) before any spend.
-        _check_customer_quota(email, "book_analysis")
-        _mybook_jobs[email] = {"fp": fp, "status": "running"}
-    threading.Thread(target=_mybook_analyze_worker,
-                     args=(email, fp, positions, ew), daemon=True).start()
+
+    try:
+        limit = _customer_quota_limit(email, "book_analysis")
+        job_id = str(uuid.uuid4())
+        started = auth_users.start_mybook_job(
+            user_id, job_id, fp, "book_analysis", limit
+        )
+    except Exception:
+        logger.warning("mybook job reservation unavailable for %s", user_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Usage metering temporarily unavailable — please retry shortly.",
+        )
+    if started["quota_exceeded"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results remain free.",
+        )
+    if not started["accepted"]:
+        job = started["job"] or {}
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "job_id": job.get("job_id")},
+        )
+    if not _submit_mybook_job(email, user_id, job_id, fp, positions, ew):
+        auth_users.finish_mybook_job(
+            user_id, job_id, fp, "failed", error_code="queue_full"
+        )
+        raise HTTPException(status_code=503, detail="Analysis capacity is busy — retry shortly.")
     return JSONResponse(
         status_code=202,
-        content={"status": "running", "message": "Analysis started — poll every few seconds"},
+        content={
+            "status": "running",
+            "job_id": job_id,
+            "message": "Analysis started — poll every few seconds",
+        },
     )
 
 

@@ -3,7 +3,11 @@
 run_ai2.py — Call Claude deep_analyze_portfolio on fresh engine results.
 Appends ai_result back to engine_results.json.
 """
-import os, sys, json, time, traceback
+import json
+import os
+import sys
+import time
+import traceback
 from pathlib import Path
 
 T0 = time.time()
