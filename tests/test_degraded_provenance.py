@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,7 +38,6 @@ def _snap(age_seconds: float, source: str = "robinhood_mcp") -> dict:
 
 
 from run_manifest import snapshot_degraded_info
-
 
 # ── snapshot_degraded_info: run_engines2.py + run_ai2.py (kept in sync) ───────
 

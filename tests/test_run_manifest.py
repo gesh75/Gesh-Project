@@ -9,7 +9,6 @@ import pytest
 
 from run_manifest import RunManifest, atomic_write_json, report_output_path
 
-
 UTC = timezone.utc
 
 
