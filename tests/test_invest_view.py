@@ -83,7 +83,7 @@ def test_render_escapes_xss_and_breaks_script():
     assert "evil()</script>" not in html          # raw break-out neutralised...
     assert "<\\/script>" in html                   # ...into the escaped form
     assert "const esc=" in html                    # runtime escaper is wired in
-    assert "GESH — Diversification Radar" in html
+    assert "GESH — Diversification Scenario Lab" in html
     assert "NOT FINANCIAL ADVICE" in html
 
 
@@ -157,3 +157,15 @@ def test_render_has_prominent_disclaimer_banner():
     html = iv.render_invest_html(iv.load_invest_data("/nonexistent/path.json"))
     assert "NOT FINANCIAL ADVICE" in html
     assert 'id="advisory-banner"' in html   # prominent top banner, not just the footer
+
+
+def test_render_frames_outputs_as_hypothetical_not_personalized_advice():
+    html = iv.render_invest_html(iv.load_invest_data("/nonexistent/path.json"))
+    assert "Diversification Scenario Lab" in html
+    assert "HYPOTHETICAL" in html
+    assert "not suitability-checked" in html
+    assert "Model allocation" in html
+    assert "Scenario alternatives" in html
+    assert "where should NEW cash go?" not in html
+    assert ">Suggest<" not in html
+    assert "Swap ideas" not in html

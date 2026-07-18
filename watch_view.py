@@ -1,9 +1,9 @@
 """
-watch_view.py — internal live paper-trading cockpit (GET /watch on :9000).
+watch_view.py — internal paper-evidence watch (GET /watch on :9000).
 
-A read-only "watch what the engine does" console: OPEN positions (with unrealized
+A read-only simulation-evidence console: OPEN positions (with unrealized
 P&L + distance-to-stop/target), RECENT closes (realized P&L, WIN/LOSS), the
-gate->fill->exit ACTIVITY feed, and the N/30 autonomy-gate progress. Updates live
+gate->fill->exit ACTIVITY feed, and the versioned autonomy-gate progress. Updates
 via a 12s fetch() poll against GET /watch/data.
 
 Design (mirrors proof_page.py):
@@ -377,13 +377,14 @@ def render_watch_html(data: dict[str, Any]) -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GESH — Live Trading Watch (paper)</title>
+<title>GESH — Paper Evidence Watch</title>
 <style>
  body{{margin:0;background:{_BG};color:#e8eef6;font-family:-apple-system,Segoe UI,Roboto,sans-serif}}
  .wrap{{max-width:1080px;margin:0 auto;padding:24px 18px 64px}}
  h1{{font-size:20px;margin:0}} .sub{{color:{_DIM};font-size:12px;margin:2px 0 16px}}
  .num{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}}
  .strip{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px}}
+ .quality{{border-left:4px solid {_YELLOW};color:#dbe7f3;font-size:12px;line-height:1.5}}
  .stat{{background:{_SURFACE};border:1px solid {_BORDER};border-radius:9px;padding:10px 14px;min-width:120px}}
  .stat .k{{color:{_DIM};font-size:10px;text-transform:uppercase;letter-spacing:.5px}}
  .stat .v{{font-size:19px;font-weight:700;margin-top:3px}}
@@ -400,8 +401,10 @@ def render_watch_html(data: dict[str, Any]) -> str:
 </style></head>
 <body><div class="wrap">
  <div><span id="status">connecting…</span>
-   <h1 style="color:{_CYAN}">GESH — Live Trading Watch <span class="pill" style="background:{_YELLOW};color:#1a1200">PAPER</span></h1></div>
- <div class="sub">Internal cockpit · what the engine is doing right now · updates every 12s</div>
+   <h1 style="color:{_CYAN}">GESH — Paper Evidence Watch <span class="pill" style="background:{_YELLOW};color:#1a1200">PAPER ONLY</span></h1></div>
+ <div class="sub">Internal simulation observatory · evidence, fills and exits · updates every 12s</div>
+
+ <div class="card quality" id="quality-rail"><b>Data quality</b> · checking marks · <b>SIMULATED</b></div>
 
  <div class="strip" id="strip"></div>
 
@@ -437,6 +440,12 @@ function badge(a){{const b=(a||"").toUpperCase();const c=b==="BUY"?C.green:C.red
   return a?`<span class="pill" style="background:${{c}}22;color:${{c}}">${{esc(a)}}</span>`:"";}}
 function renderWatch(d){{
   const s=d.summary;
+  const quality=document.getElementById("quality-rail");
+  const source=esc(d.price_source||"unknown");
+  quality.innerHTML=d.live_prices_available
+    ? `<b>Data quality</b> · VERIFIED MARKS · ${{source}} · <b>SIMULATED</b>`
+    : `<b>Data quality</b> · DEGRADED · current marks unavailable · <b>SIMULATED</b>`;
+  quality.style.borderLeftColor=d.live_prices_available?C.green:C.yellow;
   document.getElementById("strip").innerHTML=[
     ["Open",s.open_count],
     ["Unrealized P&L",fmtUsd(s.total_unrealized_pnl_usd),pnlColor(s.total_unrealized_pnl_usd)],
@@ -447,8 +456,9 @@ function renderWatch(d){{
     ["Streak",s.streak||"—"],
   ].map(([k,v,col])=>`<div class="stat"><div class="k">${{k}}</div><div class="v num" style="color:${{col||'#e8eef6'}}">${{v}}</div></div>`).join("");
 
-  const a=d.autonomy, pct=Math.min(a.closed_n/a.required*100,100);
-  document.getElementById("auto-label").textContent=a.closed_n+" of "+a.required+(a.ready?" · READY":"");
+  const a=d.autonomy, gateN=a.engine_closes==null?a.closed_n:a.engine_closes;
+  const required=Math.max(Number(a.required)||100,1), pct=Math.min(gateN/required*100,100);
+  document.getElementById("auto-label").textContent=gateN+" of "+required+(a.ready?" · READY":"");
   const bar=document.getElementById("auto-bar"); bar.style.width=pct+"%";
   bar.style.background=a.ready?C.green:(a.closed_trades.pass?C.orange:C.yellow);
   const ck=g=>`<span style="color:${{g.pass?C.green:C.dim}}">${{g.pass?'☑':'☐'}}</span>`;
@@ -494,7 +504,7 @@ function renderWatch(d){{
 function setStatus(t){{document.getElementById("status").textContent=t;}}
 async function refresh(){{
   try{{const r=await fetch('/watch/data',{{cache:'no-store'}});if(!r.ok){{setStatus('offline — last good view');return;}}
-    const d=await r.json();renderWatch(d);setStatus('live · '+(d.as_of||'').slice(11,19));}}
+    const d=await r.json();renderWatch(d);setStatus('updated · '+(d.as_of||'').slice(11,19));}}
   catch(_){{setStatus('offline — last good view');}}
 }}
 renderWatch({payload});                       // initial paint from server-rendered data

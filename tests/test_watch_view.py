@@ -209,8 +209,12 @@ def test_render_contains_panels_and_poll(tmp_path):
     d = watch_view.load_watch_data(_empty_db(tmp_path), price_fetcher=_NO_PRICES)
     html = watch_view.render_watch_html(d)
     for needle in ("Open Positions", "Recent Closes", "Activity", "/watch/data",
-                   "NOT FINANCIAL ADVICE", "of 100"):   # authoritative engine-gate bar
+                   "NOT FINANCIAL ADVICE", "of 100", "Paper Evidence Watch",
+                   "PAPER ONLY", "Data quality", "SIMULATED", "updated"):
         assert needle in html, needle
+    assert "Live Trading Watch" not in html
+    assert "what the engine is doing right now" not in html
+    assert "a.engine_closes==null?a.closed_n:a.engine_closes" in html
 
 
 def test_render_empty_states(tmp_path):
