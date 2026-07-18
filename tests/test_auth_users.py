@@ -11,6 +11,11 @@ No network. Temp SQLite + fixed secret.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import time
+import uuid
 from pathlib import Path
 from typing import Generator
 
@@ -29,6 +34,23 @@ def isolated_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
 
 
 import auth_users as au
+
+
+def _signed_v2_token(subject: str, *, typ: str = "session") -> str:
+    payload = au._b64u(
+        json.dumps(
+            {
+                "sub": subject,
+                "exp": int(time.time()) + 900,
+                "typ": typ,
+                "ver": 2,
+                "jti": "test-jti",
+            },
+            separators=(",", ":"),
+        ).encode()
+    )
+    signature = au._b64u(hmac.new(au._secret(), payload.encode(), hashlib.sha256).digest())
+    return f"{payload}.{signature}"
 
 # ── password hashing ──────────────────────────────────────────────────────────
 
@@ -56,17 +78,30 @@ class TestPasswordHashing:
 
 class TestSessionToken:
     def test_issue_verify_round_trip(self):
+        au.create_user("a@b.com", "pw")
         tok = au.issue_token("a@b.com")
-        assert au.verify_token(tok) == "a@b.com"
+        user_id = au.resolve_user_id("a@b.com")
+        claims = json.loads(au._b64u_dec(tok.split(".", maxsplit=1)[0]))
+
+        assert user_id is not None
+        assert claims["ver"] == au._TOKEN_SCHEMA_VERSION == 2
+        assert claims["sub"] == user_id
+        assert au.verify_token(tok) == user_id
 
     def test_tampered_token_rejected(self):
+        au.create_user("a@b.com", "pw")
         tok = au.issue_token("a@b.com")
         bad = tok[:-2] + ("aa" if not tok.endswith("aa") else "bb")
         assert au.verify_token(bad) is None
 
     def test_expired_token_rejected(self):
+        au.create_user("a@b.com", "pw")
         tok = au.issue_token("a@b.com", ttl=-1)   # already expired
         assert au.verify_token(tok) is None
+
+    def test_unknown_email_cannot_mint_an_identity_token(self):
+        with pytest.raises(ValueError, match="active user"):
+            au.issue_token("missing@example.com")
 
     def test_garbage_token_rejected(self):
         assert au.verify_token("not.a.token") is None
@@ -193,7 +228,7 @@ class TestGate:
         assert au.gate_decision("/api/portfolio", tok) == "unauthorized"  # same valid token now rejected
 
     def test_gate_rejects_unknown_subject(self):
-        tok = au.issue_token("ghost@x.com")   # crypto-valid token, no such user
+        tok = _signed_v2_token(str(uuid.uuid4()))   # crypto-valid token, no such user
         assert au.gate_decision("/", tok) == "redirect"
 
     def test_authenticate_session_active_user(self):
@@ -202,10 +237,18 @@ class TestGate:
 
     def test_authenticate_session_inactive_user_none(self):
         au.create_user("s@x.com", "pw")
+        token = au.issue_token("s@x.com")
         au.set_active("s@x.com", False)
-        assert au.authenticate_session(au.issue_token("s@x.com")) is None
+        assert au.authenticate_session(token) is None
 
     def test_verify_token_stays_pure_crypto_check(self):
         # verify_token validates signature+expiry only (no user lookup) — the
         # active-user check lives in authenticate_session / gate_decision.
-        assert au.verify_token(au.issue_token("anyone@x.com")) == "anyone@x.com"
+        au.create_user("anyone@x.com", "pw")
+        user_id = au.resolve_user_id("anyone@x.com")
+        token = au.issue_token("anyone@x.com")
+        with au._conn() as con:
+            con.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+
+        assert au.verify_token(token) == user_id
+        assert au.authenticate_session(token) is None

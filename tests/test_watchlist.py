@@ -19,6 +19,8 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
+    for email in ("a@x.com", "b@x.com", "cust@x.com"):
+        _au.create_user(email, "test-password")
     return _au
 
 

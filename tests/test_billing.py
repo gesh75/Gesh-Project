@@ -180,8 +180,8 @@ def test_session_token_rejected_as_magic():
     assert au.consume_magic_token(session) is None
 
 
-def test_legacy_typeless_token_treated_as_session():
-    """Back-compat: cookies issued before the typ claim (no typ) still authenticate."""
+def test_legacy_email_subject_token_is_rejected_fail_closed():
+    """Pre-v2 email-subject cookies must never authenticate a reused address."""
     import hashlib as _h
     import hmac as _hm
     import json as _json
@@ -191,7 +191,9 @@ def test_legacy_typeless_token_treated_as_session():
     sig = au._b64u(_hm.new(au._secret(), payload.encode(), _h.sha256).digest())
     legacy = f"{payload}.{sig}"
     au.create_magic_link_user("buyer@example.com", tier="trader")
-    assert au.authenticate_session(legacy) == "buyer@example.com"
+    assert au.verify_token(legacy) is None
+    assert au.authenticate_session(legacy) is None
+    assert au.consume_magic_token(legacy) is None
 
 
 def test_consume_rejects_invalid_token():

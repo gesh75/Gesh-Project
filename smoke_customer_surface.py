@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 import requests
 
@@ -139,9 +140,19 @@ def main() -> int:
         else:
             check("AI ticker card", r.status_code == 200 and "scores" in (r.json().get("data") or {}),
                   f"HTTP {r.status_code}: {r.text[:120]}")
+        # Book analysis is ASYNC: the first call returns 202 {status: running}
+        # and the client polls the SAME endpoint until 200 (the run outlasts the
+        # tunnel's ~100s limit; a warm per-book cache can return 200 at once).
         r = s.post(f"{base}/api/mybook/analyze", json={}, timeout=300)
+        deadline = time.monotonic() + 300
+        while r.status_code == 202 and time.monotonic() < deadline:
+            time.sleep(3)
+            r = s.post(f"{base}/api/mybook/analyze", json={}, timeout=300)
         if r.status_code in (401, 503):
             record("SKIP", "book analysis", f"HTTP {r.status_code} — fail-closed gate")
+        elif r.status_code == 202:
+            check("book analysis (deep AI + Kelly + MC)", False,
+                  "still 202 (running) after 300s poll budget")
         else:
             ok = r.status_code == 200 and "analysis" in (r.json().get("data") or {})
             check("book analysis (deep AI + Kelly + MC)", ok, f"HTTP {r.status_code}: {r.text[:150]}")
