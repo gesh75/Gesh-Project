@@ -85,3 +85,49 @@ def test_login_throttle_carries_retry_after(client, monkeypatch):
     r = client.post("/auth/login", json={"email": "who@x.com", "password": "bad"})
     assert r.status_code == 429
     assert r.headers.get("Retry-After") == str(server.LOGIN_FAIL_WINDOW)
+
+
+def test_constant_time_credential_api_uses_dummy_hash_for_unknown_user(monkeypatch):
+    seen: list[tuple[str, str]] = []
+    monkeypatch.setattr(auth_users, "get_user", lambda _email: None)
+    monkeypatch.setattr(
+        auth_users,
+        "verify_password",
+        lambda password, encoded: seen.append((password, encoded)) or False,
+    )
+    assert auth_users.verify_credentials_constant_time("nobody@example.com", "guess") is False
+    assert seen == [("guess", auth_users._DUMMY_PASSWORD_HASH)]
+
+
+def test_login_runs_constant_time_verifier_off_event_loop(client, monkeypatch):
+    called: dict[str, object] = {}
+    monkeypatch.setattr(server, "_login_blocked", lambda *_args: False)
+    monkeypatch.setattr(server, "_login_record_fail", lambda *_args: None)
+
+    async def fake_to_thread(fn, *args):
+        called["fn"] = fn
+        called["args"] = args
+        return False
+
+    monkeypatch.setattr(server.asyncio, "to_thread", fake_to_thread)
+    response = client.post(
+        "/auth/login", json={"email": "User@Example.com", "password": "bad"}
+    )
+    assert response.status_code == 401
+    assert called == {
+        "fn": auth_users.verify_credentials_constant_time,
+        "args": ("User@Example.com", "bad"),
+    }
+
+
+def test_https_customer_url_with_insecure_cookie_override_rejects_login(client, monkeypatch):
+    monkeypatch.setenv("APP_BASE_URL", "https://pay.example.test")
+    monkeypatch.setenv("GESH_COOKIE_SECURE", "0")
+    monkeypatch.setattr(server, "_login_blocked", lambda *_args: False)
+    monkeypatch.setattr(auth_users, "verify_credentials_constant_time", lambda *_args: True)
+    response = client.post(
+        "/auth/login", json={"email": "owner@example.com", "password": "valid"}
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Authentication temporarily unavailable"
+    assert auth_users.COOKIE_NAME not in response.cookies

@@ -23,6 +23,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 BASE_DIR = Path(__file__).parent
 RAW = Path("/tmp/gesh_mcp_raw.json")
@@ -36,18 +37,45 @@ def _f(x, default=0.0):
         return default
 
 
-def build():
-    raw = json.loads(RAW.read_text())
+def quote_provenance(item: dict[str, Any], session: str) -> dict[str, Any]:
+    """Return provider-owned quote time; never substitute transport time."""
+    quote = item.get("quote", item) if isinstance(item, dict) else {}
+    for field in ("venue_last_trade_time", "updated_at", "last_trade_time"):
+        if quote.get(field):
+            return {
+                "quote_as_of": quote[field],
+                "provider": "robinhood_mcp",
+                "session": session,
+                "timestamp_basis": field,
+            }
+    return {
+        "quote_as_of": None,
+        "provider": "robinhood_mcp",
+        "session": session,
+        "timestamp_basis": "unavailable",
+    }
+
+
+def build(
+    *,
+    raw_data: dict[str, Any] | None = None,
+    output: Path = OUTPUT,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    raw = raw_data if raw_data is not None else json.loads(RAW.read_text())
     pf = raw["portfolio"]
     positions = raw["positions"]
     # get_equity_quotes returns results[] as {"quote": {...}, "close": {...}};
     # unwrap the inner "quote" (tolerate a flat shape too).
     quotes = {}
+    quote_meta = {}
+    session = str(raw.get("session_id") or raw.get("request_id") or "mcp-snapshot")
     for item in raw["quotes"]:
         q = item.get("quote", item) if isinstance(item, dict) else {}
         sym = q.get("symbol")
         if sym:
             quotes[sym] = q
+            quote_meta[sym] = quote_provenance(item, session)
 
     # ── Cash / buying power (mirror fetch_live_snapshot.py exactly) ──
     bp = pf.get("buying_power") or {}
@@ -82,8 +110,9 @@ def build():
 
     portfolio_total = round(tot_eq + deployable, 2)
     snapshot = {
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": (now or datetime.now(timezone.utc)).isoformat(),
         "source": "robinhood_mcp",
+        "quote_provenance": quote_meta,
         "holdings": holdings,
         "equity_summary": {
             "portfolio_equity": round(tot_eq, 2),
@@ -106,11 +135,12 @@ def build():
         print("[build_snapshot] ERROR: 0 holdings parsed from MCP dump", flush=True)
         sys.exit(1)
 
-    OUTPUT.write_text(json.dumps(snapshot, indent=2))
+    output.write_text(json.dumps(snapshot, indent=2))
     es = snapshot["equity_summary"]
     print(f"[build_snapshot] {len(holdings)} holdings  total=${es['total']:,.2f}  "
           f"pos_equity=${es['portfolio_equity']:,.2f}  deployable=${es['deployable']:,.2f}  "
           f"src=robinhood_mcp", flush=True)
+    return snapshot
 
 
 if __name__ == "__main__":
