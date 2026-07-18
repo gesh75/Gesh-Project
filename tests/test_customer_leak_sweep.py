@@ -177,6 +177,18 @@ def client(monkeypatch, tmp_path):
                         lambda sym, days_back=7: [{"title": "headline", "url": "http://x",
                                                    "source": "Yahoo", "published": "2026-07-06"}],
                         raising=False)
+    # /api/earnings/{symbol} was the ONE covered entry with no stub: it fell through
+    # to yfinance, which fetches via curl_cffi and so slipped past conftest's
+    # socket-level `_no_network` guard — the sweep really called Yahoo (~4-20s) and
+    # its verdict rode on live data. Stub the same seam tests/test_earnings_viz.py
+    # uses (the handler does `import earnings_viz`, so the module attr is shared).
+    monkeypatch.setattr("earnings_viz.get_earnings",
+                        lambda sym: {"available": True, "symbol": sym,
+                                     "quarters": [{"period": "2026-03-31", "eps_actual": 1.2,
+                                                   "eps_estimate": 1.0, "surprise_pct": 20.0}],
+                                     "beat_count": 1, "scored_count": 1, "avg_surprise_pct": 20.0,
+                                     "note": "test"},
+                        raising=False)
     monkeypatch.setattr("auth_users.get_watch", lambda email: ["NVDA", "TSLA"], raising=False)
     monkeypatch.setattr("benchmarks.batch_alpha", lambda *a, **k: [], raising=False)
     monkeypatch.setattr("crypto_correlation.crypto_risk_summary", lambda *a, **k: {"crypto_pct": 0.0}, raising=False)

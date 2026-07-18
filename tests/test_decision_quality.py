@@ -83,7 +83,12 @@ def client(monkeypatch):
 
 def test_levels_endpoint_attaches_decision_quality_clean(client, monkeypatch):
     server, c = client
-    monkeypatch.setattr(server, "_latest_close", lambda sym: 100.0)
+    # /api/levels resolves its quote through _latest_close_meta, not the thin
+    # _latest_close wrapper — patch that seam, and give it a real `source` so the
+    # block is judged on a clean, ATTRIBUTABLE quote (an unattributable one is
+    # degraded by design, which is what this test must not accidentally assert).
+    monkeypatch.setattr(server, "_latest_close_meta",
+                        lambda sym: (100.0, {"source": "yahoo", "substituted": False}))
     monkeypatch.setattr(server, "_price_quality", lambda sym, px: (False, ""))
     monkeypatch.setattr("trade_levels.compute",
                         lambda sym, current_price=None: {"available": True, "symbol": sym,
@@ -96,7 +101,8 @@ def test_levels_endpoint_attaches_decision_quality_clean(client, monkeypatch):
 
 def test_levels_endpoint_attaches_decision_quality_suspect(client, monkeypatch):
     server, c = client
-    monkeypatch.setattr(server, "_latest_close", lambda sym: 17.16)
+    monkeypatch.setattr(server, "_latest_close_meta",           # the seam the handler calls
+                        lambda sym: (17.16, {"source": "yahoo", "substituted": False}))
     monkeypatch.setattr(server, "_price_quality", lambda sym, px: (True, "17.16 below 52-wk low"))
     monkeypatch.setattr(server.price_sanity, "strict_reject_enabled", lambda: False)
     monkeypatch.setattr("trade_levels.compute",

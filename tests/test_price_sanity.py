@@ -75,7 +75,12 @@ def test_analyze_ticker_marks_suspect_price(monkeypatch):
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server, "_latest_close", lambda sym: 73.83)          # broken NFLX-style feed
+    # broken NFLX-style feed. Patch _latest_close_meta: that is the seam the handler
+    # calls, so stubbing the thin _latest_close wrapper left the endpoint grounding on
+    # the LIVE price and this assertion riding on whether real NFLX happened to sit
+    # outside the 52-wk band stubbed below.
+    monkeypatch.setattr(server, "_latest_close_meta",
+                        lambda sym: (73.83, {"source": "yahoo", "substituted": False}))
     monkeypatch.setattr(server, "deep_analyze_ticker",
                         lambda sym, current_price=None, regime_context=None: {
                             "symbol": sym, "verdict": "HOLD", "scores": {"valuation": 40}, "fair_value": {}})
@@ -113,7 +118,8 @@ def _suspect_client(monkeypatch, spend_counter):
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server, "_latest_close", lambda sym: 73.83)      # broken feed
+    monkeypatch.setattr(server, "_latest_close_meta",       # broken feed; the seam the handler calls
+                        lambda sym: (73.83, {"source": "yahoo", "substituted": False}))
     monkeypatch.setattr(market_data, "rh_fundamentals",
                         lambda s: {"low_52": 500.0, "high_52": 1200.0}, raising=False)
 
@@ -154,7 +160,8 @@ def _levels_client(monkeypatch):
     import market_data
     import server
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: False)
-    monkeypatch.setattr(server, "_latest_close", lambda sym: 73.83)       # broken feed
+    monkeypatch.setattr(server, "_latest_close_meta",       # broken feed; the seam the handler calls
+                        lambda sym: (73.83, {"source": "yahoo", "substituted": False}))
     monkeypatch.setattr(market_data, "rh_fundamentals",
                         lambda s: {"low_52": 500.0, "high_52": 1200.0}, raising=False)
     monkeypatch.setattr("trade_levels.compute",

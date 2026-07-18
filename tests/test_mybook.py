@@ -90,7 +90,14 @@ def client(au, monkeypatch):
     import server
     monkeypatch.setattr(server.auth_users, "AUTH_DB_PATH", au.AUTH_DB_PATH)
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
-    monkeypatch.setattr(server, "_latest_close", lambda sym: {"NVDA": 100.0, "AAPL": 200.0}.get(sym),
+    prices = {"NVDA": 100.0, "AAPL": 200.0}
+    # Book valuation reads _latest_close (via _cached_close); /api/analyze-ticker
+    # reads _latest_close_meta. Stub BOTH from one map — stubbing only the wrapper
+    # left the analyze-ticker tests below fetching a live quote, which conftest's
+    # socket-level `_no_network` cannot see (yfinance fetches via curl_cffi).
+    monkeypatch.setattr(server, "_latest_close", lambda sym: prices.get(sym), raising=True)
+    monkeypatch.setattr(server, "_latest_close_meta",
+                        lambda sym: (prices.get(sym), {"source": "yahoo", "substituted": False}),
                         raising=True)
     return server, TestClient(server.app, raise_server_exceptions=False)
 

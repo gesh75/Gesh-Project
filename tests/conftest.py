@@ -36,7 +36,17 @@ class _NetworkBlocked(RuntimeError):
 
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail loudly if any test opens a real socket — proves tests are offline."""
+    """Fail loudly if any test opens a real socket — proves tests are offline.
+
+    Blocking `socket.socket.connect` alone is NOT enough: yfinance >= 1.x fetches
+    through **curl_cffi**, which drives libcurl in C and never touches Python's
+    socket object. An unmocked yfinance call therefore sailed straight past this
+    guard and hit Yahoo for real — silently, and only in whichever test forgot the
+    stub (`/api/earnings/{symbol}` in the customer leak sweep, which the guard was
+    supposed to catch). Block libcurl at `Curl.perform`, the single chokepoint every
+    curl_cffi request (sync + async, Session + module-level) funnels through, so a
+    missing stub surfaces as a loud error instead of a live call.
+    """
 
     def _blocked(*args: object, **kwargs: object) -> None:
         raise _NetworkBlocked(
@@ -45,6 +55,13 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(socket.socket, "connect", _blocked)
+
+    try:  # curl_cffi is a yfinance dependency; guard stays valid if it's absent
+        import curl_cffi
+    except ImportError:
+        pass
+    else:
+        monkeypatch.setattr(curl_cffi.Curl, "perform", _blocked)
 
 
 @pytest.fixture(autouse=True)
