@@ -47,7 +47,10 @@ def test_writer_skips_price_zero_rows(monkeypatch):
     captured = {}
     monkeypatch.setattr(server, "log_equity_snapshot",
                         lambda holdings: captured.setdefault("rows", holdings))
-    monkeypatch.setattr(server, "_last_snapshot_at", 0.0)
+    # Older than any time.monotonic() "now" so the rate-limit guard never early-returns.
+    # (0.0 is NOT "long ago" — monotonic is seconds-since-boot and can be < the 300s
+    # interval on a fresh CI container, which silently skipped the write and KeyError'd.)
+    monkeypatch.setattr(server, "_last_snapshot_at", -1e9)
     holdings = [
         {"symbol": "NVDA", "current_price": 0.0, "equity": 101.98},   # corrupt
         {"symbol": "QQQ", "current_price": 700.0, "equity": 12238.0},  # real
@@ -60,7 +63,10 @@ def test_writer_skips_entirely_when_nothing_real(monkeypatch):
     called = {"n": 0}
     monkeypatch.setattr(server, "log_equity_snapshot",
                         lambda holdings: called.__setitem__("n", called["n"] + 1))
-    monkeypatch.setattr(server, "_last_snapshot_at", 0.0)
+    # Older than any time.monotonic() "now" so the rate-limit guard never early-returns.
+    # (0.0 is NOT "long ago" — monotonic is seconds-since-boot and can be < the 300s
+    # interval on a fresh CI container, which silently skipped the write and KeyError'd.)
+    monkeypatch.setattr(server, "_last_snapshot_at", -1e9)
     server._maybe_log_snapshot([{"symbol": "NVDA", "current_price": 0.0, "equity": 293.3}])
     assert called["n"] == 0                                           # no write at all
 
