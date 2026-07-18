@@ -1174,7 +1174,7 @@ def rename_user_email(old_email: str, new_email: str) -> bool:
 _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
 
 
-def verify_credentials(email: str, password: str) -> bool:
+def verify_credentials_constant_time(email: str, password: str) -> bool:
     """True only when the user exists, is active, and the password matches.
 
     Runs one PBKDF2 verification on EVERY call — even for an unknown or inactive
@@ -1185,6 +1185,11 @@ def verify_credentials(email: str, password: str) -> bool:
         verify_password(password, _DUMMY_PASSWORD_HASH)  # constant-time decoy; result discarded
         return False
     return verify_password(password, u["password_hash"])
+
+
+def verify_credentials(email: str, password: str) -> bool:
+    """Backward-compatible name for the constant-work credential verifier."""
+    return verify_credentials_constant_time(email, password)
 
 
 def touch_last_login(email: str) -> None:

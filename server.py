@@ -102,7 +102,7 @@ def _server_error(exc: Exception) -> HTTPException:
         # Expected, non-secret condition: the broker session expired. Degrade to a
         # clean 503 (frontend renders this as "Offline") instead of a 500 + traceback.
         logger.warning("Robinhood offline: %s", exc)
-        return HTTPException(status_code=503, detail=str(exc))
+        return HTTPException(status_code=503, detail="Broker data temporarily unavailable")
     upstream = _upstream_unavailable_error(exc)
     if upstream is not None:
         logger.warning("Upstream unavailable: %s", exc)
@@ -128,7 +128,7 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
     except ImportError:
         pass
     if isinstance(exc, EnvironmentError) and "ANTHROPIC" in str(exc).upper():
-        return HTTPException(status_code=503, detail=str(exc))
+        return HTTPException(status_code=503, detail="AI service temporarily unavailable")
     cause = exc.__cause__ or exc.__context__
     if cause is not None and cause is not exc:
         nested = _upstream_unavailable_error(cause)
@@ -795,6 +795,24 @@ def _cookie_secure(request: Request | None = None) -> bool:
     return True
 
 
+def _secure_cookie_config_ready() -> bool:
+    """Fail closed when an HTTPS customer URL explicitly disables Secure cookies."""
+    base_url = os.getenv("APP_BASE_URL", "").strip().lower()
+    override = os.getenv("GESH_COOKIE_SECURE", "").strip().lower()
+    explicitly_insecure = override in ("0", "false", "no", "off")
+    return not (base_url.startswith("https://") and explicitly_insecure)
+
+
+def _require_secure_cookie_config() -> None:
+    if not _secure_cookie_config_ready():
+        logger.error(
+            "Authentication disabled: HTTPS APP_BASE_URL with insecure cookie override"
+        )
+        raise HTTPException(
+            status_code=503, detail="Authentication temporarily unavailable"
+        )
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
     return _LOGIN_PAGE
@@ -820,8 +838,11 @@ async def auth_login(request: Request):
         return JSONResponse(status_code=429,
                             content={"ok": False, "detail": "Too many login attempts — try again shortly"},
                             headers={"Retry-After": str(LOGIN_FAIL_WINDOW)})
+    _require_secure_cookie_config()
     # PBKDF2 is CPU-bound (~200k rounds); off-load so concurrent requests keep flowing.
-    ok = await asyncio.to_thread(auth_users.verify_credentials, email, password)
+    ok = await asyncio.to_thread(
+        auth_users.verify_credentials_constant_time, email, password
+    )
     if not ok:
         _login_record_fail(ip, email)
         return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid email or password"})
@@ -852,6 +873,7 @@ def auth_magic(request: Request, token: str = ""):
     session token for the cookie — the short-TTL URL token is never reused as the session.
     Redirect drops the token from the URL and sets Referrer-Policy: no-referrer so the
     landing nav can't leak it onward."""
+    _require_secure_cookie_config()
     # [CLAUDE Task3 2026-07-18] session-conflict guard: when the browser already
     # holds a VALID session for a DIFFERENT user, refuse (409) WITHOUT consuming
     # the magic token — clicking someone else's link must not silently swap the
@@ -1000,12 +1022,24 @@ async def billing_webhook(request: Request):
         return JSONResponse(content=result)
     except PermissionError:
         return JSONResponse(status_code=401, content={"ok": False, "detail": "bad signature"})
-    except ValueError as e:
-        return JSONResponse(status_code=400, content={"ok": False, "detail": str(e)})
-    except billing.RetryableError as e:
+    except ValueError as exc:
+        logger.warning("Invalid webhook payload: %s", exc)
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "detail": "Invalid webhook payload"},
+        )
+    except billing.RetryableError as exc:
         # Non-2xx so Lemon Squeezy RETRIES (it only retries non-2xx) — e.g. the onboarding
         # email could not be sent yet (#1). The dedup claim was already released.
-        return JSONResponse(status_code=503, content={"ok": False, "detail": str(e), "retry": True})
+        logger.warning("Retryable webhook failure: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "detail": "Webhook processing temporarily unavailable",
+                "retry": True,
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         raise _server_error(exc)
 
