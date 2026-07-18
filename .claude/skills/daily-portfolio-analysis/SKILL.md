@@ -57,10 +57,21 @@ snapshot age in the log ≤30 min.
 
 Concise markdown briefing, tables over prose:
 
+0. **Signal-vs-gate banner (FIRST LINE, mandatory).** Before anything else,
+   cross-check `action_plan` against `gate_results`. If ≥2 BUY/ADD rows are
+   rejected by the gate, open the briefing with ONE plain sentence naming it —
+   e.g. "⚠ Signals lean ADD on 5 names, but the risk gate blocked all 5
+   (size > 2% position cap) — net actionable trades today: 0." If nothing is
+   blocked, say so in one line ("All N planned actions cleared the gate."). Never
+   present the action plan without this reconciliation up top.
 1. **Headline** — total, day change, portfolio_score/risk_score,
    `portfolio_verdict`, MC VaR 95% in dollars.
 2. **Action plan** — from `action_plan` + `gate_results`: Priority | Symbol |
    Action | Shares | $ | Rationale | Gate. Use the chain's share counts verbatim.
+   Every row's **Gate** column MUST read APPROVED or REJECTED with the gate's own
+   reason (e.g. "REJECTED — size 24% > 2% cap"). If an `action_plan` row has a
+   blank reason, fill **Rationale** from its consensus verdict + Kelly signal —
+   never render an empty cell.
 3. **Signal conflicts** — reconcile consensus vs Kelly vs AI (Kelly wins sizing;
    momentum wins short-term; RSI≥70 blocks ADD; cash<$500 blocks all ADD).
 4. **Watch items** — regime flips, GARCH≫EWMA stress, alpha grade F, tax-harvest
