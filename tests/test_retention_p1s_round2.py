@@ -28,6 +28,7 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
+    _au.create_user("a@x.com", "pw-test")  # [CLAUDE 2026-07-18] immutable-user-ID: user must exist before positions/tokens
     return _au
 
 

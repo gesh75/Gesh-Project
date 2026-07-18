@@ -339,6 +339,45 @@ def _gate_audit_section(eng: dict) -> str:
 
 gate_audit_html = _gate_audit_section(eng)
 
+# ─── Signal-vs-gate reconciliation banner (added 2026-07-17) ─────────────────
+# Surfaces, in one line at the top, when ADD/BUY signals are blocked by the risk
+# gate — so "the plan says buy but nothing is actionable" can't hide in the table.
+def _signal_gate_banner(eng: dict) -> str:
+    plan  = eng.get('action_plan') or []
+    gates = eng.get('gate_results') or []
+    if not plan:
+        return ''
+    gate_by = {(g.get('symbol'), g.get('action')): g for g in gates}
+    adds = {'BUY', 'ADD'}
+    blocked, cleared, reason = [], [], ''
+    for a in plan:
+        if a.get('action') not in adds:
+            continue
+        g = gate_by.get((a.get('symbol'), a.get('action')))
+        if g is None:
+            continue
+        if g.get('approved'):
+            cleared.append(str(a.get('symbol', '?')))
+        else:
+            blocked.append(str(a.get('symbol', '?')))
+            if not reason and g.get('reason'):
+                reason = str(g.get('reason'))
+    if not (blocked or cleared):
+        return ''
+    cap = ' (size &gt; 2% position cap)' if 'cap' in reason.lower() else ''
+    if blocked and not cleared:
+        return ('<div class="override-banner">⚠️ SIGNAL vs GATE — signals lean ADD on '
+                + f'{len(blocked)} name(s) ({_esc(", ".join(blocked))}), but the risk gate blocked '
+                + f'all of them{cap} — net actionable trades today: 0.</div>')
+    if blocked and cleared:
+        return ('<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
+                + f'⚠️ SIGNAL vs GATE — {len(cleared)} ADD signal(s) cleared the gate '
+                + f'({_esc(", ".join(cleared))}); {len(blocked)} blocked ({_esc(", ".join(blocked))}){cap}.</div>')
+    return ('<div class="override-banner" style="background:#00e87a15;border-color:#00e87a44;color:#00e87a">'
+            + f'✓ SIGNAL vs GATE — all {len(cleared)} planned ADD action(s) cleared the risk gate.</div>')
+
+signal_gate_banner_html = _signal_gate_banner(eng)
+
 # ─── Diversification radar section (advisory-only, new non-held names) ────────
 # Every string cell is HTML-escaped (company/sector come from yfinance, thesis/swap
 # rationale may originate downstream) — never trust free text in an f-string table.
@@ -688,10 +727,12 @@ html = f'''<!DOCTYPE html>
     <div class="stat-card">
       <div class="sl">AI Score</div>
       <div class="sv" style="color:{score_col(port_score)}">{port_score}/100</div>
+      <div style="font-size:9px;color:#7a8a99">model-generated, not a calculation</div>
     </div>
     <div class="stat-card">
-      <div class="sl">Risk Score</div>
+      <div class="sl">AI Risk Opinion</div>
       <div class="sv" style="color:{score_col(100-risk_score)}">{risk_score}/100</div>
+      <div style="font-size:9px;color:#7a8a99">model-generated, not a calculation</div>
     </div>
     <div class="stat-card">
       <div class="sl">VaR 95% (21d)</div>
@@ -724,6 +765,8 @@ html = f'''<!DOCTYPE html>
   <!-- Override banner -->
   {'<div class="override-banner">⚠️ RULE 8 ACTIVE — Cash $' + f'{cash:.2f} < $500 minimum buffer. ALL ADD signals blocked. Priority action: generate $' + f'{500-cash:.0f}+ cash to restore tactical flexibility.</div>' if cash_blocked else ''}
   {('<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">⚠️ RULE 5 ACTIVE — RSI≥70 overrides Kelly ADD → HOLD for: ' + ', '.join(f'{s} (RSI={v:.0f})' for s,v in rsi_overrides.items()) + '</div>') if rsi_overrides else ''}
+
+  {signal_gate_banner_html}
 
   <!-- AI Verdict -->
   <div class="ai-card">

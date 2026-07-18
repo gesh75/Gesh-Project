@@ -996,10 +996,12 @@ def terms_page():
 # ── Unsubscribe: GET confirms, POST mutates (Codex P1, 2026-07-17) ────────────
 # Email security scanners and link-preview bots routinely FETCH every URL in an
 # email — a GET that mutates silently unsubscribed customers who never clicked.
-# Contract now: GET = confirmation page only (idempotent, safe); POST = the
-# actual opt-out. POST accepts the token via query string, JSON {token}, or an
-# RFC 8058 one-click body (mail providers POST "List-Unsubscribe=One-Click" with
-# the token still in the URL). The jobs' emails carry List-Unsubscribe[-Post].
+# Contract: GET = confirmation page only (idempotent, safe); POST = the actual
+# opt-out. POST accepts the token via query string, JSON {token}, or an RFC 8058
+# one-click body (mail providers POST "List-Unsubscribe=One-Click" with the token
+# still in the URL). The jobs' emails carry List-Unsubscribe[-Post].
+# [CLAUDE 2026-07-18] immutable-user-ID migration: verify_token returns the UUID
+# subject — resolve it to the user's CURRENT email before flipping preference flags.
 
 _UNSUB_KINDS = {
     "alerts": ("alerts_unsub", "GESH signal-change alerts", "set_alerts_opt_out"),
@@ -1007,11 +1009,20 @@ _UNSUB_KINDS = {
 }
 
 
+def _unsub_user(kind: str, token: str) -> dict | None:
+    """Validate the typed token and resolve its immutable-UUID subject to the
+    current user record (or None) — one place for the v2-token -> email hop so the
+    confirm page and the mutate path stay consistent."""
+    typ, _label, _setter = _UNSUB_KINDS[kind]
+    uid = auth_users.verify_token(token, expected_typ=typ)
+    return auth_users.get_user_by_id(uid) if uid else None
+
+
 def _unsub_confirm_page(kind: str, token: str) -> HTMLResponse:
     import json
 
-    typ, label, _setter = _UNSUB_KINDS[kind]
-    if not auth_users.verify_token(token, expected_typ=typ):
+    _typ, label, _setter = _UNSUB_KINDS[kind]
+    if not _unsub_user(kind, token):
         raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
     tok_js = json.dumps(token)          # JSON-string embedding — token is ours, escape anyway
     return HTMLResponse(
@@ -1032,7 +1043,7 @@ def _unsub_confirm_page(kind: str, token: str) -> HTMLResponse:
 
 
 async def _unsub_perform(kind: str, request: Request, token_qs: str) -> JSONResponse:
-    typ, _label, setter_name = _UNSUB_KINDS[kind]
+    _typ, _label, setter_name = _UNSUB_KINDS[kind]
     token = (token_qs or "").strip()
     if not token:                       # JSON body (the confirm page's fetch)
         try:
@@ -1047,11 +1058,11 @@ async def _unsub_perform(kind: str, request: Request, token_qs: str) -> JSONResp
             token = dict(parse_qsl(raw)).get("token", "").strip()
         except Exception:
             token = ""
-    email = auth_users.verify_token(token, expected_typ=typ)
-    if not email:
+    user = _unsub_user(kind, token)
+    if not user:
         return JSONResponse(status_code=400,
                             content={"ok": False, "detail": "Invalid or expired unsubscribe link"})
-    getattr(auth_users, setter_name)(email, True)
+    getattr(auth_users, setter_name)(user["email"], True)
     return JSONResponse(content={"ok": True})
 
 

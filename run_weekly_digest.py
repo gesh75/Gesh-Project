@@ -56,12 +56,13 @@ def _close_for(sym: str) -> float | None:
 
 def _customers() -> list[str]:
     with auth_users._conn() as con:  # noqa: SLF001 — same-package convention
+        # [CLAUDE 2026-07-18] immutable-user-ID migration: child tables key on user_id.
         rows = con.execute(
-            "SELECT DISTINCT s.email FROM ("
-            "  SELECT email FROM watchlist UNION SELECT email FROM customer_positions) s "
-            "LEFT JOIN users u ON u.email=s.email "
+            "SELECT DISTINCT u.email FROM ("
+            "  SELECT user_id FROM watchlist UNION SELECT user_id FROM customer_positions) s "
+            "JOIN users u ON u.user_id=s.user_id "
             "WHERE COALESCE(u.digest_opt_out,0)=0 AND COALESCE(u.is_active,1)=1 "
-            "ORDER BY s.email").fetchall()
+            "ORDER BY u.email").fetchall()
     return [r["email"] for r in rows]
 
 

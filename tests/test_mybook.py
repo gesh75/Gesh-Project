@@ -34,6 +34,14 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
+    for email in (
+        "a@x.com",
+        "b@x.com",
+        "cust@x.com",
+        "other@x.com",
+        "georgy75@gmail.com",
+    ):
+        _au.create_user(email, "test-password")
     return _au
 
 
@@ -82,7 +90,14 @@ def client(au, monkeypatch):
     import server
     monkeypatch.setattr(server.auth_users, "AUTH_DB_PATH", au.AUTH_DB_PATH)
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
-    monkeypatch.setattr(server, "_latest_close", lambda sym: {"NVDA": 100.0, "AAPL": 200.0}.get(sym),
+    prices = {"NVDA": 100.0, "AAPL": 200.0}
+    # Book valuation reads _latest_close (via _cached_close); /api/analyze-ticker
+    # reads _latest_close_meta. Stub BOTH from one map — stubbing only the wrapper
+    # left the analyze-ticker tests below fetching a live quote, which conftest's
+    # socket-level `_no_network` cannot see (yfinance fetches via curl_cffi).
+    monkeypatch.setattr(server, "_latest_close", lambda sym: prices.get(sym), raising=True)
+    monkeypatch.setattr(server, "_latest_close_meta",
+                        lambda sym: (prices.get(sym), {"source": "yahoo", "substituted": False}),
                         raising=True)
     return server, TestClient(server.app, raise_server_exceptions=False)
 
@@ -332,7 +347,10 @@ def test_saved_analyses_pruned(au):
         au.save_book_analysis("a@x.com", {"n": i})
     import sqlite3
     con = sqlite3.connect(au.AUTH_DB_PATH)
-    n = con.execute("SELECT COUNT(*) FROM customer_analyses WHERE email='a@x.com'").fetchone()[0]
+    n = con.execute(
+        "SELECT COUNT(*) FROM customer_analyses WHERE user_id=?",
+        (au.resolve_user_id("a@x.com"),),
+    ).fetchone()[0]
     con.close()
     assert n == au._MAX_ANALYSES_PER_USER
     assert au.get_latest_book_analysis("a@x.com")["n"] == 9
@@ -515,7 +533,7 @@ def test_desk_tier_multiplies_quota(client, monkeypatch, au):
 
 def test_unknown_tier_gets_base_quota(client, monkeypatch, au):
     server, c = client
-    _as(server, monkeypatch, "cust@x.com")               # no users row at all
+    _as(server, monkeypatch, "cust@x.com")               # user has no billing tier
     counters = _stub_engines(server, monkeypatch)
     monkeypatch.setenv("QUOTA_DAILY_BOOK_ANALYSIS", "1")
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")

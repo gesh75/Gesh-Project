@@ -16,6 +16,12 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
+    # [CLAUDE 2026-07-18] immutable-user-ID migration: watchlist/book/tokens now
+    # require a real active user — register the fixture emails up front.
+    _au.create_user("a@x.com", "pw-test")
+    _au.create_user("b@x.com", "pw-test")
+    _au.create_user("cust@x.com", "pw-test")
+    _au.create_user("georgy75@gmail.com", "pw-test")
     return _au
 
 

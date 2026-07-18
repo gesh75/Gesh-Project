@@ -1,17 +1,16 @@
 """
 tests/test_progress_view.py — the /progress founder cockpit (reader side).
 
-The weekly tracker (gesh-project-trading) persists a full status row to
-weekly_snapshots. This module reads that row read-only and renders the :9000
-cockpit, computing a LIVE days-to-alpha countdown so it stays current between
-the Friday writes. Honest "pending first review" state when no snapshot exists.
+The weekly tracker (gesh-project-trading) persists a historical status row to
+weekly_snapshots. Readiness comes from the authoritative versioned gate DTO plus
+the audited product/operations blockers; the retired September countdown is
+never rendered as a launch gate.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date
 from pathlib import Path
 
 import progress_view
@@ -52,7 +51,8 @@ class TestLoadProgress:
         db.touch()
         data = progress_view.load_progress(db, today="2026-06-03")
         assert data["has_data"] is False
-        assert data["days_to_sep1"] == (date(2026, 9, 1) - date(2026, 6, 3)).days
+        assert data["signal_gate"]["required"] == 100
+        assert data["readiness"]["product_beta"]["state"] == "BLOCKED"
 
     def test_missing_db_is_pending(self, tmp_path):
         data = progress_view.load_progress(tmp_path / "nope.db", today="2026-06-03")
@@ -66,11 +66,30 @@ class TestLoadProgress:
         assert data["latest"]["closed_n"] == 6
         assert data["latest"]["status"] == "ON TRACK"
 
-    def test_countdown_is_live_not_snapshot(self, tmp_path):
+    def test_retired_snapshot_deadline_is_context_only(self, tmp_path):
         db = tmp_path / "g.db"
         _seed_snapshot(db, days_to_sep1=88)         # snapshot value (stale)
         data = progress_view.load_progress(db, today="2026-08-25")
-        assert data["days_to_sep1"] == (date(2026, 9, 1) - date(2026, 8, 25)).days  # recomputed live
+        assert "days_to_sep1" not in data
+        assert data["latest"]["days_to_sep1"] == 88
+
+    def test_authoritative_gate_is_injected_and_fail_closed(self, tmp_path):
+        db = tmp_path / "g.db"
+        db.touch()
+        gate = {"version": 2, "cohort": "engine", "closes": 16, "required": 100,
+                "criteria": {}, "pass": False, "summary": "negative expectancy",
+                "fallback": False, "as_of": "2026-07-18T10:00:00Z"}
+        data = progress_view.load_progress(db, gate_loader=lambda _path: gate)
+        assert data["signal_gate"] == gate
+        assert data["readiness"]["signal_evidence"]["state"] == "BLOCKED"
+
+    def test_healthy_injected_gate_without_fallback_key_is_not_degraded(self, tmp_path):
+        db = tmp_path / "g.db"
+        db.touch()
+        gate = {"version": 2, "cohort": "engine", "closes": 100, "required": 100,
+                "criteria": {}, "pass": True, "summary": "all criteria passed"}
+        data = progress_view.load_progress(db, gate_loader=lambda _path: gate)
+        assert data["signal_gate"]["fallback"] is False
 
 
 class TestRenderProgressHtml:
@@ -79,21 +98,33 @@ class TestRenderProgressHtml:
         db.touch()
         html = progress_view.render_progress_html(progress_view.load_progress(db, today="2026-06-03"))
         assert "<!doctype html" in html.lower()
-        assert "ALPHA" in html.upper()
+        assert "PAID-BETA READINESS" in html.upper()
+        assert "SIGNAL EVIDENCE" in html.upper()
+        assert "OPERATIONS" in html.upper()
         assert "NOT FINANCIAL ADVICE" in html.upper()
+        assert "DAYS TO SEP-1 ALPHA" not in html.upper()
+        assert "30 gate" not in html
 
     def test_full_render(self, tmp_path):
         db = tmp_path / "g.db"
         _seed_snapshot(db)
         html = progress_view.render_progress_html(progress_view.load_progress(db, today="2026-06-08"))
-        assert "6/30" in html                       # closed gate
-        assert "ON TRACK" in html
-        assert "payment" in html.lower()            # milestone checklist
+        assert "of 100" in html                      # authoritative gate floor
+        assert "Legal + privacy review" in html
+        assert "Legacy weekly snapshot" in html
         assert "NOT FINANCIAL ADVICE" in html.upper()
         assert "<script" not in html.lower()        # self-contained (inline SVG)
+        assert "6/30" not in html
 
     def test_off_track_shows_red_status(self, tmp_path):
         db = tmp_path / "g.db"
         _seed_snapshot(db, status="OFF TRACK", on_track=0, closed_delta=0, actual_pace=0.0)
         html = progress_view.render_progress_html(progress_view.load_progress(db, today="2026-06-08"))
-        assert "OFF TRACK" in html
+        assert "OFF TRACK" in html                  # retained only as legacy context
+
+    def test_corrupt_legacy_numeric_value_fails_soft_and_escapes(self, tmp_path):
+        db = tmp_path / "g.db"
+        _seed_snapshot(db, closed_n="<script>alert(1)</script>")
+        html = progress_view.render_progress_html(progress_view.load_progress(db))
+        assert "<script>alert(1)</script>" not in html
+        assert "0 historical closes" in html

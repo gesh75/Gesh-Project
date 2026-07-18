@@ -26,6 +26,7 @@ Then enable the wall:
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import hmac
 import json
@@ -33,12 +34,14 @@ import logging
 import os
 import secrets
 import sqlite3
+import stat
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 AUTH_DB_PATH = Path(os.getenv("GESH_AUTH_DB", str(Path(__file__).parent / "gesh_auth.db")))
 TOKEN_TTL_SECONDS = int(os.getenv("GESH_AUTH_TTL", "604800"))   # 7 days
@@ -116,6 +119,8 @@ def verify_password(password: str, stored: str) -> bool:
 
 # ── session token (HMAC-signed, JWT-style, stdlib) ──────────────────────────────
 
+_TOKEN_SCHEMA_VERSION = 2
+
 def _b64u(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
@@ -124,14 +129,34 @@ def _b64u_dec(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def _is_canonical_user_id(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        return str(uuid.UUID(value)) == value
+    except (ValueError, AttributeError):
+        return False
+
+
 def issue_token(email: str, ttl: int | None = None, typ: str = "session") -> str:
-    """Mint an HMAC-signed token. `typ` ('session' | 'magic') is BOUND into the signed
-    payload so the two purposes are NOT interchangeable: a short-TTL magic-link token can
-    never be replayed as a long-lived session cookie (H1). A random `jti` makes each token
-    unique so it can be individually tracked/spent."""
+    """Mint a versioned token bound to the active user's immutable UUID.
+
+    The public caller still supplies email for server compatibility, but mutable email is
+    never written into the signed identity claim. Purpose and schema version are also
+    signed, and a random ``jti`` keeps magic tokens independently spendable.
+    """
+    user_id = resolve_user_id(email)
+    if user_id is None:
+        raise ValueError("token subject must be a current active user")
     exp = int(time.time()) + (TOKEN_TTL_SECONDS if ttl is None else ttl)
     payload = _b64u(json.dumps(
-        {"sub": email, "exp": exp, "typ": typ, "jti": secrets.token_urlsafe(8)},
+        {
+            "sub": user_id,
+            "exp": exp,
+            "typ": typ,
+            "ver": _TOKEN_SCHEMA_VERSION,
+            "jti": secrets.token_urlsafe(8),
+        },
         separators=(",", ":"),
     ).encode())
     sig = _b64u(hmac.new(_secret(), payload.encode(), hashlib.sha256).digest())
@@ -139,11 +164,12 @@ def issue_token(email: str, ttl: int | None = None, typ: str = "session") -> str
 
 
 def verify_token(token: str | None, expected_typ: str | None = "session") -> str | None:
-    """Return the subject (email) for a valid, unexpired token; else None.
+    """Return the immutable UUID subject for a valid schema-v2 token; else None.
 
-    `expected_typ` enforces the token's purpose claim. Tokens minted before the `typ`
-    claim existed have no `typ` and are treated as 'session' (back-compat grace for
-    cookies issued before this change). Pass expected_typ=None to skip the check."""
+    Tokens without the exact schema version, including all legacy email-subject tokens,
+    fail closed. ``expected_typ`` enforces token purpose; pass ``None`` only to skip the
+    purpose comparison, never identity/version validation.
+    """
     if not token:
         return None
     try:
@@ -152,67 +178,111 @@ def verify_token(token: str | None, expected_typ: str | None = "session") -> str
         if not hmac.compare_digest(sig, expected):
             return None
         data = json.loads(_b64u_dec(payload_b64))
+        if not isinstance(data, dict) or data.get("ver") != _TOKEN_SCHEMA_VERSION:
+            return None
         if int(data.get("exp", 0)) < int(time.time()):
             return None
-        if expected_typ is not None and data.get("typ", "session") != expected_typ:
+        if expected_typ is not None and data.get("typ") != expected_typ:
             return None        # wrong purpose (e.g. a magic token presented as a session)
-        return data.get("sub")
+        subject = data.get("sub")
+        return subject if _is_canonical_user_id(subject) else None
     except Exception:
         return None
 
 
 # ── user store ──────────────────────────────────────────────────────────────────
 
-_DDL = """
-CREATE TABLE IF NOT EXISTS users (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    email         TEXT    NOT NULL UNIQUE,
-    password_hash TEXT    NOT NULL,
-    is_active     INTEGER NOT NULL DEFAULT 1,
-    created_at    TEXT    NOT NULL DEFAULT '',
-    last_login_at TEXT
-);
-CREATE TABLE IF NOT EXISTS used_magic_tokens (
-    token_hash TEXT PRIMARY KEY,
-    used_at    TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS watchlist (
-    email    TEXT NOT NULL,
-    symbol   TEXT NOT NULL,
-    added_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (email, symbol)
-);
-CREATE TABLE IF NOT EXISTS customer_positions (
-    email      TEXT NOT NULL,
-    symbol     TEXT NOT NULL,
-    shares     REAL NOT NULL,
-    avg_cost   REAL,
-    updated_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (email, symbol)
-);
-CREATE TABLE IF NOT EXISTS customer_analyses (
-    email       TEXT NOT NULL,
-    result_json TEXT NOT NULL,
-    created_at  TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_customer_analyses_email
-    ON customer_analyses (email, created_at);
-CREATE TABLE IF NOT EXISTS usage_events (
-    email  TEXT NOT NULL,
-    event  TEXT NOT NULL,
-    detail TEXT NOT NULL DEFAULT '',
-    at     TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_usage_events_at ON usage_events (at);
-CREATE TABLE IF NOT EXISTS customer_book_prefs (
-    email        TEXT PRIMARY KEY,
-    equal_weight INTEGER NOT NULL DEFAULT 0,
-    updated_at   TEXT NOT NULL DEFAULT ''
-);
-"""
+_SCHEMA_VERSION = 2
+_BUSY_TIMEOUT_MS = 5_000
+_PRE_V2_BACKUP_SUFFIX = ".pre-v2.bak"
+_BACKUP_MANIFEST_VERSION = 1
+_OWNER_METADATA_KEY = "owner_user_id"
+_OWNER_INITIALIZED_KEY = "owner_marker_initialized"
+
+_CORE_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        email         TEXT    NOT NULL UNIQUE,
+        password_hash TEXT    NOT NULL,
+        is_active     INTEGER NOT NULL DEFAULT 1,
+        created_at    TEXT    NOT NULL DEFAULT '',
+        last_login_at TEXT,
+        user_id       TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS used_magic_tokens (
+        token_hash TEXT PRIMARY KEY,
+        used_at    TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS auth_metadata (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """,
+)
+
+_CHILD_TABLE_DDL = {
+    "watchlist": """
+        CREATE TABLE {table} (
+            user_id  TEXT NOT NULL,
+            symbol   TEXT NOT NULL,
+            added_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (user_id, symbol),
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
+    "customer_positions": """
+        CREATE TABLE {table} (
+            user_id    TEXT NOT NULL,
+            symbol     TEXT NOT NULL,
+            shares     REAL NOT NULL,
+            avg_cost   REAL,
+            updated_at TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (user_id, symbol),
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
+    "customer_analyses": """
+        CREATE TABLE {table} (
+            user_id     TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
+    "usage_events": """
+        CREATE TABLE {table} (
+            user_id TEXT NOT NULL,
+            event   TEXT NOT NULL,
+            detail  TEXT NOT NULL DEFAULT '',
+            at      TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
+    "customer_book_prefs": """
+        CREATE TABLE {table} (
+            user_id      TEXT PRIMARY KEY NOT NULL,
+            equal_weight INTEGER NOT NULL DEFAULT 0,
+            updated_at   TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
+}
+
+_CHILD_DATA_COLUMNS = {
+    "watchlist": ("symbol", "added_at"),
+    "customer_positions": ("symbol", "shares", "avg_cost", "updated_at"),
+    "customer_analyses": ("result_json", "created_at"),
+    "usage_events": ("event", "detail", "at"),
+    "customer_book_prefs": ("equal_weight", "updated_at"),
+}
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
-# migration rather than baked into _DDL so EXISTING gesh_auth.db files pick them up too
+# migration rather than baked into the base DDL so EXISTING gesh_auth.db files pick them up too
 # (CREATE TABLE IF NOT EXISTS never alters an existing table). tier/billing_* are NULL for
 # pre-payment alpha users; the login wall still gates only on is_active.
 _BILLING_COLUMNS = {
@@ -235,8 +305,8 @@ _PREF_COLUMNS = {
 }
 
 
-def _migrate(con) -> None:
-    """Add any missing billing/preference columns (idempotent — safe on every connect)."""
+def _migrate(con: sqlite3.Connection) -> None:
+    """Add missing billing/preference columns and indexes (idempotent — safe on every connect)."""
     have = {r["name"] for r in con.execute("PRAGMA table_info(users)").fetchall()}
     for col, decl in _BILLING_COLUMNS.items():
         if col not in have:
@@ -257,10 +327,740 @@ def _migrate(con) -> None:
     except sqlite3.IntegrityError as e:
         logging.getLogger(__name__).warning(
             "auth_users: could not build unique billing_sub_id index (dupes exist): %s", e)
-    # Prune spent magic tokens older than a day — they are dead long before that (15-min
-    # TTL), so this just stops the table growing unbounded (M3).
+
+
+def _prune_used_magic_tokens(con: sqlite3.Connection) -> None:
+    """Prune dead tokens when an existing write path already owns a transaction."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     con.execute("DELETE FROM used_magic_tokens WHERE used_at < ?", (cutoff,))
+
+
+def _new_user_id() -> str:
+    return str(uuid.uuid4())
+
+
+def _configured_owner_email() -> str:
+    return _norm(os.getenv("GESH_OWNER_EMAIL", "georgy75@gmail.com"))
+
+
+def _claim_owner_marker(
+    con: sqlite3.Connection, email: str, user_id: str
+) -> None:
+    """Persist the first configured owner's UUID; never transfer it by email reuse."""
+    if email != _configured_owner_email():
+        return
+    con.execute(
+        "INSERT OR IGNORE INTO auth_metadata (key, value) VALUES (?, ?)",
+        (_OWNER_METADATA_KEY, user_id),
+    )
+
+
+def _ensure_owner_marker(con: sqlite3.Connection) -> None:
+    """Backfill legacy owner email once, retaining the immutable marker thereafter."""
+    initialized = con.execute(
+        "SELECT 1 FROM auth_metadata WHERE key=?",
+        (_OWNER_INITIALIZED_KEY,),
+    ).fetchone()
+    if initialized:
+        return
+
+    existing = con.execute(
+        "SELECT 1 FROM auth_metadata WHERE key=?",
+        (_OWNER_METADATA_KEY,),
+    ).fetchone()
+    if not existing:
+        row = con.execute(
+            "SELECT user_id FROM users WHERE email=? ORDER BY id LIMIT 1",
+            (_configured_owner_email(),),
+        ).fetchone()
+        if row:
+            _claim_owner_marker(con, _configured_owner_email(), str(row["user_id"]))
+    con.execute(
+        "INSERT INTO auth_metadata (key, value) VALUES (?, '1')",
+        (_OWNER_INITIALIZED_KEY,),
+    )
+
+
+def _pre_v2_backup_path(source: Path) -> Path:
+    return source.with_suffix(_PRE_V2_BACKUP_SUFFIX)
+
+
+def _pre_v2_manifest_path(source: Path) -> Path:
+    backup = _pre_v2_backup_path(source)
+    return backup.with_name(f"{backup.name}.manifest.json")
+
+
+def _database_path(con: sqlite3.Connection) -> Path | None:
+    row = con.execute("PRAGMA database_list").fetchone()
+    filename = str(row[2] or "") if row else ""
+    return Path(filename) if filename else None
+
+
+def _path_entry_exists(path: Path) -> bool:
+    """Return true for every directory entry, including a broken symlink."""
+    return os.path.lexists(path)
+
+
+def _require_regular_file(path: Path, label: str) -> os.stat_result:
+    """Reject missing, symlinked, and non-regular security artifacts."""
+    try:
+        state = path.lstat()
+    except FileNotFoundError as exc:
+        raise sqlite3.DatabaseError(f"{label} is missing: {path}") from exc
+    if stat.S_ISLNK(state.st_mode):
+        raise sqlite3.DatabaseError(
+            f"{label} must be a regular file, not a symbolic link: {path}"
+        )
+    if not stat.S_ISREG(state.st_mode):
+        raise sqlite3.DatabaseError(f"{label} must be a regular file: {path}")
+    return state
+
+
+def _ensure_backup_private(path: Path) -> None:
+    _require_regular_file(path, "backup artifact")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if _require_regular_file(path, "backup artifact").st_mode & 0o077:
+        raise PermissionError(f"backup permissions are not owner-only: {path}")
+
+
+def _fsync_file(path: Path) -> None:
+    """Durably flush a regular file without following a replacement symlink."""
+    _require_regular_file(path, "backup artifact")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise sqlite3.DatabaseError(f"backup artifact must be a regular file: {path}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Flush directory entries where the host filesystem supports it."""
+    unsupported = {
+        value
+        for value in (
+            errno.EINVAL,
+            getattr(errno, "ENOTSUP", None),
+            getattr(errno, "EOPNOTSUPP", None),
+        )
+        if value is not None
+    }
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno in unsupported:
+            return
+        raise
+    try:
+        try:
+            os.fsync(descriptor)
+        except OSError as exc:
+            if exc.errno not in unsupported:
+                raise
+    finally:
+        os.close(descriptor)
+
+
+def _schema_tables(con: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+
+
+def _schema_fingerprint(con: sqlite3.Connection) -> str:
+    objects = [
+        tuple(row)
+        for row in con.execute(
+            "SELECT type, name, tbl_name, COALESCE(sql, '') FROM sqlite_master "
+            "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name, tbl_name, sql"
+        ).fetchall()
+    ]
+    encoded = json.dumps(objects, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _fingerprint_value(value: object) -> list[str]:
+    if value is None:
+        return ["null", ""]
+    if isinstance(value, bytes):
+        return ["blob", base64.b64encode(value).decode()]
+    if isinstance(value, float):
+        return ["float", value.hex()]
+    if isinstance(value, int):
+        return ["integer", str(value)]
+    if isinstance(value, str):
+        return ["text", value]
+    return [type(value).__name__, repr(value)]
+
+
+def _quote_identifier(value: str) -> str:
+    return f'"{value.replace(chr(34), chr(34) * 2)}"'
+
+
+def _logical_database_fingerprint(con: sqlite3.Connection) -> str:
+    tables: list[dict[str, object]] = []
+    for table in sorted(_schema_tables(con)):
+        quoted = _quote_identifier(table)
+        columns = [
+            str(row[1])
+            for row in con.execute(f"PRAGMA table_info({quoted})").fetchall()
+        ]
+        rows = [
+            [_fingerprint_value(value) for value in tuple(row)]
+            for row in con.execute(f"SELECT * FROM {quoted}").fetchall()
+        ]
+        rows.sort(key=lambda row: json.dumps(row, separators=(",", ":")))
+        tables.append({"name": table, "columns": columns, "rows": rows})
+    payload = {
+        "schema": _schema_fingerprint(con),
+        "tables": tables,
+        "user_version": int(con.execute("PRAGMA user_version").fetchone()[0]),
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    _require_regular_file(path, "backup artifact")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_identity(path: Path) -> dict[str, int | str]:
+    resolved = path.resolve()
+    state = resolved.stat()
+    identity = {
+        "path": str(resolved),
+        "device": int(state.st_dev),
+        "inode": int(state.st_ino),
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return {**identity, "sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def _verify_sqlite_file(
+    path: Path,
+    expected_tables: set[str],
+    *,
+    expected_schema: str,
+    expected_version: int,
+) -> dict[str, str | int]:
+    _require_regular_file(path, "pre-v2 backup")
+    with sqlite3.connect(path) as candidate:
+        result = candidate.execute("PRAGMA integrity_check").fetchone()
+        actual_tables = _schema_tables(candidate)
+        actual_version = int(candidate.execute("PRAGMA user_version").fetchone()[0])
+        actual_schema = _schema_fingerprint(candidate)
+        snapshot = _logical_database_fingerprint(candidate)
+    if not result or result[0] != "ok":
+        raise sqlite3.DatabaseError(f"backup integrity check failed for {path}")
+    if actual_tables != expected_tables:
+        raise sqlite3.DatabaseError(
+            f"backup schema mismatch for {path}: "
+            f"expected {sorted(expected_tables)}, got {sorted(actual_tables)}"
+        )
+    if actual_version >= _SCHEMA_VERSION or actual_version != expected_version:
+        raise sqlite3.DatabaseError(
+            f"backup is not the expected pre-v2 schema version for {path}: "
+            f"expected {expected_version}, got {actual_version}"
+        )
+    if actual_schema != expected_schema:
+        raise sqlite3.DatabaseError(f"backup schema fingerprint mismatch for {path}")
+    return {
+        "schema_sha256": actual_schema,
+        "snapshot_sha256": snapshot,
+        "user_version": actual_version,
+    }
+
+
+def _read_backup_manifest(path: Path) -> dict[str, object]:
+    _require_regular_file(path, "source-linked backup manifest")
+    _ensure_backup_private(path)
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise sqlite3.DatabaseError(f"backup manifest is invalid: {path}") from exc
+    if not isinstance(manifest, dict):
+        raise sqlite3.DatabaseError(f"backup manifest is invalid: {path}")
+    return manifest
+
+
+def _write_private_manifest(path: Path, manifest: dict[str, object]) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _build_backup_manifest(
+    *,
+    source_identity: dict[str, int | str],
+    source_user_version: int,
+    source_schema: str,
+    snapshot: str,
+    backup_path: Path,
+) -> dict[str, object]:
+    return {
+        "manifest_version": _BACKUP_MANIFEST_VERSION,
+        "source_identity_sha256": source_identity["sha256"],
+        "source_path": source_identity["path"],
+        "source_device": source_identity["device"],
+        "source_inode": source_identity["inode"],
+        "source_user_version": source_user_version,
+        "source_schema_sha256": source_schema,
+        "snapshot_sha256": snapshot,
+        "backup_file_sha256": _file_sha256(backup_path),
+    }
+
+
+def _adopt_exact_unmanifested_backup(
+    con: sqlite3.Connection,
+    source_path: Path,
+    destination: Path,
+    manifest_path: Path,
+    *,
+    expected_tables: set[str],
+    expected_schema: str,
+    expected_version: int,
+) -> None:
+    """Provenance a crash-left backup only when it exactly matches the source."""
+    backup = _verify_sqlite_file(
+        destination,
+        expected_tables,
+        expected_schema=expected_schema,
+        expected_version=expected_version,
+    )
+    _ensure_backup_private(destination)
+    source_identity = _source_identity(source_path)
+    source_snapshot = _logical_database_fingerprint(con)
+    if backup["snapshot_sha256"] != source_snapshot:
+        raise sqlite3.DatabaseError(
+            f"unmanifested backup logical snapshot does not match source: {destination}"
+        )
+
+    nonce = uuid.uuid4().hex
+    temporary_manifest = manifest_path.with_name(
+        f".{manifest_path.name}.{nonce}.tmp"
+    )
+    try:
+        manifest = _build_backup_manifest(
+            source_identity=source_identity,
+            source_user_version=expected_version,
+            source_schema=expected_schema,
+            snapshot=source_snapshot,
+            backup_path=destination,
+        )
+        _write_private_manifest(temporary_manifest, manifest)
+        _ensure_backup_private(temporary_manifest)
+        _fsync_file(destination)
+        _fsync_file(temporary_manifest)
+        if _source_identity(source_path) != source_identity:
+            raise sqlite3.DatabaseError("source identity changed during backup adoption")
+        os.replace(temporary_manifest, manifest_path)
+        _fsync_file(manifest_path)
+        _fsync_directory(manifest_path.parent)
+        _validate_existing_pre_v2_backup(
+            con, source_path, destination, manifest_path
+        )
+    except Exception:
+        temporary_manifest.unlink(missing_ok=True)
+        raise
+
+
+def _validate_existing_pre_v2_backup(
+    con: sqlite3.Connection,
+    source_path: Path,
+    destination: Path,
+    manifest_path: Path,
+) -> None:
+    expected_tables = _schema_tables(con)
+    expected_schema = _schema_fingerprint(con)
+    expected_version = int(con.execute("PRAGMA user_version").fetchone()[0])
+    backup = _verify_sqlite_file(
+        destination,
+        expected_tables,
+        expected_schema=expected_schema,
+        expected_version=expected_version,
+    )
+    _ensure_backup_private(destination)
+    manifest = _read_backup_manifest(manifest_path)
+    identity = _source_identity(source_path)
+    required = {
+        "manifest_version": _BACKUP_MANIFEST_VERSION,
+        "source_identity_sha256": identity["sha256"],
+        "source_path": identity["path"],
+        "source_device": identity["device"],
+        "source_inode": identity["inode"],
+        "source_user_version": expected_version,
+        "source_schema_sha256": expected_schema,
+        "snapshot_sha256": backup["snapshot_sha256"],
+        "backup_file_sha256": _file_sha256(destination),
+    }
+    for key, expected in required.items():
+        if manifest.get(key) != expected:
+            label = "source identity" if key.startswith("source_") else "content"
+            raise sqlite3.DatabaseError(
+                f"backup manifest {label} mismatch for {destination}: {key}"
+            )
+
+
+def _ensure_pre_v2_backup(con: sqlite3.Connection) -> None:
+    """Create one source-linked, owner-only backup before legacy schema changes."""
+    source_path = _database_path(con)
+    if source_path is None:
+        return
+    destination = _pre_v2_backup_path(source_path)
+    manifest_path = _pre_v2_manifest_path(source_path)
+    expected_tables = _schema_tables(con)
+    expected_schema = _schema_fingerprint(con)
+    expected_version = int(con.execute("PRAGMA user_version").fetchone()[0])
+    if _path_entry_exists(destination):
+        _require_regular_file(destination, "pre-v2 backup")
+        if _path_entry_exists(manifest_path):
+            _validate_existing_pre_v2_backup(
+                con, source_path, destination, manifest_path
+            )
+        else:
+            _adopt_exact_unmanifested_backup(
+                con,
+                source_path,
+                destination,
+                manifest_path,
+                expected_tables=expected_tables,
+                expected_schema=expected_schema,
+                expected_version=expected_version,
+            )
+        return
+    if _path_entry_exists(manifest_path):
+        _require_regular_file(manifest_path, "source-linked backup manifest")
+        raise sqlite3.DatabaseError(
+            f"backup manifest exists without its source-linked backup: {manifest_path}"
+        )
+
+    nonce = uuid.uuid4().hex
+    temporary = destination.with_name(f".{destination.name}.{nonce}.tmp")
+    temporary_manifest = manifest_path.with_name(f".{manifest_path.name}.{nonce}.tmp")
+    source_identity = _source_identity(source_path)
+    source_snapshot = _logical_database_fingerprint(con)
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        os.close(descriptor)
+        with (
+            sqlite3.connect(source_path, timeout=_BUSY_TIMEOUT_MS / 1_000) as source,
+            sqlite3.connect(temporary) as backup,
+        ):
+            source.backup(backup)
+        verified = _verify_sqlite_file(
+            temporary,
+            expected_tables,
+            expected_schema=expected_schema,
+            expected_version=expected_version,
+        )
+        if verified["snapshot_sha256"] != source_snapshot:
+            raise sqlite3.DatabaseError(
+                f"backup logical snapshot does not match source: {temporary}"
+            )
+        if _source_identity(source_path) != source_identity:
+            raise sqlite3.DatabaseError("source identity changed during backup")
+        manifest = _build_backup_manifest(
+            source_identity=source_identity,
+            source_user_version=expected_version,
+            source_schema=expected_schema,
+            snapshot=source_snapshot,
+            backup_path=temporary,
+        )
+        _write_private_manifest(temporary_manifest, manifest)
+        _ensure_backup_private(temporary)
+        _ensure_backup_private(temporary_manifest)
+        _fsync_file(temporary)
+        _fsync_file(temporary_manifest)
+        os.replace(temporary, destination)
+        _fsync_file(destination)
+        _fsync_directory(destination.parent)
+        os.replace(temporary_manifest, manifest_path)
+        _fsync_file(manifest_path)
+        _fsync_directory(manifest_path.parent)
+        _ensure_backup_private(destination)
+        _ensure_backup_private(manifest_path)
+        _validate_existing_pre_v2_backup(
+            con, source_path, destination, manifest_path
+        )
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        temporary_manifest.unlink(missing_ok=True)
+        raise
+
+
+def _has_existing_schema(con: sqlite3.Connection) -> bool:
+    return bool(_schema_tables(con))
+
+
+def _ensure_core_schema(con: sqlite3.Connection) -> None:
+    for statement in _CORE_DDL:
+        con.execute(statement)
+
+
+def _create_child_table(con: sqlite3.Connection, table: str, target: str) -> None:
+    con.execute(_CHILD_TABLE_DDL[table].format(table=target))
+
+
+def _has_user_id_cascade(con: sqlite3.Connection, table: str) -> bool:
+    return any(
+        row[2] == "users"
+        and row[3] == "user_id"
+        and row[4] == "user_id"
+        and row[6].upper() == "CASCADE"
+        for row in con.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+    )
+
+
+def _has_unique_user_id_index(con: sqlite3.Connection) -> bool:
+    for row in con.execute("PRAGMA index_list(users)").fetchall():
+        if row[1] != "ux_users_user_id" or not bool(row[2]) or bool(row[4]):
+            continue
+        columns = [
+            info[2]
+            for info in con.execute(
+                f"PRAGMA index_info({_quote_identifier(str(row[1]))})"
+            ).fetchall()
+        ]
+        return columns == ["user_id"]
+    return False
+
+
+def _schema_v2_ready(con: sqlite3.Connection) -> bool:
+    version = int(con.execute("PRAGMA user_version").fetchone()[0])
+    if version < _SCHEMA_VERSION:
+        return False
+
+    tables = {
+        row["name"]
+        for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    if not {"users", "used_magic_tokens", "auth_metadata", *_CHILD_TABLE_DDL}.issubset(
+        tables
+    ):
+        return False
+
+    user_columns = {
+        row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if not {"user_id", *_BILLING_COLUMNS}.issubset(user_columns):
+        return False
+    if con.execute(
+        "SELECT 1 FROM users WHERE user_id IS NULL OR trim(user_id)='' LIMIT 1"
+    ).fetchone():
+        return False
+    invalid_user_ids = [
+        str(row["user_id"])
+        for row in con.execute("SELECT user_id FROM users ORDER BY id").fetchall()
+        if not _is_canonical_user_id(row["user_id"])
+    ]
+    if invalid_user_ids:
+        raise sqlite3.DatabaseError(
+            f"schema-v2 users contain non-canonical UUID values: {invalid_user_ids}"
+        )
+    duplicate = con.execute(
+        "SELECT user_id FROM users GROUP BY user_id HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if duplicate:
+        raise sqlite3.DatabaseError(
+            f"schema-v2 users contain duplicate user_id: {duplicate['user_id']}"
+        )
+
+    initialized = con.execute(
+        "SELECT value FROM auth_metadata WHERE key=?",
+        (_OWNER_INITIALIZED_KEY,),
+    ).fetchone()
+    if not initialized or initialized["value"] != "1":
+        return False
+    owner_marker = con.execute(
+        "SELECT value FROM auth_metadata WHERE key=?",
+        (_OWNER_METADATA_KEY,),
+    ).fetchone()
+    if owner_marker and not _is_canonical_user_id(owner_marker["value"]):
+        raise sqlite3.DatabaseError("owner marker is not a canonical UUID")
+
+    indexes = {
+        row["name"]
+        for row in con.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()
+    }
+    required_indexes = {
+        "ux_users_user_id",
+        "idx_customer_analyses_user_id",
+        "idx_usage_events_at",
+    }
+    if not required_indexes.issubset(indexes):
+        return False
+    if not _has_unique_user_id_index(con):
+        raise sqlite3.DatabaseError("schema-v2 users lack a valid unique user_id index")
+
+    for table in _CHILD_TABLE_DDL:
+        columns = {
+            row["name"]
+            for row in con.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if (
+            "user_id" not in columns
+            or "email" in columns
+            or not _has_user_id_cascade(con, table)
+        ):
+            return False
+
+    violations = con.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        details = [tuple(row) for row in violations]
+        raise sqlite3.IntegrityError(f"foreign key check failed: {details}")
+    return True
+
+
+def _assert_no_orphaned_child_rows(
+    con: sqlite3.Connection, table: str, source_owner: str
+) -> None:
+    join = (
+        "owner.email = old.email"
+        if source_owner == "email"
+        else "owner.user_id = old.user_id"
+    )
+    count = con.execute(
+        f"SELECT COUNT(*) FROM {table} AS old LEFT JOIN users AS owner ON {join} "
+        "WHERE owner.user_id IS NULL"
+    ).fetchone()[0]
+    if count:
+        raise sqlite3.IntegrityError(
+            f"cannot migrate {table}: {count} orphaned {source_owner} row(s)"
+        )
+
+
+def _rebuild_child_table(
+    con: sqlite3.Connection, table: str, source_owner: str
+) -> None:
+    _assert_no_orphaned_child_rows(con, table, source_owner)
+    temporary = f"_{table}_user_id_v2"
+    con.execute(f"DROP TABLE IF EXISTS {temporary}")
+    _create_child_table(con, table, temporary)
+
+    data_columns = _CHILD_DATA_COLUMNS[table]
+    insert_columns = ", ".join(("user_id", *data_columns))
+    selected_data = ", ".join(f"old.{column}" for column in data_columns)
+    join = (
+        "users AS owner ON owner.email = old.email"
+        if source_owner == "email"
+        else "users AS owner ON owner.user_id = old.user_id"
+    )
+    con.execute(
+        f"INSERT INTO {temporary} ({insert_columns}) "
+        f"SELECT owner.user_id, {selected_data} FROM {table} AS old JOIN {join}"
+    )
+    con.execute(f"DROP TABLE {table}")
+    con.execute(f"ALTER TABLE {temporary} RENAME TO {table}")
+
+
+def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
+    """Atomically migrate mutable email ownership to immutable UUID user IDs.
+
+    Normal schema-v2 reads take the lock-free fast path. A genuine migration re-checks
+    under ``BEGIN IMMEDIATE``, creates the one verified pre-v2 backup, and fails closed
+    before copying if any child row lacks a real owner.
+    """
+    if _schema_v2_ready(con):
+        return
+
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        # Another process may have completed migration while this connection waited
+        # for the writer lock. Re-check before backing up or changing any schema.
+        if _schema_v2_ready(con):
+            con.commit()
+            return
+
+        version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        if version < _SCHEMA_VERSION and _has_existing_schema(con):
+            _ensure_pre_v2_backup(con)
+
+        _ensure_core_schema(con)
+        _migrate(con)
+        _prune_used_magic_tokens(con)
+
+        user_columns = {
+            row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "user_id" not in user_columns:
+            con.execute("ALTER TABLE users ADD COLUMN user_id TEXT")
+
+        seen: set[str] = set()
+        for row in con.execute("SELECT id, user_id FROM users ORDER BY id").fetchall():
+            user_id = str(row["user_id"] or "").strip()
+            if not _is_canonical_user_id(user_id) or user_id in seen:
+                user_id = _new_user_id()
+                con.execute("UPDATE users SET user_id=? WHERE id=?", (user_id, row["id"]))
+            seen.add(user_id)
+        if not _has_unique_user_id_index(con):
+            con.execute("DROP INDEX IF EXISTS ux_users_user_id")
+            con.execute("CREATE UNIQUE INDEX ux_users_user_id ON users(user_id)")
+        _ensure_owner_marker(con)
+
+        for table in _CHILD_TABLE_DDL:
+            columns = {
+                row["name"] for row in con.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if not columns:
+                _create_child_table(con, table, table)
+                continue
+            if (
+                "user_id" in columns
+                and "email" not in columns
+                and _has_user_id_cascade(con, table)
+            ):
+                continue
+            if "email" in columns:
+                _rebuild_child_table(con, table, "email")
+            elif "user_id" in columns:
+                _rebuild_child_table(con, table, "user_id")
+            else:
+                raise sqlite3.DatabaseError(
+                    f"cannot migrate {table}: expected email or user_id owner column"
+                )
+
+        con.execute("DROP INDEX IF EXISTS idx_customer_analyses_email")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_customer_analyses_user_id "
+            "ON customer_analyses (user_id, created_at)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_usage_events_at ON usage_events (at)"
+        )
+        con.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+
+        violations = con.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            details = [tuple(row) for row in violations]
+            raise sqlite3.IntegrityError(f"foreign key check failed: {details}")
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
 
 
 def _harden_db_perms() -> None:
@@ -275,15 +1075,19 @@ def _harden_db_perms() -> None:
 
 
 @contextmanager
-def _conn():
-    con = sqlite3.connect(AUTH_DB_PATH)
+def _conn() -> Iterator[sqlite3.Connection]:
+    con = sqlite3.connect(AUTH_DB_PATH, timeout=_BUSY_TIMEOUT_MS / 1_000)
     con.row_factory = sqlite3.Row
     try:
-        con.executescript(_DDL)
-        _migrate(con)
+        con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+        con.execute("PRAGMA foreign_keys = ON")
+        _migrate_to_user_ids(con)
         _harden_db_perms()
         yield con
         con.commit()
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
 
@@ -303,12 +1107,15 @@ def create_user(email: str, password: str) -> int:
     if not em or not password:
         raise ValueError("email and password are required")
     now = datetime.now(timezone.utc).isoformat()
+    user_id = _new_user_id()
     try:
         with _conn() as con:
             cur = con.execute(
-                "INSERT INTO users (email, password_hash, is_active, created_at) VALUES (?,?,1,?)",
-                (em, hash_password(password), now),
+                "INSERT INTO users "
+                "(user_id, email, password_hash, is_active, created_at) VALUES (?,?,?,1,?)",
+                (user_id, em, hash_password(password), now),
             )
+            _claim_owner_marker(con, em, user_id)
             return cur.lastrowid
     except sqlite3.IntegrityError as e:
         raise ValueError(f"user already exists: {em}") from e
@@ -317,6 +1124,23 @@ def create_user(email: str, password: str) -> int:
 def get_user(email: str) -> dict[str, Any] | None:
     with _conn() as con:
         row = con.execute("SELECT * FROM users WHERE email=?", (_norm(email),)).fetchone()
+    return dict(row) if row else None
+
+
+def resolve_user_id(email: str) -> str | None:
+    """Resolve an active account's mutable email to its immutable tenant key."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT user_id FROM users WHERE email=? AND is_active=1", (_norm(email),)
+        ).fetchone()
+    return str(row["user_id"]) if row else None
+
+
+def get_user_by_id(user_id: str) -> dict[str, Any] | None:
+    if not _is_canonical_user_id(user_id):
+        return None
+    with _conn() as con:
+        row = con.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -330,42 +1154,17 @@ def get_user_by_sub_id(sub_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-# Every email-keyed child table in _DDL. rename_user_email() MUST move all of them
-# with the users row — otherwise a NEW account later registered with the OLD address
-# inherits the previous customer's data (cross-tenant leak). Guarded by
-# tests/test_tenant_rename_migration.py, which derives this set from the live schema.
-_EMAIL_KEYED_TABLES = (
-    "watchlist",
-    "customer_positions",
-    "customer_analyses",
-    "usage_events",
-    "customer_book_prefs",
-)
-
-
 def rename_user_email(old_email: str, new_email: str) -> bool:
-    """Move a subscription's account AND every email-keyed child row (watchlist,
-    positions, analyses, usage, book prefs) to a new email in ONE transaction
-    (LS lets a customer change their email). Returns False — caller falls back
-    rather than clobbering — when the target email is already taken by a
-    DIFFERENT users row, OR already owns child rows (child rows can exist
-    without a users row; renaming onto them would silently merge two tenants)."""
+    """Rename only the user profile; UUID-owned child rows remain unchanged."""
     old, new = _norm(old_email), _norm(new_email)
-    if not new or old == new:
+    if not old or not new or old == new:
         return False
     with _conn() as con:
         clash = con.execute("SELECT 1 FROM users WHERE email=?", (new,)).fetchone()
         if clash:
             return False
-        for table in _EMAIL_KEYED_TABLES:   # trusted module constant, not user input
-            if con.execute(f"SELECT 1 FROM {table} WHERE email=? LIMIT 1", (new,)).fetchone():
-                return False                # orphan tenant data at the target — refuse to merge
-        con.execute("UPDATE users SET email=? WHERE email=?", (new, old))
-        for table in _EMAIL_KEYED_TABLES:
-            con.execute(f"UPDATE {table} SET email=? WHERE email=?", (new, old))
-        # _conn() commits on clean exit and rolls back (close without commit) on
-        # any raise above — the users row and child rows move together or not at all.
-    return True
+        cur = con.execute("UPDATE users SET email=? WHERE email=?", (new, old))
+        return cur.rowcount == 1
 
 
 # A valid-format PBKDF2 hash of a random secret nobody holds. Verifying a
@@ -541,13 +1340,15 @@ def customers_watching(symbol: str) -> list[str]:
     """Active, non-opted-out emails with `symbol` on watchlist OR book."""
     sym = str(symbol).upper().strip()
     with _conn() as con:
+        # [CLAUDE 2026-07-18] immutable-user-ID migration: child tables key on
+        # user_id now — join through users to recover the current email.
         rows = con.execute(
-            "SELECT DISTINCT s.email FROM ("
-            "  SELECT email, symbol FROM watchlist"
-            "  UNION SELECT email, symbol FROM customer_positions) s "
-            "LEFT JOIN users u ON u.email = s.email "
+            "SELECT DISTINCT u.email FROM ("
+            "  SELECT user_id, symbol FROM watchlist"
+            "  UNION SELECT user_id, symbol FROM customer_positions) s "
+            "JOIN users u ON u.user_id = s.user_id "
             "WHERE s.symbol=? AND COALESCE(u.alerts_opt_out, 0)=0 "
-            "  AND COALESCE(u.is_active, 1)=1 ORDER BY s.email", (sym,)).fetchall()
+            "  AND COALESCE(u.is_active, 1)=1 ORDER BY u.email", (sym,)).fetchall()
     return [r["email"] for r in rows]
 
 
@@ -562,13 +1363,27 @@ def is_owner(email: str | None) -> bool:
 
     Everyone else is a CUSTOMER session: the server masks absolute dollars /
     share quantities (normalized to a model book) and owner-only views
-    (/report, /invest, /progress) are refused. Override via GESH_OWNER_EMAIL."""
-    owner = os.getenv("GESH_OWNER_EMAIL", "georgy75@gmail.com").strip().lower()
-    return bool(email) and email.strip().lower() == owner
+    (/report, /invest, /progress) are refused. When auth is enabled the durable UUID
+    marker is authoritative; auth-disabled local development retains email behavior.
+    """
+    em = _norm(email or "")
+    if not em:
+        return False
+    if not auth_enabled():
+        return em == _configured_owner_email()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT users.user_id FROM users "
+            "JOIN auth_metadata ON auth_metadata.key=? "
+            "AND auth_metadata.value=users.user_id "
+            "WHERE users.email=? AND users.is_active=1",
+            (_OWNER_METADATA_KEY, em),
+        ).fetchone()
+    return row is not None
 
 
 def consume_magic_token(token: str | None) -> str | None:
-    """Single-use validation for a magic-link token. Returns the subject email on the
+    """Single-use validation returning the immutable subject's current email on the
     FIRST valid use and atomically marks the token spent; any later use (or an invalid/
     expired token) returns None. This prevents a leaked link (browser history, Referer,
     proxy logs) from being replayed: it works exactly once, then is dead.
@@ -576,19 +1391,26 @@ def consume_magic_token(token: str | None) -> str | None:
     Note: the magic token is NOT the session cookie — it is typ='magic' and is rejected by
     authenticate_session, and the caller mints a fresh typ='session' token after consuming
     this one, so URL exposure never yields a reusable session."""
-    sub = verify_token(token, expected_typ="magic")
-    if not sub:
+    user_id = verify_token(token, expected_typ="magic")
+    if not user_id:
         return None
     th = hashlib.sha256(token.encode()).hexdigest()
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
+        user = con.execute(
+            "SELECT email FROM users WHERE user_id=? AND is_active=1",
+            (user_id,),
+        ).fetchone()
+        if not user:
+            return None
+        _prune_used_magic_tokens(con)
         cur = con.execute(
             "INSERT OR IGNORE INTO used_magic_tokens (token_hash, used_at) VALUES (?,?)",
             (th, now),
         )
         if cur.rowcount == 0:        # already present → token was already consumed
             return None
-    return sub
+    return str(user["email"])
 
 
 def authenticate_session(token: str | None) -> str | None:
@@ -604,13 +1426,13 @@ def authenticate_session(token: str | None) -> str | None:
     Only typ='session' tokens are accepted — a leaked typ='magic' URL token cannot be
     replayed here as a session cookie (H1).
     """
-    sub = verify_token(token, expected_typ="session")
-    if not sub:
+    user_id = verify_token(token, expected_typ="session")
+    if not user_id:
         return None
-    u = get_user(sub)
+    u = get_user_by_id(user_id)
     if not u or not u["is_active"]:
         return None
-    return sub
+    return str(u["email"])
 
 
 def gate_decision(path: str, cookie_value: str | None) -> str:
@@ -689,40 +1511,48 @@ _MAX_WATCH = 50   # per-user cap — abuse guard
 def add_watch(email: str, symbol: str) -> bool:
     """Add a symbol to the user's watchlist. Idempotent (dup → True, no duplicate);
     returns False only when the per-user cap is hit. Symbols stored UPPER."""
-    em, sym = _norm(email), (symbol or "").strip().upper()
-    if not em or not sym:
+    user_id = resolve_user_id(email)
+    sym = (symbol or "").strip().upper()
+    if not user_id or not sym:
         return False
     with _conn() as con:
-        if con.execute("SELECT 1 FROM watchlist WHERE email=? AND symbol=?", (em, sym)).fetchone():
+        if con.execute(
+            "SELECT 1 FROM watchlist WHERE user_id=? AND symbol=?", (user_id, sym)
+        ).fetchone():
             return True
         # Single-statement cap check: a separate count-then-insert could exceed the
         # cap under concurrent adds. OR IGNORE absorbs a concurrent duplicate insert.
         cur = con.execute(
-            "INSERT OR IGNORE INTO watchlist (email, symbol, added_at) "
-            "SELECT ?,?,? WHERE (SELECT COUNT(*) FROM watchlist WHERE email=?) < ?",
-            (em, sym, datetime.now(timezone.utc).isoformat(), em, _MAX_WATCH))
+            "INSERT OR IGNORE INTO watchlist (user_id, symbol, added_at) "
+            "SELECT ?,?,? WHERE (SELECT COUNT(*) FROM watchlist WHERE user_id=?) < ?",
+            (user_id, sym, datetime.now(timezone.utc).isoformat(), user_id, _MAX_WATCH),
+        )
         if cur.rowcount:
             return True
         # rowcount 0 = cap hit, or a concurrent add of the same symbol won the
         # race — the latter is still a success (the symbol IS on the list).
-        return con.execute("SELECT 1 FROM watchlist WHERE email=? AND symbol=?",
-                           (em, sym)).fetchone() is not None
+        return con.execute(
+            "SELECT 1 FROM watchlist WHERE user_id=? AND symbol=?", (user_id, sym)
+        ).fetchone() is not None
 
 
 def remove_watch(email: str, symbol: str) -> None:
-    em, sym = _norm(email), (symbol or "").strip().upper()
+    user_id = resolve_user_id(email)
+    sym = (symbol or "").strip().upper()
+    if not user_id:
+        return
     with _conn() as con:
-        con.execute("DELETE FROM watchlist WHERE email=? AND symbol=?", (em, sym))
+        con.execute("DELETE FROM watchlist WHERE user_id=? AND symbol=?", (user_id, sym))
 
 
 def get_watch(email: str) -> list[str]:
     """The user's saved symbols, oldest-first. Empty list for an unknown user."""
-    em = _norm(email)
-    if not em:
+    user_id = resolve_user_id(email)
+    if not user_id:
         return []
     with _conn() as con:
         rows = con.execute(
-            "SELECT symbol FROM watchlist WHERE email=? ORDER BY added_at, symbol", (em,)
+            "SELECT symbol FROM watchlist WHERE user_id=? ORDER BY added_at, symbol", (user_id,)
         ).fetchall()
     return [r["symbol"] for r in rows]
 
@@ -730,7 +1560,7 @@ def get_watch(email: str) -> list[str]:
 # ── per-user portfolio book (customer analyze-MY-portfolio: their own positions) ──
 # The customer's OWN book — symbol + share count (+ optional avg cost), entered by
 # them, valued live at read time. Contains ZERO owner data. Same isolation contract
-# as the watchlist: every read/write is scoped to the session email.
+# as the watchlist: the email interface resolves once to an immutable tenant ID.
 
 _MAX_POSITIONS = 100   # per-user cap — abuse guard (also bounds analyze-engine cost).
 #                        Raised 30→100 (2026-07-10) to fit a real book via bulk import.
@@ -741,61 +1571,82 @@ def set_position(email: str, symbol: str, shares: float, avg_cost: float | None 
     when adding a NEW symbol would exceed the cap (updating an existing one is
     always allowed). Symbols stored UPPER; shares must be > 0 (use
     remove_position to delete)."""
-    em, sym = _norm(email), (symbol or "").strip().upper()
+    user_id = resolve_user_id(email)
+    sym = (symbol or "").strip().upper()
     try:
         sh = float(shares)
         ac = None if avg_cost in (None, "") else float(avg_cost)
     except (TypeError, ValueError):
         return False
-    if not em or not sym or not (0 < sh < 1e9) or (ac is not None and not (0 <= ac < 1e9)):
+    if (
+        not user_id
+        or not sym
+        or not (0 < sh < 1e9)
+        or (ac is not None and not (0 <= ac < 1e9))
+    ):
         return False
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        if con.execute("SELECT 1 FROM customer_positions WHERE email=? AND symbol=?",
-                       (em, sym)).fetchone():
+        if con.execute(
+            "SELECT 1 FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym)
+        ).fetchone():
             con.execute("UPDATE customer_positions SET shares=?, avg_cost=?, updated_at=? "
-                        "WHERE email=? AND symbol=?", (sh, ac, now, em, sym))
+                        "WHERE user_id=? AND symbol=?", (sh, ac, now, user_id, sym))
             return True
         # Single-statement cap check (same concurrency shape as add_watch).
         cur = con.execute(
-            "INSERT OR IGNORE INTO customer_positions (email, symbol, shares, avg_cost, updated_at) "
-            "SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM customer_positions WHERE email=?) < ?",
-            (em, sym, sh, ac, now, em, _MAX_POSITIONS))
+            "INSERT OR IGNORE INTO customer_positions "
+            "(user_id, symbol, shares, avg_cost, updated_at) "
+            "SELECT ?,?,?,?,? WHERE "
+            "(SELECT COUNT(*) FROM customer_positions WHERE user_id=?) < ?",
+            (user_id, sym, sh, ac, now, user_id, _MAX_POSITIONS),
+        )
         if cur.rowcount:
             return True
-        return con.execute("SELECT 1 FROM customer_positions WHERE email=? AND symbol=?",
-                           (em, sym)).fetchone() is not None
+        return con.execute(
+            "SELECT 1 FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym)
+        ).fetchone() is not None
 
 
 def remove_position(email: str, symbol: str) -> None:
-    em, sym = _norm(email), (symbol or "").strip().upper()
+    user_id = resolve_user_id(email)
+    sym = (symbol or "").strip().upper()
+    if not user_id:
+        return
     with _conn() as con:
-        con.execute("DELETE FROM customer_positions WHERE email=? AND symbol=?", (em, sym))
+        con.execute(
+            "DELETE FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym)
+        )
 
 
 def clear_positions(email: str) -> None:
     """Remove ALL positions for the user and exit equal-weight mode.
     Use this when the user wants a clean slate (e.g. after a symbols-only bulk import
     they now want to replace with real share counts)."""
-    em = _norm(email)
-    if not em:
+    user_id = resolve_user_id(email)
+    if not user_id:
         return
+    now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        con.execute("DELETE FROM customer_positions WHERE email=?", (em,))
-    # Explicit clear should also leave the user in "real sizes" mode
-    set_equal_weight(email, False)
+        con.execute("DELETE FROM customer_positions WHERE user_id=?", (user_id,))
+        con.execute(
+            "INSERT INTO customer_book_prefs (user_id, equal_weight, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET equal_weight=excluded.equal_weight, "
+            "updated_at=excluded.updated_at",
+            (user_id, 0, now),
+        )
 
 
 def get_positions(email: str) -> list[dict]:
     """The user's book, oldest-first: [{symbol, shares, avg_cost}]. Empty list for
     an unknown user."""
-    em = _norm(email)
-    if not em:
+    user_id = resolve_user_id(email)
+    if not user_id:
         return []
     with _conn() as con:
         rows = con.execute(
             "SELECT symbol, shares, avg_cost FROM customer_positions "
-            "WHERE email=? ORDER BY updated_at, symbol", (em,)
+            "WHERE user_id=? ORDER BY updated_at, symbol", (user_id,)
         ).fetchall()
     return [{"symbol": r["symbol"], "shares": r["shares"], "avg_cost": r["avg_cost"]}
             for r in rows]
@@ -807,26 +1658,28 @@ def get_positions(email: str) -> list[dict]:
 # unknown/placeholder size. A bulk import that DOES carry share counts clears it.
 
 def set_equal_weight(email: str, on: bool) -> None:
-    em = _norm(email)
-    if not em:
+    user_id = resolve_user_id(email)
+    if not user_id:
         return
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute(
-            "INSERT INTO customer_book_prefs (email, equal_weight, updated_at) VALUES (?,?,?) "
-            "ON CONFLICT(email) DO UPDATE SET equal_weight=excluded.equal_weight, "
+            "INSERT INTO customer_book_prefs (user_id, equal_weight, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET equal_weight=excluded.equal_weight, "
             "updated_at=excluded.updated_at",
-            (em, 1 if on else 0, now))
+            (user_id, 1 if on else 0, now),
+        )
 
 
 def get_equal_weight(email: str) -> bool:
     """True when the user's book is in equal-weight (sizes-private) mode."""
-    em = _norm(email)
-    if not em:
+    user_id = resolve_user_id(email)
+    if not user_id:
         return False
     with _conn() as con:
         row = con.execute(
-            "SELECT equal_weight FROM customer_book_prefs WHERE email=?", (em,)).fetchone()
+            "SELECT equal_weight FROM customer_book_prefs WHERE user_id=?", (user_id,)
+        ).fetchone()
     return bool(row and row["equal_weight"])
 
 
@@ -838,31 +1691,36 @@ _MAX_ANALYSES_PER_USER = 5
 
 
 def save_book_analysis(email: str, result: dict) -> None:
-    em = _norm(email)
-    if not em or not isinstance(result, dict):
+    user_id = resolve_user_id(email)
+    if not user_id or not isinstance(result, dict):
         return
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        con.execute("INSERT INTO customer_analyses (email, result_json, created_at) VALUES (?,?,?)",
-                    (em, json.dumps(result), now))
+        con.execute(
+            "INSERT INTO customer_analyses (user_id, result_json, created_at) VALUES (?,?,?)",
+            (user_id, json.dumps(result), now),
+        )
         # prune: keep only the newest _MAX_ANALYSES_PER_USER rows per user
         con.execute(
-            "DELETE FROM customer_analyses WHERE email=? AND rowid NOT IN ("
-            "  SELECT rowid FROM customer_analyses WHERE email=?"
+            "DELETE FROM customer_analyses WHERE user_id=? AND rowid NOT IN ("
+            "  SELECT rowid FROM customer_analyses WHERE user_id=?"
             "  ORDER BY created_at DESC, rowid DESC LIMIT ?)",
-            (em, em, _MAX_ANALYSES_PER_USER))
+            (user_id, user_id, _MAX_ANALYSES_PER_USER),
+        )
 
 
 def get_latest_book_analysis(email: str) -> dict | None:
     """Newest persisted analysis for the user, with its timestamp under `_saved_at`.
     Corruption-tolerant: an unparseable row returns None rather than raising."""
-    em = _norm(email)
-    if not em:
+    user_id = resolve_user_id(email)
+    if not user_id:
         return None
     with _conn() as con:
         row = con.execute(
-            "SELECT result_json, created_at FROM customer_analyses WHERE email=? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (em,)).fetchone()
+            "SELECT result_json, created_at FROM customer_analyses WHERE user_id=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
     if not row:
         return None
     try:
@@ -879,13 +1737,19 @@ def log_usage(email: str | None, event: str, detail: str = "") -> None:
     """Fire-and-forget usage counter. NEVER raises — metering must not be able to
     break a product endpoint."""
     try:
-        em = _norm(email or "")
-        if not em or not event:
+        user_id = resolve_user_id(email or "")
+        if not user_id or not event:
             return
         with _conn() as con:
-            con.execute("INSERT INTO usage_events (email, event, detail, at) VALUES (?,?,?,?)",
-                        (em, event, (detail or "")[:64],
-                         datetime.now(timezone.utc).isoformat()))
+            con.execute(
+                "INSERT INTO usage_events (user_id, event, detail, at) VALUES (?,?,?,?)",
+                (
+                    user_id,
+                    event,
+                    (detail or "")[:64],
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
     except Exception:
         pass
 
@@ -906,14 +1770,16 @@ def usage_count_24h(email: str, event: str) -> int:
     """Rolling-24h count of one event for one user — the quota denominator.
     Counts LIVE events only by design: callers meter cached hits under a
     separate `*_cached` event name, which never consumes quota."""
-    em = _norm(email)
-    if not em:
+    user_id = resolve_user_id(email)
+    if not user_id:
         return 0
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     with _conn() as con:
         row = con.execute(
-            "SELECT COUNT(*) AS n FROM usage_events WHERE email=? AND event=? AND at >= ?",
-            (em, event, cutoff)).fetchone()
+            "SELECT COUNT(*) AS n FROM usage_events "
+            "WHERE user_id=? AND event=? AND at >= ?",
+            (user_id, event, cutoff),
+        ).fetchone()
     return int(row["n"])
 
 
@@ -923,8 +1789,13 @@ def usage_summary(days: int = 30) -> list[dict]:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with _conn() as con:
         rows = con.execute(
-            "SELECT email, event, COUNT(*) AS n, MAX(at) AS last_at FROM usage_events "
-            "WHERE at >= ? GROUP BY email, event ORDER BY n DESC", (cutoff,)).fetchall()
+            "SELECT users.email, usage_events.event, COUNT(*) AS n, "
+            "MAX(usage_events.at) AS last_at FROM usage_events "
+            "JOIN users ON users.user_id = usage_events.user_id "
+            "WHERE usage_events.at >= ? GROUP BY users.email, usage_events.event "
+            "ORDER BY n DESC",
+            (cutoff,),
+        ).fetchall()
     return [{"email": r["email"], "event": r["event"], "count": r["n"], "last_at": r["last_at"]}
             for r in rows]
 
