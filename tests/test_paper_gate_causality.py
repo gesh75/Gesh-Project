@@ -192,6 +192,33 @@ def test_input_orders_are_not_mutated(gate_mod):
     assert orders == ORDERS, "gate_and_execute must not mutate its input plan"
 
 
+def test_each_symbol_uses_its_own_provider_quote_timestamp(gate_mod):
+    seen: dict[str, str] = {}
+
+    def evaluate(intent, payload):
+        seen[intent.symbol] = payload["as_of"]
+        return SimpleNamespace(approved=False, reason="test", gates={})
+
+    gate_mod.gate_and_execute(
+        ORDERS,
+        HOLDINGS,
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS, "as_of": "transport-time"},
+        confidence_by_sym=CONFIDENCE,
+        quote_as_of_by_symbol={
+            "NVDA": "2026-07-17T19:59:59Z",
+            "MU": "2026-07-17T19:58:00Z",
+        },
+        intent_builder=_make_intent_builder([], []),
+        gate_evaluate=evaluate,
+        recorder=_make_recorder([], []),
+    )
+    assert seen == {
+        "NVDA": "2026-07-17T19:59:59Z",
+        "MU": "2026-07-17T19:58:00Z",
+    }
+
+
 # ── real confidence derivation: consensus first, kelly win_rate fallback ──────
 def test_build_confidence_map_uses_real_signals(gate_mod):
     consensus = {"NVDA": {"confidence": 89.0}}

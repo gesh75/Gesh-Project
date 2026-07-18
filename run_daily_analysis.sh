@@ -176,6 +176,7 @@ if [ "$SNAP_AGE_S" -lt 0 ] || [ "$SNAP_AGE_S" -gt "$DEGRADED_AFTER_S" ]; then
     DEGRADED=1
 fi
 export GESH_DEGRADED="$DEGRADED"
+export GESH_RUN_DEGRADED="$DEGRADED"
 export GESH_DEGRADED_AFTER_S="$DEGRADED_AFTER_S"
 if [ "$DEGRADED" -eq 1 ]; then
     echo "### DEGRADED RUN (RESEARCH-ONLY) — snapshot age ${SNAP_AGE_S}s (limit ${DEGRADED_AFTER_S}s, state $SNAP_STATE). Paper gate will be SKIPPED; report carries a degraded banner."
@@ -203,15 +204,24 @@ fi
 
 # ── 5/5 HTML report (template fill, <1s)
 step "5/5 gen_report2"
+REPORT_FILE="gesh_report.html"
+if [ "$DEGRADED" -eq 1 ]; then
+    RUN_ID=$("$PY" -c 'import json; print(json.load(open("run_manifest.json"))["run_id"])')
+    REPORT_FILE="gesh_report.degraded.${RUN_ID}.html"
+    export GESH_REPORT_OUTPUT="$GP/$REPORT_FILE"
+    echo "### DEGRADED RUN — writing research artifact $REPORT_FILE; current report remains untouched"
+else
+    unset GESH_REPORT_OUTPUT
+fi
 "$PY" gen_report2.py || FAIL=1
 
 # ── Assertions — catch silently-degraded runs (e.g. half-size hand-built report)
-SIZE=$(stat -f%z gesh_report.html 2>/dev/null || echo 0)
+SIZE=$(stat -f%z "$REPORT_FILE" 2>/dev/null || echo 0)
 if [ "$SIZE" -lt 60000 ]; then
-    echo "ASSERT FAIL: gesh_report.html is ${SIZE}B (<60KB) — report degraded"
+    echo "ASSERT FAIL: $REPORT_FILE is ${SIZE}B (<60KB) — report degraded"
     FAIL=1
 else
-    echo "assert ok: gesh_report.html ${SIZE}B"
+    echo "assert ok: $REPORT_FILE ${SIZE}B"
 fi
 "$PY" - <<'PYEOF' || { echo "ASSERT FAIL: no analysis_runs row for today"; FAIL=1; }
 import sqlite3, sys
