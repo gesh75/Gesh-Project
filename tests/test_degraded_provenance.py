@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,8 +26,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-HELPER = "snapshot_degraded_info"
-STAMPING_SCRIPTS = ("run_engines2.py", "run_ai2.py")
 GATE_SCRIPT = "run_paper_gate2.py"
 NOW = datetime(2026, 7, 12, 15, 0, tzinfo=timezone.utc)
 
@@ -40,33 +37,13 @@ def _snap(age_seconds: float, source: str = "robinhood_mcp") -> dict:
     }
 
 
-def _extract_helper(script: str):
-    """Exec ONLY the helper def (+ its default constant) from a chain script —
-    the scripts run their whole pipeline at import, so a plain import is unsafe."""
-    tree = ast.parse((REPO_ROOT / script).read_text())
-    wanted: list[ast.stmt] = []
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == HELPER:
-            wanted.append(node)
-        elif isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "DEGRADED_AFTER_S_DEFAULT"
-            for t in node.targets
-        ):
-            wanted.append(node)
-    assert any(isinstance(n, ast.FunctionDef) for n in wanted), (
-        f"{script} must define {HELPER}() (degraded-run provenance stamp)"
-    )
-    ns: dict = {"os": os}
-    exec(compile(ast.Module(body=wanted, type_ignores=[]), script, "exec"), ns)
-    return ns[HELPER]
-
+from run_manifest import snapshot_degraded_info
 
 # ── snapshot_degraded_info: run_engines2.py + run_ai2.py (kept in sync) ───────
 
-@pytest.mark.parametrize("script", STAMPING_SCRIPTS)
-def test_fresh_snapshot_is_not_degraded(script: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fresh_snapshot_is_not_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GESH_DEGRADED_AFTER_S", raising=False)
-    info = _extract_helper(script)(_snap(120), now=NOW)
+    info = snapshot_degraded_info(_snap(120), now=NOW)
     assert info == {
         "degraded": False,
         "snapshot_age_seconds": 120,
@@ -74,12 +51,11 @@ def test_fresh_snapshot_is_not_degraded(script: str, monkeypatch: pytest.MonkeyP
     }
 
 
-@pytest.mark.parametrize("script", STAMPING_SCRIPTS)
 def test_stale_snapshot_is_degraded_at_default_threshold(
-    script: str, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("GESH_DEGRADED_AFTER_S", raising=False)
-    info = _extract_helper(script)(_snap(7200, source="robinhood_live"), now=NOW)
+    info = snapshot_degraded_info(_snap(7200, source="robinhood_live"), now=NOW)
     assert info == {
         "degraded": True,
         "snapshot_age_seconds": 7200,
@@ -87,22 +63,20 @@ def test_stale_snapshot_is_degraded_at_default_threshold(
     }
 
 
-@pytest.mark.parametrize("script", STAMPING_SCRIPTS)
 def test_env_threshold_override_widens_the_window(
-    script: str, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("GESH_DEGRADED_AFTER_S", "10800")
-    info = _extract_helper(script)(_snap(7200), now=NOW)
+    info = snapshot_degraded_info(_snap(7200), now=NOW)
     assert info["degraded"] is False
     assert info["snapshot_age_seconds"] == 7200
 
 
-@pytest.mark.parametrize("script", STAMPING_SCRIPTS)
 def test_unknown_snapshot_age_is_degraded_fail_safe(
-    script: str, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("GESH_DEGRADED_AFTER_S", raising=False)
-    info = _extract_helper(script)({}, now=NOW)
+    info = snapshot_degraded_info({}, now=NOW)
     assert info == {
         "degraded": True,
         "snapshot_age_seconds": None,
@@ -110,22 +84,11 @@ def test_unknown_snapshot_age_is_degraded_fail_safe(
     }
 
 
-@pytest.mark.parametrize("script", STAMPING_SCRIPTS)
-def test_stamp_is_wired_into_the_script_body(script: str) -> None:
-    """The helper must actually be CALLED outside its own def, so the stamp
-    lands in the dict each script persists to engine_results.json."""
-    tree = ast.parse((REPO_ROOT / script).read_text())
-    body_wo_def = [
-        n for n in tree.body
-        if not (isinstance(n, ast.FunctionDef) and n.name == HELPER)
-    ]
-    calls = [
-        n for stmt in body_wo_def for n in ast.walk(stmt)
-        if isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Name)
-        and n.func.id == HELPER
-    ]
-    assert calls, f"{script} must call {HELPER}(...) in its pipeline body"
+@pytest.mark.parametrize("script", ("run_engines2.py", "run_ai2.py"))
+def test_scripts_use_shared_manifest_contract_without_sibling_precedence(script: str) -> None:
+    src = (REPO_ROOT / script).read_text()
+    assert "from run_manifest import" in src
+    assert "sys.path.insert(0, str(TRADING))" not in src
 
 
 # ── run_paper_gate2.py entry guard ────────────────────────────────────────────
@@ -152,6 +115,26 @@ def test_entry_guard_skips_on_engine_results_stamp() -> None:
         {"degraded": True, "snapshot_age_seconds": 7200}, environ={}
     )
     assert reason and "7200" in reason
+
+
+def test_entry_guard_skips_on_manifest_stamp() -> None:
+    gate = _import_paper_gate()
+    reason = gate.degraded_skip(
+        {"run_manifest": {"degraded": True, "run_id": "run-1"}}, environ={}
+    )
+    assert reason and "run-1" in reason
+
+
+def test_degraded_preflight_returns_frozen_audit_only_outcome() -> None:
+    gate = _import_paper_gate()
+    outcome = gate.preflight_outcome(
+        {"run_manifest": {"degraded": True, "run_id": "run-1"}}, environ={}
+    )
+    assert outcome is not None
+    assert outcome.actionable is False
+    assert outcome.paper_session == ()
+    with pytest.raises(Exception):
+        outcome.actionable = True
 
 
 def test_entry_guard_skips_on_chain_env_flag() -> None:
@@ -203,3 +186,9 @@ def test_report_surfaces_degraded_banner() -> None:
         "degraded_banner_html must be interpolated into the report body, "
         "not just defined"
     )
+
+
+def test_chain_marks_degraded_report_as_non_publishing() -> None:
+    src = (REPO_ROOT / "run_daily_analysis.sh").read_text()
+    assert "GESH_RUN_DEGRADED" in src
+    assert "gesh_report.degraded" in src
