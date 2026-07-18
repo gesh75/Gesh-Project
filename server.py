@@ -1259,6 +1259,19 @@ SNAPSHOT_INTERVAL_SEC = 300  # 5 minutes — plenty for ECG
 _last_snapshot_at: float = 0.0
 _snapshot_lock = threading.Lock()
 
+def _is_real_observation(h: dict) -> bool:
+    """A holding is a REAL equity observation only if BOTH price and equity are finite
+    and > 0. A degraded/offline snapshot can carry current_price=0 and a stale constant
+    equity; persisting those poisons the ECG equity curve — a sentinel-heavy series reads
+    as a -96% crash and fires false "SUSPENDED — consider exiting" alarms (external audit
+    2026-07-18). Missing data must stay MISSING, never a loss."""
+    price, equity = h.get("current_price"), h.get("equity")
+    return (isinstance(price, (int, float)) and not isinstance(price, bool)
+            and math.isfinite(price) and price > 0
+            and isinstance(equity, (int, float)) and not isinstance(equity, bool)
+            and math.isfinite(equity) and equity > 0)
+
+
 def _maybe_log_snapshot(holdings: list[dict]) -> None:
     """Rate-limited equity snapshot + live cache write. Skips if last write < interval ago."""
     global _last_snapshot_at
@@ -1267,8 +1280,13 @@ def _maybe_log_snapshot(holdings: list[dict]) -> None:
         if now - _last_snapshot_at < SNAPSHOT_INTERVAL_SEC:
             return
         _last_snapshot_at = now
+    # Only persist real observations — never write price=0 / sentinel rows that would
+    # later be read back as a catastrophic drawdown.
+    valid = [h for h in holdings if _is_real_observation(h)]
+    if not valid:
+        return
     try:
-        log_equity_snapshot(holdings)
+        log_equity_snapshot(valid)
     except Exception as snap_err:
         print(f"⚠  Snapshot log failed: {snap_err}")
     # Refresh live cache so the daily-analysis skill always gets current data
@@ -1535,7 +1553,14 @@ def equity_curve_gate():
         holdings = payload["holdings"]
 
         def history_fn(symbol: str):
-            return get_equity_history(symbol, days=30)
+            # Defense in depth (external audit 2026-07-18): the equity_snapshots table
+            # accumulated corrupt rows (current_price=0, stale constant equity) from
+            # degraded snapshots. compute_ecg reads MAX(series) as the peak, so one real
+            # value among sentinels reads as a ~-96% drawdown → a false "SUSPENDED —
+            # consider exiting" panic alarm. Drop non-observations here so a corrupt
+            # symbol degrades to "insufficient history / HEALTHY", never a fake crash.
+            return [r for r in get_equity_history(symbol, days=30)
+                    if _is_real_observation(r)]
 
         result = compute_ecg(holdings, history_fn)
         result.setdefault("portfolio_gate", "UNKNOWN")
