@@ -129,7 +129,9 @@ def _sharpe(pnls: list[float], launch_date: str, today: str) -> float:
     var = sum((p - mean_r) ** 2 for p in pnls) / (n - 1)
     std = math.sqrt(var) if var > 0 else 0.0
     if std == 0:
-        return 10.0 if mean_r > 0 else (-10.0 if mean_r < 0 else 0.0)
+        # [CLAUDE 2026-07-18] audit D-05: zero variance -> 0.0 (insufficient sample),
+        # matching trading/metrics.py and proof_page.py.
+        return 0.0
     d0 = datetime.fromisoformat(launch_date).date()
     d1 = datetime.fromisoformat(today).date()
     days = max((d1 - d0).days, 1)

@@ -88,12 +88,13 @@ def get_alpha(ticker: str, period: str = "1mo") -> dict[str, Any]:
         if isinstance(data, yf.Series if hasattr(yf, "Series") else type(None)):
             data = data.to_frame(name=peers[0])
 
-        def _period_return(sym: str) -> float:
+        def _period_return(sym: str):
+            # [CLAUDE 2026-07-18] audit D-06: missing data is None, never a fake 0.0%.
             if sym not in data.columns:
-                return 0.0
+                return None
             s = data[sym].dropna()
             if len(s) < 2:
-                return 0.0
+                return None
             return float((s.iloc[-1] / s.iloc[0] - 1) * 100)
 
         stock_ret  = _period_return(ticker)
@@ -102,6 +103,13 @@ def get_alpha(ticker: str, period: str = "1mo") -> dict[str, Any]:
 
     except Exception as exc:
         return {"ticker": ticker, "error": str(exc)}
+
+    if stock_ret is None or spy_ret is None or sector_ret is None:
+        missing = [n for n, v in (("stock", stock_ret), ("SPY", spy_ret),
+                                  (sector_etf, sector_ret)) if v is None]
+        return {"ticker": ticker, "sector_etf": sector_etf, "period": period,
+                "error": f"benchmark data unavailable ({', '.join(missing)})",
+                "alpha_grade": "n/a", "summary": f"{ticker} {period}: benchmark data unavailable"}
 
     vs_market = stock_ret - spy_ret
     vs_sector = stock_ret - sector_ret
@@ -155,11 +163,12 @@ def batch_alpha(
     except Exception:
         data = None
 
-    def _ret(sym: str) -> float:
+    def _ret(sym: str):
+        # [CLAUDE 2026-07-18] audit D-06: missing data is None, never a fake 0.0%.
         if data is None or not hasattr(data, "columns") or sym not in data.columns:
-            return 0.0
+            return None
         s = data[sym].dropna()
-        return float((s.iloc[-1] / s.iloc[0] - 1) * 100) if len(s) >= 2 else 0.0
+        return float((s.iloc[-1] / s.iloc[0] - 1) * 100) if len(s) >= 2 else None
 
     spy_ret = _ret("SPY")
     results: list[dict] = []
@@ -167,6 +176,13 @@ def batch_alpha(
         etf        = sector_map[ticker]
         stock_ret  = _ret(ticker)
         sector_ret = _ret(etf)
+        if stock_ret is None or spy_ret is None or sector_ret is None:
+            results.append({"ticker": ticker, "sector_etf": etf, "period": period,
+                            "error": "benchmark data unavailable", "alpha_grade": "n/a",
+                            "stock_return_pct": None, "spy_return_pct": None,
+                            "sector_return_pct": None, "vs_market_pct": None,
+                            "vs_sector_pct": None})
+            continue
         vs_market  = stock_ret - spy_ret
         vs_sector  = stock_ret - sector_ret
         score = vs_market * 0.5 + vs_sector * 0.5
@@ -183,7 +199,8 @@ def batch_alpha(
             "alpha_grade":       grade,
         })
 
-    return sorted(results, key=lambda x: x["vs_market_pct"], reverse=True)
+    return sorted(results, key=lambda x: (x["vs_market_pct"] is None,
+                                          -(x["vs_market_pct"] or 0)))
 
 
 def alpha_summary_text(tickers: list[str], period: str = "1mo") -> str:
@@ -195,6 +212,9 @@ def alpha_summary_text(tickers: list[str], period: str = "1mo") -> str:
     lines.append(f"  {'Ticker':<7} {'vs SPY':>8} {'vs Sector':>10} {'Grade':>6}")
     lines.append("  " + "─" * 33)
     for r in rows:
+        if r.get("vs_market_pct") is None:
+            lines.append(f"  {r['ticker']:<7} {'n/a':>8} {'n/a':>10} {'n/a':>6}")
+            continue
         lines.append(
             f"  {r['ticker']:<7} {r['vs_market_pct']:>+7.1f}%"
             f" {r['vs_sector_pct']:>+9.1f}%"
