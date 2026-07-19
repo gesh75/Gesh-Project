@@ -133,6 +133,16 @@ def _throttled_log_due(key: str, interval: float = _THROTTLED_LOG_INTERVAL_S) ->
         return suppressed
 
 
+def _signups_paused() -> bool:
+    """Is the paid checkout closed to NEW subscribers? (Legal Hub L5.)
+
+    Read live from the env on every request so the flag can be flipped with a
+    restart and no code change. Defaults to OFF: pausing revenue is the owner's
+    call, not a default this code should impose — it only provides the switch.
+    """
+    return os.getenv("GESH_SIGNUPS_PAUSED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _reset_throttled_logs() -> None:
     """Test seam — throttle state is process-global and would leak across tests."""
     with _throttled_log_lock:
@@ -992,17 +1002,32 @@ def pricing_page():
     feats = ["Signal-accuracy proof (live track record)", "Daily AI portfolio report",
              "Watch dashboard", "Diversification radar"]
     items = "".join(f"<li>{f}</li>" for f in feats)
-    card = (
-        "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:28px;"
-        "background:#0d1520;max-width:360px\">"
-        f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
-        f"<p style=\"font-size:34px;margin:8px 0\"><strong>${price}</strong>"
-        "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
-        f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
-        f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
-        "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
-        "font-weight:600;margin-top:12px\">Subscribe</a></div>"
-    )
+    if _signups_paused():
+        # The Legal Hub's L5 recommends pausing net-new paid signups until the ToS
+        # is finalised and counsel has classified "My Book". Whether to actually
+        # stop taking money is a BUSINESS decision, so this is an explicit env
+        # flag defaulting to OFF — the mechanism exists, the choice stays human.
+        card = (
+            "<div style=\"border:1px solid #6b5410;border-radius:12px;padding:28px;"
+            "background:#1a1405;max-width:460px;color:#e8d9b0\">"
+            "<h2 style=\"color:#f0b429;margin:0 0 10px\">Not accepting new subscribers</h2>"
+            "<p style=\"margin:0 0 10px\">GESH is in beta and we have paused new paid "
+            "signups while our terms and regulatory position are being finalised with "
+            "counsel. Existing subscribers are unaffected.</p>"
+            "<p style=\"margin:0\">The <a href=\"/track-record\" style=\"color:#00e87a\">"
+            "track record</a> and research pages remain open to read.</p></div>")
+    else:
+        card = (
+            "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:28px;"
+            "background:#0d1520;max-width:360px\">"
+            f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
+            f"<p style=\"font-size:34px;margin:8px 0\"><strong>${price}</strong>"
+            "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
+            f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
+            f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
+            "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
+            "font-weight:600;margin-top:12px\">Subscribe</a></div>"
+        )
     return (
         "<!doctype html><html><head><meta charset=utf-8><title>GESH — Pricing</title>"
         "<meta name=viewport content=\"width=device-width,initial-scale=1\"></head>"
@@ -1142,6 +1167,72 @@ def terms_page():
     """Public Terms of Service & Disclaimer (internal compliance notes stripped)."""
     import legal_pages
     return legal_pages.render_terms_html()
+
+
+@app.get("/api/account/export")
+def account_export(request: Request):
+    """Data-subject ACCESS/PORTABILITY right (Privacy Policy §8).
+
+    Returns everything stored about the caller as a downloadable JSON file.
+    `export_user_data` keys strictly on the caller's user_id, so it cannot reach
+    another account, and it never includes the password hash."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        data = auth_users.export_user_data(email)
+        auth_users.log_usage(email, "data_export")
+        stamp = _dt.now(_tz.utc).strftime("%Y%m%d")
+        return JSONResponse(
+            content=_jsonable(data),
+            headers={"Content-Disposition": f'attachment; filename="gesh-my-data-{stamp}.json"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.post("/api/account/delete")
+async def account_delete(request: Request):
+    """Data-subject ERASURE right (Privacy Policy §8) — a real purge, not a
+    deactivation.
+
+    Requires the literal string "DELETE": this is irreversible, and an
+    irreversible action behind a single click is an accident waiting to happen.
+    The owner account is refused — deleting it would lock the operator out of
+    their own product. If a live subscription exists we say so: deleting here
+    does NOT cancel Lemon Squeezy, and letting someone keep paying for an
+    account that no longer exists would be indefensible."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if auth_users.is_owner(email):
+        raise HTTPException(status_code=403,
+                            detail="The owner account cannot be deleted from the app.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if (body or {}).get("confirm") != "DELETE":
+        raise HTTPException(
+            status_code=400,
+            detail='Confirmation required — send {"confirm": "DELETE"} to erase your account.')
+    try:
+        sub_id, sub_status = auth_users.billing_subscription_status(email)
+        report = auth_users.delete_user_data(email)
+        notice = ""
+        if sub_id and (sub_status or "").lower() in ("active", "past_due", "paused"):
+            notice = ("Your account data is deleted, but your subscription is billed by "
+                      "Lemon Squeezy and is NOT cancelled by this action — cancel it from "
+                      "the billing-portal link in your receipt email to stop future charges.")
+        resp = JSONResponse({"status": "ok", **report, "notice": notice})
+        resp.delete_cookie(auth_users.COOKIE_NAME, path="/")
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
 
 
 @app.get("/privacy", response_class=HTMLResponse)
