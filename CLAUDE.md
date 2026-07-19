@@ -811,6 +811,58 @@ under the new cap — the report banner should show partial approvals (Kelly-siz
 adds ≤16.3% clear; >18% still reject) instead of blanket rejection. FINNHUB_API_KEY
 placeholder line also removed from `.env` (was shadow-defined twice).
 
+## Analyze-progress UX — 2026-07-19 ★★ (the async 202+poll contract, and how to not misread it)
+
+**Read this before ever filing `/api/mybook/analyze` as broken.** It returns **202
+(async enqueue), NEVER 429-for-busy**. A QA audit filed "Test 4 FAILED — daily rate
+limit exhausted"; nothing was broken. The run had **completed**.
+
+**The contract:** 202 → the client polls the SAME endpoint every 3s, `attempt<110`
+= a **5.5-minute budget** (sized to outlast the Cloudflare tunnel's ~100s limit).
+A 40-position book takes ~3 min. **Navigating away kills the in-page poll loop** —
+that is what the tester did (left at 1m13s of a 3m02s run).
+
+**Diagnosing a "nothing happened" report — in this order:**
+| Question | Where to look |
+|---|---|
+| Did it enqueue? | `grep 'POST /api/mybook/analyze' /tmp/gesh_main.log` → **202 = fine**, 429 = real quota |
+| Did it finish? | `sqlite3 gesh_auth.db "SELECT job_id,status,delivered_at,created_at,updated_at FROM mybook_jobs ORDER BY created_at DESC LIMIT 3"` |
+| Is the result there? | `sqlite3 gesh_auth.db "SELECT created_at,length(result_json) FROM customer_analyses ORDER BY created_at DESC LIMIT 3"` |
+
+**`delivered_at IS NULL` on a `done` job is NOT a leak** — it is a deliberate
+handoff (`/api/mybook/analyze`): the next POST returns that result `200` and marks it
+delivered. **A finished analysis is HELD; one click retrieves it with zero new Claude spend.**
+
+**Quota lives in `usage_reservations`, not `usage_events`.** `start_mybook_job`
+reserves the slot inside `BEGIN IMMEDIATE` **before** any LLM call (the Gap #7
+concurrency-bypass fix). **The absence of a `book_analysis` usage_event for a live
+run is EXPECTED** — do not read it as un-metered spend.
+
+**40→8 detailed-card truncation is by `equity` DESC**, disclosed in the UI, and
+`book_meta.note` forces portfolio verdict/sector/diversification from
+`all_holdings_summary` — **scores reflect the FULL book**; Kelly does too.
+
+### What this session changed (PR: `fix/analyze-progress-ux`)
+1. **Live elapsed counter** on the analyze spinner (`mybook-elapsed`, `setInterval`,
+   cleared in `finally`) + copy stating the result survives navigating away. Static
+   text could not distinguish *working* from *hung*; the ticking number proves liveness.
+2. **`_ready_analysis_pending(email)`** — `/mybook/report` now detects a **done,
+   undelivered, fingerprint-MATCHING** job and shows "a newer analysis is ready …
+   no new AI usage" instead of the alarming "reflect the OLD portfolio" banner.
+   Fingerprint-matched on purpose: a held result for a *different* book keeps the
+   honest stale warning. Fail-quiet (never 500s a print page).
+3. **`_throttled_log_due(key, interval)`** — the offline-RH retry logged **26,445
+   identical lines** (~6% of a 21MB unrotated `/tmp/gesh_main.log`) from a 60s retry
+   that cannot succeed off-hours. First hit still logs immediately; repeats collapse
+   into a 5-min line that **reports the suppressed count** (a quiet log must never
+   imply a quiet system). Reset via `_reset_throttled_logs()` in tests.
+
+Guard tests: `tests/test_analyze_progress_ux.py` (17). Suite **1,367 passed**.
+**QA rule learned:** never hardcode price bands in a test sheet — the audit's INTC
+`$100–120` / AMD `$500–600` were written against 7/16 closes and both fell 7/17, so
+correct app values ($95.04 / $495.76, penny-accurate vs the broker) read as failures.
+Derive expectations at runtime from the RH feed.
+
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.
 All trading decisions remain the user's responsibility.

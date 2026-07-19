@@ -103,6 +103,41 @@ def require_customer_or_owner(
 
 logger = logging.getLogger("gesh.server")
 
+# ─── repeating-log throttle ───────────────────────────────────────────────────
+# A retry that can never succeed (the reauth-dead Robinhood session, retried on
+# every /api/portfolio poll) logged one WARNING per attempt: 26,445 identical
+# lines, ~6% of a 21MB /tmp/gesh_main.log, and off-hours it cannot possibly
+# recover. Nothing was broken — but that volume is exactly what buries a REAL
+# error, so the fix is volume, not severity. First occurrence still logs
+# immediately (never delay a new signal); repeats collapse into a periodic line
+# that reports how many were swallowed, so an outage is never understated.
+_THROTTLED_LOG_INTERVAL_S = 300.0
+_throttled_log_last: dict[str, tuple[float, int]] = {}
+_throttled_log_lock = threading.Lock()
+
+
+def _throttled_log_due(key: str, interval: float = _THROTTLED_LOG_INTERVAL_S) -> int | None:
+    """Rate-limit a repeating log line, keyed by call site.
+
+    Returns the number of repeats SUPPRESSED since the last emission when the
+    line is due (0 on the first ever call), or None while still throttled.
+    Callers must append the count so a quiet log never implies a quiet system.
+    """
+    now = time.monotonic()
+    with _throttled_log_lock:
+        last, suppressed = _throttled_log_last.get(key, (None, 0))
+        if last is not None and (now - last) < interval:
+            _throttled_log_last[key] = (last, suppressed + 1)
+            return None
+        _throttled_log_last[key] = (now, 0)
+        return suppressed
+
+
+def _reset_throttled_logs() -> None:
+    """Test seam — throttle state is process-global and would leak across tests."""
+    with _throttled_log_lock:
+        _throttled_log_last.clear()
+
 
 def _server_error(exc: Exception) -> HTTPException:
     """Log the real exception server-side; return a generic 500 so internal
@@ -1593,8 +1628,15 @@ def get_portfolio():
             # Any OTHER exception is a real bug — it must NOT be masked by serving stale data;
             # it falls through to _server_error (500) and reaches monitoring (Codex MEDIUM-4).
             payload = load_snapshot_payload()       # may re-raise RobinhoodOfflineError → 503
-            logger.warning("api/portfolio: live RH offline (%s) — serving snapshot (age=%ss)",
-                           type(live_err).__name__, payload.get("snapshot_age_seconds"))
+            # Throttled: this fires on EVERY poll while the RH session is dead and
+            # cannot self-heal off-hours. First hit is immediate; repeats collapse.
+            suppressed = _throttled_log_due("api_portfolio_offline")
+            if suppressed is not None:
+                logger.warning(
+                    "api/portfolio: live RH offline (%s) — serving snapshot (age=%ss)%s",
+                    type(live_err).__name__, payload.get("snapshot_age_seconds"),
+                    f" [+{suppressed} suppressed in the last {int(_THROTTLED_LOG_INTERVAL_S)}s]"
+                    if suppressed else "")
 
         eq = payload["equity_summary"]
         prev = eq.get("adjusted_equity_previous_close", 0)
@@ -3381,6 +3423,35 @@ def _analysis_stale_for(email: str, saved: dict | None) -> bool:
     return saved_fp != _book_fingerprint(positions) + ("|ew" if ew else "")
 
 
+def _ready_analysis_pending(email: str) -> bool:
+    """Is a COMPLETED analysis for the CURRENT book sitting undelivered?
+
+    The async job hands its result to the next POST /api/mybook/analyze, which
+    marks it delivered. A customer who navigates away mid-run therefore leaves a
+    finished result held on disk with nothing telling them so — /mybook/report
+    showed "Analysis out of date" while a matching fresh analysis existed, which
+    reads as "it failed" (QA audit 2026-07-19: an expert tester concluded the
+    daily rate limit was exhausted; the run had in fact completed).
+
+    Fingerprint-matched on purpose: a held result for a DIFFERENT book must keep
+    the honest stale warning rather than promise a fresh one. Read-only and
+    fail-quiet — this only upgrades a banner on a print-friendly page, so a
+    metering hiccup must never turn it into a 500.
+    """
+    try:
+        user_id = auth_users.resolve_user_id(email)
+        if not user_id:
+            return False
+        latest = auth_users.get_latest_mybook_job(user_id)
+        if not latest or latest.get("status") != "done" or latest.get("delivered_at"):
+            return False
+        ew = auth_users.get_equal_weight(email)
+        current_fp = _book_fingerprint(auth_users.get_positions(email)) + ("|ew" if ew else "")
+        return latest.get("fingerprint") == current_fp
+    except Exception:  # noqa: BLE001 — advisory banner, never break the report
+        return False
+
+
 @app.post("/api/mybook/deploy-cash")
 async def mybook_deploy_cash(request: Request):
     """'Where does new cash go?' — ranks the customer's LAST persisted Kelly ADD
@@ -3534,7 +3605,19 @@ def _render_book_report(email: str) -> str:
                   if ew else f"<b>Total: ${total:,.2f}</b>")
 
     stale_banner = ""
-    if stale:
+    if stale and _ready_analysis_pending(email):
+        # A finished analysis for THESE positions is held, undelivered — the run
+        # completed after the customer navigated away. Telling them it's "out of
+        # date" here would be true of what's rendered but wrong about the system.
+        stale_banner = (
+            "<div style='background:#d1e7dd;border:1px solid #0f5132;border-radius:6px;"
+            "padding:12px 16px;margin:18px 0'><b>&#10003; A newer analysis is ready</b> — "
+            "your last run finished after you left the page, and it matches the positions "
+            "listed above. Open <b>Analyze My Portfolio</b> on the dashboard to load it "
+            "instantly (it is already computed — no new AI usage), then reload this report. "
+            "Everything below is the PREVIOUS analysis"
+            f" ({e(str(saved.get('_saved_at', ''))[:16])} UTC).</div>")
+    elif stale:
         stale_banner = (
             "<div style='background:#fff3cd;border:1px solid #d39e00;border-radius:6px;"
             "padding:12px 16px;margin:18px 0'><b>&#9888; Analysis out of date</b> — your "

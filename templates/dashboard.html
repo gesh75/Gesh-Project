@@ -3432,7 +3432,18 @@ async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
   const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
-  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo. This can take 2–4 minutes for a large book; keep this tab open…</div></div>`;
+  // Live elapsed counter, not static text: a large book runs ~3 min, and with a
+  // frozen "2–4 minutes" message "working" is indistinguishable from "hung". A QA
+  // audit (2026-07-19) waited 1m13s of a 3m02s run and filed it as a rate-limit
+  // failure — a paying customer reaches the same conclusion faster. The ticking
+  // number is the whole fix: it proves liveness.
+  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo.<div style="margin-top:8px;font-variant-numeric:tabular-nums"><b id="mybook-elapsed">0:00</b> elapsed — a large book takes 2–4 minutes.</div><div style="margin-top:6px;font-size:12px;color:var(--muted)">Keep this tab open. If you navigate away the result is still saved — reopen this tab to collect it.</div></div></div>`;
+  const t0=Date.now();
+  const tick=setInterval(()=>{
+    const el=document.getElementById('mybook-elapsed'); if(!el){ clearInterval(tick); return; }
+    const s=Math.floor((Date.now()-t0)/1000);
+    el.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+  },1000);
   try{
     let res=null, j=null;
     for(let attempt=0; attempt<110; attempt++){
@@ -3497,6 +3508,7 @@ async function mybookAnalyze(){
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
+  finally{ clearInterval(tick); }
 }
 
 // "Where does new cash go?" — LLM-free Kelly-gap proportional cash deployment,
