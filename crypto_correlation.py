@@ -29,7 +29,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
+import price_source  # locked yf.download adapter (thread-safety)
 from datetime import datetime, timedelta
 
 
@@ -55,7 +55,7 @@ def _fetch_returns(
     end   = datetime.today()
     start = end - timedelta(days=lookback_days + 10)
     try:
-        data = yf.download(
+        data = price_source.locked_yf_download(
             all_syms,
             start=start.strftime("%Y-%m-%d"),
             end=end.strftime("%Y-%m-%d"),

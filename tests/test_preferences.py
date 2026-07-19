@@ -16,6 +16,12 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
+    # [CLAUDE 2026-07-18] immutable-user-ID migration: watchlist/book/tokens now
+    # require a real active user — register the fixture emails up front.
+    _au.create_user("a@x.com", "pw-test")
+    _au.create_user("b@x.com", "pw-test")
+    _au.create_user("cust@x.com", "pw-test")
+    _au.create_user("georgy75@gmail.com", "pw-test")
     return _au
 
 
@@ -97,7 +103,9 @@ def test_reenable_via_preferences_after_unsubscribe_link(client, monkeypatch, au
     (sets opt_out True), then flip it back via the new dashboard endpoint."""
     server, c = client
     tok = au.issue_token("cust@x.com", ttl=86400, typ="alerts_unsub")
-    assert c.get(f"/alerts/unsubscribe?token={tok}").status_code == 200
+    assert c.get(f"/alerts/unsubscribe?token={tok}").status_code == 200   # confirm page only
+    assert au.get_alerts_opt_out("cust@x.com") is False                  # GET never mutates
+    assert c.post("/alerts/unsubscribe", json={"token": tok}).status_code == 200
     assert au.get_alerts_opt_out("cust@x.com") is True
     _as(server, monkeypatch, "cust@x.com")
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")

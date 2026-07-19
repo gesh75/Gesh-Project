@@ -378,18 +378,31 @@ def node_kelly(symbol: str, equity: float, total_portfolio: float,
 def node_ecg(symbol: str) -> tuple[int | None, str]:
     """Equity Curve Gate health for this holding."""
     try:
+        # Phase 3.2 renamed the ecg helpers (_drawdown/_streak/_gate_status →
+        # below); this node kept the old imports and ABSTAINed on ImportError
+        # every run. Mirrors compute_ecg exactly: history arrives newest-first
+        # (ORDER BY snapshot_at DESC) so reverse for the running-peak math, and
+        # _loss_streak takes per-snapshot % CHANGES derived from the equity
+        # series — never raw equity levels (always positive → streak stuck at 0).
         from db import get_equity_history
-        from ecg import _drawdown, _streak, _gate_status
+        from ecg import _classify, _compute_drawdown_from_peak, _loss_streak
+
         history = get_equity_history(symbol, days=30)
         if not history or len(history) < 3:
             return ABSTAIN, "Insufficient ECG history"
-        prices = [h["equity"] for h in history]
-        dd = _drawdown(prices)
-        streak = _streak(prices)
-        status = _gate_status(dd, streak)
+        prices = [h["equity"] for h in reversed(history)]  # oldest → newest
+        chgs = [
+            (prices[i] / prices[i - 1] - 1.0) * 100 if prices[i - 1] else 0.0
+            for i in range(1, len(prices))
+        ]
+        dd = _compute_drawdown_from_peak(prices)
+        streak = _loss_streak(chgs)
+        status = _classify(dd, streak)
         detail = f"ECG={status} DD={dd:.1f}% Streak={streak}"
-        if status == "HEALTHY":   return VOTE_BULLISH, detail
-        if status == "SUSPENDED": return VOTE_BEARISH, detail
+        if status == "HEALTHY":
+            return VOTE_BULLISH, detail
+        if status == "SUSPENDED":
+            return VOTE_BEARISH, detail
         return VOTE_NEUTRAL, detail
     except Exception as e:
         return ABSTAIN, str(e)

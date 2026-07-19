@@ -29,6 +29,7 @@ import anthropic
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import price_source  # locked yf.download adapter (thread-safety)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -107,7 +108,7 @@ def _fetch_fundamentals_batch(symbols: list[str]) -> list[dict]:
 
     # Price momentum in one batch call
     try:
-        raw = yf.download(symbols, period="3mo", progress=False, auto_adjust=True)
+        raw = price_source.locked_yf_download(symbols, period="3mo", progress=False, auto_adjust=True)
         if isinstance(raw.columns, pd.MultiIndex):
             closes = raw["Close"]
         else:

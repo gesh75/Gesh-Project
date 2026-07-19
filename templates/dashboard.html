@@ -661,6 +661,16 @@ body:not(.customer) .customer-only { display: none !important; }
 
 <div class="main">
 
+  <!-- L5: beta / educational framing. The ToS is still a DRAFT and counsel has not
+       classified the "My Book" feature, so the product must present itself as
+       research and education — never as advice. Remove only when counsel says so. -->
+  <div id="gesh-beta-banner" style="background:#1a1405;border:1px solid #6b5410;border-left:3px solid #f0b429;border-radius:8px;padding:11px 15px;margin:0 0 16px;color:#e8d9b0;font-size:12.5px;line-height:1.6">
+    <b>BETA · educational use.</b> GESH is a research and education tool in beta —
+    it is <b>not investment advice</b>, does not manage money, and never places trades.
+    Analytics are AI-generated and may be wrong; performance shown is hypothetical/simulated.
+    All decisions remain yours.
+  </div>
+
   <!-- ═══ TAB: HOME (customer hero — book value, what changed, one next action) ═══ -->
   <div class="tab-pane" id="tab-home">
     <div class="card" style="margin-bottom:18px">
@@ -719,6 +729,14 @@ body:not(.customer) .customer-only { display: none !important; }
         <button class="btn-analyze" onclick="mybookClear()" title="Remove EVERY position from your book. Use this to wipe a symbols-only bulk import before adding real share counts.">🗑 Clear</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
         <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()">🧠 Analyze My Portfolio</button>
+      </div>
+      <!-- L1: the AI data-flow disclosure, shown at the point of use. A privacy
+           page alone does not put it in front of someone at the moment they act. -->
+      <div id="gesh-ai-disclosure" style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.6">
+        ℹ️ Running an analysis sends your symbols and entered holdings to third-party AI
+        providers (<b>Anthropic Claude</b>, <b>Google Gemini</b>) to generate the research.
+        Output is an AI opinion, not a calculation, and is <b>not investment advice</b>.
+        See the <a href="/privacy" style="color:var(--accent)">Privacy Policy</a>.
       </div>
       <div id="mybook-bulk-panel" style="display:none;margin:0 0 12px">
         <textarea id="mybook-bulk-text" rows="6" placeholder="Paste tickers — one per line:&#10;AAPL&#10;NVDA&#10;MSFT&#10;&#10;Sizes are optional & stay private. To weight exactly, add:  AAPL, 100, 150.25"
@@ -1254,7 +1272,7 @@ body:not(.customer) .customer-only { display: none !important; }
         <!-- 5 stat cards -->
         <div class="da-stats">
           <div class="da-stat"><div class="lbl">Portfolio Score</div><div class="val" id="da-port-score">—</div><div class="sub" id="da-port-type">—</div></div>
-          <div class="da-stat"><div class="lbl">Risk Score</div><div class="val" id="da-risk-score">—</div><div class="sub">0 safe · 100 extreme</div></div>
+          <div class="da-stat"><div class="lbl">AI Risk Opinion</div><div class="val" id="da-risk-score">—</div><div class="sub">model-generated · 0 safe · 100 extreme</div></div>
           <div class="da-stat"><div class="lbl">Diversification</div><div class="val" id="da-div-score">—</div><div class="sub">0 concentrated · 100 spread</div></div>
           <div class="da-stat" style="grid-column:span 2">
             <div class="lbl">AI Verdict</div>
@@ -1296,6 +1314,31 @@ body:not(.customer) .customer-only { display: none !important; }
       </div><!-- /da-results -->
     </div>
   </div><!-- /tab-daily -->
+
+  <!-- L3: data-subject rights. The published Privacy Policy §8 promises access,
+       export and deletion and points users at in-app controls — so they have to
+       exist in the product, not only by emailing support. -->
+  <div id="gesh-data-rights" class="customer-only" style="margin:22px 0 0;padding:14px 16px;border:1px solid var(--border);border-radius:8px">
+    <div style="font-weight:600;margin-bottom:6px">Your data</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.6">
+      Download everything we store about you, or permanently delete your account.
+      Deletion is immediate and cannot be undone.
+    </div>
+    <a class="btn-analyze" href="/api/account/export" style="text-decoration:none;display:inline-flex;align-items:center">⬇ Export my data</a>
+    <button class="btn-analyze" onclick="accountDelete()" style="border-color:#7a2530;color:#ff8b96">🗑 Delete my account</button>
+    <div id="gesh-delete-status" style="font-size:12px;color:var(--muted);margin-top:8px"></div>
+  </div>
+
+  <!-- L1: policy footer. Before this the dashboard had ZERO links to /terms or
+       /disclaimer — policies that exist but are unreachable from the product are
+       not published in any meaningful sense. Static markup, no interpolation. -->
+  <div class="gesh-policy-footer" style="margin:26px 0 10px;padding-top:14px;border-top:1px solid var(--border);color:var(--muted);font-size:12px;line-height:1.7">
+    <a href="/privacy" style="color:var(--accent);text-decoration:none">Privacy Policy</a> ·
+    <a href="/terms" style="color:var(--accent);text-decoration:none">Terms of Service</a> ·
+    <a href="/disclaimer" style="color:var(--accent);text-decoration:none">Disclaimer</a><br>
+    GESH Financial is a research and education tool. Informational purposes only —
+    <b>not investment advice</b>. Past and simulated performance do not guarantee future results.
+  </div>
 
 </div>
 
@@ -1757,7 +1800,7 @@ function piCard(a){
     <div class="ch">
       <div style="display:flex;align-items:center;gap:10px"><span class="ct">Portfolio Intelligence</span><span class="badge b-muted">${daEsc(a.portfolio_type||'Mixed')}</span></div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span style="font-size:13px;color:var(--muted)">Risk:</span><span style="font-weight:700;color:${riskC}">${a.risk_score||'—'}<span style="font-size:12px;color:var(--muted)">/100</span></span>
+        <span style="font-size:13px;color:var(--muted)" title="AI model opinion, not a computed metric">AI risk:</span><span style="font-weight:700;color:${riskC}">${a.risk_score||'—'}<span style="font-size:12px;color:var(--muted)">/100</span></span>
         <span style="font-size:13px;color:var(--muted);margin-left:6px">Diversification:</span><span style="font-weight:700;color:var(--accent)">${daEsc(a.diversification_score||0)}<span style="font-size:12px;color:var(--muted)">/100</span></span>
       </div>
     </div>
@@ -3428,11 +3471,43 @@ function buildLeadFold(text,maxLead=220){
   return `<div style="font-size:13px;color:var(--muted2);margin-top:10px;line-height:1.55"><b>${daEsc(lead)}</b></div>`
     +(rest?`<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">Full context</summary><div style="font-size:13px;color:var(--muted2);line-height:1.55;margin-top:6px">${daEsc(rest)}</div></details>`:'');
 }
+// L3: account erasure. Two gates before an irreversible call — a confirm() and a
+// typed word — because the server also demands the literal string "DELETE".
+async function accountDelete(){
+  const st=document.getElementById('gesh-delete-status');
+  if(!confirm('Permanently delete your GESH account and all your data?\n\nThis cannot be undone. Export your data first if you want a copy.')) return;
+  const typed=prompt('Type DELETE (in capitals) to confirm permanent erasure:');
+  if(typed!=='DELETE'){ if(st) st.textContent='Cancelled — nothing was deleted.'; return; }
+  if(st) st.textContent='Deleting…';
+  try{
+    const r=await fetch('/api/account/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:'DELETE'})});
+    const j=await r.json().catch(()=>null);
+    if(!r.ok){ if(st) st.textContent=(j&&j.detail)||'Deletion failed — please contact support.'; return; }
+    let msg='Your account and data have been deleted.';
+    if(j&&j.notice) msg+=' '+j.notice;
+    document.body.innerHTML='<div style="max-width:640px;margin:80px auto;padding:0 24px;font-family:system-ui,sans-serif;color:#dfe8f2;line-height:1.7">'
+      +'<h1 style="color:#00d4ff;font-size:22px">Account deleted</h1><p></p>'
+      +'<p><a href="/track-record" style="color:#00d4ff">View the public track record</a></p></div>';
+    document.querySelector('p').textContent=msg;
+  }catch(e){ if(st) st.textContent='Network error — nothing was deleted.'; }
+}
+
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
   const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
-  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo. This can take 2–4 minutes for a large book; keep this tab open…</div></div>`;
+  // Live elapsed counter, not static text: a large book runs ~3 min, and with a
+  // frozen "2–4 minutes" message "working" is indistinguishable from "hung". A QA
+  // audit (2026-07-19) waited 1m13s of a 3m02s run and filed it as a rate-limit
+  // failure — a paying customer reaches the same conclusion faster. The ticking
+  // number is the whole fix: it proves liveness.
+  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo.<div style="margin-top:8px;font-variant-numeric:tabular-nums"><b id="mybook-elapsed">0:00</b> elapsed — a large book takes 2–4 minutes.</div><div style="margin-top:6px;font-size:12px;color:var(--muted)">Keep this tab open. If you navigate away the result is still saved — reopen this tab to collect it.</div></div></div>`;
+  const t0=Date.now();
+  const tick=setInterval(()=>{
+    const el=document.getElementById('mybook-elapsed'); if(!el){ clearInterval(tick); return; }
+    const s=Math.floor((Date.now()-t0)/1000);
+    el.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+  },1000);
   try{
     let res=null, j=null;
     for(let attempt=0; attempt<110; attempt++){
@@ -3483,7 +3558,7 @@ async function mybookAnalyze(){
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <span class="da-holding vrd" style="${daVerdictStyle(a.portfolio_verdict)}">${daEsc(a.portfolio_verdict||'—')}</span>
           <span style="font-size:13px;color:var(--muted)">${daEsc(a.portfolio_type||'')}</span></div>
-        ${buildRow('Portfolio score', a.portfolio_score!=null?a.portfolio_score+' / 100':'—')}${buildRow('Risk score', a.risk_score!=null?a.risk_score+' / 100':'—')}${buildRow('Diversification', a.diversification_score!=null?a.diversification_score+' / 100':'—')}
+        ${buildRow('AI portfolio score (opinion)', a.portfolio_score!=null?a.portfolio_score+' / 100':'—')}${buildRow('AI risk opinion', a.risk_score!=null?a.risk_score+' / 100':'—')}${buildRow('Diversification', a.diversification_score!=null?a.diversification_score+' / 100':'—')}
         ${a.holdings_truncated?`<div style="font-size:12px;color:var(--muted);margin-top:10px">ℹ️ Detailed AI cards cover your ${daEsc(a.holdings_truncated.analyzed)} largest holdings; all ${daEsc(a.holdings_truncated.total)} feed the risk &amp; Kelly math.</div>`:''}
         ${a.market_context?buildLeadFold(a.market_context):''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
@@ -3497,6 +3572,7 @@ async function mybookAnalyze(){
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
+  finally{ clearInterval(tick); }
 }
 
 // "Where does new cash go?" — LLM-free Kelly-gap proportional cash deployment,

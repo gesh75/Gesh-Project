@@ -115,6 +115,30 @@ def _run():
     )
 
 
+# ─── ECG regression ──────────────────────────────────────────────────────────
+
+def test_ecg_uses_oldest_to_newest_changes(monkeypatch):
+    """Newest-first DB rows must become a three-session loss streak."""
+    import db
+
+    monkeypatch.setattr(
+        db,
+        "get_equity_history",
+        lambda *_a, **_k: [
+            {"equity": 70.0},
+            {"equity": 80.0},
+            {"equity": 90.0},
+            {"equity": 100.0},
+        ],
+    )
+
+    vote, detail = consensus.node_ecg("TEST")
+
+    assert vote == consensus.VOTE_BEARISH
+    assert "ECG=SUSPENDED" in detail
+    assert "Streak=3" in detail
+
+
 # ─── verdict thresholds ───────────────────────────────────────────────────────
 
 def test_strong_buy_all_bullish(monkeypatch):

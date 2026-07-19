@@ -3,7 +3,11 @@
 run_engines2.py — Re-run all GESH analysis engines on fresh live snapshot.
 Writes output to engine_results.json.
 """
-import os, sys, json, time, traceback
+import json
+import os
+import sys
+import time
+import traceback
 from pathlib import Path
 
 T0 = time.time()
@@ -23,11 +27,10 @@ def _t() -> str:
     return f"[t+{time.time() - T0:5.1f}s]"
 
 BASE = Path(__file__).parent
-TRADING = Path(os.environ.get('GESH_TRADING_HOME',
-                               str(Path(__file__).parent.parent / 'gesh-project-trading')))
 sys.path.insert(0, str(BASE))
-sys.path.insert(0, str(TRADING))
 os.chdir(BASE)
+
+from run_manifest import atomic_write_json, manifest_from_snapshot, snapshot_degraded_info
 
 try:
     from dotenv import load_dotenv
@@ -53,34 +56,6 @@ def _utcnow() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
 
-DEGRADED_AFTER_S_DEFAULT = 3600.0
-
-def snapshot_degraded_info(snap: dict, threshold_s: float | None = None,
-                           *, now=None) -> dict:
-    """Degraded-run provenance stamp (duplicated in run_ai2.py — the two copies
-    are pinned to identical behavior by tests/test_degraded_provenance.py).
-    A run driven by a snapshot older than GESH_DEGRADED_AFTER_S (default 3600s)
-    is research-only; the stamp travels in engine_results.json so downstream
-    consumers (paper gate, report) can tell a stale-data run from a fresh one.
-    Unknown age counts as degraded (fail-safe)."""
-    from datetime import datetime, timezone
-    if threshold_s is None:
-        try:
-            threshold_s = float(os.environ.get('GESH_DEGRADED_AFTER_S', '')
-                                or DEGRADED_AFTER_S_DEFAULT)
-        except (TypeError, ValueError):
-            threshold_s = DEGRADED_AFTER_S_DEFAULT
-    now = now or datetime.now(timezone.utc)
-    try:
-        age_s = (now - datetime.fromisoformat(snap['fetched_at'])).total_seconds()
-    except (KeyError, TypeError, ValueError):
-        age_s = None
-    return {
-        'degraded': age_s is None or age_s > threshold_s,
-        'snapshot_age_seconds': None if age_s is None else int(age_s),
-        'snapshot_source': snap.get('source', 'UNKNOWN'),
-    }
-
 # MERGE over the existing file instead of clobbering it: a full rewrite wipes
 # the *_ran_at freshness stamps and the dashboard's POST-run caches (screener
 # etc.) every morning, leaving every sidebar badge stale and the Radar tab
@@ -102,6 +77,12 @@ results.update({
 # masquerade as fresh output (run_paper_gate2 skips on it; the report labels it).
 _degraded_info = snapshot_degraded_info(snap)
 results.update(_degraded_info)
+_manifest = manifest_from_snapshot(snap)
+results['run_manifest'] = _manifest.to_dict()
+# [CLAUDE V6 2026-07-19] run_manifest.json is now published TOGETHER with
+# engine_results.json at the end of the run (see the Save block), so the standalone
+# file and the embedded manifest can never disagree during the multi-minute engine
+# window — a crash mid-engines leaves BOTH at the previous run, never a split pair.
 if _degraded_info['degraded']:
     print(f"[engines] DEGRADED RUN — snapshot age {_degraded_info['snapshot_age_seconds']}s "
           f"(source={_degraded_info['snapshot_source']}); research-only provenance stamped")
@@ -109,7 +90,6 @@ if _degraded_info['degraded']:
 # ── 1. Regime ────────────────────────────────────────────────────────────────
 print(f"\n{_t()} [1/8] Running regime detection...")
 try:
-    sys.path.insert(0, str(TRADING))
     from regime import detect_regimes
     regime_data = detect_regimes(symbols)
     results['regime'] = regime_data
@@ -417,12 +397,10 @@ results['regime_summary'] = regime_summary
 # Atomic write (temp + replace): the :9000 server reads this file while the
 # chain writes it — a bare open('w') exposes a truncated JSON mid-write.
 out = BASE / 'engine_results.json'
-tmp = out.with_name(out.name + '.tmp')
-with open(tmp, 'w') as f:
-    json.dump(results, f, indent=2, default=str)
-    f.flush()
-    os.fsync(f.fileno())              # durable before rename — not just atomic
-os.replace(tmp, out)
+atomic_write_json(out, results)
+# [CLAUDE V6] publish the standalone manifest from the SAME final object so the pair
+# (run_manifest.json + engine_results.json['run_manifest']) is only ever written together.
+atomic_write_json(BASE / 'run_manifest.json', results['run_manifest'])
 
 print(f"\n{_t()} [engines] Done — saved to {out}")
 print(f"[engines] Keys: {list(results.keys())}")

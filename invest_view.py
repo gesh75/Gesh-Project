@@ -1,10 +1,10 @@
 """
-invest_view.py — internal Diversification Radar panel (GET /invest on :9000).
+invest_view.py — internal Diversification Scenario Lab (GET /invest on :9000).
 
-A read-only "where should new cash go?" cockpit. Surfaces the advisory radar that
+A read-only hypothetical-scenario panel. Surfaces the diversification model that
 the daily 10:30 pipeline persists into engine_results.json: the book's real sector
-concentration, ranked NEW (non-held) candidates with multi-factor scores + suggested
-sizing, and — when slots/cash are full — swap ideas. Updates via a 12s fetch() poll
+concentration, ranked NEW (non-held) candidates with multi-factor scores + model
+allocations, and — when slots/cash are full — scenario alternatives. Updates via a 12s fetch() poll
 against GET /invest/data.
 
 Design (mirrors watch_view.py / proof_page.py):
@@ -160,8 +160,9 @@ def load_invest_data(results_path: str | None = None,
 # ── renderer (self-contained HTML + inline poll JS) ──────────────────────────
 
 _DISCLAIMER = (
-    "Advisory research only — NOT FINANCIAL ADVICE. New-name candidates are HYPOTHETICAL "
-    "diversification ideas, never auto-traded; PAPER_MODE and the autonomy gate are unaffected."
+    "HYPOTHETICAL research scenario only — NOT FINANCIAL ADVICE. Outputs are not "
+    "suitability-checked for goals, liabilities, taxes, liquidity needs, or risk tolerance; "
+    "they are never auto-traded and do not change PAPER_MODE or the autonomy gate."
 )
 
 
@@ -174,7 +175,7 @@ def render_invest_html(data: dict[str, Any]) -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GESH — Diversification Radar</title>
+<title>GESH — Diversification Scenario Lab</title>
 <style>
  body{{margin:0;background:{_BG};color:#e8eef6;font-family:-apple-system,Segoe UI,Roboto,sans-serif}}
  .wrap{{max-width:1080px;margin:0 auto;padding:24px 18px 64px}}
@@ -195,16 +196,19 @@ def render_invest_html(data: dict[str, Any]) -> str:
  .empty{{color:{_DIM};text-align:center;padding:18px;font-size:12.5px}}
  a{{color:{_CYAN}}} #status{{float:right;color:{_DIM};font-size:11px}}
  .chip{{font-size:10px;padding:1px 6px;border-radius:8px;border:1px solid {_BORDER};color:{_DIM};margin-left:6px}}
+ .quality{{border-left:4px solid {_YELLOW};font-size:12px;line-height:1.5}}
 </style></head>
 <body><div class="wrap">
  <div><span id="status">connecting…</span>
-   <h1 style="color:{_CYAN}">💎 GESH — Diversification Radar
-     <span class="pill" id="mode-pill" style="background:{_YELLOW};color:#1a1200">{mode}</span></h1></div>
- <div class="sub">Internal · where should NEW cash go? · advisory-only · updates every 12s
-   &nbsp;·&nbsp;<a href="/watch">📡 Live watch</a> · <a href="/progress">Progress</a> · <a href="/track-record">Track record</a></div>
+   <h1 style="color:{_CYAN}">💎 GESH — Diversification Scenario Lab
+     <span class="pill" id="mode-pill" style="background:{_YELLOW};color:#1a1200">HYPOTHETICAL · {mode}</span></h1></div>
+ <div class="sub">Internal · hypothetical diversification scenarios · updates every 12s
+   &nbsp;·&nbsp;<a href="/watch">📡 Paper evidence</a> · <a href="/progress">Readiness</a> · <a href="/track-record">Track record</a></div>
 
  <div id="advisory-banner" style="background:{_RED}22;border-left:3px solid {_RED};border-radius:7px;padding:10px 14px;margin:0 0 14px;font-size:12px;color:#e8eef6">
-   ⚠️ <b>Advisory research only — NOT FINANCIAL ADVICE.</b> These are diversification ideas for research; they are never auto-traded, and PAPER_MODE + the autonomy gate are unaffected.</div>
+   ⚠️ <b>HYPOTHETICAL research only — NOT FINANCIAL ADVICE.</b> Outputs are not suitability-checked for goals, liabilities, taxes, liquidity needs, or risk tolerance. Nothing here is auto-traded.</div>
+
+ <div class="card quality" id="scenario-quality"><b>Data quality</b> · checking captured scan · <b>HYPOTHETICAL</b></div>
 
  <div class="strip" id="strip"></div>
 
@@ -212,9 +216,9 @@ def render_invest_html(data: dict[str, Any]) -> str:
    <div id="sectors"></div></div>
 
  <div class="card">
-   <h2>What-if · cash to deploy
-     <span id="wi-val" class="num" style="color:{_CYAN};font-weight:400">live</span>
-     <button id="wi-reset" style="float:right;background:{_BORDER};color:#e8eef6;border:0;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer">reset to live</button></h2>
+   <h2>Scenario input · hypothetical cash
+     <span id="wi-val" class="num" style="color:{_CYAN};font-weight:400">captured scan</span>
+     <button id="wi-reset" style="float:right;background:{_BORDER};color:#e8eef6;border:0;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer">reset scenario</button></h2>
    <input type="range" id="wi-slider" min="0" max="20000" step="250" value="0" style="width:100%;accent-color:{_CYAN};cursor:pointer">
    <div style="display:flex;justify-content:space-between;color:{_DIM};font-size:10px"><span>$0</span><span>$5k</span><span>$10k</span><span>$15k</span><span>$20k</span></div>
    <div style="color:{_DIM};font-size:11px;margin-top:5px">Drag to preview how the radar would size new-name buys at a hypothetical deployable cash — your real config and account stay unchanged.</div>
@@ -222,10 +226,10 @@ def render_invest_html(data: dict[str, Any]) -> str:
 
  <div class="card"><h2>New-name candidates <span class="chip" id="cand-note"></span></h2>
    <table><thead><tr><th>Symbol</th><th>Sector</th><th class="r">Score</th><th>Consensus</th>
-     <th class="r">Analyst</th><th class="r">Corr→Book</th><th class="r">Suggest</th><th>Thesis</th></tr></thead>
+     <th class="r">Analyst</th><th class="r">Corr→Book</th><th class="r">Model allocation</th><th>Thesis</th></tr></thead>
      <tbody id="cand-body"></tbody></table></div>
 
- <div class="card" id="swap-card" style="display:none"><h2>Swap ideas <span style="color:{_DIM};font-size:11px;font-weight:400">fund a diversifier by trimming concentration</span></h2>
+ <div class="card" id="swap-card" style="display:none"><h2>Scenario alternatives <span style="color:{_DIM};font-size:11px;font-weight:400">model the effect of trimming concentration</span></h2>
    <table><thead><tr><th>Trim</th><th>Fund new</th><th>Why</th></tr></thead>
      <tbody id="swap-body"></tbody></table></div>
 
@@ -238,10 +242,15 @@ const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({{"&":"&amp;","<":"&lt;
 const usd=v=>v==null?"—":"$"+Number(v).toLocaleString(undefined,{{maximumFractionDigits:0}});
 function renderInvest(d){{
   const mp=document.getElementById("mode-pill");
-  mp.textContent=d.mode; mp.style.background=modeCol[d.mode]||C.dim; mp.style.color="#0b0f14";
+  mp.textContent="HYPOTHETICAL · "+d.mode; mp.style.background=modeCol[d.mode]||C.dim; mp.style.color="#0b0f14";
+  const quality=document.getElementById("scenario-quality");
+  quality.innerHTML=d.stale
+    ? `<b>Data quality</b> · DEGRADED · captured scan is stale or unavailable · <b>HYPOTHETICAL</b>`
+    : `<b>Data quality</b> · CURRENT CAPTURE · generated ${{esc(d.as_of||"unknown")}} · <b>HYPOTHETICAL</b>`;
+  quality.style.borderLeftColor=d.stale?C.orange:C.green;
   document.getElementById("strip").innerHTML=[
-    ["Mode",d.mode,modeCol[d.mode]],
-    ["Deployable cash",usd(d.deployable_cash),C.cyan],
+    ["Scenario mode",d.mode,modeCol[d.mode]],
+    ["Scenario cash",usd(d.deployable_cash),C.cyan],
     ["Open slots",d.open_slots],
     ["New names",d.new_names_to_add],
     ["Excluded held",(d.excluded_holdings||[]).length],
@@ -282,13 +291,13 @@ function renderInvest(d){{
   }} else {{ sc.style.display="none"; }}
 }}
 function setStatus(t){{document.getElementById("status").textContent=t;}}
-let whatIf=null;   // null = live; a number = hypothetical deployable cash
+let whatIf=null;   // null = captured scan; a number = hypothetical scenario cash
 async function refresh(){{
   try{{
     const url=whatIf?('/invest/data?what_if_cash='+whatIf):'/invest/data';
     const r=await fetch(url,{{cache:'no-store'}});if(!r.ok){{setStatus('offline — last good view');return;}}
     const d=await r.json();renderInvest(d);
-    setStatus((d.what_if_cash?('what-if $'+d.what_if_cash.toLocaleString()+' · '):'live · ')+(d.as_of||'').slice(11,19));
+    setStatus((d.what_if_cash?('scenario $'+d.what_if_cash.toLocaleString()+' · '):'updated · ')+(d.as_of||'').slice(11,19));
   }}catch(_){{setStatus('offline — last good view');}}
 }}
 const wiSlider=document.getElementById('wi-slider');
@@ -296,14 +305,14 @@ const wiVal=document.getElementById('wi-val');
 let wiTimer=null;
 wiSlider.addEventListener('input',()=>{{
   const v=+wiSlider.value;
-  wiVal.textContent=v>0?('what-if $'+v.toLocaleString()):'live';
+  wiVal.textContent=v>0?('scenario $'+v.toLocaleString()):'captured scan';
   wiVal.style.color=v>0?C.yellow:C.cyan;
   whatIf=v>0?v:null;
-  setStatus(v>0?('what-if $'+v.toLocaleString()+' · sizing…'):'live · …');   // immediate feedback
+  setStatus(v>0?('scenario $'+v.toLocaleString()+' · sizing…'):'updated · …');
   clearTimeout(wiTimer); wiTimer=setTimeout(refresh,200);   // debounce drags
 }});
 document.getElementById('wi-reset').addEventListener('click',()=>{{
-  whatIf=null; wiSlider.value=0; wiVal.textContent='live'; wiVal.style.color=C.cyan; refresh();
+  whatIf=null; wiSlider.value=0; wiVal.textContent='captured scan'; wiVal.style.color=C.cyan; refresh();
 }});
 renderInvest({payload});
 refresh(); setInterval(refresh,12000);

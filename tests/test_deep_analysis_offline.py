@@ -11,6 +11,7 @@ def _owner_session(monkeypatch):
     monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "georgy75@gmail.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda path, cookie: "allow")
+    monkeypatch.setattr(server.auth_users, "is_owner", lambda email: True)
 
 
 _SNAPSHOT = {

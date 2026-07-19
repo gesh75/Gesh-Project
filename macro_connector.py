@@ -37,8 +37,8 @@ from typing import Any
 
 import numpy as np
 import requests
-import yfinance as yf
 
+import price_source  # locked yf.download adapter (thread-safety)
 # ── Optional fredapi ──────────────────────────────────────────────────────────
 try:
     from fredapi import Fred
@@ -144,7 +144,7 @@ def _fred_fetch(series_id: str) -> float | None:
 
 def _yf_last(ticker: str, period: str = "5d") -> float | None:
     try:
-        raw = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+        raw = price_source.locked_yf_download(ticker, period=period, auto_adjust=True, progress=False)
         if raw is None or len(raw) == 0:
             return None
         return float(raw["Close"].squeeze().dropna().iloc[-1])
@@ -188,8 +188,8 @@ def _fetch_credit_spread() -> float | None:
         return val
     # Proxy: LQD/HYG ratio — rising = HY underperforming IG = spread widening
     try:
-        hyg = yf.download("HYG", period="60d", auto_adjust=True, progress=False)
-        lqd = yf.download("LQD", period="60d", auto_adjust=True, progress=False)
+        hyg = price_source.locked_yf_download("HYG", period="60d", auto_adjust=True, progress=False)
+        lqd = price_source.locked_yf_download("LQD", period="60d", auto_adjust=True, progress=False)
         if hyg is None or lqd is None or len(hyg) < 5 or len(lqd) < 5:
             return None
         hyg_c = hyg["Close"].squeeze().dropna().values.astype(float)

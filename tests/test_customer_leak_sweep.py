@@ -24,6 +24,7 @@ view=model_book, failing CLOSED (500) if scaling throws — so `view` present +
 from __future__ import annotations
 
 import json
+import re
 
 import pandas as pd
 import pytest
@@ -56,6 +57,19 @@ def _sentinel_strings() -> list[str]:
         vals.add(f"{v:.2f}")      # 2-dp      -> "509.70"
         vals.add(f"{v:,.2f}")     # grouped   -> "5,843.32"
     return sorted(vals)
+
+
+def _find_leaks(blob: str) -> list[str]:
+    """Boundary-aware sentinel search. A sentinel counts only when it is a whole
+    number token — not embedded in a larger one. Naive `s in blob` flaked in CI:
+    the rounded sentinel '6.08' substring-matched an unrelated indicator value
+    16.08. Lookarounds reject an adjacent digit/dot, plus a leading 'digit,'
+    (so '509.70' can't match inside a grouped '1,509.70'). Exact-value detection
+    is unchanged — every sentinel variant is still checked, fail-closed."""
+    return [
+        s for s in _sentinel_strings()
+        if re.search(r"(?<!\d,)(?<![\d.])" + re.escape(s) + r"(?![\d.])", blob)
+    ]
 
 
 def _owner_payload() -> dict:
@@ -163,6 +177,18 @@ def client(monkeypatch, tmp_path):
                         lambda sym, days_back=7: [{"title": "headline", "url": "http://x",
                                                    "source": "Yahoo", "published": "2026-07-06"}],
                         raising=False)
+    # /api/earnings/{symbol} was the ONE covered entry with no stub: it fell through
+    # to yfinance, which fetches via curl_cffi and so slipped past conftest's
+    # socket-level `_no_network` guard — the sweep really called Yahoo (~4-20s) and
+    # its verdict rode on live data. Stub the same seam tests/test_earnings_viz.py
+    # uses (the handler does `import earnings_viz`, so the module attr is shared).
+    monkeypatch.setattr("earnings_viz.get_earnings",
+                        lambda sym: {"available": True, "symbol": sym,
+                                     "quarters": [{"period": "2026-03-31", "eps_actual": 1.2,
+                                                   "eps_estimate": 1.0, "surprise_pct": 20.0}],
+                                     "beat_count": 1, "scored_count": 1, "avg_surprise_pct": 20.0,
+                                     "note": "test"},
+                        raising=False)
     monkeypatch.setattr("auth_users.get_watch", lambda email: ["NVDA", "TSLA"], raising=False)
     monkeypatch.setattr("benchmarks.batch_alpha", lambda *a, **k: [], raising=False)
     monkeypatch.setattr("crypto_correlation.crypto_risk_summary", lambda *a, **k: {"crypto_pct": 0.0}, raising=False)
@@ -242,6 +268,12 @@ EXCLUDED: dict[str, str] = {
     "/api/usage/summary": "OWNER-ONLY metering view (403s customer sessions — locked by "
                           "tests/test_mybook.py); the sweep's 200-with-masking contract "
                           "cannot apply to a route customers cannot read",
+    "/api/account/export": "the caller's OWN account data as a file download, for the "
+                           "Privacy-Policy §8 access/portability right — mask-EXEMPT by "
+                           "design (masking would redact a user's own data back at them). "
+                           "Scoped by user_id inside auth_users.export_user_data, omits "
+                           "password_hash, carries no owner financial data; per-user "
+                           "isolation locked by tests/test_account_data_rights.py",
     "/api/mybook": "the CUSTOMER's own entered positions valued from public quotes — zero "
                    "owner data, mask-EXEMPT by design (masking would redact the customer's "
                    "own dollars back at them); per-user isolation + raw-dollar contract "
@@ -315,7 +347,7 @@ def test_customer_get_masks_and_gates(monkeypatch, client, url):
     # the response actually routed through _scale_money.
     assert body.get("view") == "model_book", f"{url} missing model_book marker — bypassed masking"
     blob = json.dumps(body)
-    leaked = [s for s in _sentinel_strings() if s in blob]
+    leaked = _find_leaks(blob)
     assert not leaked, f"OWNER VALUE LEAKED at {url}: {leaked}"
 
 
@@ -338,7 +370,7 @@ def test_scale_money_masks_every_exact_sentinel():
     }
     out = server._scale_money(fixture, SCALE)
     blob = json.dumps(out)
-    survivors = [s for s in _sentinel_strings() if s in blob]
+    survivors = _find_leaks(blob)
     assert not survivors, f"sentinel(s) survived masking: {survivors}"
     # model-book values are present and correctly scaled
     assert out["equity_summary"]["total"] == pytest.approx(OWNER["total"] * SCALE)
@@ -365,7 +397,7 @@ def test_scale_money_masks_position_account_and_trade_dollars():
                                 "pnl_pct": 4.2}},
     }
     out = server._scale_money(fixture, SCALE)
-    survivors = [s for s in _sentinel_strings() if s in json.dumps(out)]
+    survivors = _find_leaks(json.dumps(out))
     assert not survivors, f"owner-$ sentinel survived masking: {survivors}"
     assert out["equity_summary"]["extended_hours_equity"] == pytest.approx(OWNER["xhours"] * SCALE)
     assert out["holdings"][0]["equity_change"] == pytest.approx(OWNER["pos_change"] * SCALE)

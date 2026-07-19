@@ -42,8 +42,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-import yfinance as yf
 
+import price_source  # locked yf.download adapter (thread-safety)
 # ─── Config ───────────────────────────────────────────────────────────────────
 SPIKE_THRESHOLD  = 1.2   # volume ratio to be considered "hot"
 AVG_PERIOD       = 20    # trading days for volume average
@@ -134,7 +134,7 @@ def _get_volume_ratio(etf: str) -> tuple[float, float, float]:
     Returns (0, 0, 0) on failure.
     """
     try:
-        df = yf.download(
+        df = price_source.locked_yf_download(
             etf,
             period=FETCH_PERIOD,
             interval=FETCH_INTERVAL,

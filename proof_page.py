@@ -245,7 +245,9 @@ def load_track_record(
         var = sum((p - mean_r) ** 2 for p in pnls) / (closed - 1)
         std = math.sqrt(var) if var > 0 else 0.0
         if std == 0:
-            sharpe = 10.0 if mean_r > 0 else (-10.0 if mean_r < 0 else 0.0)
+            # [CLAUDE 2026-07-18] audit D-05: match trading/metrics.py — a zero-variance
+            # sample is an insufficient sample, not an infinite Sharpe.
+            sharpe = 0.0
         else:
             days = max(_days_between(launch_date, today), 1)
             tpy = closed / max(days / 252.0, 0.001)

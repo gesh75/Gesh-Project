@@ -71,28 +71,75 @@ def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
                 close_obj = close_obj[cols[0]]   # unlabeled/neutral single column
             else:
                 return None, meta               # labeled with a DIFFERENT ticker
-        closes = close_obj.squeeze().dropna()
-        if len(closes) == 0:
-            return None, meta
-        import numpy as np
-        arr = np.array(closes).flatten().astype(float)
-        last = round(float(arr[-1]), 2)
-        # Bad-tick guard: a single split-mismatched / partial quote (the observed
-        # NVDA $17.16 flash against a ~$205 book) poisons valuation, weights, and
-        # Kelly. If the latest close is wildly off the recent median (a real move
-        # stays inside 0.5×–2×), fall back to the most recent in-band close, or the
-        # median if none qualifies — never persist an obvious outlier.
-        if len(arr) >= 5:
-            med = float(np.median(arr[-20:]))
-            if med > 0 and not (med * 0.5 <= last <= med * 2.0):
-                meta["substituted"] = True
-                for v in arr[-2::-1]:
-                    if med * 0.5 <= float(v) <= med * 2.0:
-                        return round(float(v), 2), meta
-                return round(med, 2), meta
-        return last, meta
+        price, substituted = _close_price_guarded(close_obj.squeeze())
+        meta["substituted"] = substituted
+        return price, meta
     except Exception:
         return None, meta
+
+
+def _close_price_guarded(closes) -> tuple[float | None, bool]:
+    """Latest close off a Close series, with the bad-tick guard. Returns
+    (price, substituted) — shared by _latest_close_meta and the batch book warm
+    so both paths price identically.
+
+    Bad-tick guard: a single split-mismatched / partial quote (the observed
+    NVDA $17.16 flash against a ~$205 book) poisons valuation, weights, and
+    Kelly. If the latest close is wildly off the recent median (a real move
+    stays inside 0.5×–2×), fall back to the most recent in-band close, or the
+    median if none qualifies — never persist an obvious outlier."""
+    closes = closes.dropna()
+    if len(closes) == 0:
+        return None, False
+    import numpy as np
+    arr = np.array(closes).flatten().astype(float)
+    last = round(float(arr[-1]), 2)
+    if len(arr) >= 5:
+        med = float(np.median(arr[-20:]))
+        if med > 0 and not (med * 0.5 <= last <= med * 2.0):
+            for v in arr[-2::-1]:
+                if med * 0.5 <= float(v) <= med * 2.0:
+                    return round(float(v), 2), True
+            return round(med, 2), True
+    return last, False
+
+
+def warm_close_cache_batch(symbols: list[str]) -> None:
+    """Warm the close cache with ONE multi-symbol download.
+
+    The book warm used to fan out single-ticker fetches over a
+    ThreadPoolExecutor, but price_source's _YF_DOWNLOAD_LOCK (the yfinance
+    shared._DFS race fix) serializes them — a cold 40-symbol bulk import
+    degraded to 40 sequential round-trips. One batched yf.download is
+    internally safe (a single shared._DFS reset) and one round-trip. Prices go
+    through the same bad-tick guard as the per-symbol path
+    (_close_price_guarded). Symbols the batch fails to serve are simply left
+    cold — the caller's valuation loop fetches them per-symbol."""
+    try:
+        import price_source
+        raw = price_source.yf_download(list(symbols), period="1mo", interval="1d",
+                                       auto_adjust=True, progress=False)
+        if raw is None or getattr(raw, "empty", True):
+            return
+        close = raw["Close"]
+    except Exception:
+        return
+    for sym in symbols:
+        try:
+            if getattr(close, "ndim", 1) > 1:
+                if sym not in getattr(close, "columns", []):
+                    continue
+                series = close[sym]
+            elif len(symbols) == 1:
+                series = close
+            else:
+                continue                     # flat frame for a multi-symbol ask
+            price, _substituted = _close_price_guarded(series)
+        except Exception:
+            continue
+        if price is not None and price > 0:
+            with _close_lock:
+                _close_cache[sym] = (time.monotonic(), price)
 
 
 def _latest_close(sym: str) -> float | None:

@@ -38,7 +38,8 @@ def test_watch_page_200_html():
     r = client.get("/watch")
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
-    for needle in ("Open Positions", "Recent Closes", "Activity", "PAPER"):
+    for needle in ("Open Positions", "Recent Closes", "Activity", "PAPER ONLY",
+                   "Paper Evidence Watch", "Data quality"):
         assert needle in r.text
 
 

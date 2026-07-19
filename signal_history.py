@@ -11,6 +11,7 @@ score-based competitors, so raw one-day flips are never surfaced.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,11 +31,46 @@ CREATE TABLE IF NOT EXISTS signal_history (
 );
 """
 
+# Durable confirmed-flip EVENTS (Codex review P1, 2026-07-17). detect_confirmed_flips
+# only sees a flip while it sits at the latest streak boundary — one more snapshot and
+# it is gone, so a failed alert send was lost forever and the Friday digest missed
+# anything confirmed earlier in the week. Events persist; delivery reads events.
+_FLIPS_DDL = """
+CREATE TABLE IF NOT EXISTS signal_flips (
+    symbol         TEXT NOT NULL,
+    prior_verdict  TEXT NOT NULL,
+    new_verdict    TEXT NOT NULL,
+    confirmed_date TEXT NOT NULL,      -- YYYY-MM-DD of the first day of the streak
+    score          REAL,
+    created_at     TEXT NOT NULL,
+    PRIMARY KEY (symbol, confirmed_date)
+);
+"""
+
+# A "flip" between a real verdict and a data-outage marker is noise, not signal —
+# BUY → INSUFFICIENT DATA must never reach a customer inbox (Codex follow-up).
+_NON_VERDICTS = ("INSUFFICIENT", "UNKNOWN", "ERROR", "N/A")
+
+
+def _is_real_verdict(v: str) -> bool:
+    up = (v or "").strip().upper()
+    return bool(up) and not any(marker in up for marker in _NON_VERDICTS)
+
 
 def _conn() -> sqlite3.Connection:
-    con = sqlite3.connect(Path(DB_PATH))
+    path = Path(DB_PATH)
+    con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     con.execute(_DDL)
+    con.execute(_FLIPS_DDL)
+    # alert_log/digest_log in this DB carry customer emails; the auth DB is 0600
+    # but this one shipped 0644 (Codex finding). Tighten best-effort — same user
+    # owns every reader (server + launchd agents), so 0600 is safe.
+    try:
+        if path.exists() and (path.stat().st_mode & 0o077):
+            os.chmod(path, 0o600)
+    except OSError:  # read-only mount etc. — never let hygiene break the job
+        pass
     return con
 
 
@@ -91,3 +127,46 @@ def detect_confirmed_flips(symbols: list[str], persistence_days: int = 2) -> lis
                       "score": streak[-1]["score"],
                       "confirmed_since": streak[0]["date"]})
     return flips
+
+
+def record_confirmed_flips(symbols: list[str], persistence_days: int = 2) -> list[dict]:
+    """Persist today's confirmed flips as durable events (INSERT OR IGNORE — a flip
+    is one event, however many snapshots later observe it). Non-verdict states
+    (INSUFFICIENT DATA etc.) are filtered on BOTH sides: a data outage is not a
+    signal change. Returns the flips that are NEWLY recorded this call."""
+    detected = detect_confirmed_flips(symbols, persistence_days=persistence_days)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    new: list[dict] = []
+    with _conn() as con:
+        for f in detected:
+            if not (_is_real_verdict(f["prior_verdict"]) and _is_real_verdict(f["new_verdict"])):
+                continue
+            cur = con.execute(
+                "INSERT OR IGNORE INTO signal_flips "
+                "(symbol, prior_verdict, new_verdict, confirmed_date, score, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (f["symbol"], f["prior_verdict"], f["new_verdict"],
+                 f["confirmed_since"], f["score"], now))
+            if cur.rowcount:
+                new.append(f)
+    return new
+
+
+def flips_since(symbols: list[str], since_date: str) -> list[dict]:
+    """Durable flip events for `symbols` with confirmed_date >= since_date
+    (YYYY-MM-DD, inclusive). This is what delivery reads — the weekly digest asks
+    for the market week, the alerts job for its retry window — so an event
+    confirmed Monday is still visible Friday even though the live detector has
+    long since moved past it."""
+    want = {s.upper().strip() for s in symbols if s}
+    if not want:
+        return []
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT symbol, prior_verdict, new_verdict, confirmed_date, score "
+            "FROM signal_flips WHERE confirmed_date >= ? ORDER BY confirmed_date, symbol",
+            (since_date,)).fetchall()
+    return [{"symbol": r["symbol"], "prior_verdict": r["prior_verdict"],
+             "new_verdict": r["new_verdict"], "confirmed_since": r["confirmed_date"],
+             "score": r["score"]}
+            for r in rows if r["symbol"] in want]

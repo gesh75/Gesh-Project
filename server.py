@@ -1,12 +1,24 @@
 from __future__ import annotations
+
+import asyncio
+import hmac
+import logging
+import math
+import os
+import re
+import threading
+import time
+import uuid
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-import asyncio, math, time, threading, uvicorn, os, hmac
-from fastapi import FastAPI, HTTPException, Request, Depends, Header, Query
+
+import uvicorn
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-import logging, re
-from collections import defaultdict, deque
+import price_source  # locked yf.download adapter (thread-safety)
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
 # Long-running uvicorn + yfinance + sqlite + robin_stocks tends to leak FDs
@@ -91,6 +103,51 @@ def require_customer_or_owner(
 
 logger = logging.getLogger("gesh.server")
 
+# ─── repeating-log throttle ───────────────────────────────────────────────────
+# A retry that can never succeed (the reauth-dead Robinhood session, retried on
+# every /api/portfolio poll) logged one WARNING per attempt: 26,445 identical
+# lines, ~6% of a 21MB /tmp/gesh_main.log, and off-hours it cannot possibly
+# recover. Nothing was broken — but that volume is exactly what buries a REAL
+# error, so the fix is volume, not severity. First occurrence still logs
+# immediately (never delay a new signal); repeats collapse into a periodic line
+# that reports how many were swallowed, so an outage is never understated.
+_THROTTLED_LOG_INTERVAL_S = 300.0
+_throttled_log_last: dict[str, tuple[float, int]] = {}
+_throttled_log_lock = threading.Lock()
+
+
+def _throttled_log_due(key: str, interval: float = _THROTTLED_LOG_INTERVAL_S) -> int | None:
+    """Rate-limit a repeating log line, keyed by call site.
+
+    Returns the number of repeats SUPPRESSED since the last emission when the
+    line is due (0 on the first ever call), or None while still throttled.
+    Callers must append the count so a quiet log never implies a quiet system.
+    """
+    now = time.monotonic()
+    with _throttled_log_lock:
+        last, suppressed = _throttled_log_last.get(key, (None, 0))
+        if last is not None and (now - last) < interval:
+            _throttled_log_last[key] = (last, suppressed + 1)
+            return None
+        _throttled_log_last[key] = (now, 0)
+        return suppressed
+
+
+def _signups_paused() -> bool:
+    """Is the paid checkout closed to NEW subscribers? (Legal Hub L5.)
+
+    Read live from the env on every request so the flag can be flipped with a
+    restart and no code change. Defaults to OFF: pausing revenue is the owner's
+    call, not a default this code should impose — it only provides the switch.
+    """
+    return os.getenv("GESH_SIGNUPS_PAUSED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _reset_throttled_logs() -> None:
+    """Test seam — throttle state is process-global and would leak across tests."""
+    with _throttled_log_lock:
+        _throttled_log_last.clear()
+
 
 def _server_error(exc: Exception) -> HTTPException:
     """Log the real exception server-side; return a generic 500 so internal
@@ -102,7 +159,7 @@ def _server_error(exc: Exception) -> HTTPException:
         # Expected, non-secret condition: the broker session expired. Degrade to a
         # clean 503 (frontend renders this as "Offline") instead of a 500 + traceback.
         logger.warning("Robinhood offline: %s", exc)
-        return HTTPException(status_code=503, detail=str(exc))
+        return HTTPException(status_code=503, detail="Broker data temporarily unavailable")
     upstream = _upstream_unavailable_error(exc)
     if upstream is not None:
         logger.warning("Upstream unavailable: %s", exc)
@@ -128,7 +185,7 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
     except ImportError:
         pass
     if isinstance(exc, EnvironmentError) and "ANTHROPIC" in str(exc).upper():
-        return HTTPException(status_code=503, detail=str(exc))
+        return HTTPException(status_code=503, detail="AI service temporarily unavailable")
     cause = exc.__cause__ or exc.__context__
     if cause is not None and cause is not exc:
         nested = _upstream_unavailable_error(cause)
@@ -791,12 +848,39 @@ def _cookie_secure(request: Request | None = None) -> bool:
     override = os.getenv("GESH_COOKIE_SECURE", "").strip()
     if override:
         return override.lower() not in ("0", "false", "no", "off")
+    # [CLAUDE V4 2026-07-19] HTTPS-deploy FLOOR (host-aware): on an https:// customer
+    # deploy, a request to a NON-localhost host is floored to a Secure cookie even if
+    # the per-request X-Forwarded-Proto is missing/spoofed — a bypassed proxy can no
+    # longer downgrade a production cookie to cleartext. Localhost stays derivable so
+    # the owner's http://localhost session still works (the M2 tradeoff is preserved).
+    if request is not None and os.getenv("APP_BASE_URL", "").strip().lower().startswith("https://"):
+        _host = (request.headers.get("host", "") or "").split(":")[0].strip().lower()
+        if _host and _host not in ("localhost", "127.0.0.1", "::1"):
+            return True
     if request is not None:
         proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
         if proto:
             return proto == "https"
         return request.url.scheme == "https"
     return True
+
+
+def _secure_cookie_config_ready() -> bool:
+    """Fail closed when an HTTPS customer URL explicitly disables Secure cookies."""
+    base_url = os.getenv("APP_BASE_URL", "").strip().lower()
+    override = os.getenv("GESH_COOKIE_SECURE", "").strip().lower()
+    explicitly_insecure = override in ("0", "false", "no", "off")
+    return not (base_url.startswith("https://") and explicitly_insecure)
+
+
+def _require_secure_cookie_config() -> None:
+    if not _secure_cookie_config_ready():
+        logger.error(
+            "Authentication disabled: HTTPS APP_BASE_URL with insecure cookie override"
+        )
+        raise HTTPException(
+            status_code=503, detail="Authentication temporarily unavailable"
+        )
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -813,17 +897,19 @@ async def auth_login(request: Request):
     per (IP, email); the 200k-round PBKDF2 verify runs in a worker thread so it
     never blocks the event loop."""
     ip = request.client.host if request.client else "unknown"
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _read_json_capped(request)   # [CLAUDE V1] capped public body
     email = (body.get("email") or "").strip()
     password = body.get("password") or ""
     if _login_blocked(ip, email):
+        # [CLAUDE Task3 2026-07-18] tell well-behaved clients when to come back
         return JSONResponse(status_code=429,
-                            content={"ok": False, "detail": "Too many login attempts — try again shortly"})
+                            content={"ok": False, "detail": "Too many login attempts — try again shortly"},
+                            headers={"Retry-After": str(LOGIN_FAIL_WINDOW)})
+    _require_secure_cookie_config()
     # PBKDF2 is CPU-bound (~200k rounds); off-load so concurrent requests keep flowing.
-    ok = await asyncio.to_thread(auth_users.verify_credentials, email, password)
+    ok = await asyncio.to_thread(
+        auth_users.verify_credentials_constant_time, email, password
+    )
     if not ok:
         _login_record_fail(ip, email)
         return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid email or password"})
@@ -854,6 +940,19 @@ def auth_magic(request: Request, token: str = ""):
     session token for the cookie — the short-TTL URL token is never reused as the session.
     Redirect drops the token from the URL and sets Referrer-Policy: no-referrer so the
     landing nav can't leak it onward."""
+    _require_secure_cookie_config()
+    # [CLAUDE Task3 2026-07-18] session-conflict guard: when the browser already
+    # holds a VALID session for a DIFFERENT user, refuse (409) WITHOUT consuming
+    # the magic token — clicking someone else's link must not silently swap the
+    # signed-in identity (and the link stays valid for its rightful owner).
+    _current = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+    if _current:
+        _subject_uid = auth_users.verify_token(token, expected_typ="magic")
+        _subject = auth_users.get_user_by_id(_subject_uid) if _subject_uid else None
+        if _subject and _subject["email"] != _current:
+            return HTMLResponse(status_code=409, content=(
+                "<h2>Already signed in</h2><p>This browser is signed in as a different "
+                "user. Sign out first, then open the link again.</p>"))
     email = auth_users.consume_magic_token(token)
     if not email:
         return RedirectResponse(url="/login?e=expired", status_code=302)
@@ -881,10 +980,7 @@ async def auth_request_link(request: Request):
     ip = request.client.host if request.client else "unknown"
     if not _bucket_ok(ip, "request-link", limit=5, window=600):
         return JSONResponse(status_code=429, content={"ok": False, "detail": "Too many requests"})
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _read_json_capped(request)   # [CLAUDE V1] capped public body
     email = (body.get("email") or "").strip()
     token = auth_users.issue_magic_token(email) if email else None
     if token:
@@ -910,30 +1006,56 @@ def pricing_page():
     feats = ["Signal-accuracy proof (live track record)", "Daily AI portfolio report",
              "Watch dashboard", "Diversification radar"]
     items = "".join(f"<li>{f}</li>" for f in feats)
-    card = (
-        "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:28px;"
-        "background:#0d1520;max-width:360px\">"
-        f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
-        f"<p style=\"font-size:34px;margin:8px 0\"><strong>${price}</strong>"
-        "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
-        f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
-        f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
-        "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
-        "font-weight:600;margin-top:12px\">Subscribe</a></div>"
-    )
+    if _signups_paused():
+        # The Legal Hub's L5 recommends pausing net-new paid signups until the ToS
+        # is finalised and counsel has classified "My Book". Whether to actually
+        # stop taking money is a BUSINESS decision, so this is an explicit env
+        # flag defaulting to OFF — the mechanism exists, the choice stays human.
+        card = (
+            "<div style=\"border:1px solid #6b5410;border-radius:12px;padding:28px;"
+            "background:#1a1405;max-width:460px;color:#e8d9b0\">"
+            "<h2 style=\"color:#f0b429;margin:0 0 10px\">Not accepting new subscribers</h2>"
+            "<p style=\"margin:0 0 10px\">GESH is in beta and we have paused new paid "
+            "signups while our terms and regulatory position are being finalised with "
+            "counsel. Existing subscribers are unaffected.</p>"
+            "<p style=\"margin:0\">The <a href=\"/track-record\" style=\"color:#00e87a\">"
+            "track record</a> and research pages remain open to read.</p></div>")
+    else:
+        card = (
+            "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:28px;"
+            "background:#0d1520;max-width:360px\">"
+            f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
+            f"<p style=\"font-size:34px;margin:8px 0\"><strong>${price}</strong>"
+            "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
+            f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
+            f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
+            "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
+            "font-weight:600;margin-top:12px\">Subscribe</a></div>"
+        )
     return (
         "<!doctype html><html><head><meta charset=utf-8><title>GESH — Pricing</title>"
         "<meta name=viewport content=\"width=device-width,initial-scale=1\"></head>"
         "<body style=\"font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;"
         "max-width:900px;margin:auto;padding:32px\">"
         "<h1 style=\"color:#00d4ff\">GESH Financial — Access</h1>"
-        "<p style=\"color:#aeb9c7\">AI signal intelligence for your portfolio. "
-        "See the <a href=\"/track-record\" style=\"color:#00e87a\">live track record</a> first.</p>"
+        # L5 beta framing, shown where money changes hands. The ToS is still a
+        # DRAFT and counsel has not classified "My Book", so the product must
+        # present itself as beta research/education rather than as advice.
+        "<div style=\"background:#1a1405;border:1px solid #6b5410;border-left:3px solid #f0b429;"
+        "border-radius:6px;padding:12px 16px;margin:0 0 20px;color:#e8d9b0;font-size:13px\">"
+        "<b>BETA · educational use.</b> GESH is a research and education tool in beta. "
+        "It is <b>not investment advice</b> and does not manage money or place trades. "
+        "Analytics are AI-generated and may be wrong; all decisions remain yours.</div>"
+        "<p style=\"color:#aeb9c7\">AI research tooling for your portfolio. "
+        "See the <a href=\"/track-record\" style=\"color:#00e87a\">track record</a> first — "
+        "results shown are hypothetical/simulated.</p>"
         f"<div style=\"margin:24px 0\">{card}</div>"
         "<p style=\"color:#667;font-size:12px\">By subscribing you agree to the "
-        "<a href=\"/terms\" style=\"color:#889\">Terms</a> &amp; "
+        "<a href=\"/terms\" style=\"color:#889\">Terms</a>, "
+        "<a href=\"/privacy\" style=\"color:#889\">Privacy Policy</a> &amp; "
         "<a href=\"/disclaimer\" style=\"color:#889\">Disclaimer</a>. "
-        "NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY.</p></body></html>"
+        "NOT FINANCIAL ADVICE — FOR INFORMATIONAL AND EDUCATIONAL PURPOSES ONLY."
+        "</p></body></html>"
     )
 
 
@@ -951,14 +1073,57 @@ def billing_success():
     )
 
 
+WEBHOOK_MAX_BYTES = 262_144  # 256 KiB — real LS payloads are a few KiB
+
+
+async def _read_limited_body(request: Request, limit: int) -> bytes:
+    """[CLAUDE Task3 2026-07-18] Read a request body with a hard byte cap.
+
+    Rejects oversized payloads with 413 BEFORE any signature check or JSON parse
+    so an attacker cannot make the public webhook endpoint buffer arbitrary data."""
+    declared = request.headers.get("content-length")
+    try:
+        if declared is not None and int(declared) > limit:
+            raise HTTPException(status_code=413, detail="Request too large")
+    except ValueError:
+        raise HTTPException(status_code=411, detail="Invalid Content-Length")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise HTTPException(status_code=413, detail="Request too large")
+    return bytes(body)
+
+
+PUBLIC_BODY_MAX_BYTES = 65_536  # 64 KiB — email+password / token payloads are tiny
+
+
+async def _read_json_capped(request: Request, limit: int = PUBLIC_BODY_MAX_BYTES) -> dict:
+    """[CLAUDE V1 2026-07-19] Read + parse a JSON body under a hard byte cap.
+
+    Public POST routes (login, request-link, unsubscribe) must not buffer an
+    unbounded unauthenticated body — the 413 fires before any parse/auth work.
+    Returns {} on empty/invalid JSON (callers already treat that as no-op)."""
+    raw = await _read_limited_body(request, limit)
+    if not raw:
+        return {}
+    try:
+        data = _json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 @app.post("/api/billing/webhook")
 async def billing_webhook(request: Request):
     """Lemon Squeezy webhook — signature-verified + idempotent. Provisions/revokes the
     auth_users account. Public (in PUBLIC_PREFIXES) because it carries its own HMAC auth."""
-    raw = await request.body()
+    raw = await _read_limited_body(request, WEBHOOK_MAX_BYTES)
     sig = request.headers.get("X-Signature")
     try:
-        payload = await request.json()
+        payload = _json.loads(raw)
+        if not isinstance(payload, dict):
+            payload = {}
     except Exception:
         payload = {}
     try:
@@ -966,12 +1131,24 @@ async def billing_webhook(request: Request):
         return JSONResponse(content=result)
     except PermissionError:
         return JSONResponse(status_code=401, content={"ok": False, "detail": "bad signature"})
-    except ValueError as e:
-        return JSONResponse(status_code=400, content={"ok": False, "detail": str(e)})
-    except billing.RetryableError as e:
+    except ValueError as exc:
+        logger.warning("Invalid webhook payload: %s", exc)
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "detail": "Invalid webhook payload"},
+        )
+    except billing.RetryableError as exc:
         # Non-2xx so Lemon Squeezy RETRIES (it only retries non-2xx) — e.g. the onboarding
         # email could not be sent yet (#1). The dedup claim was already released.
-        return JSONResponse(status_code=503, content={"ok": False, "detail": str(e), "retry": True})
+        logger.warning("Retryable webhook failure: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "detail": "Webhook processing temporarily unavailable",
+                "retry": True,
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         raise _server_error(exc)
 
@@ -1033,28 +1210,182 @@ def terms_page():
     return legal_pages.render_terms_html()
 
 
-@app.get("/alerts/unsubscribe", response_class=HTMLResponse)
-def alerts_unsubscribe(token: str = ""):
-    """One-click opt-out from signal-change alert emails. Public (link-in-email),
-    gated by a typed 30-day HMAC token — a session/magic token is rejected."""
-    email = auth_users.verify_token(token, expected_typ="alerts_unsub")
+@app.get("/api/account/export")
+def account_export(request: Request):
+    """Data-subject ACCESS/PORTABILITY right (Privacy Policy §8).
+
+    Returns everything stored about the caller as a downloadable JSON file.
+    `export_user_data` keys strictly on the caller's user_id, so it cannot reach
+    another account, and it never includes the password hash."""
+    email = _session_email(request)
     if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        data = auth_users.export_user_data(email)
+        auth_users.log_usage(email, "data_export")
+        stamp = _dt.now(_tz.utc).strftime("%Y%m%d")
+        return JSONResponse(
+            content=_jsonable(data),
+            headers={"Content-Disposition": f'attachment; filename="gesh-my-data-{stamp}.json"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.post("/api/account/delete")
+async def account_delete(request: Request):
+    """Data-subject ERASURE right (Privacy Policy §8) — a real purge, not a
+    deactivation.
+
+    Requires the literal string "DELETE": this is irreversible, and an
+    irreversible action behind a single click is an accident waiting to happen.
+    The owner account is refused — deleting it would lock the operator out of
+    their own product. If a live subscription exists we say so: deleting here
+    does NOT cancel Lemon Squeezy, and letting someone keep paying for an
+    account that no longer exists would be indefensible."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if auth_users.is_owner(email):
+        raise HTTPException(status_code=403,
+                            detail="The owner account cannot be deleted from the app.")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if (body or {}).get("confirm") != "DELETE":
+        raise HTTPException(
+            status_code=400,
+            detail='Confirmation required — send {"confirm": "DELETE"} to erase your account.')
+    try:
+        sub_id, sub_status = auth_users.billing_subscription_status(email)
+        report = auth_users.delete_user_data(email)
+        notice = ""
+        if sub_id and (sub_status or "").lower() in ("active", "past_due", "paused"):
+            notice = ("Your account data is deleted, but your subscription is billed by "
+                      "Lemon Squeezy and is NOT cancelled by this action — cancel it from "
+                      "the billing-portal link in your receipt email to stop future charges.")
+        resp = JSONResponse({"status": "ok", **report, "notice": notice})
+        resp.delete_cookie(auth_users.COOKIE_NAME, path="/")
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page():
+    """Public Privacy Policy (hub item L1).
+
+    Published as an honest DRAFT pending counsel review: the product already
+    collects emails, customer-entered positions, and usage metering, and until
+    now had NO published policy at all. Public (in PUBLIC_PREFIXES) because a
+    policy nobody can read before signing up is not a published policy."""
+    import legal_pages
+    return legal_pages.render_privacy_html()
+
+
+# ── Unsubscribe: GET confirms, POST mutates (Codex P1, 2026-07-17) ────────────
+# Email security scanners and link-preview bots routinely FETCH every URL in an
+# email — a GET that mutates silently unsubscribed customers who never clicked.
+# Contract: GET = confirmation page only (idempotent, safe); POST = the actual
+# opt-out. POST accepts the token via query string, JSON {token}, or an RFC 8058
+# one-click body (mail providers POST "List-Unsubscribe=One-Click" with the token
+# still in the URL). The jobs' emails carry List-Unsubscribe[-Post].
+# [CLAUDE 2026-07-18] immutable-user-ID migration: verify_token returns the UUID
+# subject — resolve it to the user's CURRENT email before flipping preference flags.
+
+_UNSUB_KINDS = {
+    "alerts": ("alerts_unsub", "GESH signal-change alerts", "set_alerts_opt_out"),
+    "digest": ("digest_unsub", "the GESH weekly digest", "set_digest_opt_out"),
+}
+
+
+def _unsub_user(kind: str, token: str) -> dict | None:
+    """Validate the typed token and resolve its immutable-UUID subject to the
+    current user record (or None) — one place for the v2-token -> email hop so the
+    confirm page and the mutate path stay consistent."""
+    typ, _label, _setter = _UNSUB_KINDS[kind]
+    uid = auth_users.verify_token(token, expected_typ=typ)
+    return auth_users.get_user_by_id(uid) if uid else None
+
+
+def _unsub_confirm_page(kind: str, token: str) -> HTMLResponse:
+    import json
+
+    _typ, label, _setter = _UNSUB_KINDS[kind]
+    if not _unsub_user(kind, token):
         raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
-    auth_users.set_alerts_opt_out(email, True)
-    return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive GESH "
-                        "signal-change alerts. You can re-enable them from the dashboard.</p>")
+    tok_js = json.dumps(token)          # JSON-string embedding — token is ours, escape anyway
+    return HTMLResponse(
+        f"<div style='font-family:system-ui,sans-serif;max-width:480px;margin:40px auto'>"
+        f"<h2>Unsubscribe from {label}?</h2>"
+        f"<p>Click confirm to stop these emails. You can re-enable them any time "
+        f"from your dashboard.</p>"
+        f"<button id='go' style='padding:10px 18px;font-size:15px'>Confirm unsubscribe</button>"
+        f"<p id='done' style='display:none;color:#0a7'>Unsubscribed. You can close this page.</p>"
+        f"<noscript><p>JavaScript is required to confirm — or use your email client's "
+        f"built-in unsubscribe button.</p></noscript>"
+        f"<script>document.getElementById('go').onclick=async()=>{{"
+        f"const r=await fetch(location.pathname,{{method:'POST',"
+        f"headers:{{'Content-Type':'application/json'}},"
+        f"body:JSON.stringify({{token:{tok_js}}})}});"
+        f"if(r.ok){{document.getElementById('go').style.display='none';"
+        f"document.getElementById('done').style.display='block';}}}};</script></div>")
+
+
+async def _unsub_perform(kind: str, request: Request, token_qs: str) -> JSONResponse:
+    _typ, _label, setter_name = _UNSUB_KINDS[kind]
+    token = (token_qs or "").strip()
+    if not token:                       # JSON or urlencoded body (both capped — [CLAUDE V1])
+        try:
+            raw = await _read_limited_body(request, PUBLIC_BODY_MAX_BYTES)
+        except HTTPException:
+            raise
+        except Exception:
+            raw = b""
+        if raw:
+            try:
+                _b = _json.loads(raw)
+                token = str((_b or {}).get("token") or "").strip() if isinstance(_b, dict) else ""
+            except Exception:
+                token = ""
+            if not token:               # RFC 8058 one-click: urlencoded fallback
+                from urllib.parse import parse_qsl
+                token = dict(parse_qsl(raw.decode("utf-8", "replace"))).get("token", "").strip()
+    user = _unsub_user(kind, token)
+    if not user:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "detail": "Invalid or expired unsubscribe link"})
+    getattr(auth_users, setter_name)(user["email"], True)
+    return JSONResponse(content={"ok": True})
+
+
+@app.get("/alerts/unsubscribe", response_class=HTMLResponse)
+def alerts_unsubscribe_confirm(token: str = ""):
+    """Confirmation page ONLY — never mutates (scanner/preview-safe)."""
+    return _unsub_confirm_page("alerts", token)
+
+
+@app.post("/alerts/unsubscribe")
+async def alerts_unsubscribe_do(request: Request, token: str = ""):
+    """The actual opt-out. Typed-token gated; accepts JSON / query / one-click bodies."""
+    return await _unsub_perform("alerts", request, token)
 
 
 @app.get("/digest/unsubscribe", response_class=HTMLResponse)
-def digest_unsubscribe(token: str = ""):
-    """One-click opt-out from the weekly customer digest. Public (link-in-email),
-    gated by a typed 30-day HMAC token — a session/magic token is rejected."""
-    email = auth_users.verify_token(token, expected_typ="digest_unsub")
-    if not email:
-        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
-    auth_users.set_digest_opt_out(email, True)
-    return HTMLResponse("<h2>Unsubscribed</h2><p>You will no longer receive the GESH "
-                        "weekly digest. You can re-enable it from the dashboard.</p>")
+def digest_unsubscribe_confirm(token: str = ""):
+    """Confirmation page ONLY — never mutates (scanner/preview-safe)."""
+    return _unsub_confirm_page("digest", token)
+
+
+@app.post("/digest/unsubscribe")
+async def digest_unsubscribe_do(request: Request, token: str = ""):
+    """The actual opt-out. Typed-token gated; accepts JSON / query / one-click bodies."""
+    return await _unsub_perform("digest", request, token)
 
 
 @app.get("/progress", response_class=HTMLResponse)
@@ -1300,6 +1631,19 @@ SNAPSHOT_INTERVAL_SEC = 300  # 5 minutes — plenty for ECG
 _last_snapshot_at: float = 0.0
 _snapshot_lock = threading.Lock()
 
+def _is_real_observation(h: dict) -> bool:
+    """A holding is a REAL equity observation only if BOTH price and equity are finite
+    and > 0. A degraded/offline snapshot can carry current_price=0 and a stale constant
+    equity; persisting those poisons the ECG equity curve — a sentinel-heavy series reads
+    as a -96% crash and fires false "SUSPENDED — consider exiting" alarms (external audit
+    2026-07-18). Missing data must stay MISSING, never a loss."""
+    price, equity = h.get("current_price"), h.get("equity")
+    return (isinstance(price, (int, float)) and not isinstance(price, bool)
+            and math.isfinite(price) and price > 0
+            and isinstance(equity, (int, float)) and not isinstance(equity, bool)
+            and math.isfinite(equity) and equity > 0)
+
+
 def _maybe_log_snapshot(holdings: list[dict]) -> None:
     """Rate-limited equity snapshot + live cache write. Skips if last write < interval ago."""
     global _last_snapshot_at
@@ -1308,8 +1652,13 @@ def _maybe_log_snapshot(holdings: list[dict]) -> None:
         if now - _last_snapshot_at < SNAPSHOT_INTERVAL_SEC:
             return
         _last_snapshot_at = now
+    # Only persist real observations — never write price=0 / sentinel rows that would
+    # later be read back as a catastrophic drawdown.
+    valid = [h for h in holdings if _is_real_observation(h)]
+    if not valid:
+        return
     try:
-        log_equity_snapshot(holdings)
+        log_equity_snapshot(valid)
     except Exception as snap_err:
         print(f"⚠  Snapshot log failed: {snap_err}")
     # Refresh live cache so the daily-analysis skill always gets current data
@@ -1434,8 +1783,15 @@ def get_portfolio():
             # Any OTHER exception is a real bug — it must NOT be masked by serving stale data;
             # it falls through to _server_error (500) and reaches monitoring (Codex MEDIUM-4).
             payload = load_snapshot_payload()       # may re-raise RobinhoodOfflineError → 503
-            logger.warning("api/portfolio: live RH offline (%s) — serving snapshot (age=%ss)",
-                           type(live_err).__name__, payload.get("snapshot_age_seconds"))
+            # Throttled: this fires on EVERY poll while the RH session is dead and
+            # cannot self-heal off-hours. First hit is immediate; repeats collapse.
+            suppressed = _throttled_log_due("api_portfolio_offline")
+            if suppressed is not None:
+                logger.warning(
+                    "api/portfolio: live RH offline (%s) — serving snapshot (age=%ss)%s",
+                    type(live_err).__name__, payload.get("snapshot_age_seconds"),
+                    f" [+{suppressed} suppressed in the last {int(_THROTTLED_LOG_INTERVAL_S)}s]"
+                    if suppressed else "")
 
         eq = payload["equity_summary"]
         prev = eq.get("adjusted_equity_previous_close", 0)
@@ -1576,7 +1932,14 @@ def equity_curve_gate():
         holdings = payload["holdings"]
 
         def history_fn(symbol: str):
-            return get_equity_history(symbol, days=30)
+            # Defense in depth (external audit 2026-07-18): the equity_snapshots table
+            # accumulated corrupt rows (current_price=0, stale constant equity) from
+            # degraded snapshots. compute_ecg reads MAX(series) as the peak, so one real
+            # value among sentinels reads as a ~-96% drawdown → a false "SUSPENDED —
+            # consider exiting" panic alarm. Drop non-observations here so a corrupt
+            # symbol degrades to "insufficient history / HEALTHY", never a fake crash.
+            return [r for r in get_equity_history(symbol, days=30)
+                    if _is_real_observation(r)]
 
         result = compute_ecg(holdings, history_fn)
         result.setdefault("portfolio_gate", "UNKNOWN")
@@ -2395,6 +2758,16 @@ _QUOTA_DEFAULTS = {"ticker_card": 25, "book_analysis": 10}
 _TIER_QUOTA_MULT = {"observer": 1, "trader": 2, "desk": 5}
 
 
+def _customer_quota_limit(email: str | None, event: str) -> int:
+    """Return the tier-scaled limit; zero means unlimited/exempt."""
+    if not email or auth_users.is_owner(email):
+        return 0
+    base = int(os.getenv(f"QUOTA_DAILY_{event.upper()}", _QUOTA_DEFAULTS.get(event, 0)))
+    if base <= 0:
+        return 0
+    return base * _TIER_QUOTA_MULT.get(auth_users.get_tier(email), 1)
+
+
 def _check_customer_quota(email: str | None, event: str) -> None:
     """Raise 429 when the user's rolling-24h count of `event` has hit their
     tier-scaled cap.
@@ -2404,13 +2777,10 @@ def _check_customer_quota(email: str | None, event: str) -> None:
     old fail-open let a locked/corrupt usage table turn into unbounded API cost
     (the only other backstop, LLM_DAILY_BUDGET_USD, is off by default). Cached
     results still serve free, so a transient 503 does not blank the product."""
-    if not email or auth_users.is_owner(email):
-        return
     try:
-        base = int(os.getenv(f"QUOTA_DAILY_{event.upper()}", _QUOTA_DEFAULTS.get(event, 0)))
-        if base <= 0:
+        limit = _customer_quota_limit(email, event)
+        if limit <= 0:
             return
-        limit = base * _TIER_QUOTA_MULT.get(auth_users.get_tier(email), 1)
         used = auth_users.usage_count_24h(email, event)
     except Exception:
         logger.warning("quota metering unavailable (%s/%s) — denying spend (fail-closed)", email, event)
@@ -2624,15 +2994,14 @@ def _customer_book_payload(positions: list[dict], equal_weight: bool = False) ->
     ignored and every priced name is given an equal slice of a fixed notional — so
     weights are 1/N and the customer's real position sizes are never needed nor
     faked into the weighting. The absolute dollar figures are illustrative only."""
-    # Warm the close cache in parallel: a cold 100-position book valued serially is
-    # 100 sequential upstream fetches (~1-2s each) on every GET — parallel it's one
-    # round-trip's worth. _cached_close is lock-guarded, so concurrent warms are safe.
+    # Warm the close cache with ONE batched download: a cold 40-position book
+    # valued per-symbol is 40 upstream fetches serialized by the yfinance
+    # download lock — batched it's one round-trip. Anything the batch misses
+    # falls through to the per-symbol path in the loop below.
     uncached = [p["symbol"] for p in positions
                 if not price_cache.has_cached_close(p["symbol"])]
     if len(uncached) > 1:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as ex:
-            list(ex.map(_cached_close, uncached))
+        price_cache.warm_close_cache_batch(uncached)
     priced, unpriced = [], []
     for p in positions:
         price = _cached_close(p["symbol"])
@@ -2782,7 +3151,52 @@ def mybook_clear(request: Request):
 _MYBOOK_TTL = 900  # 15 min
 _mybook_cache: dict[str, tuple[float, str, dict]] = {}
 _mybook_lock = threading.Lock()
-_mybook_jobs: dict[str, dict] = {}   # email -> {"fp", "status": running|done|error, "error"}
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+_MYBOOK_WORKERS = _positive_env_int("GESH_MYBOOK_WORKERS", 2)
+_MYBOOK_QUEUE = _positive_env_int("GESH_MYBOOK_QUEUE", _MYBOOK_WORKERS * 2)
+_mybook_executor = ThreadPoolExecutor(
+    max_workers=_MYBOOK_WORKERS, thread_name_prefix="gesh-mybook"
+)
+_mybook_slots = threading.BoundedSemaphore(_MYBOOK_WORKERS + _MYBOOK_QUEUE)
+
+
+def _submit_mybook_job(*args: object) -> bool:
+    """Submit without allowing an unbounded executor queue."""
+    if not _mybook_slots.acquire(blocking=False):
+        return False
+    try:
+        future = _mybook_executor.submit(_mybook_analyze_worker, *args)
+    except BaseException:
+        _mybook_slots.release()
+        raise
+    future.add_done_callback(lambda _future: _mybook_slots.release())
+    return True
+
+
+def _load_mybook_job_state(user_id: str) -> tuple[dict | None, dict | None]:
+    """Read durable state fail-closed without exposing database details."""
+    try:
+        auth_users.expire_stale_mybook_jobs(
+            _positive_env_int("GESH_MYBOOK_STALE_SECONDS", 900)  # [CLAUDE V3] runs are minutes; 15m orphan expiry
+        )
+        return (
+            auth_users.get_active_mybook_job(user_id),
+            auth_users.get_latest_mybook_job(user_id),
+        )
+    except Exception as exc:
+        logger.warning("mybook durable state unavailable for %s: %s", user_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Analysis state temporarily unavailable — please retry shortly.",
+        )
 
 
 def _book_fingerprint(positions: list[dict]) -> str:
@@ -2869,21 +3283,39 @@ def _run_book_engines(payload: dict) -> dict:
     # Cap the DETAILED analysis first; its regime + analyst enrichment then runs only
     # over the analyzed names (the yfinance pulls scale with symbol count too).
     holdings = payload["holdings"]
-    analysis_payload, truncated = payload, None
+    coverage = {
+        "analyzed": min(len(holdings), _BOOK_ANALYSIS_MAX_HOLDINGS),
+        "total": len(holdings),
+    }
+    all_holdings_summary = [
+        {
+            "symbol": h.get("symbol"),
+            "equity": h.get("equity"),
+            "portfolio_percentage": h.get("portfolio_percentage"),
+        }
+        for h in holdings
+    ]
+    analysis_payload = {
+        **payload,
+        "all_holdings_summary": all_holdings_summary,
+        "detailed_coverage": coverage,
+    }
+    truncated = None
     if len(holdings) > _BOOK_ANALYSIS_MAX_HOLDINGS:
         top = sorted(holdings, key=lambda h: h.get("equity") or 0,
                      reverse=True)[:_BOOK_ANALYSIS_MAX_HOLDINGS]
         analysis_payload = {
-            **payload,
+            **analysis_payload,
             "holdings": top,
             "book_meta": {
                 "total_holdings": len(holdings),
                 "all_symbols": [h["symbol"] for h in holdings],
                 "analyzed_symbols": [h["symbol"] for h in top],
+                "portfolio_scope_source": "all_holdings_summary",
                 "note": (
                     f"Emit detailed per-holding cards for analyzed_symbols only "
                     f"({len(top)} of {len(holdings)}). Portfolio verdict, sector mix, "
-                    f"and diversification must reflect all_symbols."
+                    f"and diversification must be derived from all_holdings_summary."
                 ),
             },
         }
@@ -2918,21 +3350,25 @@ def _run_book_engines(payload: dict) -> dict:
     except Exception as e:
         kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
     return _jsonable({"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
+                      "detailed_coverage": coverage,
                       "book": {"positions": payload["holdings"],
                                "total_equity": payload["equity_summary"]["portfolio_equity"],
                                "unpriced": payload["unpriced"]}})
 
 
-def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> None:
-    """Run the engine suite in a daemon THREAD (not an asyncio task) so the
-    background analysis is independent of the request's event loop — a multi-minute
-    run survives the client/tunnel disconnect, and it behaves identically under
-    TestClient (whose per-request event loops would strand an asyncio task). The
-    outcome is written into _mybook_jobs / _mybook_cache under _mybook_lock, and the
-    poll of /api/mybook/analyze picks it up."""
+def _mybook_analyze_worker(
+    email: str,
+    user_id: str,
+    job_id: str,
+    fp: str,
+    positions: list[dict],
+    ew: bool,
+) -> None:
+    """Run one durably identified generation in the bounded worker pool."""
+    if not auth_users.mark_mybook_job_running(user_id, job_id, fp):
+        auth_users.release_usage(job_id, user_id)   # [CLAUDE V5] tenant-scoped
+        return
     try:
-        # Quota was already reserved atomically at accept time (in the handler under
-        # _mybook_lock, before this thread was started) — no re-check here.
         payload = _customer_book_payload(positions, ew)
         if not payload["holdings"]:
             raise HTTPException(status_code=404,
@@ -2943,20 +3379,36 @@ def _mybook_analyze_worker(email: str, fp: str, positions: list, ew: bool) -> No
         # changed and flag the analysis as stale instead of silently pairing new
         # positions with old scores (audit 2026-07-15 Test 4).
         result["_fp"] = fp
+        result["_job_id"] = job_id
+
+        # A book edit while this generation was running makes the result audit-only.
+        # The paid reservation is completed, but no cache/analysis publication occurs.
+        current_positions = auth_users.get_positions(email)
+        current_ew = auth_users.get_equal_weight(email)
+        current_fp = _book_fingerprint(current_positions) + ("|ew" if current_ew else "")
+        if current_fp != fp:
+            auth_users.finish_mybook_job(user_id, job_id, fp, "done")
+            return
+
+        # finish_mybook_job compares the durable latest generation and persists the
+        # analysis in the same transaction before it releases the active-job slot.
+        if not auth_users.finish_mybook_job(
+            user_id, job_id, fp, "done", result=result
+        ):
+            return
         with _mybook_lock:
-            _mybook_cache[email] = (time.monotonic(), fp, result)
+            latest = auth_users.get_latest_mybook_job(user_id)
+            if not latest or latest.get("job_id") != job_id:
+                return
+            _mybook_cache[user_id] = (time.monotonic(), fp, result)
             for k in [k for k, (ts, _, _) in _mybook_cache.items()
                       if (time.monotonic() - ts) >= _MYBOOK_TTL]:
                 del _mybook_cache[k]
-            _mybook_jobs[email] = {"fp": fp, "status": "done"}
-        try:
-            auth_users.save_book_analysis(email, result)
-        except Exception:
-            pass
-        auth_users.log_usage(email, "book_analysis")
-    except BaseException as e:   # record ANY failure so the poller can surface it
-        with _mybook_lock:
-            _mybook_jobs[email] = {"fp": fp, "status": "error", "error": e}
+    except BaseException as exc:
+        code = f"HTTP_{exc.status_code}" if isinstance(exc, HTTPException) else type(exc).__name__
+        auth_users.finish_mybook_job(
+            user_id, job_id, fp, "failed", error_code=code
+        )
 
 
 @app.post("/api/mybook/analyze", dependencies=[Depends(require_customer_or_owner)])
@@ -2967,7 +3419,7 @@ async def mybook_analyze(request: Request):
     for _MYBOOK_TTL, single-flight per user. NOT logged to the owner's analysis
     history — this is the customer's data.
 
-    The engine suite can run for minutes, so it runs in a daemon thread: the first
+    The engine suite can run for minutes, so it runs in a bounded executor: the first
     call returns HTTP 202 {status: running} immediately and the client polls this
     same endpoint every few seconds until 200 (outlasting the Cloudflare tunnel's
     ~100s limit); a completed run warms the per-book cache so the poll returns it."""
@@ -2979,55 +3431,68 @@ async def mybook_analyze(request: Request):
         raise HTTPException(status_code=400, detail="Your book is empty — add positions first")
     ew = auth_users.get_equal_weight(email)
     fp = _book_fingerprint(positions) + ("|ew" if ew else "")
+    user_id = auth_users.resolve_user_id(email)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    active, latest = _load_mybook_job_state(user_id)
+    if active:
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "job_id": active["job_id"]},
+        )
+
+    if latest and latest.get("fingerprint") == fp and not latest.get("delivered_at"):
+        if latest.get("status") == "failed":
+            auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
+            if latest.get("error_code") == "HTTP_404":
+                raise HTTPException(status_code=404, detail="No market data for any symbol on your book")
+            raise HTTPException(status_code=500, detail="Book analysis failed — please retry.")
+        if latest.get("status") == "done" and latest.get("result") is not None:
+            auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
+            return {"status": "ok", "cached": False, "data": latest["result"]}
 
     with _mybook_lock:
-        job = _mybook_jobs.get(email)
-        # 1) SINGLE-FLIGHT IS PER-USER, not per-fingerprint. If ANY analysis is in
-        #    flight for this user, a new request (even for a freshly-edited book)
-        #    must NOT spawn a second concurrent worker — that would double-spend the
-        #    quota and let a slow stale run overwrite a newer result. The client
-        #    keeps polling; the new book runs once the current one finishes.
-        if job and job.get("status") == "running":
-            return JSONResponse(status_code=202, content={"status": "running"})
-        # 2) a finished / errored job for THIS exact book — handed back exactly once
-        #    (checked before the cache so the poll that completes a live run reports
-        #    it as live, not a cache hit — the worker already metered it).
-        if job and job.get("fp") == fp:
-            status = job.get("status")
-            if status == "error":
-                err = job.pop("error", None)
-                del _mybook_jobs[email]
-                if isinstance(err, HTTPException):
-                    raise err
-                raise _server_error(err if isinstance(err, Exception)
-                                    else RuntimeError(str(err)))
-            if status == "done":
-                del _mybook_jobs[email]           # completion is handed back exactly once
-                hit = _mybook_cache.get(email)
-                if hit and hit[1] == fp:
-                    return {"status": "ok", "cached": False, "data": hit[2]}
-                # cache entry vanished (evicted) → fall through and re-run
-        elif job:
-            # a finished / errored job for a DIFFERENT (now-stale) book — discard it
-            # so a fresh run for the current book can start cleanly.
-            _mybook_jobs.pop(email, None)
-        # 3) a genuine repeat view — fresh cached result for this exact book?
-        hit = _mybook_cache.get(email)
+        hit = _mybook_cache.get(user_id)
         if hit and hit[1] == fp and (time.monotonic() - hit[0]) < _MYBOOK_TTL:
             auth_users.log_usage(email, "book_analysis_cached")
             return {"status": "ok", "cached": True, "data": hit[2]}
-        # 4) reserve quota ATOMICALLY (under the lock, before starting the worker) so
-        #    an over-cap call 429s immediately instead of a thread discovering the cap
-        #    minutes later — and combined with per-user single-flight (step 1 returns
-        #    202 for ANY in-flight run, whatever the fingerprint), no two runs can
-        #    slip past the check→log window. Raises HTTPException(429) before any spend.
-        _check_customer_quota(email, "book_analysis")
-        _mybook_jobs[email] = {"fp": fp, "status": "running"}
-    threading.Thread(target=_mybook_analyze_worker,
-                     args=(email, fp, positions, ew), daemon=True).start()
+
+    try:
+        limit = _customer_quota_limit(email, "book_analysis")
+        job_id = str(uuid.uuid4())
+        started = auth_users.start_mybook_job(
+            user_id, job_id, fp, "book_analysis", limit
+        )
+    except Exception:
+        logger.warning("mybook job reservation unavailable for %s", user_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Usage metering temporarily unavailable — please retry shortly.",
+        )
+    if started["quota_exceeded"]:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results remain free.",
+        )
+    if not started["accepted"]:
+        job = started["job"] or {}
+        return JSONResponse(
+            status_code=202,
+            content={"status": "running", "job_id": job.get("job_id")},
+        )
+    if not _submit_mybook_job(email, user_id, job_id, fp, positions, ew):
+        auth_users.finish_mybook_job(
+            user_id, job_id, fp, "failed", error_code="queue_full"
+        )
+        raise HTTPException(status_code=503, detail="Analysis capacity is busy — retry shortly.")
     return JSONResponse(
         status_code=202,
-        content={"status": "running", "message": "Analysis started — poll every few seconds"},
+        content={
+            "status": "running",
+            "job_id": job_id,
+            "message": "Analysis started — poll every few seconds",
+        },
     )
 
 
@@ -3111,6 +3576,35 @@ def _analysis_stale_for(email: str, saved: dict | None) -> bool:
     positions = auth_users.get_positions(email)
     ew = auth_users.get_equal_weight(email)
     return saved_fp != _book_fingerprint(positions) + ("|ew" if ew else "")
+
+
+def _ready_analysis_pending(email: str) -> bool:
+    """Is a COMPLETED analysis for the CURRENT book sitting undelivered?
+
+    The async job hands its result to the next POST /api/mybook/analyze, which
+    marks it delivered. A customer who navigates away mid-run therefore leaves a
+    finished result held on disk with nothing telling them so — /mybook/report
+    showed "Analysis out of date" while a matching fresh analysis existed, which
+    reads as "it failed" (QA audit 2026-07-19: an expert tester concluded the
+    daily rate limit was exhausted; the run had in fact completed).
+
+    Fingerprint-matched on purpose: a held result for a DIFFERENT book must keep
+    the honest stale warning rather than promise a fresh one. Read-only and
+    fail-quiet — this only upgrades a banner on a print-friendly page, so a
+    metering hiccup must never turn it into a 500.
+    """
+    try:
+        user_id = auth_users.resolve_user_id(email)
+        if not user_id:
+            return False
+        latest = auth_users.get_latest_mybook_job(user_id)
+        if not latest or latest.get("status") != "done" or latest.get("delivered_at"):
+            return False
+        ew = auth_users.get_equal_weight(email)
+        current_fp = _book_fingerprint(auth_users.get_positions(email)) + ("|ew" if ew else "")
+        return latest.get("fingerprint") == current_fp
+    except Exception:  # noqa: BLE001 — advisory banner, never break the report
+        return False
 
 
 @app.post("/api/mybook/deploy-cash")
@@ -3266,7 +3760,19 @@ def _render_book_report(email: str) -> str:
                   if ew else f"<b>Total: ${total:,.2f}</b>")
 
     stale_banner = ""
-    if stale:
+    if stale and _ready_analysis_pending(email):
+        # A finished analysis for THESE positions is held, undelivered — the run
+        # completed after the customer navigated away. Telling them it's "out of
+        # date" here would be true of what's rendered but wrong about the system.
+        stale_banner = (
+            "<div style='background:#d1e7dd;border:1px solid #0f5132;border-radius:6px;"
+            "padding:12px 16px;margin:18px 0'><b>&#10003; A newer analysis is ready</b> — "
+            "your last run finished after you left the page, and it matches the positions "
+            "listed above. Open <b>Analyze My Portfolio</b> on the dashboard to load it "
+            "instantly (it is already computed — no new AI usage), then reload this report. "
+            "Everything below is the PREVIOUS analysis"
+            f" ({e(str(saved.get('_saved_at', ''))[:16])} UTC).</div>")
+    elif stale:
         stale_banner = (
             "<div style='background:#fff3cd;border:1px solid #d39e00;border-radius:6px;"
             "padding:12px 16px;margin:18px 0'><b>&#9888; Analysis out of date</b> — your "
@@ -3375,7 +3881,9 @@ details{{margin:8px 0;page-break-inside:avoid}}details summary{{cursor:pointer;c
 {body}
 <hr><p style='color:#888;font-size:12px'>Informational and educational only — not financial advice.
 All trading decisions remain your responsibility. Generated by GESH Financial Observability ·
-<a href='/track-record'>see our verified signal track record</a>.</p>
+<a href='/track-record'>see the track record</a> (hypothetical/simulated).</p>
+<p style='color:#888;font-size:12px'><a href='/privacy'>Privacy Policy</a> ·
+<a href='/terms'>Terms of Service</a> · <a href='/disclaimer'>Disclaimer</a></p>
 </body></html>"""
 
 
@@ -4118,10 +4626,9 @@ async def api_security_health():
 async def api_vol_compare(symbol: str):
     """Compare EWMA vs GARCH(1,1) volatility for a symbol."""
     try:
-        import yfinance as yf
         import numpy as np
         from volatility_models import compare_vol_models
-        data   = yf.download(symbol.upper(), period="1y", auto_adjust=True, progress=False)["Close"]
+        data   = price_source.locked_yf_download(symbol.upper(), period="1y", auto_adjust=True, progress=False)["Close"]
         if isinstance(data, __import__("pandas").DataFrame):
             data = data.iloc[:, 0]
         rets   = np.log(data / data.shift(1)).dropna()

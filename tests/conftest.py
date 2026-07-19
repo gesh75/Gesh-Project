@@ -36,7 +36,17 @@ class _NetworkBlocked(RuntimeError):
 
 @pytest.fixture(autouse=True)
 def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail loudly if any test opens a real socket — proves tests are offline."""
+    """Fail loudly if any test opens a real socket — proves tests are offline.
+
+    Blocking `socket.socket.connect` alone is NOT enough: yfinance >= 1.x fetches
+    through **curl_cffi**, which drives libcurl in C and never touches Python's
+    socket object. An unmocked yfinance call therefore sailed straight past this
+    guard and hit Yahoo for real — silently, and only in whichever test forgot the
+    stub (`/api/earnings/{symbol}` in the customer leak sweep, which the guard was
+    supposed to catch). Block libcurl at `Curl.perform`, the single chokepoint every
+    curl_cffi request (sync + async, Session + module-level) funnels through, so a
+    missing stub surfaces as a loud error instead of a live call.
+    """
 
     def _blocked(*args: object, **kwargs: object) -> None:
         raise _NetworkBlocked(
@@ -45,6 +55,13 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(socket.socket, "connect", _blocked)
+
+    try:  # curl_cffi is a yfinance dependency; guard stays valid if it's absent
+        import curl_cffi
+    except ImportError:
+        pass
+    else:
+        monkeypatch.setattr(curl_cffi.Curl, "perform", _blocked)
 
 
 @pytest.fixture(autouse=True)
@@ -81,11 +98,11 @@ def _clear_server_response_caches() -> None:
         srv = sys.modules.get("server")
         # _ticker_card_flight holds asyncio.Locks bound to one test's event loop —
         # every TestClient spins a fresh loop, so a leaked lock raises "bound to a
-        # different event loop" in the next test. _mybook_jobs holds background-
-        # analysis status; a stale entry would make the next test poll a done job.
+        # different event loop" in the next test. MyBook job state is durable and
+        # isolated by AUTH_DB_PATH; only its process-local result cache is cleared.
         for name in ("_chart_cache", "_ticker_get_cache", "_RATE_HITS",
                      "_ticker_card_cache", "_ticker_card_flight",
-                     "_mybook_cache", "_mybook_jobs", "_LOGIN_FAILS", "_ltm_cache"):
+                     "_mybook_cache", "_LOGIN_FAILS", "_ltm_cache"):
             state = getattr(srv, name, None)
             if state is not None:
                 state.clear()
