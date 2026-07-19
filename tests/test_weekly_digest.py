@@ -26,10 +26,17 @@ def _sig_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sh, "DB_PATH", tmp_path / "sig.db")
 
 
+def _days_ago(n: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%d")
+
+
 def _seed_flip(sym):
-    for d in ("2026-07-13", "2026-07-14"):
+    # Dynamic dates: the durable-event pipeline keys dedup and windows on the
+    # flip's confirmed_date, so hardcoded dates would rot as the clock advances.
+    for d in (_days_ago(3), _days_ago(2)):
         sh.record_snapshots([{"symbol": sym, "verdict": "BUY"}], date=d)
-    for d in ("2026-07-15", "2026-07-16"):
+    for d in (_days_ago(1), _days_ago(0)):
         sh.record_snapshots([{"symbol": sym, "verdict": "HOLD"}], date=d)
 
 
@@ -41,7 +48,7 @@ def test_digest_sent_to_active_customer_with_book(au, monkeypatch):
     _seed_flip("NVDA")
     sent = []
     monkeypatch.setattr(job.email_sender, "send_email",
-                        lambda to, subject, html: sent.append((to, html)) or True)
+                        lambda to, subject, html, **kw: sent.append((to, html)) or True)
     out = job.main()
     assert out["emails_sent"] == 1
     to, html = sent[0]
@@ -61,7 +68,7 @@ def test_digest_skips_opted_out_and_empty_customers(au, monkeypatch):
     au.add_watch("empty@x.com", "NVDA")   # watch-only user still gets a digest
     sent = []
     monkeypatch.setattr(job.email_sender, "send_email",
-                        lambda to, subject, html: sent.append(to) or True)
+                        lambda to, subject, html, **kw: sent.append(to) or True)
     job.main()
     assert sent == ["empty@x.com"]
 
@@ -117,7 +124,7 @@ def test_one_customer_failure_does_not_sink_the_run(au, monkeypatch):
     monkeypatch.setattr(job, "_close_for", lambda sym: 100.0, raising=True)
     sent = []
     monkeypatch.setattr(job.email_sender, "send_email",
-                        lambda to, subject, html: sent.append(to) or True)
+                        lambda to, subject, html, **kw: sent.append(to) or True)
     out = job.main()
     assert sent == ["ok@x.com"]
     assert out["emails_sent"] == 1
@@ -134,7 +141,7 @@ def test_digest_not_resent_within_same_iso_week(au, monkeypatch):
     _seed_flip("NVDA")
     sent = []
     monkeypatch.setattr(job.email_sender, "send_email",
-                        lambda to, subject, html: sent.append(to) or True)
+                        lambda to, subject, html, **kw: sent.append(to) or True)
     assert job.main()["emails_sent"] == 1
     assert job.main()["emails_sent"] == 0          # double-fire → dedup
     assert sent == ["a@x.com"]
@@ -149,6 +156,6 @@ def test_digest_dry_run_does_not_consume_the_week(au, monkeypatch):
     _seed_flip("NVDA")
     sent = []
     monkeypatch.setattr(job.email_sender, "send_email",
-                        lambda to, subject, html: sent.append(to) or True)
+                        lambda to, subject, html, **kw: sent.append(to) or True)
     assert job.main(dry_run=True)["emails_sent"] == 0
     assert job.main()["emails_sent"] == 1          # real run still delivers

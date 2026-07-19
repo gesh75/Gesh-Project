@@ -103,7 +103,9 @@ def test_reenable_via_preferences_after_unsubscribe_link(client, monkeypatch, au
     (sets opt_out True), then flip it back via the new dashboard endpoint."""
     server, c = client
     tok = au.issue_token("cust@x.com", ttl=86400, typ="alerts_unsub")
-    assert c.get(f"/alerts/unsubscribe?token={tok}").status_code == 200
+    assert c.get(f"/alerts/unsubscribe?token={tok}").status_code == 200   # confirm page only
+    assert au.get_alerts_opt_out("cust@x.com") is False                  # GET never mutates
+    assert c.post("/alerts/unsubscribe", json={"token": tok}).status_code == 200
     assert au.get_alerts_opt_out("cust@x.com") is True
     _as(server, monkeypatch, "cust@x.com")
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")

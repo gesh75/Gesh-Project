@@ -85,7 +85,7 @@ def test_is_stale_garbage_timestamp_is_stale():
 def test_signal_alerts_cli_records_job_run(monkeypatch, capsys):
     import run_signal_alerts as job
     monkeypatch.setattr(job, "main", lambda dry_run=False: {"emails_sent": 0, "flips": 0})
-    job._cli([])
+    job._cli(["--force"])  # bypass the ET schedule gate — this test is about recording
     assert '"emails_sent": 0' in capsys.readouterr().out   # JSON summary still printed
     assert job_health.latest_runs()[job.JOB_NAME]["summary"] == {"emails_sent": 0, "flips": 0}
 
@@ -101,7 +101,7 @@ def test_signal_alerts_cli_dry_run_records_nothing(monkeypatch, capsys):
 def test_weekly_digest_cli_records_job_run(monkeypatch, capsys):
     import run_weekly_digest as job
     monkeypatch.setattr(job, "main", lambda dry_run=False: {"customers": 3, "emails_sent": 1})
-    job._cli([])
+    job._cli(["--force"])  # bypass the ET schedule gate — this test is about recording
     capsys.readouterr()
     assert job_health.latest_runs()[job.JOB_NAME]["summary"]["customers"] == 3
 
@@ -111,7 +111,7 @@ def test_cli_recording_failure_never_sinks_the_run(monkeypatch, capsys, tmp_path
     import run_signal_alerts as job
     monkeypatch.setattr(sh, "DB_PATH", tmp_path)           # unopenable
     monkeypatch.setattr(job, "main", lambda dry_run=False: {"emails_sent": 1})
-    job._cli([])
+    job._cli(["--force"])  # bypass the ET schedule gate — this test is about recording
     assert '"emails_sent": 1' in capsys.readouterr().out
 
 

@@ -14,18 +14,15 @@
     <key>WorkingDirectory</key>
     <string>/Users/georgigaydarov/Projects/gesh-project</string>
 
-    <!-- Fridays 17:15 local — after market close, end-of-week wrap. -->
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>17</integer>
-        <key>Minute</key>
-        <integer>15</integer>
-        <key>Weekday</key>
-        <integer>5</integer>
-    </dict>
+    <!-- Tick every 30 min; the SCRIPT decides (schedule_gate.py, America/New_York):
+         Friday from 17:15 ET with the whole weekend as catch-up, once per ISO week.
+         The old Friday-17:15 LOCAL calendar trigger meant 10:15 ET on this EEST
+         host, and vanished entirely when the Mac slept through it — the digest
+         had literally never run (Codex P1). -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
     <key>KeepAlive</key>
     <false/>
 

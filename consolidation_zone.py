@@ -38,8 +38,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-import yfinance as yf
 
+import price_source  # locked yf.download adapter (thread-safety)
 # ─── Config ───────────────────────────────────────────────────────────────────
 MIN_CANDLES        = 10      # minimum consecutive candles to qualify
 RANGE_PCT_THRESHOLD = 2.0   # max high-low range as % of low price
@@ -138,7 +138,7 @@ def detect_consolidation(
     }
     """
     try:
-        df = yf.download(
+        df = price_source.locked_yf_download(
             symbol,
             period=period,
             interval=interval,

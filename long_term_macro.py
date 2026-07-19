@@ -40,8 +40,8 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
-import yfinance as yf
 
+import price_source  # locked yf.download adapter (thread-safety)
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path(__file__).parent
@@ -103,7 +103,7 @@ def _save_cache(path: Path, data: dict) -> None:
 def fetch_vix(period: str = "1y") -> Optional[pd.Series]:
     """Fetch VIX close. Uses yfinance ^VIX (fast, no key needed)."""
     try:
-        df = yf.download("^VIX", period=period, progress=False, auto_adjust=True)
+        df = price_source.locked_yf_download("^VIX", period=period, progress=False, auto_adjust=True)
         if df is None or df.empty:
             return None
         # .squeeze() to handle MultiIndex columns that yfinance sometimes returns

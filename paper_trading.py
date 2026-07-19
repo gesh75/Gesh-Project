@@ -25,8 +25,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import yfinance as yf
 
+import price_source  # locked yf.download adapter (thread-safety)
 logger = logging.getLogger(__name__)
 
 from trade_log import log_trade, close_trade, get_trade_history, get_win_rate
@@ -188,7 +188,7 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, float]:
     try:
         if not symbols:
             return prices
-        tickers = yf.download(
+        tickers = price_source.locked_yf_download(
             symbols, period="1d", interval="1m",
             auto_adjust=True, progress=False, group_by="ticker"
         )

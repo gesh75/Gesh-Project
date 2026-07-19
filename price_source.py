@@ -90,6 +90,73 @@ _YF_CACHE_TTL_S = float(os.getenv("YF_CACHE_TTL_S", "600"))
 # shared state and stays parallel.
 _YF_DOWNLOAD_LOCK = threading.Lock()
 
+
+def locked_yf_download(*args, **kwargs):
+    """The ONLY sanctioned way to call ``yfinance.download`` outside this module.
+
+    Behavior-preserving: no cache, no Robinhood fallback — exactly
+    ``yf.download(*args, **kwargs)`` under the process-wide lock above. Exists
+    because the 2026-07-15 race fix only protected THIS module's wrapper while
+    ~10 other production call sites still called ``yf.download`` raw, so the
+    NVDA-priced-as-TSLA contamination could recur through any of them (Codex
+    review P1, 2026-07-17). A static test (tests/test_retention_p1s.py) forbids
+    raw ``yf.download(`` anywhere else in production code."""
+    import yfinance as yf  # lazy, matching this module's import-light convention
+    with _YF_DOWNLOAD_LOCK:
+        return yf.download(*args, **kwargs)
+
+
+class _LockedYFProxy:
+    """Wraps the yfinance module, serializing ONLY ``download`` on our lock and
+    passing everything else through unchanged."""
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        attr = getattr(self._real, name)
+        if name != "download":
+            return attr
+
+        def _locked(*a, **k):
+            with _YF_DOWNLOAD_LOCK:
+                return attr(*a, **k)
+        return _locked
+
+
+def install_shared_yf_lock() -> bool:
+    """Make ``gesh_core.market_fetch`` share THIS module's yf.download lock.
+
+    Codex re-review (2026-07-18): the race fix only covered price_source's own
+    wrapper, but consensus.py:483 → gesh_core.market_fetch.fetch_spy_close still
+    called RAW ``yf.download``. Two separate lock domains means a price_source
+    book-warm and a gesh_core SPY fetch can hit yfinance's process-global
+    ``shared._DFS`` concurrently and cross-contaminate frames. We rebind ONLY
+    gesh_core.market_fetch's module-level ``yf`` to a proxy that takes the SAME
+    lock — the global yfinance module is untouched, so price_source's own
+    ``with _YF_DOWNLOAD_LOCK: yf.download(...)`` never nests this lock (no
+    deadlock). Best-effort + idempotent; a missing gesh_core is a no-op.
+
+    NOTE: the complete fix belongs IN gesh-core (own the lock in market_fetch);
+    this is the in-repo mitigation until that ships.
+    """
+    try:
+        import gesh_core.market_fetch as _mf
+    except Exception:
+        return False
+    if isinstance(getattr(_mf, "yf", None), _LockedYFProxy):
+        return True   # already installed
+    try:
+        _mf.yf = _LockedYFProxy(_mf.yf)
+        return True
+    except Exception:
+        return False
+
+
+# Install at import: every process that touches price_source (server, autopilot,
+# the daily chain, the retention jobs) gets the cross-module lock automatically.
+install_shared_yf_lock()
+
+
 # Mirror fetch_live_snapshot.py — the canonical session pickle location.
 _PICKLE_PATH = os.path.expanduser("~/.tokens/robinhoodrobinhood_session.pickle")
 
