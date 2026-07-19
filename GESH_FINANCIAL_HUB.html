@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GESH Financial — Master Hub</title>
+<style>
+  :root{
+    --bg:#080f18; --panel:#0d1b2e; --panel2:#101d2c; --border:#22354d;
+    --ink:#e8f0f8; --muted:#9db0c4; --dim:#7a8a99;
+    --blue:#4c9aff; --amber:#ffb020; --green:#3ddc84; --red:#ff6b6b; --violet:#c4b5fd; --cyan:#4cc9ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#0f2036 0,var(--bg) 60%);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
+  .wrap{max-width:1120px;margin:0 auto;padding:34px 20px 80px}
+  header.hero{text-align:center;margin-bottom:8px}
+  .logo{font-size:30px;font-weight:800;letter-spacing:-.5px}
+  .logo .g{color:var(--blue)}
+  .tag{color:var(--muted);font-size:14px;margin-top:2px}
+  .stamp{color:var(--dim);font-size:12px;margin-top:6px}
+  .status{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:18px 0 6px}
+  .chip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border);
+    border-radius:22px;padding:6px 14px;font-size:13px;color:var(--muted)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .dot.g{background:var(--green)} .dot.a{background:var(--amber)} .dot.b{background:var(--blue)} .dot.r{background:var(--red)}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:34px 0 12px;
+    padding-bottom:8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
+  h2 .ic{font-size:17px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  a.card{display:block;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);
+    border-radius:12px;padding:15px 16px;text-decoration:none;color:var(--ink);transition:.15s;position:relative;overflow:hidden}
+  a.card:hover{border-color:var(--blue);transform:translateY(-2px);box-shadow:0 8px 26px rgba(0,0,0,.35)}
+  a.card .t{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
+  a.card .d{color:var(--muted);font-size:12.5px;margin-top:5px;line-height:1.5}
+  a.card .u{color:var(--dim);font-size:11px;margin-top:8px;font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+  a.card .edge{position:absolute;left:0;top:0;bottom:0;width:3px}
+  .e-blue{background:var(--blue)} .e-green{background:var(--green)} .e-amber{background:var(--amber)}
+  .e-violet{background:var(--violet)} .e-cyan{background:var(--cyan)} .e-red{background:var(--red)}
+  .pin{position:absolute;top:12px;right:12px;font-size:10px;font-weight:700;padding:2px 7px;border-radius:12px;text-transform:uppercase;letter-spacing:.04em}
+  .pin.live{background:#0f2e1c;color:var(--green);border:1px solid #1f5f3a}
+  .pin.owner{background:#2a1f3f;color:var(--violet);border:1px solid #4a3a77}
+  .pin.draft{background:#3a2a10;color:var(--amber);border:1px solid #6b4d1c}
+  .note{color:var(--dim);font-size:12px;margin:8px 0 0}
+  .foot{color:var(--dim);font-size:12px;margin-top:36px;border-top:1px solid var(--border);padding-top:16px;text-align:center;line-height:1.7}
+  .legend{color:var(--dim);font-size:11.5px;margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="logo"><span class="g">GESH</span> Financial</div>
+    <div class="tag">Master Hub · every page, service &amp; document in one place</div>
+    <div class="stamp">Updated 2026-07-19 · Owner: Georgi Gaydarov</div>
+    <div class="status">
+      <span class="chip"><span class="dot g"></span> Engineering: all blockers closed</span>
+      <span class="chip"><span class="dot g"></span> CI: both repos green</span>
+      <span class="chip"><span class="dot a"></span> Paid launch: blocked on legal</span>
+      <span class="chip"><span class="dot b"></span> 1 paying subscriber · $49/mo</span>
+    </div>
+    <div class="legend">Links open the local HTML files (<code>file://</code>) and the live app (<code>localhost</code>). Start the servers for the live cards.</div>
+  </header>
+
+  <!-- ===================== LIVE APP ===================== -->
+  <h2><span class="ic">🟢</span> Live Application</h2>
+  <div class="note">Product on <b>:9000</b>, trading/crypto console on <b>:9003</b>. Owner-only cockpits redirect to /login unless you're signed in.</div>
+  <div class="grid" style="margin-top:12px">
+    <a class="card" href="http://localhost:9000/"><span class="edge e-green"></span><span class="pin live">live</span>
+      <div class="t">📊 Dashboard</div><div class="d">Main customer + owner intelligence dashboard — portfolio, consensus, Kelly, Monte Carlo, regime, AI research.</div><div class="u">localhost:9000/</div></a>
+    <a class="card" href="http://localhost:9000/progress"><span class="edge e-violet"></span><span class="pin owner">owner</span>
+      <div class="t">🎯 Readiness Progress</div><div class="d">Founder cockpit — evidence-based autonomy-gate readiness (engine-cohort closes).</div><div class="u">localhost:9000/progress</div></a>
+    <a class="card" href="http://localhost:9000/watch"><span class="edge e-violet"></span><span class="pin owner">owner</span>
+      <div class="t">👁️ Paper Evidence Watch</div><div class="d">Live paper-trade cockpit — read-only, 12s poll, paper-only.</div><div class="u">localhost:9000/watch</div></a>
+    <a class="card" href="http://localhost:9000/invest"><span class="edge e-violet"></span><span class="pin owner">owner</span>
+      <div class="t">🧭 Diversification Lab</div><div class="d">Hypothetical diversification scenario lab (radar).</div><div class="u">localhost:9000/invest</div></a>
+    <a class="card" href="http://localhost:9000/track-record"><span class="edge e-green"></span><span class="pin live">public</span>
+      <div class="t">📈 Track Record</div><div class="d">Public proof page — hypothetical/simulated paper-trade stats, honestly labeled.</div><div class="u">localhost:9000/track-record</div></a>
+    <a class="card" href="http://localhost:9000/pricing"><span class="edge e-green"></span><span class="pin live">public</span>
+      <div class="t">💳 Pricing</div><div class="d">Subscription plans + Lemon Squeezy checkout.</div><div class="u">localhost:9000/pricing</div></a>
+    <a class="card" href="http://localhost:9003/"><span class="edge e-cyan"></span><span class="pin owner">owner</span>
+      <div class="t">⚙️ Trading Console</div><div class="d">Internal engine console (:9003) — signals, gate, paper orders. Never sold.</div><div class="u">localhost:9003/</div></a>
+    <a class="card" href="http://localhost:9003/crypto"><span class="edge e-cyan"></span><span class="pin owner">owner</span>
+      <div class="t">₿ Crypto Console</div><div class="d">Crypto paper book (restated $9,702, POL quarantined) + 11-node engine.</div><div class="u">localhost:9003/crypto</div></a>
+  </div>
+
+  <!-- ===================== DOCS ===================== -->
+  <h2><span class="ic">📚</span> Documentation &amp; Architecture</h2>
+  <div class="grid">
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/GESH_PROJECT_DOCS.html"><span class="edge e-blue"></span>
+      <div class="t">📖 Project Documentation</div><div class="d">Main docs index — architecture, features, audit &amp; remediation banners.</div><div class="u">gesh-project-trading/GESH_PROJECT_DOCS.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/Gesh_Architecture_Diagram.html"><span class="edge e-blue"></span>
+      <div class="t">🏛️ Architecture &amp; Commercial Map</div><div class="d">System-context diagram — how the services, data providers &amp; AI models connect.</div><div class="u">gesh-project/Gesh_Architecture_Diagram.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/Crypto_Architecture_Diagram.html"><span class="edge e-cyan"></span>
+      <div class="t">₿ Crypto Architecture</div><div class="d">Crypto subsystem diagram — data, 11-node engine, paper state &amp; open risks.</div><div class="u">gesh-project-trading/Crypto_Architecture_Diagram.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/gesh_financial_learning_path.html"><span class="edge e-green"></span>
+      <div class="t">🎓 Learning Path</div><div class="d">Educational onboarding / study path for the product &amp; its methods.</div><div class="u">gesh-project/gesh_financial_learning_path.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/docs/index.html"><span class="edge e-blue"></span>
+      <div class="t">🗂️ Animated Docs (docs/index.html)</div><div class="d">Single-page animated documentation (architecture, data flow, quickstart).</div><div class="u">gesh-project/docs/index.html</div></a>
+  </div>
+
+  <!-- ===================== LEGAL ===================== -->
+  <h2><span class="ic">⚖️</span> Legal &amp; Compliance</h2>
+  <div class="grid">
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/GESH_LEGAL_HUB.html"><span class="edge e-violet"></span><span class="pin owner">source of truth</span>
+      <div class="t">⚖️ Legal &amp; Compliance Hub</div><div class="d">Everything legal in one place — page directory, tracked roadmap (L1–L13), publisher-vs-adviser analysis, data-licensing matrix, counsel guidance.</div><div class="u">gesh-project/GESH_LEGAL_HUB.html</div></a>
+    <a class="card" href="http://localhost:9000/terms"><span class="edge e-amber"></span><span class="pin draft">draft</span>
+      <div class="t">📜 Terms of Service</div><div class="d">Public legal contract (served from TERMS_OF_SERVICE.md). Still DRAFT — needs attorney review.</div><div class="u">localhost:9000/terms</div></a>
+    <a class="card" href="http://localhost:9000/disclaimer"><span class="edge e-amber"></span><span class="pin draft">draft</span>
+      <div class="t">⚠️ Disclaimer</div><div class="d">Not-financial-advice &amp; risk disclaimer.</div><div class="u">localhost:9000/disclaimer</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/docs/GESH_ATTORNEY_ENGAGEMENT_BRIEF.md"><span class="edge e-violet"></span>
+      <div class="t">🧑‍⚖️ Attorney Engagement Brief</div><div class="d">Hand-to-a-lawyer brief — built to get fixed-fee quotes on the classification memo + ToS/privacy redline.</div><div class="u">gesh-project/docs/GESH_ATTORNEY_ENGAGEMENT_BRIEF.md</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/docs/GESH_PRIVACY_POLICY_DRAFT.md"><span class="edge e-amber"></span><span class="pin draft">draft</span>
+      <div class="t">🔒 Privacy Policy (draft)</div><div class="d">Draft skeleton for counsel to redline — includes the third-party-LLM disclosure.</div><div class="u">gesh-project/docs/GESH_PRIVACY_POLICY_DRAFT.md</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/docs/GESH_DATA_LICENSING_MATRIX.md"><span class="edge e-amber"></span>
+      <div class="t">📊 Data-Licensing Matrix</div><div class="d">Per-provider commercial-resale risk + action (yfinance HIGH, etc.).</div><div class="u">gesh-project/docs/GESH_DATA_LICENSING_MATRIX.md</div></a>
+  </div>
+
+  <!-- ===================== REPORTS & AUDIT ===================== -->
+  <h2><span class="ic">📑</span> Reports &amp; Audit</h2>
+  <div class="grid">
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/GESH_MONETIZATION_REPORT.html"><span class="edge e-green"></span>
+      <div class="t">💰 Monetization Report</div><div class="d">Pricing, MRR projections &amp; go-to-market (truth-contract tested in CI).</div><div class="u">gesh-project-trading/GESH_MONETIZATION_REPORT.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/gesh_report.html"><span class="edge e-blue"></span>
+      <div class="t">📅 Daily Analysis Report</div><div class="d">Latest generated daily portfolio-analysis report.</div><div class="u">gesh-project/gesh_report.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/AUTONOMY_PROGRESS_REPORT.html"><span class="edge e-violet"></span>
+      <div class="t">🚦 Autonomy Progress</div><div class="d">Trading-autonomy readiness report.</div><div class="u">gesh-project-trading/AUTONOMY_PROGRESS_REPORT.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/PAPER_MODE_STATUS_REPORT.html"><span class="edge e-amber"></span>
+      <div class="t">📝 Paper Mode Status</div><div class="d">Paper-trading status &amp; safety report.</div><div class="u">gesh-project-trading/PAPER_MODE_STATUS_REPORT.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/crypto_report.html"><span class="edge e-cyan"></span>
+      <div class="t">₿ Crypto Report</div><div class="d">Latest crypto paper-book report.</div><div class="u">gesh-project-trading/crypto_report.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/sim_report.html"><span class="edge e-cyan"></span>
+      <div class="t">🎲 Simulation Report</div><div class="d">Crypto simulator run report.</div><div class="u">gesh-project-trading/sim_report.html</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project/docs/GESH_LEGAL_COMPLIANCE_PLAYBOOK.md"><span class="edge e-violet"></span>
+      <div class="t">📚 Legal Compliance Playbook</div><div class="d">Full deep-dig companion to the Legal Hub (workstreams, sequencing, cost).</div><div class="u">gesh-project/docs/GESH_LEGAL_COMPLIANCE_PLAYBOOK.md</div></a>
+    <a class="card" href="file:///Users/georgigaydarov/Projects/gesh-project-trading/CLAUDE_VERDICT_TASKS_3_5_6.md"><span class="edge e-blue"></span>
+      <div class="t">✅ PR#98 Review Verdict</div><div class="d">Adversarial review of Codex Tasks 3/5/6 (also the 8 CLAUDE_GESH_FINANCE_*.md audit files).</div><div class="u">gesh-project-trading/ (CLAUDE_* files)</div></a>
+  </div>
+
+  <div class="foot">
+    <b>GESH Financial — Master Hub.</b> Single front door to every service, document &amp; report.<br>
+    Live cards need the servers running (:9000 product, :9003 trading). Local file cards open from disk.<br>
+    Legal source of truth: <b>GESH_LEGAL_HUB.html</b> · Docs index: <b>GESH_PROJECT_DOCS.html</b> · Tracking: Notion "GESH Project Tracker" + "⚖️ Legal &amp; Compliance".
+  </div>
+</div>
+</body>
+</html>
