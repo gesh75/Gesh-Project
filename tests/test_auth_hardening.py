@@ -131,3 +131,31 @@ def test_https_customer_url_with_insecure_cookie_override_rejects_login(client, 
     assert response.status_code == 503
     assert response.json()["detail"] == "Authentication temporarily unavailable"
     assert auth_users.COOKIE_NAME not in response.cookies
+
+
+# ── [CLAUDE V1 2026-07-19] public-body cap extended beyond the webhook ──────────
+def test_login_body_is_capped(client):
+    r = client.post("/auth/login",
+                    content=b"x" * (server.PUBLIC_BODY_MAX_BYTES + 1),
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 413
+
+
+def test_request_link_body_is_capped(client):
+    r = client.post("/auth/request-link",
+                    content=b"x" * (server.PUBLIC_BODY_MAX_BYTES + 1),
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 413
+
+
+def test_unsubscribe_body_is_capped(client):
+    r = client.post("/alerts/unsubscribe",
+                    content=b"x" * (server.PUBLIC_BODY_MAX_BYTES + 1),
+                    headers={"Content-Type": "application/json"})
+    assert r.status_code == 413
+
+
+def test_normal_login_body_still_works(client):
+    # a normal small body is parsed and reaches the auth logic (401 for bad creds)
+    r = client.post("/auth/login", json={"email": "nobody@x.com", "password": "bad"})
+    assert r.status_code in (401, 429)

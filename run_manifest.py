@@ -121,11 +121,20 @@ def manifest_from_snapshot(
 ) -> RunManifest:
     info = snapshot_degraded_info(snapshot, threshold_s, now=now)
     provenance = snapshot.get("quote_provenance") or {}
-    quote_times = {
-        symbol: item["quote_as_of"]
-        for symbol, item in provenance.items()
-        if isinstance(item, Mapping) and item.get("quote_as_of")
-    }
+    # [CLAUDE V2 2026-07-19] parse-and-skip: a MISSING quote_as_of already degrades
+    # safely, but a non-empty UNPARSEABLE one (e.g. "N/A") used to crash the whole
+    # engines run via RunManifest.__post_init__. Drop unparseable values here so the
+    # symbol is simply absent from the manifest → the data-freshness gate fails closed
+    # on it (quote age unknown) instead of aborting the daily chain.
+    quote_times: dict[str, Any] = {}
+    for symbol, item in provenance.items():
+        if not (isinstance(item, Mapping) and item.get("quote_as_of")):
+            continue
+        try:
+            _parse_utc(item["quote_as_of"])   # validate only; store raw for create()
+        except (ValueError, TypeError, AttributeError):
+            continue
+        quote_times[symbol] = item["quote_as_of"]
     return RunManifest.create(
         source=str(snapshot.get("source") or "UNKNOWN"),
         snapshot_as_of=snapshot["fetched_at"],

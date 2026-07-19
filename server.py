@@ -839,10 +839,7 @@ async def auth_login(request: Request):
     per (IP, email); the 200k-round PBKDF2 verify runs in a worker thread so it
     never blocks the event loop."""
     ip = request.client.host if request.client else "unknown"
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _read_json_capped(request)   # [CLAUDE V1] capped public body
     email = (body.get("email") or "").strip()
     password = body.get("password") or ""
     if _login_blocked(ip, email):
@@ -925,10 +922,7 @@ async def auth_request_link(request: Request):
     ip = request.client.host if request.client else "unknown"
     if not _bucket_ok(ip, "request-link", limit=5, window=600):
         return JSONResponse(status_code=429, content={"ok": False, "detail": "Too many requests"})
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _read_json_capped(request)   # [CLAUDE V1] capped public body
     email = (body.get("email") or "").strip()
     token = auth_users.issue_magic_token(email) if email else None
     if token:
@@ -1015,6 +1009,25 @@ async def _read_limited_body(request: Request, limit: int) -> bytes:
         if len(body) > limit:
             raise HTTPException(status_code=413, detail="Request too large")
     return bytes(body)
+
+
+PUBLIC_BODY_MAX_BYTES = 65_536  # 64 KiB — email+password / token payloads are tiny
+
+
+async def _read_json_capped(request: Request, limit: int = PUBLIC_BODY_MAX_BYTES) -> dict:
+    """[CLAUDE V1 2026-07-19] Read + parse a JSON body under a hard byte cap.
+
+    Public POST routes (login, request-link, unsubscribe) must not buffer an
+    unbounded unauthenticated body — the 413 fires before any parse/auth work.
+    Returns {} on empty/invalid JSON (callers already treat that as no-op)."""
+    raw = await _read_limited_body(request, limit)
+    if not raw:
+        return {}
+    try:
+        data = _json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 @app.post("/api/billing/webhook")
@@ -1128,19 +1141,22 @@ def _unsub_confirm_page(kind: str, token: str) -> HTMLResponse:
 async def _unsub_perform(kind: str, request: Request, token_qs: str) -> JSONResponse:
     _typ, _label, setter_name = _UNSUB_KINDS[kind]
     token = (token_qs or "").strip()
-    if not token:                       # JSON body (the confirm page's fetch)
+    if not token:                       # JSON or urlencoded body (both capped — [CLAUDE V1])
         try:
-            body = await request.json()
-            token = str(body.get("token") or "").strip()
+            raw = await _read_limited_body(request, PUBLIC_BODY_MAX_BYTES)
+        except HTTPException:
+            raise
         except Exception:
-            token = ""
-    if not token:                       # RFC 8058 one-click: urlencoded body
-        try:
-            from urllib.parse import parse_qsl
-            raw = (await request.body()).decode("utf-8", "replace")
-            token = dict(parse_qsl(raw)).get("token", "").strip()
-        except Exception:
-            token = ""
+            raw = b""
+        if raw:
+            try:
+                _b = _json.loads(raw)
+                token = str((_b or {}).get("token") or "").strip() if isinstance(_b, dict) else ""
+            except Exception:
+                token = ""
+            if not token:               # RFC 8058 one-click: urlencoded fallback
+                from urllib.parse import parse_qsl
+                token = dict(parse_qsl(raw.decode("utf-8", "replace"))).get("token", "").strip()
     user = _unsub_user(kind, token)
     if not user:
         return JSONResponse(status_code=400,
@@ -2963,7 +2979,7 @@ def _load_mybook_job_state(user_id: str) -> tuple[dict | None, dict | None]:
     """Read durable state fail-closed without exposing database details."""
     try:
         auth_users.expire_stale_mybook_jobs(
-            _positive_env_int("GESH_MYBOOK_STALE_SECONDS", 7200)
+            _positive_env_int("GESH_MYBOOK_STALE_SECONDS", 900)  # [CLAUDE V3] runs are minutes; 15m orphan expiry
         )
         return (
             auth_users.get_active_mybook_job(user_id),
