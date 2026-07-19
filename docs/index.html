@@ -264,8 +264,8 @@
     <div class="chips" id="chips">
       <div class="chip"><span class="num" data-count="11">11</span><span class="lbl">Consensus Nodes</span></div>
       <div class="chip"><span class="num" data-count="8">8</span><span class="lbl">Risk Gates</span></div>
-      <div class="chip"><span class="num" data-count="60">60</span><span class="lbl">API Routes</span></div>
-      <div class="chip"><span class="num" data-count="8">8</span><span class="lbl">Dashboard Tabs</span></div>
+      <div class="chip"><span class="num" data-count="119">119</span><span class="lbl">API Routes</span></div>
+      <div class="chip"><span class="num" data-count="11">11</span><span class="lbl">Dashboard Tabs</span></div>
       <div class="chip"><span class="num" data-count="1000" data-suffix=" GBM">1000</span><span class="lbl">Monte Carlo Paths</span></div>
       <div class="chip"><span class="num" data-count="9000">9000</span><span class="lbl">Server Port</span></div>
     </div>
@@ -447,11 +447,12 @@
     <div class="ov-wrap">
       <div>
         <p class="lead reveal">GESH Financial is a single-node Python platform that turns a live Robinhood portfolio into AI-driven trading intelligence. A FastAPI server on port 9000 ingests holdings via <code>robin_stocks</code>, runs a stack of quantitative engines and an 11-node consensus voting engine, then routes structured prompts to Claude and Gemini for deep analysis and contrarian second opinions.</p>
-        <p class="lead reveal">Every signal is funneled through a typed <code>TradeIntent</code> contract and an 8-gate risk gate before a paper-mode execution layer simulates orders — with the whole signal → gate → execute chain audited to SQLite and scheduled by an APScheduler autopilot. Since June 2026, a deterministic <b>daily analysis chain</b> (launchd, 10:30 ET weekdays, ~4–6 min) runs the entire pipeline unattended — and a commercial surface (<code>/track-record</code> proof page, <code>/watch</code> cockpit, <code>/invest</code> radar, <code>/report</code>) exposes the results. It is built for an individual operator/trader who wants quantified, explainable portfolio insight without risking real capital.</p>
+        <p class="lead reveal">Every signal is funneled through a typed <code>TradeIntent</code> contract and an 8-gate risk gate before a paper-mode execution layer simulates orders — with the whole signal → gate → execute chain audited to SQLite and scheduled by an APScheduler autopilot. Since June 2026, a deterministic <b>daily analysis chain</b> (launchd, 10:30 ET weekdays, ~4–6 min) runs the entire pipeline unattended — and a commercial surface (<code>/track-record</code> proof page, <code>/watch</code> cockpit, <code>/invest</code> radar, <code>/report</code>) exposes the results.</p>
+        <p class="lead reveal">What started as a personal tool now also runs as an <b>auth-walled customer product</b> (public at <code>pay.geshfinance.com</code>): per-user accounts with isolated data, <b>Lemon Squeezy</b> subscriptions ($49 / $149 / $399) with rolling-24h usage quotas, a customer <b>My Book</b> surface, and legal scaffolding — <code>/privacy</code>, <code>/terms</code> and <code>/disclaimer</code> (DRAFT pending counsel) plus self-serve data rights (in-app export and account deletion). It ships as a <b>monitored paid beta</b> — educational framing, a signup-pause switch (<code>GESH_SIGNUPS_PAUSED</code>), 1 paying subscriber — with broad launch gated on attorney review of the publisher-vs-adviser classification.</p>
       </div>
       <div class="card reveal">
         <span class="ico" aria-hidden="true">🎯</span>
-        <h3>Built for one operator</h3>
+        <h3>Solo-built — now a monitored paid beta</h3>
         <ul class="ov-points">
           <li><span class="k" aria-hidden="true"></span><span><b>Problem:</b> raw brokerage data isn't a trading decision — it needs quant signals, AI reasoning, and disciplined risk control.</span></li>
           <li><span class="k" aria-hidden="true"></span><span><b>Approach:</b> uncorrelated signals → consensus → multi-model AI → gated paper execution.</span></li>
@@ -465,7 +466,7 @@
   <section id="features" aria-labelledby="features-h">
     <span class="eyebrow reveal">✦ Capabilities</span>
     <h2 class="title reveal" id="features-h">Key <span class="g">Features</span></h2>
-    <p class="lead reveal">Nine intelligence layers, each independently auditable, from raw signal nodes to gated execution and the daily chain that runs them all.</p>
+    <p class="lead reveal">Ten product layers, each independently auditable, from raw signal nodes to gated execution, the daily chain that runs them all, and the commercial shell around them.</p>
     <div class="grid feat-grid" id="featGrid">
       <article class="card reveal"><span class="ico" aria-hidden="true">🗳️</span><h3>11-Node Consensus Engine</h3><p>Eleven intentionally uncorrelated signal nodes (momentum, trend, relative strength, fundamentals, analyst, live Reddit sentiment, Kelly, ECG, volume, FFT cycle, FRED macro) each vote BULLISH/NEUTRAL/BEARISH/ABSTAIN; the normalized score thresholds into STRONG BUY/SELL (≥0.55) or BUY/SELL (≥0.25).</p></article>
       <article class="card reveal"><span class="ico" aria-hidden="true">🛡️</span><h3>8-Gate Risk Gate</h3><p>Every TradeIntent passes through ordered gates — kill-switch, market hours, confidence floor, position cap, order rate, cash floor, daily loss, data freshness — and each approve/reject verdict is persisted before returning.</p></article>
@@ -476,6 +477,7 @@
       <article class="card reveal"><span class="ico" aria-hidden="true">🔎</span><h3>Scanner Pipeline</h3><p>Cheap ETF sector pre-filter, then consolidation-zone detection (10+ candle tight ranges, min 2.0× R/R), then full engine analysis only on hot symbols — across eight timeframe modes from 5MIN to forex-daily.</p></article>
       <article class="card reveal"><span class="ico" aria-hidden="true">⏱️</span><h3>Deterministic Daily Chain</h3><p>launchd fires <code>run_daily_analysis.sh</code> at 10:30 ET weekdays: live snapshot → all engines → one bounded Claude call → paper/risk-gate audit with Telegram signal alerts → self-asserting HTML report at <code>/report</code> — the full analysis in ~4–6 minutes, no agent in the loop.</p></article>
       <article class="card reveal"><span class="ico" aria-hidden="true">💡</span><h3>Advanced Portfolio Analytics</h3><p>IRS wash-sale tax-loss harvesting, per-holding alpha vs SPY and 30+ sector ETFs (A–F grade), rolling 90-day BTC/ETH correlation, plain-English consensus explainability, and 3-tier DeFi yield comparison.</p></article>
+      <article class="card reveal"><span class="ico" aria-hidden="true">🔐</span><h3>Auth, Billing &amp; Data Rights</h3><p>Per-user login wall (<code>GESH_AUTH_ENABLED</code>) with isolated accounts, Lemon Squeezy subscriptions with usage quotas, public legal pages (<code>/privacy</code> · <code>/terms</code> · <code>/disclaimer</code>, DRAFT pending counsel), and self-serve data rights — in-app export and account deletion, with a <code>GESH_SIGNUPS_PAUSED</code> kill-switch.</p></article>
     </div>
   </section>
 
@@ -507,6 +509,10 @@ flowchart TB
         edgar["SEC EDGAR"]:::ext
         tg["Telegram Bot"]:::alert
     end
+    subgraph COM["Commerce &amp; Delivery"]
+        ls["Lemon Squeezy - subscriptions"]:::ext
+        cf["Cloudflare tunnel - pay.geshfinance.com"]:::ext
+    end
     operator -->|"dashboard"| gesh
     gesh -->|"holdings, equity"| rh
     gesh -->|"history, fundamentals"| yf
@@ -516,6 +522,8 @@ flowchart TB
     gesh -->|"sentiment, macro"| news
     gesh -->|"10-K, 10-Q, 8-K"| edgar
     gesh -->|"fills, EOD PnL"| tg
+    gesh -->|"checkout, webhook, portal"| ls
+    cf -->|"public HTTPS"| gesh
     classDef actor fill:#0f766e,stroke:#5eead4,color:#f0fdfa
     classDef core fill:#b45309,stroke:#f59e0b,color:#fffbeb
     classDef ai fill:#7c3aed,stroke:#a78bfa,color:#f5f3ff
@@ -532,8 +540,8 @@ flowchart TB
 <pre class="mermaid">
 flowchart TB
     subgraph EDGE["Edge"]
-        api["server.py - 60 routes, caches"]:::core
-        dash["dashboard.html - Chart.js, 8 tabs"]:::core
+        api["server.py - 119 routes, caches"]:::core
+        dash["dashboard.html - Chart.js, 11 tabs"]:::core
         cli["main.py CLI"]:::core
     end
     fetch["auth + data_fetcher to cache.json"]:::svc
@@ -542,12 +550,14 @@ flowchart TB
     cons["consensus.py - 11 nodes (engine repo)"]:::data
     ai["ai_analyzer.py - Claude routing"]:::ai
     gate["trading: contract, risk_gate, execution, autopilot"]:::danger
-    store[("SQLite - gesh_financial.db + gesh.db")]:::store
+    store[("SQLite - gesh_financial.db + gesh.db + gesh_auth.db")]:::store
     chain["daily chain - launchd 10:30 ET"]:::svc
-    pub["routes: /track-record /watch /invest /progress /report"]:::core
+    bill["billing.py - Lemon Squeezy webhook, tiers, quotas"]:::svc
+    pub["routes: /track-record /pricing /privacy /watch /invest /progress /report /usage"]:::core
     chain --> fetch
     chain --> ai
     chain --> gate
+    api --> bill
     api --> pub
     dash --> api
     cli --> fetch
@@ -717,8 +727,9 @@ flowchart LR
         <h3>Commercial surface</h3>
         <ul class="ov-points">
           <li><span class="k" aria-hidden="true"></span><span><b>/track-record</b> — public proof page: timestamped forward ledger, all losses, avg win/loss, SPY benchmark.</span></li>
-          <li><span class="k" aria-hidden="true"></span><span><b>/watch</b> cockpit · <b>/invest</b> diversification radar · <b>/progress</b> weekly burndown · <b>/report</b> daily HTML (wall-gated).</span></li>
-          <li><span class="k" aria-hidden="true"></span><span>Login wall (stdlib, env-gated off) ready for the Sep-2026 paid alpha.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span><b>/watch</b> cockpit · <b>/invest</b> diversification radar · <b>/progress</b> weekly burndown · <b>/report</b> daily HTML (wall-gated owner pages).</span></li>
+          <li><span class="k" aria-hidden="true"></span><span><b>/pricing</b> with Lemon Squeezy checkout · legal pages <b>/privacy</b> · <b>/terms</b> · <b>/disclaimer</b> (DRAFT pending counsel) · self-serve data export + account deletion.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Login wall <b>live</b> (<code>GESH_AUTH_ENABLED</code>) with per-user isolation; monitored paid beta running ($49/$149/$399, 1 paying subscriber); new signups pausable via <code>GESH_SIGNUPS_PAUSED</code>; broad launch gated on counsel classification review.</span></li>
         </ul>
       </div>
     </div>
@@ -772,6 +783,10 @@ pip install -r requirements.txt
 <pre class="code" id="code-run"><span class="cm"># web dashboard on port 9000</span>
 python server.py
 
+<span class="cm"># with the login wall (paid-beta default)</span>
+<span class="pr">GESH_AUTH_ENABLED=true</span> python server.py
+<span class="cm"># pause new signups: GESH_SIGNUPS_PAUSED=true</span>
+
 <span class="cm"># CLI quick analysis</span>
 python main.py
 
@@ -801,10 +816,13 @@ bash run_daily_analysis.sh
         <a href="#overview">Overview</a>
         <a href="#architecture">Architecture</a>
         <a href="#quickstart">Quickstart</a>
+        <a href="https://pay.geshfinance.com/track-record" target="_blank" rel="noopener">Track Record ↗</a>
+        <a href="https://pay.geshfinance.com/privacy" target="_blank" rel="noopener">Privacy ↗</a>
+        <a href="https://pay.geshfinance.com/terms" target="_blank" rel="noopener">Terms ↗</a>
         <span>© 2026 Georgi Gaydarov · Proprietary — All Rights Reserved</span>
       </div>
     </div>
-    <p class="foot-note">Auto-generated documentation · single self-contained page · diagrams rendered live with Mermaid. Content grounded in the repository's README, CLAUDE.md, docs/ARCHITECTURE.md, and source tree. Last synced 2026-06-11.</p>
+    <p class="foot-note">Auto-generated documentation · single self-contained page · diagrams rendered live with Mermaid. Content grounded in the repository's README, CLAUDE.md, docs/ARCHITECTURE.md, and source tree. Last synced 2026-07-19.</p>
   </footer>
 </main>
 
@@ -834,7 +852,7 @@ bash run_daily_analysis.sh
     "requests","Chart.js","Telegram Bot API","pytest","ruff","macOS launchd"
   ];
   const COMPONENTS = [
-    ["server.py","FastAPI application on port 9000 — exposes ~60 API routes, serves the Chart.js dashboard, owns request caches and orchestrates every analysis/trading flow.","FastAPI + uvicorn · threading · hmac X-API-Key"],
+    ["server.py","FastAPI application on port 9000 — exposes 119 API routes, serves the Chart.js dashboard, enforces the per-user login wall and the legal/data-rights pages, and orchestrates every analysis/trading flow.","FastAPI + uvicorn · threading · hmac X-API-Key · GESH_AUTH_ENABLED"],
     ["consensus.py","11-node uncorrelated consensus voting engine (momentum, trend, relative strength, fundamentals, analyst, news, Kelly, ECG, volume, FFT, macro) that normalizes votes into STRONG/BUY/SELL/HOLD verdicts.","numpy · pandas"],
     ["ai_analyzer.py","Claude routing layer with forced tool-use JSON schemas (3 analyzers) for deep portfolio analysis, screening, SEC and fundamentals.","Anthropic Claude Sonnet/Haiku · forced tool-use · prompt caching"],
     ["data_fetcher.py / auth.py","Robinhood ingestion — MFA-aware login plus live holdings, equity and watchlist quotes written to an atomic JSON snapshot cache.","robin_stocks · pyotp"],
@@ -842,8 +860,11 @@ bash run_daily_analysis.sh
     ["monte_carlo.py / kelly.py / fft_cycles.py","Quant engines — 1000-path GBM stress test with EWMA vol, Kelly Criterion sizer, and FFT dominant price-cycle detection.","numpy · pandas"],
     ["volatility_models.py / tax_harvester.py / benchmarks.py / crypto_correlation.py","Sprint-3 advanced analytics — EWMA vs GARCH(1,1), IRS wash-sale harvesting, alpha vs SPY+sector ETFs, rolling 90-day BTC/ETH correlation.","numpy · pandas · yfinance"],
     ["trading/","Execution subpackage — typed TradeIntent contract, 8-gate risk gate, paper/live execution with SHA idempotency, Telegram alerts and APScheduler autopilot, audited to SQLite.","dataclasses · APScheduler · zoneinfo · Telegram Bot API · sqlite3"],
-    ["db.py / gesh_financial.db","SQLite persistence — analysis_runs, equity_snapshots, news_sentiment, sec_filings, trade_intents, risk_decisions, orders audit chain.","sqlite3"],
-    ["templates/dashboard.html","Customer-facing web UI — Chart.js dashboard with 8 tabs (Overview, Analysis, Screener, Kelly, Monte Carlo, Regime, SEC/News, Daily Analysis).","Chart.js · vanilla JS"],
+    ["db.py / gesh_financial.db","SQLite persistence — analysis_runs, equity_snapshots, news_sentiment, sec_filings, trade_intents, risk_decisions, orders audit chain. Per-user commercial data lives in a separate gesh_auth.db.","sqlite3"],
+    ["auth_users.py","Auth wall + per-user data — stdlib session login (GESH_AUTH_ENABLED), per-customer isolation, signup-pause switch (GESH_SIGNUPS_PAUSED), and GDPR-style data rights: export_user_data / delete_user_data behind GET /api/account/export and POST /api/account/delete.","stdlib (hashlib · hmac · secrets) · sqlite3 (gesh_auth.db)"],
+    ["billing.py","Lemon Squeezy subscriptions — signed webhook (/api/billing/webhook) provisions/revokes tiers ($49/$149/$399), rolling-24h LLM usage quotas metered at /usage, /billing/success + customer-portal flow.","HMAC-SHA256 webhook · Lemon Squeezy API"],
+    ["proof_page.py / watch_view.py / progress_view.py","Commercial surface — public /track-record proof page, owner /watch cockpit (read-only, 12s poll) and /progress readiness burndown; the versioned autonomy-gate DTO (engine cohort, 100 closes) is the single readiness verdict everywhere.","sqlite3 read-only · versioned gate DTO"],
+    ["templates/dashboard.html","Customer-facing web UI — Chart.js dashboard with 11 tabs (Home, Overview, Analysis, Analyze, Scanner, Signals, Intelligence, Risk, Radar, Trading, Daily) including the My Book surface and data-rights controls (export / delete).","Chart.js · vanilla JS"],
     ["news_agent.py / sec_agent.py / fundamental_agent.py","Intelligence agents — Yahoo RSS + Finnhub with a FRED macro overlay (replaced the removed Polymarket scraper), SEC EDGAR filing watcher, and fundamental momentum scanner.","requests · beautifulsoup4 · vaderSentiment · yfinance"],
     ["gemini_agent.py","Alternative LLM agent — Google Gemini 2.5 Flash/Pro for batch sentiment and contrarian second opinions (the legacy ollama_agent.py / llama3.2 path was removed; its endpoints now return 410 Gone).","google-genai"]
   ];
