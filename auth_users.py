@@ -51,7 +51,9 @@ _PBKDF2_ROUNDS = 200_000
 # Paths reachable without a session (login flow, public proof/legal pages, health).
 PUBLIC_PREFIXES = (
     "/login", "/auth/login", "/auth/logout", "/auth/magic", "/auth/request-link", "/static/",
-    "/track-record", "/terms", "/disclaimer", "/healthz", "/favicon.ico",
+    # /privacy is public by necessity: a policy behind a login wall is not a
+    # published policy — people must be able to read it BEFORE creating an account.
+    "/track-record", "/terms", "/disclaimer", "/privacy", "/healthz", "/favicon.ico",
     # Payment surface: pricing page + provider webhook + post-checkout landing must be
     # reachable WITHOUT a session (the webhook is signature-gated, not cookie-gated).
     "/pricing", "/api/billing/webhook", "/billing/success",
