@@ -1,11 +1,11 @@
 # GESH Financial — Privacy Policy (DRAFT)
 > **DRAFT — NOT YET LEGALLY REVIEWED.** Have a qualified attorney review and finalize before publishing. Placeholders in **[BRACKETS]** need your real values. This skeleton exists so counsel redlines a draft (cheaper) instead of drafting from scratch.
 
-**Effective date:** [DATE]
+**Effective date:** 2026-07-19
 **Who we are:** GESH Financial ("GESH", "we", "us"), operated by [LEGAL ENTITY / SOLE PROPRIETOR NAME], [MICHIGAN, USA]. Contact: [PRIVACY@YOURDOMAIN].
 
 ## 1. Scope
-This policy explains what personal information we collect when you use the GESH website and application at [DOMAIN], why we collect it, who we share it with, and your rights.
+This policy explains what personal information we collect when you use the GESH website and application at pay.geshfinance.com, why we collect it, who we share it with, and your rights.
 
 ## 2. Information we collect
 - **Account data:** email address; authentication data (password stored only as a salted hash — we never store your plaintext password).
@@ -27,7 +27,7 @@ When you run an analysis, the relevant inputs (including symbols and, for "My Bo
 ## 5. Who we share with (processors / sub-processors)
 - **Lemon Squeezy** — payments/subscriptions (merchant of record).
 - **Anthropic, Google** — AI analysis (see §4).
-- **Resend** (or [EMAIL PROVIDER]) — transactional/alert email delivery.
+- **Resend** — transactional/alert email delivery.
 - **Market/data providers** — we send them queries (e.g., ticker symbols), not your identity, to fetch market data.
 - We do **not sell** your personal information.
 - We may disclose information if required by law or to protect our rights.

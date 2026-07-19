@@ -661,6 +661,16 @@ body:not(.customer) .customer-only { display: none !important; }
 
 <div class="main">
 
+  <!-- L5: beta / educational framing. The ToS is still a DRAFT and counsel has not
+       classified the "My Book" feature, so the product must present itself as
+       research and education — never as advice. Remove only when counsel says so. -->
+  <div id="gesh-beta-banner" style="background:#1a1405;border:1px solid #6b5410;border-left:3px solid #f0b429;border-radius:8px;padding:11px 15px;margin:0 0 16px;color:#e8d9b0;font-size:12.5px;line-height:1.6">
+    <b>BETA · educational use.</b> GESH is a research and education tool in beta —
+    it is <b>not investment advice</b>, does not manage money, and never places trades.
+    Analytics are AI-generated and may be wrong; performance shown is hypothetical/simulated.
+    All decisions remain yours.
+  </div>
+
   <!-- ═══ TAB: HOME (customer hero — book value, what changed, one next action) ═══ -->
   <div class="tab-pane" id="tab-home">
     <div class="card" style="margin-bottom:18px">
@@ -719,6 +729,14 @@ body:not(.customer) .customer-only { display: none !important; }
         <button class="btn-analyze" onclick="mybookClear()" title="Remove EVERY position from your book. Use this to wipe a symbols-only bulk import before adding real share counts.">🗑 Clear</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
         <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()">🧠 Analyze My Portfolio</button>
+      </div>
+      <!-- L1: the AI data-flow disclosure, shown at the point of use. A privacy
+           page alone does not put it in front of someone at the moment they act. -->
+      <div id="gesh-ai-disclosure" style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.6">
+        ℹ️ Running an analysis sends your symbols and entered holdings to third-party AI
+        providers (<b>Anthropic Claude</b>, <b>Google Gemini</b>) to generate the research.
+        Output is an AI opinion, not a calculation, and is <b>not investment advice</b>.
+        See the <a href="/privacy" style="color:var(--accent)">Privacy Policy</a>.
       </div>
       <div id="mybook-bulk-panel" style="display:none;margin:0 0 12px">
         <textarea id="mybook-bulk-text" rows="6" placeholder="Paste tickers — one per line:&#10;AAPL&#10;NVDA&#10;MSFT&#10;&#10;Sizes are optional & stay private. To weight exactly, add:  AAPL, 100, 150.25"
@@ -1296,6 +1314,17 @@ body:not(.customer) .customer-only { display: none !important; }
       </div><!-- /da-results -->
     </div>
   </div><!-- /tab-daily -->
+
+  <!-- L1: policy footer. Before this the dashboard had ZERO links to /terms or
+       /disclaimer — policies that exist but are unreachable from the product are
+       not published in any meaningful sense. Static markup, no interpolation. -->
+  <div class="gesh-policy-footer" style="margin:26px 0 10px;padding-top:14px;border-top:1px solid var(--border);color:var(--muted);font-size:12px;line-height:1.7">
+    <a href="/privacy" style="color:var(--accent);text-decoration:none">Privacy Policy</a> ·
+    <a href="/terms" style="color:var(--accent);text-decoration:none">Terms of Service</a> ·
+    <a href="/disclaimer" style="color:var(--accent);text-decoration:none">Disclaimer</a><br>
+    GESH Financial is a research and education tool. Informational purposes only —
+    <b>not investment advice</b>. Past and simulated performance do not guarantee future results.
+  </div>
 
 </div>
 
