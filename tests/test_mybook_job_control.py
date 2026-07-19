@@ -129,3 +129,18 @@ def test_large_book_gives_llm_full_book_summary_and_explicit_coverage(
     assert len(seen["all_holdings_summary"]) == 10
     assert seen["book_meta"]["portfolio_scope_source"] == "all_holdings_summary"
     assert result["detailed_coverage"] == {"analyzed": 8, "total": 10}
+
+
+# ── [CLAUDE V5 2026-07-19] reservation transitions are tenant-scoped ────────────
+def test_release_usage_scoped_by_user_id(au):
+    au.create_user("t1@x.com", "pw")
+    au.create_user("t2@x.com", "pw")
+    uid1 = au.resolve_user_id("t1@x.com")
+    uid2 = au.resolve_user_id("t2@x.com")
+    assert au.reserve_usage(uid1, "book_analysis", "job-uid1", limit=10) is True
+    # a wrong-tenant release must NOT touch tenant 1's reservation
+    assert au.release_usage("job-uid1", uid2) is False
+    assert au.get_usage_reservation("job-uid1")["state"] == "reserved"
+    # the rightful tenant can release it
+    assert au.release_usage("job-uid1", uid1) is True
+    assert au.get_usage_reservation("job-uid1")["state"] == "released"

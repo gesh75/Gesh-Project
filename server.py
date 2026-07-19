@@ -799,6 +799,15 @@ def _cookie_secure(request: Request | None = None) -> bool:
     override = os.getenv("GESH_COOKIE_SECURE", "").strip()
     if override:
         return override.lower() not in ("0", "false", "no", "off")
+    # [CLAUDE V4 2026-07-19] HTTPS-deploy FLOOR (host-aware): on an https:// customer
+    # deploy, a request to a NON-localhost host is floored to a Secure cookie even if
+    # the per-request X-Forwarded-Proto is missing/spoofed — a bypassed proxy can no
+    # longer downgrade a production cookie to cleartext. Localhost stays derivable so
+    # the owner's http://localhost session still works (the M2 tradeoff is preserved).
+    if request is not None and os.getenv("APP_BASE_URL", "").strip().lower().startswith("https://"):
+        _host = (request.headers.get("host", "") or "").split(":")[0].strip().lower()
+        if _host and _host not in ("localhost", "127.0.0.1", "::1"):
+            return True
     if request is not None:
         proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
         if proto:
@@ -3160,7 +3169,7 @@ def _mybook_analyze_worker(
 ) -> None:
     """Run one durably identified generation in the bounded worker pool."""
     if not auth_users.mark_mybook_job_running(user_id, job_id, fp):
-        auth_users.release_usage(job_id)
+        auth_users.release_usage(job_id, user_id)   # [CLAUDE V5] tenant-scoped
         return
     try:
         payload = _customer_book_payload(positions, ew)

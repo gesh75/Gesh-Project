@@ -79,7 +79,10 @@ _degraded_info = snapshot_degraded_info(snap)
 results.update(_degraded_info)
 _manifest = manifest_from_snapshot(snap)
 results['run_manifest'] = _manifest.to_dict()
-atomic_write_json(BASE / 'run_manifest.json', _manifest.to_dict())
+# [CLAUDE V6 2026-07-19] run_manifest.json is now published TOGETHER with
+# engine_results.json at the end of the run (see the Save block), so the standalone
+# file and the embedded manifest can never disagree during the multi-minute engine
+# window — a crash mid-engines leaves BOTH at the previous run, never a split pair.
 if _degraded_info['degraded']:
     print(f"[engines] DEGRADED RUN — snapshot age {_degraded_info['snapshot_age_seconds']}s "
           f"(source={_degraded_info['snapshot_source']}); research-only provenance stamped")
@@ -395,6 +398,9 @@ results['regime_summary'] = regime_summary
 # chain writes it — a bare open('w') exposes a truncated JSON mid-write.
 out = BASE / 'engine_results.json'
 atomic_write_json(out, results)
+# [CLAUDE V6] publish the standalone manifest from the SAME final object so the pair
+# (run_manifest.json + engine_results.json['run_manifest']) is only ever written together.
+atomic_write_json(BASE / 'run_manifest.json', results['run_manifest'])
 
 print(f"\n{_t()} [engines] Done — saved to {out}")
 print(f"[engines] Keys: {list(results.keys())}")

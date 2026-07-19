@@ -1824,26 +1824,36 @@ def reserve_usage(user_id: str, event: str, job_id: str, limit: int) -> bool:
         return _reserve_usage_in_transaction(con, user_id, event, job_id, limit)
 
 
-def _transition_usage(job_id: str, target: str) -> bool:
+def _transition_usage(job_id: str, target: str, user_id: str | None = None) -> bool:
     if target not in ("completed", "released"):
         raise ValueError("invalid reservation state")
     now = datetime.now(timezone.utc).isoformat()
+    # [CLAUDE V5 2026-07-19] defense-in-depth: when the caller knows the owner, scope
+    # the transition by user_id too, so a reservation can only ever be mutated by its
+    # own tenant even if a job_id were somehow reused/forged.
     with _conn() as con:
         con.execute("BEGIN IMMEDIATE")
-        cur = con.execute(
-            "UPDATE usage_reservations SET state=?, completed_at=? "
-            "WHERE job_id=? AND state='reserved'",
-            (target, now, job_id),
-        )
+        if user_id is not None:
+            cur = con.execute(
+                "UPDATE usage_reservations SET state=?, completed_at=? "
+                "WHERE job_id=? AND user_id=? AND state='reserved'",
+                (target, now, job_id, user_id),
+            )
+        else:
+            cur = con.execute(
+                "UPDATE usage_reservations SET state=?, completed_at=? "
+                "WHERE job_id=? AND state='reserved'",
+                (target, now, job_id),
+            )
         return cur.rowcount == 1
 
 
-def complete_usage(job_id: str) -> bool:
-    return _transition_usage(job_id, "completed")
+def complete_usage(job_id: str, user_id: str | None = None) -> bool:
+    return _transition_usage(job_id, "completed", user_id)
 
 
-def release_usage(job_id: str) -> bool:
-    return _transition_usage(job_id, "released")
+def release_usage(job_id: str, user_id: str | None = None) -> bool:
+    return _transition_usage(job_id, "released", user_id)
 
 
 def get_usage_reservation(job_id: str) -> dict[str, Any] | None:
@@ -2007,8 +2017,8 @@ def finish_mybook_job(
             )
         con.execute(
             "UPDATE usage_reservations SET state=?, completed_at=? "
-            "WHERE job_id=? AND state='reserved'",
-            ("completed" if status == "done" else "released", now, job_id),
+            "WHERE job_id=? AND user_id=? AND state='reserved'",  # [CLAUDE V5] tenant-scoped
+            ("completed" if status == "done" else "released", now, job_id, user_id),
         )
         return True
 
