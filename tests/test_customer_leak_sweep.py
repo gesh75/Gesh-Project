@@ -268,6 +268,12 @@ EXCLUDED: dict[str, str] = {
     "/api/usage/summary": "OWNER-ONLY metering view (403s customer sessions — locked by "
                           "tests/test_mybook.py); the sweep's 200-with-masking contract "
                           "cannot apply to a route customers cannot read",
+    "/api/account/export": "the caller's OWN account data as a file download, for the "
+                           "Privacy-Policy §8 access/portability right — mask-EXEMPT by "
+                           "design (masking would redact a user's own data back at them). "
+                           "Scoped by user_id inside auth_users.export_user_data, omits "
+                           "password_hash, carries no owner financial data; per-user "
+                           "isolation locked by tests/test_account_data_rights.py",
     "/api/mybook": "the CUSTOMER's own entered positions valued from public quotes — zero "
                    "owner data, mask-EXEMPT by design (masking would redact the customer's "
                    "own dollars back at them); per-user isolation + raw-dollar contract "

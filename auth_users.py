@@ -2105,3 +2105,113 @@ def usage_summary(days: int = 30) -> list[dict]:
 
 if __name__ == "__main__":
     raise SystemExit(_cli(sys.argv[1:]))
+
+
+# ─── Data-subject rights (L3): export + delete ────────────────────────────────
+# The published Privacy Policy §8 promises access/export/delete. These implement
+# them. Note: `export_portfolio.py` in this repo is the OWNER's Robinhood
+# exporter and is unrelated — there was no customer export primitive before this.
+
+# Every table that keys on user_id. Deletion walks this list, so a NEW customer
+# table added later must be appended here or it silently survives a "deletion".
+_USER_DATA_TABLES = (
+    "customer_positions",
+    "customer_book_prefs",
+    "watchlist",
+    "customer_analyses",
+    "usage_events",
+    "usage_reservations",
+    "mybook_jobs",
+)
+
+
+def export_user_data(email: str) -> dict[str, Any]:
+    """Everything we hold about this user, as plain JSON-able data.
+
+    Scoped strictly to the caller. Deliberately omits `password_hash` — an
+    export is handed to the user and must never carry a credential — and omits
+    internal billing identifiers beyond the status the user already sees.
+    Returns {} for an unknown user rather than raising.
+    """
+    user_id = resolve_user_id(email)
+    if not user_id:
+        return {}
+    with _conn() as con:
+        acct = con.execute(
+            "SELECT email, created_at, last_login_at, tier, billing_status, "
+            "alerts_opt_out, digest_opt_out FROM users WHERE user_id=?", (user_id,)
+        ).fetchone()
+        positions = con.execute(
+            "SELECT symbol, shares, avg_cost, updated_at FROM customer_positions "
+            "WHERE user_id=? ORDER BY rowid", (user_id,)
+        ).fetchall()
+        prefs = con.execute(
+            "SELECT equal_weight, updated_at FROM customer_book_prefs WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+        watch = con.execute(
+            "SELECT symbol, added_at FROM watchlist WHERE user_id=? ORDER BY rowid",
+            (user_id,)
+        ).fetchall()
+        analyses = con.execute(
+            "SELECT result_json, created_at FROM customer_analyses WHERE user_id=? "
+            "ORDER BY created_at DESC", (user_id,)
+        ).fetchall()
+        usage = con.execute(
+            "SELECT event, detail, at FROM usage_events WHERE user_id=? ORDER BY at DESC",
+            (user_id,)
+        ).fetchall()
+
+    def _parse(raw: str) -> Any:
+        try:
+            return json.loads(raw)
+        except Exception:  # noqa: BLE001 — a corrupt row must not block an export
+            return {"parse_error": True}
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "account": dict(acct) if acct else {},
+        "positions": [dict(r) for r in positions],
+        "book_preferences": dict(prefs) if prefs else {},
+        "watchlist": [r["symbol"] for r in watch],
+        "analyses": [
+            {"created_at": r["created_at"], "result": _parse(r["result_json"])}
+            for r in analyses
+        ],
+        "usage": [dict(r) for r in usage],
+        "note": (
+            "This is everything GESH Financial stores about your account. Payment "
+            "records are held by Lemon Squeezy (our merchant of record), not by us."
+        ),
+    }
+
+
+def delete_user_data(email: str) -> dict[str, Any]:
+    """Hard-delete the user and every row keyed to them. Returns a receipt.
+
+    A real purge, not a deactivation: rows are removed from every table in
+    _USER_DATA_TABLES and then from `users`. Scoped by user_id so it can never
+    reach another account. Idempotent — deleting an unknown user is a no-op.
+    """
+    user_id = resolve_user_id(email)
+    if not user_id:
+        return {"deleted": False, "counts": {}}
+    counts: dict[str, int] = {}
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        for table in _USER_DATA_TABLES:
+            cur = con.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+            counts[table] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        cur = con.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+        counts["users"] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    return {"deleted": True, "counts": counts}
+
+
+def billing_subscription_status(email: str) -> tuple[str | None, str | None]:
+    """(subscription_id, status) — used to warn before deleting an account that
+    is still being billed. Deleting here does NOT cancel Lemon Squeezy."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT billing_sub_id, billing_status FROM users WHERE email=?", (_norm(email),)
+        ).fetchone()
+    return (row["billing_sub_id"], row["billing_status"]) if row else (None, None)
