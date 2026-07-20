@@ -80,3 +80,4 @@ node_modules/
 llm_usage.jsonl
 gesh_auth.secret
 *.jpeg
+.rh_mcp_oauth.json
