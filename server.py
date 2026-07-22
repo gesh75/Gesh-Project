@@ -443,9 +443,13 @@ app = FastAPI(title="Gesh Financial Observability", lifespan=lifespan)
 
 @app.middleware("http")
 async def _rate_limit_middleware(request: Request, call_next):
-    if request.url.path.startswith("/api/"):
+    # /congress-watch is the only public HTML page that triggers upstream fetches —
+    # it must be throttled too, not just /api/*, or anonymous cold-cache traffic can
+    # exhaust workers and the upstream quota.
+    path = request.url.path
+    if path.startswith("/api/") or path == "/congress-watch":
         ip = request.client.host if request.client else "unknown"
-        heavy = request.url.path.startswith(_HEAVY_PREFIXES)
+        heavy = path.startswith(_HEAVY_PREFIXES)
         if not _rate_ok(ip, heavy):
             return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded — slow down"})
     return await call_next(request)
@@ -1159,6 +1163,43 @@ def track_record_page():
         return proof_page.render_html(proof_page.load_track_record())
     except Exception as exc:
         raise _server_error(exc)
+
+
+@app.get("/congress-watch", response_class=HTMLResponse)
+def congress_watch_page():
+    """Public, shareable Congress-Trade-Watch page — the acquisition magnet extracted
+    from Autopilot's viral hook, but INFORMATIONAL only (public STOCK Act disclosures,
+    no execution, no advice; publisher-lane). Offline-safe empty state."""
+    try:
+        import congress_agent
+        return congress_agent.render_watch_html(congress_agent.load_watch_data())
+    except Exception as exc:
+        raise _server_error(exc)
+
+
+@app.get("/api/congress")
+def api_congress():
+    """Recent congressional disclosures + most-bought leaderboard (public data).
+
+    Includes source provenance (chambers, fetched-at, degraded flag) so an
+    upstream outage is reported as degraded — never as successful empty data."""
+    import congress_agent
+    lb = congress_agent.leaderboard()
+    return {"status": "ok", "data": {
+        "leaderboard": lb.get("top_bought", []),
+        "window": lb.get("window"),
+        "recent": congress_agent.recent_activity(limit=40).get("trades", []),
+        "disclaimer": congress_agent.DISCLOSURE_LAG_NOTE,
+        "attribution": congress_agent.FILING_ATTRIBUTION_NOTE,
+        "source": congress_agent.source_status(),
+    }}
+
+
+@app.get("/api/congress/{symbol}")
+def api_congress_symbol(symbol: str):
+    """Congressional trades for one ticker — informational, attaches to the research card."""
+    import congress_agent
+    return {"status": "ok", "data": congress_agent.for_symbol(_safe_symbol(symbol))}
 
 
 @app.get("/terms", response_class=HTMLResponse)
