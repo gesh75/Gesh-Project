@@ -554,62 +554,20 @@ body:not(.customer) .customer-only { display: none !important; }
     </button>
     <button class="nav-item" onclick="switchTab('analyze'); showBookRisk()" title="Risk, Monte Carlo &amp; Kelly on your book">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
-      <span class="nav-label">Risk</span>
+      <span class="nav-label">Model Risk</span>
     </button>
-    <button class="nav-item owner-only" data-tab="scanner" onclick="switchTab('scanner')" title="Market scanner">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-      <span class="nav-label">Scanner</span>
-    </button>
+    <!--GESH_SLOT:owner_block_01-->
   </div>
 
-  <div class="sb-group owner-only">
-    <div class="sb-group-title">Monitor</div>
-    <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Overview">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
-      <span class="nav-label">Overview</span><span class="nav-badge" id="navb-overview"></span></button>
-    <button class="nav-item" data-tab="risk" onclick="switchTab('risk')" title="Risk">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
-      <span class="nav-label">Risk</span><span class="nav-badge" id="navb-risk"></span></button>
-    <button class="nav-item" data-tab="scanner" onclick="switchTab('scanner')" title="Scanner">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-      <span class="nav-label">Scanner</span><span class="nav-badge" id="navb-scanner"></span></button>
-  </div>
+  <!--GESH_SLOT:owner_block_02-->
 
   <!-- Scanner has no customer-reachable pane (customers only see Analyze/My Book),
        so this group is owner-only — customers must not get a dead nav link. -->
-  <div class="sb-group owner-only" id="customer-tools" style="display:none">
-    <div class="sb-group-title">Tools</div>
-    <button class="nav-item" data-tab="scanner" onclick="switchTab('scanner')" title="Market Scanner (public research)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-      <span class="nav-label">Scanner</span>
-    </button>
-  </div>
+  <!--GESH_SLOT:owner_block_03-->
 
-  <div class="sb-group owner-only">
-    <div class="sb-group-title">Intelligence</div>
-    <button class="nav-item" data-tab="analysis" onclick="switchTab('analysis')" title="AI Analysis">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3A3.5 3.5 0 0 0 9 19a3 3 0 0 0 3 0 3 3 0 0 0 3 0 3.5 3.5 0 0 0 3-5.7A3.5 3.5 0 0 0 16 7a4 4 0 0 0-4-4z"/><line x1="12" y1="3" x2="12" y2="19"/></svg>
-      <span class="nav-label">AI Analysis</span><span class="nav-badge" id="navb-analysis"></span></button>
-    <button class="nav-item" data-tab="intelligence" onclick="switchTab('intelligence')" title="Intelligence">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M9 4h6"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg>
-      <span class="nav-label">Intelligence</span><span class="nav-badge" id="navb-intelligence"></span></button>
-    <button class="nav-item" data-tab="radar" onclick="switchTab('radar')" title="Radar">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M19.07 4.93A10 10 0 1 0 22 12"/><path d="M12 12 17 7"/><circle cx="12" cy="12" r="4"/></svg>
-      <span class="nav-label">Radar</span><span class="nav-badge" id="navb-radar"></span></button>
-    <button class="nav-item" data-tab="daily" onclick="switchTab('daily')" title="Daily Analysis">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
-      <span class="nav-label">Daily Analysis</span><span class="nav-badge" id="navb-daily"></span></button>
-  </div>
+  <!--GESH_SLOT:owner_block_04-->
 
-  <div class="sb-group owner-only">
-    <div class="sb-group-title">Execution</div>
-    <button class="nav-item" data-tab="signals" onclick="switchTab('signals')" title="Signals">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
-      <span class="nav-label">Signals</span><span class="nav-badge" id="navb-signals"></span></button>
-    <button class="nav-item" data-tab="trading" onclick="switchTab('trading')" title="Paper Trades">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
-      <span class="nav-label">Paper Trades</span><span class="nav-badge" id="navb-trading"></span></button>
-  </div>
+  <!--GESH_SLOT:owner_block_05-->
 
   <div class="sb-foot">⌘K to search · <span id="sb-model">{{ model }}</span></div>
 </aside>
@@ -620,23 +578,14 @@ body:not(.customer) .customer-only { display: none !important; }
   <span class="badge b-cyan" id="model-badge" title="Deep analysis runs on {{ model }}">✨ Powered by Claude</span>
   <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
   <span class="ts" id="ts">—</span>
-  <a href="/watch" id="watch-link" class="badge b-cyan owner-only" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
-  <a href="/invest" class="badge b-cyan owner-only" style="text-decoration:none" title="Diversification radar — where new cash should go (advisory)">💎 Invest</a>
-  <a href="/usage" class="badge b-cyan owner-only" style="text-decoration:none" title="Per-customer usage counters (LLM spend, reports)">📊 Usage</a>
+  <!--GESH_SLOT:owner_block_06-->
+  <!--GESH_SLOT:owner_block_07-->
+  <!--GESH_SLOT:owner_block_08-->
   <button class="btn-ref" onclick="loadPortfolio()" title="Reloads the latest portfolio snapshot. Live Robinhood prices appear only when the brokerage session is online; otherwise the most recent cached snapshot is shown (the daily chain refreshes it each morning).">↻ Refresh</button>
 </header>
 
 <!-- Persistent stats bar -->
-<div class="owner-only" style="background:var(--card);border-bottom:1px solid var(--border);padding:14px 24px">
-  <div style="max-width:1700px;margin:0 auto">
-    <div class="stats">
-      <div class="scard" id="kpi-equity"><span class="kpi-bar"></span><div class="slabel">Portfolio Value</div><div class="sval" id="s-equity">—</div><div class="ssub" id="s-equity-sub">—</div><canvas class="kpi-spark" id="spark-equity"></canvas></div>
-      <div class="scard" id="kpi-day"><span class="kpi-bar"></span><div class="slabel">Day Change</div><div class="sval" id="s-day">—</div><div class="ssub">vs. previous close</div><canvas class="kpi-spark" id="spark-day"></canvas></div>
-      <div class="scard"><span class="kpi-bar"></span><div class="slabel">Cash</div><div class="sval" id="s-cash">—</div><div class="ssub">available balance</div></div>
-      <div class="scard"><span class="kpi-bar"></span><div class="slabel">Buying Power</div><div class="sval" id="s-bp">—</div><div class="ssub">available to trade</div></div>
-    </div>
-  </div>
-</div>
+<!--GESH_SLOT:owner_block_09-->
 
 <!-- Alert banners — ECG suspended + cash warning (hidden by default) -->
 <div id="alert-bar" style="display:none;background:var(--card);border-bottom:1px solid var(--border);padding:0 24px">
@@ -723,13 +672,14 @@ body:not(.customer) .customer-only { display: none !important; }
                style="width:110px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
         <input id="mybook-cost" placeholder="Avg cost (opt.)" type="number" min="0" step="any"
                style="width:140px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
-        <button class="btn-analyze" onclick="mybookAdd()">＋ Add</button>
+        <button class="btn-analyze" id="mybook-add-btn" onclick="mybookAdd()">＋ Add</button>
         <button class="btn-analyze" onclick="mybookToggleBulk()" title="Paste your whole list at once — one ticker per line. Sizes optional & private.">📋 Bulk import</button>
         <button class="btn-analyze" onclick="mybookImportWatchlist()" title="Add every saved watchlist ticker (1 share each — edit after)">⬇ Import watchlist</button>
         <button class="btn-analyze" onclick="mybookClear()" title="Remove EVERY position from your book. Use this to wipe a symbols-only bulk import before adding real share counts.">🗑 Clear</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
-        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()">🧠 Analyze My Portfolio</button>
+        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()" title="Run educational model research on this book (illustrative outputs only — not personalized advice)">🧠 Analyze My Portfolio</button>
       </div>
+      <div id="mybook-form-error" role="alert" style="display:none;margin:0 0 10px;color:var(--red);font-size:13px"></div>
       <!-- L1: the AI data-flow disclosure, shown at the point of use. A privacy
            page alone does not put it in front of someone at the moment they act. -->
       <div id="gesh-ai-disclosure" style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.6">
@@ -767,553 +717,31 @@ body:not(.customer) .customer-only { display: none !important; }
   </div>
 
   <!-- ═══ TAB: OVERVIEW ═══ -->
-  <div class="tab-pane active" id="tab-overview">
-    <!-- Price Chart Panel -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:14px">
-          <span class="ct">Price Chart</span>
-          <select id="chart-sym" onchange="loadChart()" style="background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 10px;font-family:var(--font);font-size:15px;cursor:pointer"></select>
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="period-btn" onclick="setPeriod('1d',this)">1D</button>
-          <button class="period-btn" onclick="setPeriod('5d',this)">5D</button>
-          <button class="period-btn active" onclick="setPeriod('1mo',this)">1M</button>
-          <button class="period-btn" onclick="setPeriod('3mo',this)">3M</button>
-          <button class="period-btn" onclick="setPeriod('6mo',this)">6M</button>
-          <button class="period-btn" onclick="setPeriod('1y',this)">1Y</button>
-        </div>
-      </div>
-      <div style="padding:6px 16px 4px;display:flex;gap:16px;align-items:center;border-bottom:1px solid var(--border)">
-        <span id="chart-price" style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums">—</span>
-        <span id="chart-chg" style="font-size:18px;font-weight:700">—</span>
-        <span id="chart-period-label" style="font-size:14px;color:var(--muted)"></span>
-      </div>
-      <div style="padding:8px 16px 16px;height:300px;position:relative">
-        <canvas id="price-chart"></canvas>
-      </div>
-    </div>
-
-    <!-- LONG-TERM MACRO OVERLAY — visible surface for VIX / F&G / Margin Debt + LT bias -->
-    <div class="card" style="margin-bottom:18px" id="lt-macro-card">
-      <div class="ch">
-        <span class="ct">LONG-TERM MACRO (1-3Y BIAS)</span>
-        <span class="ts" id="lt-ts"></span>
-      </div>
-      <div id="lt-macro-body" style="padding:16px 18px">
-        <div class="deep-placeholder" style="padding:12px 0">
-          <div class="deep-ph-text" style="font-size:15px">Loading macro sentiment overlay…</div>
-        </div>
-      </div>
-      <div style="padding:0 18px 14px;font-size:12px;color:var(--muted);line-height:1.5">
-        VIX high = opportunity tilt; Extreme Fear (low F&G) = long-term bullish; Rising margin debt = caution. Combined into a long-term macro signal the consensus engine weighs.
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <div class="ch"><span class="ct">Open Positions</span><span class="badge b-cyan" id="pos-count" style="display:none"></span></div>
-        <div class="tw"><table>
-          <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Last Price</th><th>Equity</th><th>Alloc %</th><th>Chng %</th><th>ECG</th></tr></thead>
-          <tbody id="holdings-body"><tr><td colspan="8" class="empty"><span class="spin"></span> Loading positions...</td></tr></tbody>
-        </table></div>
-      </div>
-      <div class="rcol">
-        <div class="card"><div class="ch"><span class="ct">Allocation</span></div><div class="chart-wrap"><canvas id="alloc-chart"></canvas></div></div>
-        <div class="card">
-          <div class="ch"><span class="ct">Watchlist</span></div>
-          <div class="tw"><table style="font-size:15px">
-            <thead><tr><th style="padding:8px 10px">Symbol</th><th style="padding:8px 10px">Last</th><th style="padding:8px 10px">Bid</th><th style="padding:8px 10px">Ask</th><th style="padding:8px 10px">Δ%</th></tr></thead>
-            <tbody id="watchlist-body"><tr><td colspan="5" class="empty"><span class="spin"></span> Loading...</td></tr></tbody>
-          </table></div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_10-->
 
   <!-- ═══ TAB: AI ANALYSIS ═══ -->
-  <div class="tab-pane" id="tab-analysis">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">AI Deep Analysis</span>
-          <span class="badge b-purple" style="font-size:10px">◈ Snowflake · Fair Value · Predictions · Regime-Aware</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="deep-ts" class="ts"></span>
-          <button class="btn-analyze" id="btn-deep" onclick="runDeepAnalysis()">▶ Run Deep Analysis</button>
-        </div>
-      </div>
-      <div id="deep-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">◈</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">AI Portfolio Intelligence</strong><br>
-            Snowflake scores · Fair value estimates · Risk/reward analysis · 3M &amp; 12M AI predictions<br>
-            <span style="font-size:15px">Now regime-aware — ADX/Bollinger/RSI context is injected into every analysis.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_11-->
 
   <!-- ═══ TAB: SIGNALS ═══ -->
-  <div class="tab-pane" id="tab-signals">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Consensus Engine</span>
-          <span class="badge b-purple" style="font-size:10px">11 NODES · INDEPENDENT SIGNALS · VOTE</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ts" id="cons-ts"></span>
-          <button class="btn-analyze" id="btn-cons" onclick="runConsensus()">▶ Run Consensus</button>
-        </div>
-      </div>
-      <div id="cons-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">🗳️</div>
-          <div class="deep-ph-text"><strong style="color:var(--text)">11-Node Signal Consensus</strong><br>
-          Momentum · Trend · Rel.Strength · Fundamentals · Analyst · News★ · Kelly · ECG · Volume · FFT Cycle · Macro★<br>
-          Each node votes independently. Final signal requires ≥5 of 11 nodes to agree.<br>
-          <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run Consensus</strong> (~25 sec).</span></div>
-        </div>
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Kelly Position Sizer</span>
-          <span class="badge b-green" style="font-size:10px">½-KELLY · WIN-RATE · VOLATILITY-ADJUSTED</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ts" id="kelly-ts"></span>
-          <button class="btn-analyze" id="btn-kelly" onclick="runKelly()">▶ Size Positions</button>
-        </div>
-      </div>
-      <div id="kelly-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">⚖️</div>
-          <div class="deep-ph-text"><strong style="color:var(--text)">Optimal Position Sizing</strong><br>
-          Half-Kelly Criterion · historical win rate · payoff ratio · volatility · Sharpe · analyst upside<br>
-          <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Size Positions</strong> to run (~15 sec).</span></div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_12-->
 
   <!-- ═══ TAB: RISK ═══ -->
-  <div class="tab-pane" id="tab-risk">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Monte Carlo Stress Test</span>
-          <span class="badge b-purple" style="font-size:10px">N=1 000 · 21-Day Horizon · GBM</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="mc-ts" class="ts"></span>
-          <button class="btn-analyze" id="btn-mc" onclick="runMonteCarlo()">▶ Run Stress Test</button>
-        </div>
-      </div>
-      <div id="mc-container"><div class="deep-placeholder"><div class="deep-ph-icon">🎲</div><div class="deep-ph-text"><strong style="color:var(--text)">Portfolio Stress Testing</strong><br>Simulates 1 000 GBM paths using historic volatility per holding.<br><span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run Stress Test</strong> to see VaR, CVaR and probability distribution.</span></div></div></div>
-    </div>
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Equity Curve Gate</span>
-          <span class="badge b-green" style="font-size:10px">⬤ VRE26-Style Health Monitor</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="ecg-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadECG()">↻ Refresh</button>
-        </div>
-      </div>
-      <div id="ecg-gate-banner" class="gate-banner gate-healthy" style="display:none">
-        <span class="gate-dot"></span><span id="ecg-gate-msg">—</span>
-      </div>
-      <div id="ecg-panel"><div class="deep-placeholder"><span class="spin"></span> loading ECG…</div></div>
-    </div>
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Market Regime</span>
-          <span class="badge b-yellow" style="font-size:10px">ADX · Bollinger · RSI</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="regime-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadRegime()">↻ Refresh</button>
-        </div>
-      </div>
-      <div id="regime-panel"><div class="deep-placeholder"><span class="spin"></span> detecting regimes…</div></div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_13-->
 
   <!-- ═══ TAB: INTELLIGENCE ═══ -->
-  <div class="tab-pane" id="tab-intelligence">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Company Intelligence</span>
-          <span class="badge b-purple" style="font-size:10px">🤖 SEC · NEWS · FUNDAMENTALS</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span id="intel-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadIntelHistory()">↻ Load Cached</button>
-          <button class="btn-analyze" id="btn-intel" onclick="runAllAgents()">▶ Run All Agents</button>
-        </div>
-      </div>
-      <div id="intel-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">🤖</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Autonomous Research Agents</strong><br>
-            <span style="color:var(--accent)">SEC Watcher</span> · monitors 10-K/10-Q/8-K filings · Claude extracts red flags &amp; signals<br>
-            <span style="color:var(--accent)">News Sentiment</span> · Yahoo Finance + Finnhub · rolling 7-day mood score per company<br>
-            <span style="color:var(--accent)">Fundamental Momentum</span> · scans 80+ stocks · finds improving fundamentals before price moves<br>
-            <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run All Agents</strong> (~2-4 min) or <strong style="color:var(--text)">↻ Load Cached</strong> for instant results.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_14-->
 
   <!-- ═══ TAB: SCANNER ═══ -->
-  <div class="tab-pane" id="tab-scanner">
-
-    <!-- Config card -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Scanner Config</span>
-          <span class="badge b-cyan" id="scanner-mode-badge" style="font-size:10px">DAILY</span>
-          <span class="badge b-muted" style="font-size:10px">Sector → CZ → Engines</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span id="scanner-cfg-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadScannerConfig()">↻ Reload</button>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:16px">
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">TIMEFRAME</div>
-          <select id="scanner-tf" onchange="saveScannerTf(this.value)"
-            style="width:100%;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-            <option value="daily">Daily (60d/1d)</option>
-            <option value="1HR">1-Hour (5d/1h)</option>
-            <option value="5MIN">5-Minute (1d/5m)</option>
-            <option value="premarket">Pre-Market (1d/5m)</option>
-            <option value="stock">Penny Stocks</option>
-          </select>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">MIN R/R</div>
-          <input id="scanner-rr" type="number" value="2.0" step="0.1" min="1.5" max="5"
-            style="width:100%;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">SYMBOLS (comma-sep)</div>
-          <input id="scanner-syms" type="text" placeholder="auto = holdings + watchlist"
-            style="width:100%;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div style="display:flex;align-items:flex-end">
-          <button class="btn-analyze" id="btn-scanner" onclick="runScanner()" style="width:100%">▶ Run Scanner</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Sector Filter Results -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <span class="ct">🔥 Sector Pre-Filter</span>
-        <span class="badge b-muted" style="font-size:10px">1.2× 20d avg volume threshold</span>
-      </div>
-      <div id="sector-container">
-        <div class="deep-placeholder" style="padding:24px">
-          <div class="deep-ph-icon">📊</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">GICS Sector Volume Filter</strong><br>
-            Checks if each symbol's sector ETF is showing above-average volume.<br>
-            <span style="color:var(--muted);font-size:14px">Hot sectors produce stronger setups — cold sectors are skipped.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Consolidation Zone Results -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <span class="ct">📐 Consolidation Zones</span>
-        <span class="badge b-muted" style="font-size:10px">Black Bot TA · 10+ candle tight range · R/R ≥ 2×</span>
-      </div>
-      <div id="cz-container">
-        <div class="deep-placeholder" style="padding:24px">
-          <div class="deep-ph-icon">📐</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Consolidation Zone Detector</strong><br>
-            Finds 10+ candle tight consolidation ranges ready for breakout.<br>
-            <span style="color:var(--muted);font-size:14px">Entry = zone midpoint · Stop = zone_low − 0.5% · Target = prev zone top or 2:1 R/R</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-  </div>
+  <!--GESH_SLOT:owner_block_15-->
 
   <!-- ═══ TAB: PAPER TRADES ═══ -->
-  <div class="tab-pane" id="tab-trading">
-
-    <!-- Book disclosure: two separate paper books exist by design -->
-    <div style="background:var(--hover);border:1px solid var(--border);border-radius:8px;
-      padding:8px 14px;margin-bottom:14px;font-size:12px;color:var(--muted)">
-      📒 This book: <b style="color:var(--text)">daily-analysis chain + manual simulations</b>
-      (trade_log paper book). The autopilot's consensus-signal book is separate — it powers
-      <a href="/watch">/watch</a> and the public <a href="/track-record">/track-record</a>
-      and is the only book counted toward the 30-trade autonomy gate.
-    </div>
-
-    <!-- Performance Summary -->
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px">
-      <div class="scard">
-        <div class="slabel">Paper Win Rate</div>
-        <div class="sval" id="pt-winrate" style="color:var(--muted)">—</div>
-        <div class="ssub" id="pt-wl">Loading…</div>
-      </div>
-      <div class="scard">
-        <div class="slabel">Paper P&amp;L</div>
-        <div class="sval" id="pt-pnl">—</div>
-        <div class="ssub">7-day simulated</div>
-      </div>
-      <div class="scard">
-        <div class="slabel">Paper Edge</div>
-        <div class="sval" id="pt-edge">—</div>
-        <div class="ssub" id="pt-edge-sub">vs live performance</div>
-      </div>
-      <div class="scard">
-        <div class="slabel">Open Positions</div>
-        <div class="sval" id="pt-open">—</div>
-        <div class="ssub" id="pt-open-sub">paper trades active</div>
-      </div>
-    </div>
-
-    <!-- Trade Log -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">📄 Paper Trade Log</span>
-          <span class="badge b-purple" id="pt-scanner-best" style="font-size:10px">PAPER MODE</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span id="pt-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadTradeStats()">↻ Refresh</button>
-          <button class="btn-ref" onclick="checkPaperCloses()">⏱ Check Closes</button>
-          <button class="btn-analyze" id="btn-pt-run" onclick="runPaperSession()">▶ Simulate Today</button>
-        </div>
-      </div>
-      <div id="pt-container">
-        <div class="deep-placeholder" style="padding:24px">
-          <div class="deep-ph-icon">📄</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Paper Trading Simulation</strong><br>
-            Simulates the current action plan through the full risk gate pipeline.<br>
-            <span style="color:var(--muted);font-size:14px">8-gate safety check · Kelly position sizing · automatic stop/target tracking</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Gate Check -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">🔐 Risk Gate Dry-Run</span>
-          <span class="badge b-yellow" style="font-size:10px">8-GATE SAFETY CHECK</span>
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 0 14px">
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">SYMBOL</div>
-          <input id="gate-sym" type="text" value="NVDA"
-            style="width:100px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">ACTION</div>
-          <select id="gate-action"
-            style="background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-            <option>BUY</option><option>SELL</option><option>HOLD</option>
-          </select>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">CONFIDENCE</div>
-          <input id="gate-conf" type="number" value="0.85" step="0.01" min="0" max="1"
-            style="width:90px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">TARGET % OF PORTFOLIO</div>
-          <input id="gate-pct" type="number" value="2.0" step="0.5" min="0.5" max="10"
-            style="width:100px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <button class="btn-analyze" id="btn-gate" onclick="runDryRun()">▶ Gate Check</button>
-      </div>
-      <div id="gate-container" style="display:none;padding-bottom:14px"></div>
-    </div>
-
-    <!-- Bull / Bear Debate Engine -->
-    <div class="card" style="margin-bottom:18px" id="mainDebateCard">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">🧠 Bull / Bear Debate</span>
-          <span class="badge b-purple" style="font-size:10px">haiku x2 · sonnet x1 · ~15s</span>
-        </div>
-        <span id="main-debate-meta" class="ts">enter ticker → run debate</span>
-      </div>
-      <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 0 14px">
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">SYMBOL</div>
-          <input id="main-debate-sym" type="text" value="NVDA" maxlength="8"
-            style="width:110px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <button class="btn-analyze" id="btn-main-debate" onclick="runMainDebate()">▶ Run Debate</button>
-      </div>
-      <div id="main-debate-loading" style="display:none;padding:16px;text-align:center;color:var(--muted)">
-        Calling Claude (bull → bear → portfolio manager)…
-      </div>
-      <div id="main-debate-result" style="display:none;padding:0 0 16px">
-        <div id="main-debate-decision" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px;background:var(--hover)"></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-          <div id="main-debate-bull" style="border:1px solid #00e87a33;border-radius:8px;padding:12px;background:#00e87a08"></div>
-          <div id="main-debate-bear" style="border:1px solid #ff3c5a33;border-radius:8px;padding:12px;background:#ff3c5a08"></div>
-        </div>
-        <div id="main-debate-catalysts" style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--hover)"></div>
-      </div>
-    </div>
-
-    <!-- Trade History Table -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <span class="ct">Trade History</span>
-        <span class="badge b-muted" style="font-size:10px">PAPER TRADES</span>
-      </div>
-      <div id="pt-history-container">
-        <div class="empty">Loading trade history…</div>
-      </div>
-    </div>
-
-  </div>
+  <!--GESH_SLOT:owner_block_16-->
 
   <!-- ═══ TAB: RADAR ═══ -->
-  <div class="tab-pane" id="tab-radar">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Investment Radar</span>
-          <span class="badge b-green" style="font-size:10px">AI-Screened Weekly Picks</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="radar-ts" class="ts"></span>
-          <button class="btn-analyze" id="btn-radar" onclick="runScreener()">▶ Scan Market</button>
-        </div>
-      </div>
-      <div id="radar-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">📡</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Weekly Investment Radar</strong><br>
-            Screens the market on momentum · value · growth · analyst consensus<br>
-            <span style="font-size:15px">Claude surfaces this week's best opportunities with a scored thesis for each.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_17-->
 
   <!-- ═══ TAB: DAILY ANALYSIS ═══ -->
-  <div class="tab-pane" id="tab-daily">
-    <div class="card" style="margin-bottom:18px">
-
-      <!-- Header -->
-      <div class="ch" style="flex-wrap:wrap;gap:10px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct" style="display:flex;align-items:center;gap:8px"><span style="font-size:20px">🔬</span> GESH Daily Portfolio Analysis</span>
-          <span class="badge b-purple" style="font-size:11px">All 6 Engines · Regime-Aware · AI Deep-Dive</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn-analyze" id="da-btn-run" onclick="daRunAnalysis()">▶ Run Daily Analysis</button>
-          <select class="da-hist-sel" id="da-hist-sel"><option value="">— Load past run —</option></select>
-          <button class="da-btn-load" id="da-btn-load" onclick="daLoadRun()">Load</button>
-          <span class="ts" id="da-ts"></span>
-        </div>
-      </div>
-
-      <!-- Loading -->
-      <div id="da-loading" style="display:none;padding:32px 20px;text-align:center">
-        <div style="font-size:16px;font-weight:600;color:var(--accent);margin-bottom:8px">
-          <span class="spin" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></span>
-          Running all engines — <span id="da-elapsed">0s</span><span id="da-eta"></span>
-        </div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:12px" id="da-loading-msg">Fetching portfolio · building payload…</div>
-        <div class="da-load-bar"><div class="da-load-fill" id="da-load-fill"></div></div>
-        <button class="da-btn-load" id="da-btn-cancel" onclick="daCancelAnalysis()"
-                style="margin-top:14px">Cancel</button>
-      </div>
-
-      <!-- Placeholder (before first run) -->
-      <div id="da-placeholder" class="deep-placeholder">
-        <div class="deep-ph-icon">🔬</div>
-        <div class="deep-ph-text">
-          <strong style="color:var(--text)">Full Daily Portfolio Deep-Dive</strong><br>
-          Snowflake scores · Fair value · Regime overlay · Kelly sizing · Monte Carlo risk · 12M predictions<br>
-          <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run Daily Analysis</strong> or load a past run from the dropdown.</span>
-        </div>
-      </div>
-
-      <!-- Results -->
-      <div id="da-results" style="display:none;padding:18px">
-
-        <!-- 5 stat cards -->
-        <div class="da-stats">
-          <div class="da-stat"><div class="lbl">Portfolio Score</div><div class="val" id="da-port-score">—</div><div class="sub" id="da-port-type">—</div></div>
-          <div class="da-stat"><div class="lbl">AI Risk Opinion</div><div class="val" id="da-risk-score">—</div><div class="sub">model-generated · 0 safe · 100 extreme</div></div>
-          <div class="da-stat"><div class="lbl">Diversification</div><div class="val" id="da-div-score">—</div><div class="sub">0 concentrated · 100 spread</div></div>
-          <div class="da-stat" style="grid-column:span 2">
-            <div class="lbl">AI Verdict</div>
-            <div class="val" id="da-verdict" style="font-size:16px;line-height:1.4;margin-top:4px;font-weight:600">—</div>
-          </div>
-        </div>
-
-        <!-- Market context -->
-        <div class="da-ctx" id="da-context">—</div>
-
-        <!-- Prioritised action plan -->
-        <div style="margin-bottom:18px">
-          <div class="da-sec-lbl" style="margin-bottom:10px">Prioritised Action Plan</div>
-          <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:4px 16px 0" id="da-recs"></div>
-        </div>
-
-        <!-- Holdings analysis -->
-        <div style="margin-bottom:18px">
-          <div class="da-sec-lbl" style="margin-bottom:10px">Holdings Analysis</div>
-          <div class="da-holdings-grid" id="da-holdings"></div>
-        </div>
-
-        <!-- Risks + Sectors side by side -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
-          <div>
-            <div class="da-sec-lbl" style="margin-bottom:10px">Portfolio Risks</div>
-            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:4px 16px 0" id="da-risks"></div>
-          </div>
-          <div>
-            <div class="da-sec-lbl" style="margin-bottom:10px">Sector Breakdown</div>
-            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;overflow:hidden" id="da-sectors"></div>
-          </div>
-        </div>
-
-        <div style="font-size:12px;color:var(--muted);padding-top:8px;border-top:1px solid var(--border)">
-          <span id="da-run-meta">—</span> &nbsp;·&nbsp; NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY
-        </div>
-
-      </div><!-- /da-results -->
-    </div>
-  </div><!-- /tab-daily -->
+  <!--GESH_SLOT:owner_block_18--><!-- /tab-daily -->
 
   <!-- L3: data-subject rights. The published Privacy Policy §8 promises access,
        export and deletion and points users at in-app controls — so they have to
@@ -3140,6 +2568,29 @@ async function analyzeTicker(raw){
 // Rich Claude research card — the money-free per-ticker subset of the internal
 // deep analysis. POSTed separately (LLM ~15s) so the fast mechanical cards render
 // first; fills #analyze-ai on arrival, degrades silently if the model is unavailable.
+// Combined-stance panel (audit BUG-03). The mechanical signal and this card's
+// valuation opinion answer DIFFERENT questions, and shown as two equal verdicts
+// they read as the product contradicting itself ("STRONG BUY" beside "HOLD —
+// overvalued −18.1%"). The server reconciles them (verdict_reconciliation.py);
+// this renders the single stance plus the evidence, agreement stated either way.
+function buildStancePanel(rec){
+  if(!rec||!rec.stance||rec.stance==='NO_STANCE') return '';
+  const tone=rec.stance==='ACCUMULATE'?'var(--green)':rec.stance==='REDUCE'?'var(--red)'
+            :rec.stance==='WATCH'?'var(--yellow)':'var(--muted2)';
+  const conf=(rec.confidence!=null)
+    ? `<span style="margin-left:auto;color:var(--muted);font-size:12px" title="${daEsc(rec.confidence_basis||'')}">confidence ${daEsc(Math.round(rec.confidence*100))}%</span>`
+    : '';
+  return `<div style="border:1px solid var(--border);border-left:3px solid ${tone};border-radius:6px;padding:10px 12px;margin-bottom:12px">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <span style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;font-size:12px;color:var(--muted)">Combined stance</span>
+      <span style="font-weight:800;color:${tone}">${daEsc(rec.stance)}</span>
+      <span style="color:var(--muted2)">${daEsc(rec.headline||'')}</span>${conf}
+    </div>
+    <div style="margin-top:6px;color:var(--muted2);font-size:13px;line-height:1.5">${daEsc(rec.reason||'')}</div>
+    ${rec.components_agree===false?`<div style="margin-top:6px;font-size:12px;color:var(--yellow)">⚠ These layers disagree — both readings are shown below so you can see why.</div>`:''}
+    <table style="margin-top:8px;font-size:13px;border-collapse:collapse">${(rec.components||[]).map(c=>`<tr><td style="padding:3px 10px 3px 0;color:var(--muted);white-space:nowrap">${daEsc(c.layer)}</td><td style="padding:3px 10px 3px 0;font-weight:700">${daEsc(c.reading)}</td><td style="padding:3px 0;color:var(--muted2);font-size:12px">${daEsc(c.means)}</td></tr>`).join('')}</table>
+  </div>`;
+}
 function buildAICard(h,opts){
   const withSpark=!!(opts&&opts.spark);   // sparkline slot: single-ticker Analyze flow only
   const sc=h.scores||{}, fv=h.fair_value||{};
@@ -3153,6 +2604,7 @@ function buildAICard(h,opts){
     <div style="${T}">🧠 AI Research — ${daEsc(h.symbol||'')}</div>
     ${h.generated_at?`<div style="display:inline-block;border:1px solid var(--border);border-radius:5px;padding:2px 8px;margin-bottom:8px;font-size:11px;color:var(--muted)" title="This card is generated by an AI model from a point-in-time quote — NOT live market data, and it does not auto-update.">🤖 AI-GENERATED${genTime?' · '+daEsc(genTime):''}${h._cached?' · cached':''}</div>`:''}
     ${h.price_suspect?buildSuspectBadge((h.price_suspect_reason||'')+' — this analysis was built on that quote, treat it with caution'):''}
+    ${buildStancePanel(h.reconciliation)}
     <div class="da-holding" style="border:none;padding:0;margin:0">
       <div class="hdr">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -3324,13 +2776,26 @@ async function loadMyBook(){
     // Customer book stats (parity with owner overview)
     let bookStats = '';
     if (pos.length) {
+      // Day change comes from the SERVER's canonical valuation (portfolio_valuation.py).
+      // It used to be computed here as Σ equity × (lifetime return vs cost) with the
+      // unweighted mean of those returns as the percentage — two unrelated numbers
+      // shown as one reading, which rendered "+$271,629 (5920.4%)" on a real book
+      // (audit Q-02). When the server cannot evidence a day change (no prior close,
+      // or an equal-weight book whose dollars are illustrative) we say so instead of
+      // printing a zero that looks like a flat market.
+      const v = d.valuation || {};
       const totalEq = d.total_equity || pos.reduce((s,p)=>s+(p.equity||0),0);
-      const avgPctChg = pos.length ? (pos.reduce((s,p)=>s+(p.percent_change||0),0)/pos.length) : 0;
-      const dayChg = pos.reduce((s,p)=>s + (p.equity||0)*( (p.percent_change||0)/100 ), 0);
       const conc = pos.length ? Math.max(...pos.map(p=>p.portfolio_percentage||0)) : 0;
+      const dayCell = (v.day_change_available && v.day_change_amount!=null)
+        ? `<span class="${cls(v.day_change_amount)}">${v.day_change_amount>=0?'+':'−'}$${daFmt(Math.abs(v.day_change_amount),2)}${v.day_change_percent!=null?` (${v.day_change_percent>=0?'+':'−'}${Math.abs(v.day_change_percent).toFixed(2)}%)`:''}</span>`
+        : `<span style="color:var(--muted)" title="Day change needs the previous session's close for every holding; it is not available for this book right now.">not available</span>`;
+      const pnlChip = (v.cost_basis_available && v.unrealized_pnl!=null)
+        ? `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Unrealized: <span class="${cls(v.unrealized_pnl)}">${v.unrealized_pnl>=0?'+':'−'}$${daFmt(Math.abs(v.unrealized_pnl),2)}${v.unrealized_pnl_percent!=null?` (${v.unrealized_pnl_percent>=0?'+':'−'}${Math.abs(v.unrealized_pnl_percent).toFixed(1)}%)`:''}</span></span>`
+        : `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Add an average cost per position to see unrealized P&L.">Unrealized: <span style="color:var(--muted)">add cost basis</span></span>`;
       bookStats = `<div style="display:flex;gap:12px;margin:0 0 10px;flex-wrap:wrap;font-size:13px">
-        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(totalEq,0)}</b></span>
-        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Day: <span class="${cls(dayChg)}">${dayChg>=0?'+':''}$${daFmt(Math.abs(dayChg),0)} (${avgPctChg.toFixed(1)}%)</span></span>
+        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(totalEq,2)}</b></span>
+        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Today's move vs the previous session's close">Day: ${dayCell}</span>
+        ${pnlChip}
         <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Holdings: <b>${pos.length}</b></span>
         <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Top: ${conc.toFixed(0)}%</span>
       </div>`;
@@ -3342,7 +2807,7 @@ async function loadMyBook(){
       <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT','CONSENSUS','KELLY Δ','RISK',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
       <tbody>${pos.map(p=>`<tr style="border-bottom:1px dashed var(--border)">
         <td style="padding:8px 10px;font-weight:700;color:var(--accent)"><span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer" title="Deep research on ${daEsc(p.symbol)}">${daEsc(p.symbol)}</span></td>
-        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${eqw?'—':daEsc(p.quantity)}</td>
+        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${eqw?'—':daEsc(fmtQty(p.quantity))}</td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
         <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${eqw?'—':'$'+daFmt(p.equity,2)}</td>
         <td style="padding:8px 10px;text-align:right;color:var(--muted2)">${daFmt(p.portfolio_percentage,1)}%</td>
@@ -3356,17 +2821,62 @@ async function loadMyBook(){
         <span>${eqw?('<span style="color:var(--muted)">'+daEsc(pos.length)+' names · equal-weight</span>'):('Total: <b style="color:var(--accent)">$'+daFmt(d.total_equity,2)+'</b>')}</span></div>`;
   }catch(e){ el.innerHTML=''; }
 }
+// Strict numeric parse for quantity/cost inputs. `Number()` alone accepts ''
+// (→0), whitespace, and scientific notation; a share count is a decimal figure a
+// human typed, so anything else is rejected here AND by the server rather than
+// silently coerced. Returns null when the text is not an acceptable quantity.
+function parseQty(text){
+  const t=String(text==null?'':text).trim();
+  if(!t||!/^\d*\.?\d+$/.test(t)) return null;   // no sign, no exponent, no spaces
+  const n=Number(t);
+  return (Number.isFinite(n)&&n>0&&n<1e9)?n:null;
+}
+// Deliberate decimal rendering: a 0.00000001 position rendered as the raw
+// JS string "1e-8" in the SHARES column (audit F-04). Scientific notation is
+// not part of this UI's contract in either direction.
+function fmtQty(n){
+  const v=Number(n);
+  if(!Number.isFinite(v)) return '—';
+  return v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:8});
+}
+function mybookClearForm(){
+  ['mybook-sym','mybook-shares','mybook-cost'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+}
+function mybookFormError(msg){
+  const el=document.getElementById('mybook-form-error');
+  if(el){ el.textContent=msg||''; el.style.display=msg?'block':'none'; }
+}
 async function mybookAdd(){
-  const sym=(document.getElementById('mybook-sym').value||'').trim();
-  const shares=document.getElementById('mybook-shares').value;
-  const cost=document.getElementById('mybook-cost').value;
-  if(!sym||!shares) return;
+  const btn=document.getElementById('mybook-add-btn');
+  if(btn&&btn.disabled) return;                 // in-flight guard: no double submit
+  const sym=(document.getElementById('mybook-sym').value||'').trim().toUpperCase();
+  const shares=parseQty(document.getElementById('mybook-shares').value);
+  const costRaw=(document.getElementById('mybook-cost').value||'').trim();
+  const cost=costRaw?parseQty(costRaw):null;
+  mybookFormError('');
+  if(!sym){ mybookFormError('Enter a ticker symbol.'); return; }
+  if(shares===null){ mybookFormError('Shares must be a positive number (e.g. 12 or 2.5).'); return; }
+  if(costRaw&&cost===null){ mybookFormError('Average cost must be a positive number.'); return; }
+  if(btn) btn.disabled=true;
   try{
     const r=await fetch('/api/mybook',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({symbol:sym,shares:Number(shares),avg_cost:cost?Number(cost):null})});
-    if(r.ok){ ['mybook-sym','mybook-shares','mybook-cost'].forEach(id=>document.getElementById(id).value=''); }
+      body:JSON.stringify({symbol:sym,shares:shares,avg_cost:cost})});
+    if(!r.ok){
+      const d=await r.json().catch(()=>({}));
+      mybookFormError(String((d&&d.detail)||'That position could not be added.'));
+    }
     loadMyBook();
-  }catch(e){}
+  }catch(e){ mybookFormError('Could not reach the server — try again.'); }
+  finally{
+    // ALWAYS reset the inputs, success or failure. Clearing only on success left
+    // a rejected entry sitting in the fields, and the next entry was typed onto
+    // the end of it — a rejected "NVDA / -100" followed by "MSFT / 3" submitted
+    // as {"symbol":"NVDAMSFT","shares":-1003} (audit F-01).
+    mybookClearForm();
+    if(btn) btn.disabled=false;
+  }
 }
 async function mybookRemove(sym){
   try{ await fetch('/api/mybook/'+encodeURIComponent(sym),{method:'DELETE'}); loadMyBook(); }catch(e){}
@@ -3492,8 +3002,18 @@ async function accountDelete(){
   }catch(e){ if(st) st.textContent='Network error — nothing was deleted.'; }
 }
 
+// One user action = one poll loop. Every nav entry point ("Model Research",
+// "Model Risk", "Signals", the Run button) calls this, and a second click while
+// a run is in flight started a SECOND 3-second poll loop against the same job —
+// doubling the request rate for no benefit and making the traffic read as a
+// duplicate-submission storm (audit REL-dup / H). The server already refuses to
+// create a second job (unique index on one active job per user), so this guard
+// is about request volume, not job integrity.
+let _mybookAnalyzeInFlight=false;
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
+  if(_mybookAnalyzeInFlight) return;
+  _mybookAnalyzeInFlight=true;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
   const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
   // Live elapsed counter, not static text: a large book runs ~3 min, and with a
@@ -3572,7 +3092,7 @@ async function mybookAnalyze(){
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
-  finally{ clearInterval(tick); }
+  finally{ clearInterval(tick); _mybookAnalyzeInFlight=false; }
 }
 
 // "Where does new cash go?" — LLM-free Kelly-gap proportional cash deployment,
