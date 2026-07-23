@@ -115,3 +115,42 @@ def _clear_server_response_caches() -> None:
     _clear()
     yield
     _clear()
+
+
+# ── TestClient is not a browser (CSRF hardening, 2026-07-23) ─────────────────
+# Cookie-authenticated mutations now require an Origin (or Referer) that matches
+# a configured deployment origin. A real browser ALWAYS sends Origin on a
+# same-origin POST/PUT/PATCH/DELETE; Starlette's TestClient sends none, so every
+# pre-existing customer-flow test suddenly looked like a forged request.
+#
+# This makes the harness behave like the browser it stands in for. It does NOT
+# weaken the guard: the header is only defaulted when the test did not set one,
+# and tests/test_csrf_hardening.py opts out to exercise absent / null /
+# mismatched / wrong-scheme / wrong-port origins directly.
+_DEFAULT_TEST_ORIGIN = {"enabled": True}
+
+
+@pytest.fixture
+def no_default_origin():
+    """Opt out of the browser-like Origin default for one test module."""
+    _DEFAULT_TEST_ORIGIN["enabled"] = False
+    yield
+    _DEFAULT_TEST_ORIGIN["enabled"] = True
+
+
+@pytest.fixture(autouse=True)
+def _browser_like_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.testclient import TestClient
+
+    original = TestClient.request
+
+    def _with_origin(self, method, url, *args, **kwargs):
+        if (_DEFAULT_TEST_ORIGIN["enabled"]
+                and str(method).upper() in ("POST", "PUT", "PATCH", "DELETE")):
+            headers = dict(kwargs.get("headers") or {})
+            if not any(k.lower() == "origin" for k in headers):
+                headers["Origin"] = str(self.base_url).rstrip("/")
+                kwargs["headers"] = headers
+        return original(self, method, url, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "request", _with_origin)

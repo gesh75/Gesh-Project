@@ -630,3 +630,884 @@
     </div>
   </div>
 <!--/GESH_BLOCK:owner_block_18-->
+<!--GESH_BLOCK:owner_console_js-->
+<script>
+/* OPERATOR-ONLY JAVASCRIPT — spliced in only when rendering for an owner.
+   These functions drive operator actions (daily-analysis runs, screener, paper
+   trade log, risk-gate dry-run, scanner config, cached engine loads). They used
+   to ship in every customer's bundle as dead code that still disclosed internal
+   route paths. Every shared call site is `typeof fn === 'function'` guarded, so
+   their absence is a no-op for a customer. */
+async function daRunAnalysis(){
+  const btn=$('da-btn-run');
+  btn.disabled=true; btn.innerHTML='<span class="spin" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></span> Analysing…';
+  $('da-loading').style.display='block';
+  $('da-placeholder').style.display='none';
+  $('da-results').style.display='none';
+  $('da-ts').textContent='';
+
+  const fill=$('da-load-fill');
+  fill.style.animation='none'; fill.getBoundingClientRect(); fill.style.animation='';
+
+  // Name only what is genuinely outstanding; drop each as its fetch really settles.
+  const outstanding=new Set(['portfolio snapshot','Kelly sizing','Claude deep-analysis']);
+  const paint=()=>{
+    const el=$('da-loading-msg'); if(!el) return;
+    el.textContent = outstanding.size ? 'Waiting on: '+[...outstanding].join(' · ') : 'Rendering…';
+  };
+  const settled=(name)=>(r)=>{ outstanding.delete(name); paint(); return r; };
+  paint();
+
+  const t0=Date.now();
+  const typical=daTypicalMs();
+  const etaEl=$('da-eta');
+  if(etaEl) etaEl.textContent = typical
+    ? ` · typically ~${Math.round(typical/1000)}s on this machine`
+    : ' · timing this run (no estimate yet)';
+  const tick=setInterval(()=>{
+    const el=$('da-elapsed'); if(el) el.textContent=Math.round((Date.now()-t0)/1000)+'s';
+  },1000);
+
+  _daCtl = new AbortController();
+  const killer=setTimeout(()=>_daCtl&&_daCtl.abort(new DOMException('deadline','TimeoutError')),DA_DEADLINE_MS);
+  const sig={signal:_daCtl.signal};
+
+  try{
+    // Run deep analysis + Kelly + portfolio in parallel
+    const [deepRes, kellyRes, portRes] = await Promise.all([
+      fetch('/api/deep-analysis',{method:'POST',...sig}).then(settled('Claude deep-analysis')),
+      fetch('/api/kelly',{method:'POST',...sig}).then(settled('Kelly sizing')),
+      fetch('/api/portfolio',sig).then(settled('portfolio snapshot')),
+    ]);
+    if(deepRes.status===401){ const err=new Error('auth'); err.authRequired=true; throw err; }
+    if(!deepRes.ok) throw new Error(await deepRes.text());
+    const deep   = await deepRes.json();
+    const kelly  = kellyRes.ok  ? await kellyRes.json()  : null;
+    const port   = portRes.ok   ? await portRes.json()   : null;
+    daRecordTiming(Date.now()-t0);   // only a run that actually completed counts
+    const ts=new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    $('da-ts').textContent=ts;
+    // Warn-and-proceed: a degraded run is still worth showing, but it must SAY so.
+    // Blocking here would break the offline/snapshot fallback path on purpose built
+    // into /api/deep-analysis — the honest move is to label it, not refuse it.
+    const degraded = !!(deep && (deep.degraded===true || deep.status==='degraded' || deep.cached===true));
+    const meta = (degraded?'⚠ DEGRADED INPUTS — ':'')+
+                 `run #${deep.run_id||'—'} · ${deep.model||'—'} · ${ts}`;
+    daRender(deep, meta, kelly, port);
+    if(degraded && typeof toast==='function')
+      toast('Analysis ran on degraded/cached inputs — see the run label','error',7000);
+    daLoadHistory();
+  }catch(e){
+    $('da-placeholder').style.display='flex';
+    if(e&&e.authRequired){
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">🔒</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Daily Analysis again.</div>`;
+      if(typeof toast==='function') toast('Sign in to run a live Claude analysis','error',6000);
+    }else if(e&&e.name==='AbortError'){
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">✋</div><div class="deep-ph-text" style="color:var(--muted)">Run cancelled. Nothing was saved — click ▶ Run Daily Analysis to start again.</div>`;
+    }else if(e&&e.name==='TimeoutError'){
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⏱</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Gave up after ${Math.round(DA_DEADLINE_MS/1000)}s.</strong><br>The engines did not return in time. Nothing was saved — try again, or load a past run from the dropdown.</div>`;
+    }else{
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>`;
+    }
+  }finally{
+    clearInterval(tick); clearTimeout(killer); _daCtl=null;
+    $('da-loading').style.display='none';
+    btn.disabled=false; btn.innerHTML='↻ Re-analyse';
+  }
+}
+
+
+async function daLoadHistory(){
+  try{
+    const r=await fetch('/api/history?limit=30');
+    if(!r.ok) return;
+    const j=await r.json();
+    const rows=(j.data&&j.data.runs)||j.data||[];
+    const sel=$('da-hist-sel');
+    sel.innerHTML='<option value="">— Load past run —</option>'+
+      rows.map(row=>{
+        const d=new Date(row.run_at||'');
+        const label=`#${row.id} · ${isNaN(d)?row.run_at:d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · score=${row.portfolio_score||'?'}`;
+        return `<option value="${daEsc(row.id)}">${daEsc(label)}</option>`;
+      }).join('');
+  }catch(e){/* silent */}
+}
+
+
+async function daLoadRun(){
+  const sel=$('da-hist-sel'), id=sel.value;
+  if(!id) return;
+  const btn=$('da-btn-load');
+  btn.disabled=true; btn.innerHTML='<span class="spin" style="width:11px;height:11px;border-width:2px;display:inline-block;vertical-align:middle"></span>';
+  try{
+    const r=await fetch(`/api/history/${encodeURIComponent(id)}`);
+    if(!r.ok) throw new Error('not found');
+    const j=await r.json();
+    const row=j.data;
+    const analysis=row.result||null;
+    const ts=row.run_at?new Date(row.run_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+    $('da-ts').textContent=ts+' (cached)';
+    daRender({analysis,regimes:[],market:{}}, `run #${row.id} · ${row.model||'—'} · ${ts} (historical)`);
+  }catch(e){ alert('Failed to load: '+e.message); }
+  finally{ btn.disabled=false; btn.textContent='Load'; }
+}
+
+
+async function daAutoLoadLatest(){
+  if(typeof daLoadHistory!=='function') return;
+  await daLoadHistory();
+  if(_daAutoLoaded) return;
+  const sel=$('da-hist-sel');
+  if(sel&&sel.options.length>1&&!sel.value){
+    sel.value=sel.options[1].value;   // newest run (options[0] is the placeholder)
+    _daAutoLoaded=true;
+    if(typeof daLoadRun==='function') daLoadRun();
+  }
+}
+
+
+function daRender(data, meta, kellyData, portData){
+  const a=data.analysis;
+  if(!a){$('da-placeholder').style.display='flex';$('da-results').style.display='none';return;}
+
+  // ── Stat cards ──────────────────────────────────────────────────────
+  const ps=a.portfolio_score||0, rs=a.risk_score||0, ds=a.diversification_score||0;
+  $('da-port-score').textContent=ps; $('da-port-score').style.color=daScoreColor(ps);
+  $('da-port-type').textContent=a.portfolio_type||'';
+  $('da-risk-score').textContent=rs;
+  $('da-risk-score').style.color=rs>=65?'var(--red)':rs>=40?'var(--yellow)':'var(--green)';
+  $('da-div-score').textContent=ds; $('da-div-score').style.color=daScoreColor(ds);
+  $('da-verdict').textContent=a.portfolio_verdict||'—';
+
+  // ── Market context ───────────────────────────────────────────────────
+  $('da-context').textContent=a.market_context||'—';
+
+  // ── Trade Plan (Kelly-powered) ───────────────────────────────────────
+  // Build price map from portfolio data
+  const priceMap={}, qtyMap={};
+  const portHoldings=(portData&&portData.data&&portData.data.holdings)||[];
+  portHoldings.forEach(h=>{
+    priceMap[h.symbol]=parseFloat(h.current_price||0);
+    qtyMap[h.symbol]=parseFloat(h.quantity||0);
+  });
+
+  const kellyHoldings=(kellyData&&kellyData.data&&kellyData.data.holdings)||[];
+  const totalEq=parseFloat((kellyData&&kellyData.total_equity)||0);
+
+  // Build AI verdict map for colour coding
+  const aiMap={};
+  (a.holdings_analysis||[]).forEach(h=>{ aiMap[h.symbol]={verdict:h.verdict||'',fv:h.fair_value||{}}; });
+
+  // Sort: TRIM first (P1), ADD second (P2), HOLD last (P3)
+  const actionOrder={TRIM:0,AVOID:1,ADD:2,HOLD:3};
+  const sorted=[...kellyHoldings].sort((x,y)=>(actionOrder[x.action]??4)-(actionOrder[y.action]??4));
+
+  const actColor={ADD:'var(--green)',TRIM:'var(--red)',AVOID:'#ff8c42',HOLD:'var(--muted2)'};
+  const actPri  ={ADD:'P2',TRIM:'P1',AVOID:'P1',HOLD:'P3'};
+
+  if(sorted.length){
+    $('da-recs').innerHTML=`
+      <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">PRI</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">SYMBOL</th>
+          <th style="padding:8px 10px;text-align:center;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ACTION</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">CURR SH</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">Δ SHARES</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">$ IMPACT</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">NOW %</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">KELLY %</th>
+          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">PRICE</th>
+          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;min-width:200px;max-width:320px">AI VERDICT</th>
+        </tr></thead>
+        <tbody>
+        ${sorted.map(k=>{
+          const sym=k.symbol;
+          const price=priceMap[sym]||0;
+          const currQty=qtyMap[sym]||0;
+          const delta=parseFloat(k.delta_usd||0);
+          // share count: BUY=floor, TRIM=ceil
+          let deltaShares=0;
+          if(price>0){
+            if(k.action==='ADD')  deltaShares=Math.floor(Math.abs(delta)/price);
+            if(k.action==='TRIM') deltaShares=-Math.ceil(Math.abs(delta)/price);
+          }
+          const targetQty=Math.max(0,currQty+deltaShares);
+          const dollarImpact=deltaShares*price;
+          const pri=actPri[k.action]||'P3';
+          const ac=actColor[k.action]||'var(--muted2)';
+          const aiV=aiMap[sym]||{};
+          const fvPct=(daFairValue(aiV.fv)||{}).str||'';
+          const rowBg=k.action==='TRIM'?'rgba(255,68,68,.04)':k.action==='ADD'?'rgba(0,230,118,.04)':'';
+          return `<tr style="border-bottom:1px dashed var(--border);background:${rowBg}">
+            <td style="padding:9px 10px"><span class="da-pri" style="${daPriStyle(pri)}">${pri}</span></td>
+            <td style="padding:9px 10px;font-weight:700;color:var(--accent);font-size:15px">${daEsc(sym)}</td>
+            <td style="padding:9px 10px;text-align:center">
+              <span style="font-size:12px;font-weight:700;color:${daEsc(ac)};background:${daEsc(ac)}18;padding:3px 10px;border-radius:4px;border:1px solid ${daEsc(ac)}44">${daEsc(k.action)}</span>
+            </td>
+            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums">${currQty>0?currQty.toFixed(2):'—'}</td>
+            <td style="padding:9px 10px;text-align:right;font-weight:700;color:${daEsc(ac)};font-variant-numeric:tabular-nums">
+              ${deltaShares===0?'—':(deltaShares>0?'+':'')+deltaShares+' sh'}
+              ${deltaShares!==0&&targetQty>=0?`<span style="font-size:11px;opacity:.5;display:block">→ ${targetQty.toFixed(2)} sh</span>`:''}
+            </td>
+            <td style="padding:9px 10px;text-align:right;font-weight:700;color:${dollarImpact>0?'var(--green)':dollarImpact<0?'var(--red)':'var(--muted)'};font-variant-numeric:tabular-nums">
+              ${dollarImpact===0?'—':(dollarImpact>0?'+':'')+daFmt(dollarImpact,0)}
+              <span style="font-size:11px;opacity:.5;display:block">${delta>=0?'+':''}${daFmt(delta,0)} target</span>
+            </td>
+            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums">${daFmt(k.current_pct,1)}%</td>
+            <td style="padding:9px 10px;text-align:right;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums">${daFmt(k.optimal_pct,1)}%</td>
+            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted2)">
+              ${price>0?'$'+daFmt(price,2):'—'}
+            </td>
+            <td style="padding:9px 10px;max-width:320px;word-break:break-word">
+              <span style="${daVerdictStyle(aiV.verdict)};white-space:normal" class="da-holding vrd">${daEsc(aiV.verdict||'—')}</span>
+              ${fvPct?`<span style="font-size:11px;opacity:.6;display:block;margin-top:2px">FV ${fvPct}</span>`:''}
+            </td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+      </div>
+      ${totalEq?`<div style="font-size:12px;color:var(--muted);padding:8px 10px;border-top:1px dashed var(--border)">
+        Kelly allocated: <b style="color:var(--accent)">${daFmt(kellyData.data.total_optimal_allocated_pct,1)}%</b> of $${daFmt(totalEq,0)} portfolio ·
+        Cash recommended: <b style="color:var(--yellow)">${daFmt(kellyData.data.cash_recommended_pct,1)}%</b>
+      </div>`:''}
+    `;
+  } else {
+    // Fallback to AI text recommendations if no Kelly data
+    const recs=a.portfolio_recommendations||[];
+    $('da-recs').innerHTML=recs.length?recs.map(r=>{
+      const p=((r.priority||'P3').replace(/priority/i,'').trim().toUpperCase());
+      const lbl=p.match(/^P[123]$/)?p:'P3';
+      return `<div class="da-rec">
+        <span class="da-pri" style="${daPriStyle(lbl)}">${daEsc(lbl)}</span>
+        <span style="color:var(--accent);font-weight:600;min-width:90px;flex-shrink:0">${daEsc(r.action||'')}</span>
+        <span style="color:var(--muted2)">${daEsc(r.rationale||'')}</span>
+      </div>`;
+    }).join(''):'<div class="da-rec" style="color:var(--muted)">No recommendations</div>';
+  }
+
+  // ── Holdings ─────────────────────────────────────────────────────────
+  const holdings=a.holdings_analysis||[];
+  const regimes=data.regimes||[];
+  const rmap={}; regimes.forEach(r=>{if(r.symbol)rmap[r.symbol]=r.regime||'';});
+  const skeys=['valuation','growth','health','momentum','dividend'];
+
+  $('da-holdings').innerHTML=holdings.length?holdings.map(h=>{
+    const sc=h.scores||{}, fv=h.fair_value||{};
+    const fvv=daFairValue(fv);
+    const fvPct=fvv?fvv.str:'';
+    const fvColor=fvv&&fvv.pct>5?'var(--green)':fvv&&fvv.pct<-5?'var(--red)':'var(--yellow)';
+    const regime=rmap[h.symbol]||'';
+    return `<div class="da-holding">
+      <div class="hdr">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="sym">${daEsc(h.symbol)}</span>
+            <span class="da-holding vrd" style="${daVerdictStyle(h.verdict)}">${daEsc(h.verdict||'—')}</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px">${daEsc(h.company_type||'')}${regime?' · '+daEsc(regime):''}</div>
+        </div>
+        <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
+          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>
+        </div>
+      </div>
+      <div class="da-sbars">
+        ${skeys.map(k=>{const v=sc[k]||0;return `<div class="da-sbar">
+          <span class="nm">${daEsc(k.slice(0,3).toUpperCase())}</span>
+          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${daEsc(v)}</span>
+          <div class="tr"><div class="fl" style="width:${daEsc(v)}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
+        </div>`;}).join('')}
+      </div>
+      <div style="font-size:13px;color:var(--muted2);margin-bottom:8px;font-style:italic">${daEsc(h.snowflake_summary||'')}</div>
+      ${h.prediction?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">3M: <b style="color:var(--accent)">${daEsc(h.prediction['3m']||'')}</b></span>
+        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">12M: <b style="color:var(--accent)">${daEsc(h.prediction['12m']||'')}</b></span>
+      </div>`:''}
+      ${(h.risks||[]).slice(0,3).map(r=>{
+        const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
+        return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;font-size:13px">
+          <span class="da-dot" style="background:${dot}"></span>
+          <span style="color:var(--muted2)">${daEsc(r.text||'')}</span>
+        </div>`;
+      }).join('')}
+      ${h.analyst_note?`<div style="font-size:13px;color:var(--accent);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">💡 ${daEsc(h.analyst_note)}</div>`:''}
+    </div>`;
+  }).join(''):'<div style="color:var(--muted);padding:10px;font-size:14px">No holdings in analysis</div>';
+
+  // ── Portfolio risks ──────────────────────────────────────────────────
+  const portRisks=a.portfolio_risks||[];
+  $('da-risks').innerHTML=portRisks.length?portRisks.map(r=>{
+    const sev=(r.severity||'LOW').toUpperCase();
+    const dot=sev==='HIGH'?'var(--red)':sev==='MEDIUM'?'var(--yellow)':'var(--green)';
+    return `<div class="da-risk">
+      <span class="da-dot" style="background:${dot}"></span>
+      <span style="font-size:11px;font-weight:700;min-width:52px;flex-shrink:0;color:${dot}">${daEsc(sev)}</span>
+      <span style="color:var(--muted2)">${daEsc(r.text||'')}</span>
+    </div>`;
+  }).join(''):'<div class="da-risk" style="color:var(--muted)">No risks identified</div>';
+
+  // ── Sector breakdown ─────────────────────────────────────────────────
+  const sectors=a.sector_breakdown||[];
+  $('da-sectors').innerHTML=sectors.length?`<table style="width:100%;border-collapse:collapse;font-size:14px">
+    <thead><tr style="border-bottom:1px solid var(--border)">
+      <th style="padding:9px 14px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">SECTOR</th>
+      <th style="padding:9px 14px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ALLOC</th>
+      <th style="padding:9px 14px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ASSESSMENT</th>
+    </tr></thead>
+    <tbody>${sectors.map(s=>`<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:9px 14px;color:var(--accent);font-weight:600">${daEsc(s.sector||'')}</td>
+      <td style="padding:9px 14px;text-align:right;font-variant-numeric:tabular-nums">${daFmt(s.allocation_pct,1)}%</td>
+      <td style="padding:9px 14px;color:var(--muted2)">${daEsc(s.assessment||'')}</td>
+    </tr>`).join('')}</tbody>
+  </table>`:'<div style="color:var(--muted);font-size:13px;padding:12px">No sector data</div>';
+
+  // ── Meta + show ──────────────────────────────────────────────────────
+  $('da-run-meta').textContent=meta||'';
+  $('da-placeholder').style.display='none';
+  $('da-results').style.display='block';
+}
+
+
+async function runScreener(){
+  const btn=$('btn-radar'),cont=$('radar-container');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Scanning...';
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Screening the market · fetching fundamentals · running AI scoring…<br><span style="font-size:15px">This takes ~30-45 seconds — batch downloading price data + analyst targets</span></div></div>`;
+  try{
+    const r=await fetch('/api/screener',{method:'POST'});
+    check401(r);
+    if(!r.ok) throw new Error(await r.text());
+    const j=await r.json();
+    renderScreener(j);
+    toast('Market scan complete · '+((j.data&&j.data.picks||[]).length)+' picks','success'); refreshSectionBadges();
+  }catch(e){
+    runErr(e, 'radar-container', 'Screener');
+  }finally{btn.disabled=false;btn.innerHTML='↻ Re-scan';}
+}
+
+
+async function loadCachedScreener(){
+  const cont=$('radar-container'); if(!cont||cont.dataset.loaded) return;
+  try{ const r=await fetch('/api/screener/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data){ renderScreener(j, j.ran_at); prependStaleBadge('radar-container', j.ran_at); cont.dataset.loaded='1'; } }catch(e){}
+}
+
+
+async function runAllAgents(){
+  const btn=$('btn-intel');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Running agents...';
+  const t0=Date.now();
+  let secR=null, newsR=null, fundR=null;
+  try{
+    intelSetProgress('Step 1/3 — SEC EDGAR filing watcher',
+      'Checking recent 10-K / 10-Q / 8-K filings · skips already-analyzed · max 6 new Claude reads');
+    secR=await agentPost('/api/agents/sec','SEC agent');
+
+    intelSetProgress('Step 2/3 — News sentiment scanner',
+      '✓ SEC done ('+daEsc(String(secR.new_filings||0))+' new, '+daEsc(String(secR.skipped_cached||0))+' cached skipped)<br>Scanning holdings + watchlist news…');
+    newsR=await agentPost('/api/agents/news','News agent');
+
+    intelSetProgress('Step 3/3 — Fundamental momentum detector',
+      '✓ SEC + News done ('+daEsc(String(newsR.skipped_cached||0))+' news rows from cache)<br>Running 80-stock universe pre-score → Claude deep scan (~2-4 min)…');
+    fundR=await agentPost('/api/agents/fundamentals','Fundamentals agent');
+
+    const elapsed=Math.round((Date.now()-t0)/1000);
+    renderIntelligence(secR.results||[], newsR, fundR);
+    $('intel-ts').textContent=`Updated ${new Date().toLocaleTimeString()} · ${elapsed}s`;
+  }catch(e){
+    if(e&&e.authRequired){
+      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required</strong> to run live agents.</div></div>`;
+    }else{
+      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>
+        <div style="margin-top:12px;font-size:14px;color:var(--muted)">Partial results may exist — try <button class="btn-ref" onclick="loadIntelHistory()">↻ Load Cached</button></div></div>`;
+    }
+    if(secR||newsR) try{ renderIntelligence((secR&&secR.results)||[], newsR||{}, fundR||null); }catch(_){}
+    console.error(e);
+  }finally{btn.disabled=false;btn.innerHTML='↻ Re-run Agents';}
+}
+
+
+async function loadIntelHistory(){
+  const cont=$('intel-container');
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:18px;height:18px;border-width:2px;margin:0 auto 10px"></div><div class="deep-ph-text">Loading cached intelligence…</div></div>`;
+  try{
+    const [secR,newsR,fundR]=await Promise.all([
+      fetch('/api/agents/sec/history').then(r=>r.json()),
+      fetch('/api/agents/news/history').then(r=>r.json()),
+      fetch('/api/agents/fundamentals/latest').then(r=>r.json()),
+    ]);
+    renderIntelligence(secR.data, newsR.data, fundR.data);
+  }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;}
+}
+
+
+async function loadScannerConfig(){
+  try{
+    const r=await fetch('/api/config');
+    if(!r.ok) return;
+    const d=await r.json();
+    // /api/config returns {status, data: cfg}
+    const cfg=(d&&d.data)||d||{};
+    const tf=cfg.scanner_timeframe||'daily';
+    $('scanner-tf').value=tf;
+    $('scanner-mode-badge').textContent=tf.toUpperCase();
+    $('scanner-cfg-ts').textContent='Config loaded '+new Date().toLocaleTimeString();
+  }catch(e){console.error('scanner config',e);}
+}
+
+
+async function saveScannerTf(val){
+  try{
+    await fetch('/api/config',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({scanner_timeframe:val})});
+    $('scanner-mode-badge').textContent=val.toUpperCase();
+  }catch(e){console.error('save tf',e);}
+}
+
+
+async function loadTradeStats(){
+  try{
+    $('pt-ts').textContent='Loading…';
+    const [stats, summary, trades] = await Promise.all([
+      fetch('/api/trades/stats').then(r=>r.json()),
+      fetch('/api/paper/summary').then(r=>r.json()),
+      fetch('/api/trades?paper=true&limit=20').then(r=>r.json())
+    ]);
+
+    // Stats row — endpoints return {status, data} envelopes; this tab shows the
+    // PAPER book, so stats come from data.paper (data.real lives beside it).
+    const statsD=(stats&&stats.data)||{};
+    const s=statsD.paper||{};
+    const wr=(s.win_rate_pct||0).toFixed(0);
+    const totalTrades=s.total_trades||0;
+    // Only color-code win rate if there are actual trades
+    const wrColor=totalTrades===0?'var(--muted)':parseFloat(wr)>=60?'var(--green)':parseFloat(wr)>=40?'var(--yellow)':'var(--red)';
+    $('pt-winrate').textContent=totalTrades===0?'—':wr+'%';
+    $('pt-winrate').style.color=wrColor;
+    $('pt-wl').textContent=`${s.wins||0}W / ${s.losses||0}L`;
+
+    const pnl=s.total_realized_pnl||0;
+    $('pt-pnl').textContent=fmt(pnl);
+    $('pt-pnl').className='sval '+(pnl>=0?'pos':'neg');
+
+    const summaryD=(summary&&summary.data)||{};
+    const edge=(summaryD.paper_edge||0).toFixed(1);
+    $('pt-edge').textContent=(edge>0?'+':'')+edge+'%';
+    $('pt-edge').className='sval '+(parseFloat(edge)>=0?'pos':'neg');
+    $('pt-edge-sub').textContent=summaryD.verdict||'vs live performance';
+
+    $('pt-open').textContent=String(s.open_trades||0);
+    $('pt-open-sub').textContent=`${totalTrades} closed paper trades`;
+
+    // Best scanner badge
+    const scanPerf=statsD.scanner_performance||[];
+    if(scanPerf.length){
+      const best=scanPerf[0];
+      $('pt-scanner-best').textContent=`🏆 Best: ${best.scanner_source} (${(best.win_rate||0).toFixed(0)}%)`;
+      $('pt-scanner-best').className='badge b-green';
+    }
+
+    // Trade history — unwrap the {status, data} envelope
+    renderTradeHistory((trades&&trades.data)||[]);
+    $('pt-ts').textContent='Updated '+new Date().toLocaleTimeString();
+  }catch(e){
+    console.error('trade stats',e);
+    $('pt-ts').textContent='Error: '+e.message;
+  }
+}
+
+
+async function runDryRun(){
+  const btn=$('btn-gate');
+  btn.disabled=true; btn.textContent='⏳ Checking…';
+  $('gate-container').style.display='block';
+  $('gate-container').innerHTML='<span class="spin"></span> Running gate check…';
+  try{
+    const sym=$('gate-sym').value.trim().toUpperCase();
+    const action=$('gate-action').value;
+    const conf=parseFloat($('gate-conf').value)||0.85;
+    const pct=parseFloat($('gate-pct').value)/100||0.02;
+    const body={symbol:sym,action,confidence:conf,target_position_pct:pct};
+    const r=await fetch('/api/trading/dry-run',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body)});
+    const d=await r.json();
+    renderGateVerdict(d, sym, action);
+  }catch(e){
+    $('gate-container').innerHTML=`<div style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
+  }
+  btn.disabled=false; btn.textContent='▶ Gate Check';
+}
+
+
+function renderGateVerdict(resp, sym, action){
+  // /api/trading/dry-run returns {status, data: {approved, reason, gates, ...}}
+  const d=(resp&&resp.data)||resp||{};
+  const verdict=d.verdict||d.approved;
+  const approved=verdict==='APPROVED'||verdict===true;
+  const gates=d.gates||{};
+  const gateNames=['KILL_SWITCH','MARKET_HOURS','CONFIDENCE_FLOOR','POSITION_CAP','ORDER_RATE','CASH_FLOOR','DAILY_LOSS','DATA_FRESH'];
+  const color=approved?'var(--green)':'var(--red)';
+  let failedAt=-1;
+  if(!approved){
+    for(let i=0;i<gateNames.length;i++){
+      const g=gateNames[i];
+      if(g in gates&&gates[g]===false){ failedAt=i; break; }
+    }
+  }
+
+  let html=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <span style="font-size:28px;font-weight:700;color:${color}">${approved?'✅ APPROVED':'❌ REJECTED'}</span>
+    <span style="color:var(--accent)">${daEsc(sym)} ${daEsc(action)}</span>
+  </div>`;
+  if(!approved&&d.reason){
+    html+=`<div style="background:var(--rdim);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:14px;color:var(--red)">${daEsc(d.reason)}</div>`;
+  }
+  html+=`<div style="display:flex;flex-wrap:wrap;gap:8px">`;
+  gateNames.forEach((g,i)=>{
+    const pass=gates[g];
+    const known=g in gates;
+    const skipped=!approved&&failedAt>=0&&i>failedAt&&known&&pass===false;
+    const bg=!known?'var(--border)':skipped?'var(--border)':pass?'var(--gdim)':'var(--rdim)';
+    const col=!known?'var(--muted)':skipped?'var(--muted)':pass?'var(--green)':'var(--red)';
+    const icon=!known?'⊘':skipped?'–':pass?'✓':'✗';
+    const gateLbl=g.replace(/_/g,' ')+(skipped?' (skipped)':'');
+    html+=`<div style="background:${bg};border:1px solid ${col};border-radius:4px;padding:4px 10px;font-size:12px;color:${col}">${icon} ${daEsc(gateLbl)}</div>`;
+  });
+  html+=`</div>`;
+  $('gate-container').innerHTML=html;
+}
+
+
+async function runConsensus(){
+  const btn=$('btn-cons'),cont=$('cons-container');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Voting...';
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running 9 independent signal nodes per holding…<br><span style="font-size:13px">Momentum · Trend · Rel.Strength · Fundamentals · Analyst · News · Kelly · ECG · Volume</span></div></div>`;
+  try{
+    const r=await fetch('/api/consensus',{method:'POST'});
+    check401(r);
+    if(!r.ok) throw new Error(await r.text());
+    const j=await r.json();
+    renderConsensus(j.data);
+    cont.dataset.loaded='1';
+    $('cons-ts').textContent='Updated '+new Date().toLocaleTimeString();
+    toast('Consensus vote complete','success'); refreshSectionBadges();
+  }catch(e){
+    runErr(e, 'cons-container', 'Consensus');
+  }finally{btn.disabled=false;btn.innerHTML='↻ Re-Vote';}
+}
+
+async function runKelly(){
+  const btn=$('btn-kelly'),cont=$('kelly-container');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analyzing...';
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Fetching 90-day price history · computing Kelly fractions…</div></div>`;
+  try{
+    const r=await fetch('/api/kelly',{method:'POST'});
+    check401(r);
+    if(!r.ok) throw new Error(await r.text());
+    const j=await r.json();
+    renderKelly(j.data, j.total_equity);
+    cont.dataset.loaded='1';
+    $('kelly-ts').textContent='Updated '+new Date().toLocaleTimeString();
+    toast('Kelly position sizing complete','success'); refreshSectionBadges();
+  }catch(e){
+    runErr(e, 'kelly-container', 'Kelly sizing');
+  }finally{btn.disabled=false;btn.innerHTML='↻ Re-Size';}
+}
+
+async function runMonteCarlo(){
+  const btn=$('btn-mc'),cont=$('mc-container');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Simulating...';
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running 1 000 Monte Carlo simulations…</div></div>`;
+  try{
+    const r=await fetch('/api/monte-carlo',{method:'POST'});
+    check401(r);
+    if(!r.ok) throw new Error(await r.text());
+    const mc=(await r.json()).data;
+    renderMonteCarlo(mc);
+    toast('Monte Carlo stress test complete','success'); refreshSectionBadges();
+  }catch(e){
+    runErr(e, 'mc-container', 'Stress test');
+  }finally{btn.disabled=false;btn.innerHTML='↻ Re-run';}
+}
+
+
+async function loadCachedConsensus(){
+  const cont=$('cons-container'); if(!cont||cont.dataset.loaded) return;
+  try{ const r=await fetch('/api/consensus/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); prependStaleBadge('cons-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){console.error('cachedConsensus',e);}
+}
+
+
+async function loadCachedKelly(){
+  const cont=$('kelly-container'); if(!cont||cont.dataset.loaded) return;
+  try{ const r=await fetch('/api/kelly/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderKelly(j.data, j.total_equity); prependStaleBadge('kelly-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('kelly-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){console.error('cachedKelly',e);}
+}
+
+
+async function loadCachedMonteCarlo(){
+  const cont=$('mc-container'); if(!cont||cont.dataset.loaded) return;
+  try{
+    const r=await fetch('/api/monte-carlo/cached'); const j=await r.json();
+    if(j&&j.cached&&j.data){ renderMonteCarlo(j.data, j.ran_at); prependStaleBadge('mc-container', j.ran_at); cont.dataset.loaded='1'; }
+  }catch(e){/* keep placeholder */}
+}
+
+
+async function tryLoadCachedAnalysis(){
+  if(_cachedAnalysisLoaded) return; // already loaded or user ran fresh
+  const cont=$('deep-container');
+  if(!cont||cont.querySelector('.pi-card')) return; // already has real data
+  try{
+    const r=await fetch('/api/history?limit=1');
+    if(!r.ok) return;
+    const j=await r.json();
+    // /api/history returns {status, data: [rows]} — data is the list itself
+    const runs=Array.isArray(j.data)?j.data:((j.data&&j.data.runs)||[]);
+    const run=runs[0];
+    let rj=run&&run.result_json;
+    if(typeof rj==='string'){ try{ rj=JSON.parse(rj); }catch(_e){ rj=null; } }
+    if(rj){
+      // result_json stores the full analysis response — render it
+      const a=rj.analysis||rj;
+      const mkt=rj.market||null;
+      renderDeepAnalysis(a, mkt, true, run.created_at||null);
+      _cachedAnalysisLoaded=true;
+      $('deep-ts').textContent='Cached '+(run.created_at?new Date(run.created_at).toLocaleTimeString():'');
+      return;
+    }
+    // Fallback: no DB run today → use the engine_results.json ai_result cache
+    const cr=await fetch('/api/deep-analysis/cached'); const cj=await cr.json();
+    const a=cj&&cj.cached?(cj.analysis||cj.data):null;
+    if(a&&a.holdings_analysis){
+      renderDeepAnalysis(a, (cj.market||null), true, cj.ran_at||null);
+      _cachedAnalysisLoaded=true;
+      $('deep-ts').textContent='Cached '+relTime(cj.ran_at);
+    }else{
+      const ph=cont.querySelector('.deep-ph-text');
+      if(ph) ph.innerHTML='<strong style="color:var(--text)">No analysis run yet.</strong><br>Click ▶ Run Deep Analysis to generate AI scores, fair value estimates, and 12M predictions.';
+    }
+  }catch(e){/* silent — user can run manually */}
+}
+
+
+async function runMainDebate(){
+  const sym = _esc((document.getElementById('main-debate-sym').value||'SPY').trim().toUpperCase());
+  if(!sym) return;
+  const btn = document.getElementById('btn-main-debate');
+  const aColors = {'STRONG BUY':'#00e87a','BUY':'#4caf87','HOLD':'#f0b429','SELL':'#ff6b35','STRONG SELL':'#ff3c5a'};
+  btn.disabled=true; btn.textContent='⏳ Debating…';
+  document.getElementById('main-debate-loading').style.display='block';
+  document.getElementById('main-debate-result').style.display='none';
+  document.getElementById('main-debate-meta').textContent='calling Claude (cached consensus) — ~15s…';
+  try {
+    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{
+      method:'POST',
+      headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({use_cached:true})
+    });
+    const r=await resp.json();
+    if(!resp.ok||!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
+    const dec=r.debate.decision, bull=r.debate.bull, bear=r.debate.bear;
+    const aCol=aColors[dec.action]||'#e8eaf0';
+    document.getElementById('main-debate-decision').innerHTML=
+      `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">` +
+      `<div style="font-size:22px;font-weight:700;color:${aCol}">${_esc(dec.action)}</div>` +
+      `<div style="flex:1"><div style="font-size:12px;opacity:.6;margin-bottom:4px">${daEsc(sym)} · Conv ${_esc(dec.conviction)}% · Bull ${_esc(dec.bull_weight)}%</div>` +
+      `<div style="font-size:13px">${_esc(dec.rationale)}</div></div>` +
+      `<div style="text-align:right;min-width:120px">` +
+      `<div style="font-size:18px;font-weight:600;color:${aCol}">$${_fmt(dec.price_target,2)}</div>` +
+      `<div style="font-size:11px;opacity:.6">${dec.upside_pct>=0?'+':''}${_fmt(dec.upside_pct,1)}% target</div>` +
+      `<div style="font-size:11px;opacity:.5">Stop −${_fmt(dec.stop_loss_pct,1)}%</div></div></div>` +
+      (()=>{const bw=Math.max(0,Math.min(100,Number(dec.bull_weight)||50));return `<div class="verdict-balance"><div class="vb-bull" style="width:${bw}%"></div><div class="vb-bear" style="width:${100-bw}%"></div></div><div class="vb-legend"><span style="color:var(--green)">🐂 Bull ${bw}%</span><span style="color:var(--red)">Bear ${100-bw}% 🐻</span></div>`;})();
+    const bullConf=Math.max(0,Math.min(100,Number(bull.confidence)||0));
+    const bearConf=Math.max(0,Math.min(100,Number(bear.confidence)||0));
+    document.getElementById('main-debate-bull').innerHTML=
+      `<div class="deb-head" style="color:var(--green)"><span>🐂 BULL</span><span>${_esc(bull.confidence)}%</span></div>` +
+      `<div class="conv-meter"><i style="width:${bullConf}%;background:var(--green)"></i></div>` +
+      `<div class="prose" style="font-size:13px;margin-bottom:4px;font-style:italic;color:var(--text-dim)">${_esc(bull.thesis)}</div>` +
+      `<ul class="deb-arg">${_debArgs(bull.arguments)}</ul>` +
+      `<div style="font-size:11.5px;color:var(--muted);margin-top:10px">Target $${_fmt(bull.price_target,2)} · Risk: ${_esc(bull.key_risk)}</div>`;
+    document.getElementById('main-debate-bear').innerHTML=
+      `<div class="deb-head" style="color:var(--red)"><span>🐻 BEAR</span><span>${_esc(bear.confidence)}%</span></div>` +
+      `<div class="conv-meter"><i style="width:${bearConf}%;background:var(--red)"></i></div>` +
+      `<div class="prose" style="font-size:13px;margin-bottom:4px;font-style:italic;color:var(--text-dim)">${_esc(bear.thesis)}</div>` +
+      `<ul class="deb-arg">${_debArgs(bear.arguments)}</ul>` +
+      `<div style="font-size:11.5px;color:var(--muted);margin-top:10px">Target $${_fmt(bear.price_target,2)} · Risk: ${_esc(bear.key_risk)}</div>`;
+    const cats=(dec.catalysts||[]).map(c=>`<span style="display:inline-block;background:var(--hover);border-radius:4px;padding:3px 8px;margin:3px;font-size:12px">${_esc(c)}</span>`).join('');
+    document.getElementById('main-debate-catalysts').innerHTML=`<div style="font-size:12px;opacity:.6;margin-bottom:6px">CATALYSTS TO WATCH</div>${cats||'—'}`;
+    document.getElementById('main-debate-meta').textContent=`${sym} · ${new Date().toLocaleTimeString()}`;
+    document.getElementById('main-debate-loading').style.display='none';
+    document.getElementById('main-debate-result').style.display='block';
+  } catch(e){
+    document.getElementById('main-debate-loading').style.display='none';
+    document.getElementById('main-debate-meta').textContent='Error: '+(e.message||e);
+  }
+  btn.disabled=false; btn.textContent='▶ Run Debate';
+}
+
+
+async function loadECG(){
+  const panel=$('ecg-panel');
+  try{
+    const r=await fetch('/api/ecg');
+    if(!r.ok) throw new Error(r.status);
+    const d=(await r.json()).data;
+    _ecgStates={};
+    (d.states||[]).forEach(s=>{_ecgStates[s.symbol]=s;});
+    updateAlertBar();
+
+    // Update banner
+    const banner=$('ecg-gate-banner');
+    const gateClass='gate-'+String(d.portfolio_gate||'unknown').toLowerCase();
+    banner.className='gate-banner '+gateClass;
+    banner.style.display='flex';
+    $('ecg-gate-msg').textContent=d.portfolio_message||'';
+
+    // Render items — degraded/empty resolves the spinner with an honest message.
+    if(!d.states||!d.states.length){
+      panel.innerHTML=`<div class="empty" style="padding:20px">${daEsc(d.portfolio_message||'No equity-curve data available right now.')}</div>`;
+      return;
+    }
+    panel.innerHTML=`<div class="ecg-panel">${d.states.map(s=>{
+      const ic=s.state==='HEALTHY'?'🟢':s.state==='COOLING'?'🟡':'🔴';
+      const cls2=`ecg-item`;
+      return `<div class="${cls2}">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span class="ecg-sym">${daEsc(s.symbol)}</span>
+          <span class="ecg-badge ecg-${daEsc(s.state.toLowerCase())}">${ic} ${daEsc(s.state)}</span>
+        </div>
+        <div class="ecg-msg">${daEsc(s.message)}</div>
+        <div class="ecg-meta">Drawdown: ${s.drawdown_pct.toFixed(1)}%  ·  Streak: ${daEsc(s.loss_streak)}  ·  ${daEsc(s.snapshots_available)} snapshots</div>
+      </div>`;
+    }).join('')}</div>`;
+    $('ecg-ts').textContent='Updated '+new Date().toLocaleTimeString();
+    // re-render table ECG badges
+    renderHoldings(_lastHoldings||[]);
+  }catch(e){
+    console.error('ECG',e);
+    if(panel) panel.innerHTML='<div class="empty" style="padding:20px">Equity-curve gate temporarily unavailable — retry with ↻ Refresh.</div>';
+  }
+}
+
+
+async function runDeepAnalysis(){
+  _cachedAnalysisLoaded=false; // allow re-cache after fresh run
+  const btn=$('btn-deep'),cont=$('deep-container');
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analyzing...';
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running AI deep analysis…<br><span style="font-size:13px">Generating snowflake scores, fair values, predictions</span><br><button class="da-btn-load" style="margin-top:12px" onclick="cancelDeepAnalysis()">Cancel</button></div></div>`;
+  // GESH-5: bound the wait. Without a deadline a hung Claude call spins forever.
+  _deepCtl=new AbortController();
+  const killer=setTimeout(()=>_deepCtl&&_deepCtl.abort(new DOMException('deadline','TimeoutError')),DA_DEADLINE_MS);
+  try{
+    const r=await fetch('/api/deep-analysis',{method:'POST',signal:_deepCtl.signal});
+    if(r.status===401){
+      const err=new Error('auth'); err.authRequired=true; throw err;
+    }
+    if(!r.ok) throw new Error(await r.text());
+    const j=await r.json();
+    const a=j.analysis;
+    const mkt=j.market||null;
+    // Warn-and-proceed: label a degraded/cached run rather than hiding or refusing it.
+    const degraded = !!(j && (j.degraded===true || j.status==='degraded'));
+    renderDeepAnalysis(a, mkt, j.cached===true, j.ran_at||null);
+    _cachedAnalysisLoaded=true;
+    $('deep-ts').textContent=(degraded?'⚠ degraded · ':'')+j.model+' · '+new Date().toLocaleTimeString();
+    toast(degraded?'Deep analysis ran on degraded inputs':'Deep analysis complete',
+          degraded?'error':'success', degraded?7000:undefined);
+    refreshSectionBadges();
+  }catch(e){
+    if(e&&e.authRequired){
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
+      toast('Sign in to run a live Claude analysis','error',6000);
+    }else if(e&&e.name==='AbortError'){
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--muted)">Run cancelled — nothing was saved.</div></div>`;
+    }else if(e&&e.name==='TimeoutError'){
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Gave up after ${Math.round(DA_DEADLINE_MS/1000)}s.</strong><br>The deep-analysis engine did not return in time. Nothing was saved.</div></div>`;
+      toast('Deep analysis timed out','error');
+    }else{
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(friendlyErr(e))}</div></div>`;
+      toast('Deep analysis failed','error');
+    }
+    console.error(e);
+  }finally{clearTimeout(killer);_deepCtl=null;btn.disabled=false;btn.innerHTML='↻ Re-analyze';}
+}
+
+
+async function checkPaperCloses(){
+  try{
+    const r=await fetch('/api/paper/check-closes',{method:'POST'});
+    const d=await r.json();
+    const closed=d.closed||[];
+    if(closed.length){
+      alert(`Closed ${closed.length} paper position(s):\n${closed.map(c=>`${c.symbol}: ${c.outcome} ${c.pnl_usd?'$'+c.pnl_usd.toFixed(2):''}`).join('\n')}`);
+    } else {
+      alert('No positions hit stop/target — all still open.');
+    }
+    loadTradeStats();
+  }catch(e){alert('Error: '+e.message);}
+}
+
+
+async function runPaperSession(){
+  const btn=$('btn-pt-run');
+  btn.disabled=true; btn.textContent='⏳ Simulating…';
+  const setProgress=(msg)=>{$('pt-container').innerHTML=`<div class="empty"><span class="spin"></span> ${daEsc(msg)}</div>`;};
+  setProgress('Running paper simulation through risk gate…');
+  try{
+    const pj=await fetch('/api/portfolio').then(r=>r.json());
+    const holdings=pj.data.holdings||[];
+    if(!holdings.length){
+      $('pt-container').innerHTML='<div class="empty" style="color:var(--yellow)">No holdings found — load portfolio first.</div>';
+      btn.disabled=false; btn.textContent='▶ Simulate Today';
+      return;
+    }
+
+    const gate=await fetch('/api/trading/gate-status').then(r=>r.json()).catch(()=>({}));
+    if(gate.cap_reached){
+      setProgress(`Daily order cap already reached (${gate.orders_today}/${gate.max_orders_per_day}) — running HOLD checks only…`);
+    } else {
+      setProgress(`Simulating ${holdings.length} holdings (cached consensus)…`);
+    }
+
+    const r=await fetch('/api/trading/simulate-session',{
+      method:'POST',
+      headers:authHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({use_cached:true})
+    });
+    const d=await r.json();
+    if(!r.ok){
+      throw new Error(d.detail||d.error||`HTTP ${r.status}`);
+    }
+    const results=(d.results||[]).map(row=>({
+      symbol:row.symbol,
+      verdict:row.verdict,
+      order:row.order,
+      consensus_verdict:row.consensus_verdict,
+      skipped:row.skipped,
+      reason:row.reason||row.error,
+      error:row.error
+    }));
+    if(d.cap_reached){
+      results._capNote=d.cap_reason;
+    }
+    renderPaperSessionResults(results);
+    await loadTradeStats();
+  }catch(e){
+    $('pt-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
+  }
+  btn.disabled=false; btn.textContent='▶ Simulate Today';
+}
+
+
+/* Operator entries for the command palette, appended to the shared (empty) list. */
+CMDK_ACTIONS.push(
+  ['Run Deep Analysis',()=>{switchTab('analysis');runDeepAnalysis&&runDeepAnalysis();}],
+  ['Run Consensus',()=>{switchTab('signals');runConsensus&&runConsensus();}],
+  ['Size Positions (Kelly)',()=>{switchTab('signals');runKelly&&runKelly();}],
+  ['Run Monte Carlo',()=>{switchTab('risk');runMonteCarlo&&runMonteCarlo();}],
+  ['Run Daily Analysis',()=>{switchTab('daily');daRunAnalysis&&daRunAnalysis();}],
+  ['Scan Market (Radar)',()=>{switchTab('radar');runScreener&&runScreener();}]
+);
+if(typeof loadECG==='function') loadECG();
+</script>
+<!--/GESH_BLOCK:owner_console_js-->

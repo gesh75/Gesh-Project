@@ -735,47 +735,138 @@ _MUTATING_METHODS = frozenset(("POST", "PUT", "PATCH", "DELETE"))
 _CSRF_EXEMPT_PREFIXES = ("/api/billing/webhook",)
 
 
-def _allowed_origin_hosts(request: Request) -> set[str]:
-    hosts = {h.strip().lower() for h in
-             os.getenv("GESH_ALLOWED_ORIGINS", "").split(",") if h.strip()}
-    # The tunnel rewrites the scheme but preserves Host, so the request's own
-    # Host header is the reliable same-origin reference.
-    for candidate in (request.headers.get("host"), request.url.netloc):
-        if candidate:
-            hosts.add(candidate.strip().lower())
-    return hosts
+def _trusted_origins(request: Request) -> set[str]:
+    """Canonical scheme://host[:port] origins this deployment answers for.
+
+    The request's own Host header is NOT authoritative — it is attacker-supplied
+    and, with an origin check keyed off it, "Origin: evil.test" + "Host:
+    evil.test" would validate against itself. Configuration is authoritative:
+    APP_BASE_URL (the deployment's public origin) plus any GESH_ALLOWED_ORIGINS
+    entries. The Host header is admitted ONLY for loopback development, where
+    there is no proxy to assert a public origin and no cross-site attacker to
+    benefit."""
+    out: set[str] = set()
+
+    def _add(raw: str) -> None:
+        raw = (raw or "").strip()
+        if not raw:
+            return
+        if "//" not in raw:
+            raw = "https://" + raw
+        out.add(_canonical_origin(raw))
+
+    _add(os.getenv("APP_BASE_URL", ""))
+    for entry in os.getenv("GESH_ALLOWED_ORIGINS", "").split(","):
+        _add(entry)
+    host = (request.headers.get("host") or "").strip().lower()
+    if host.split(":")[0] in ("localhost", "127.0.0.1", "[::1]", "::1"):
+        _add(f"http://{host}")
+        _add(f"https://{host}")
+    if not out:
+        # No deployment origin configured: fall back to the request's own origin
+        # so a single-tenant local install is not bricked, and say so once.
+        _add(f"{request.url.scheme}://{request.headers.get('host') or request.url.netloc}")
+    out.discard("")
+    return out
+
+
+_DEFAULT_PORTS = {"http": "80", "https": "443"}
+
+
+def _canonical_origin(raw: str) -> str:
+    """scheme://host:port with the default port made explicit, lowercased.
+
+    Comparing raw strings would treat https://x.test and https://x.test:443 as
+    different origins; comparing bare netloc would treat http:// and https://
+    as the same one. Both are wrong."""
+    try:
+        u = _urlparse(raw.strip())
+    except Exception:  # noqa: BLE001
+        return ""
+    scheme = (u.scheme or "").lower()
+    host = (u.hostname or "").lower()
+    if not scheme or not host:
+        return ""
+    port = str(u.port) if u.port else _DEFAULT_PORTS.get(scheme, "")
+    return f"{scheme}://{host}:{port}"
+
+
+def _is_api_key_authenticated(request: Request) -> bool:
+    """True when the caller proves itself with the service key rather than an
+    ambient cookie. CSRF is a cookie problem: a request that carries no cookie
+    authority cannot be forged by a third-party page."""
+    expected = os.getenv("GESH_API_KEY", "")
+    supplied = request.headers.get("x-api-key") or ""
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
 
 
 @app.middleware("http")
 async def _csrf_guard_middleware(request: Request, call_next):
+    """Origin enforcement for cookie-authenticated mutations.
+
+    Policy by authentication mode, because the two have different threat models:
+
+      COOKIE-authenticated  — Origin (or Referer only when Origin is genuinely
+          absent) is REQUIRED and must canonically match a configured origin.
+          Absent/null/malformed is a refusal. This is the CSRF-relevant case:
+          the browser attaches the cookie whether or not the user meant to.
+      API-KEY authenticated — Origin is optional. A cron job or CLI has no
+          ambient authority for a hostile page to borrow.
+      UNAUTHENTICATED       — passes through to the route's own auth, which
+          refuses it. Blocking here would only turn 401s into 403s.
+
+    Applies to POST/PUT/PATCH/DELETE regardless of whether a body is present:
+    a bodyless DELETE is exactly as forgeable as a POST."""
+    path = request.url.path
     if (request.method not in _MUTATING_METHODS
-            or not request.url.path.startswith("/api/")
-            or any(request.url.path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)):
+            or not path.startswith("/api/")
+            or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)):
         return await call_next(request)
+
+    # Method override would let a GET-shaped request become a DELETE and skip
+    # the check above. The app does not support it; refuse rather than ignore.
+    for hdr in ("x-http-method-override", "x-method-override", "x-http-method"):
+        if request.headers.get(hdr):
+            return JSONResponse(status_code=400,
+                                content={"detail": "Method override is not supported."})
 
     ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
     has_body = bool(request.headers.get("content-length", "").strip("0 ")
                     or request.headers.get("transfer-encoding"))
     if has_body and ctype and ctype != "application/json":
+        # Parameters after the media type (charset=UTF-8) are valid JSON and are
+        # stripped above — only a genuinely different media type is refused.
         return JSONResponse(
             status_code=415,
             content={"detail": "This endpoint accepts application/json only."})
 
-    origin = (request.headers.get("origin") or request.headers.get("referer") or "").strip()
-    if origin:
-        # PRESENT-but-unparseable is a refusal, not an absence: treating a
-        # garbage Origin as "no Origin" would hand an attacker the bypass.
-        try:
-            netloc = _urlparse(origin).netloc.lower()
-        except Exception:  # noqa: BLE001
-            netloc = ""
-        if netloc not in _allowed_origin_hosts(request):
-            logger.warning("cross-origin mutation refused: %s %s", request.method,
-                           request.url.path)
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "Cross-origin request refused."})
+    if _is_api_key_authenticated(request):
+        return await call_next(request)
+
+    cookie_authenticated = bool(request.cookies.get(auth_users.COOKIE_NAME))
+    if not cookie_authenticated:
+        return await call_next(request)      # no ambient authority to forge
+
+    raw = (request.headers.get("origin") or "").strip()
+    source = "Origin"
+    if not raw or raw.lower() == "null":
+        if raw.lower() == "null":
+            return _csrf_refusal(request, "opaque origin")
+        raw = (request.headers.get("referer") or "").strip()
+        source = "Referer"
+    if not raw:
+        return _csrf_refusal(request, "no Origin or Referer")
+    candidate = _canonical_origin(raw)
+    if not candidate or candidate not in _trusted_origins(request):
+        return _csrf_refusal(request, f"{source} not trusted")
     return await call_next(request)
+
+
+def _csrf_refusal(request: Request, why: str):
+    logger.warning("cross-origin mutation refused (%s): %s %s",
+                   why, request.method, request.url.path)
+    return JSONResponse(status_code=403,
+                        content={"detail": "Cross-origin request refused."})
 
 
 @app.middleware("http")
@@ -2015,6 +2106,28 @@ def _resolved_payload(_watchlist=None) -> dict:
         return load_snapshot_payload()   # re-raises RobinhoodOfflineError only if NO snapshot exists
 
 
+def _context_payload(request: Request | None) -> dict:
+    """Portfolio context for an analysis route, scoped to the caller's role.
+
+    The OWNER gets the real payload. A CUSTOMER gets the PUBLISHED model
+    context — the same allowlist `model_portfolio.publish()` uses, in the
+    engine-facing shape.
+
+    Ten customer-reachable GETs (/api/ecg, /api/regime, /api/market-data,
+    /api/fft-cycles, /api/tax/harvest, /api/benchmarks, /api/crypto-correlation,
+    /api/yield/landscape and the two agent-history routes) fed `_resolved_payload()`
+    straight into their engines. The response mask scales NUMBERS on the way out;
+    it does nothing about private non-numeric fields on the way IN, and nothing at
+    all about a field added to the owner payload next month. Sanitising at the
+    boundary — not after the computation — is the difference between a filtered
+    answer and an answer that was never allowed to see the data.
+    """
+    payload = _resolved_payload()
+    if _is_owner_request(request):
+        return payload
+    return model_portfolio.build_customer_model_context(payload)
+
+
 def _regime_for_symbols(symbols: list[str], *, offline: bool = False) -> dict:
     """Regime bundle for analysis endpoints. Prefers engine_results cache when the
     portfolio payload is offline or when a fresh (<4h) cache exists."""
@@ -2313,10 +2426,10 @@ def monte_carlo():
 # ─── Step 3 — Equity Curve Gate ──────────────────────────────────────────────
 
 @app.get("/api/ecg")
-def equity_curve_gate():
+def equity_curve_gate(request: Request = None):  # noqa: B008
     try:
         try:
-            payload = _resolved_payload()
+            payload = _context_payload(request)
         except RobinhoodOfflineError:
             # No live session AND no snapshot: degrade explicitly, never 503 into a
             # forever-spinner. ECG runs off the equity_snapshots table, so a snapshot
@@ -2351,7 +2464,7 @@ def equity_curve_gate():
 # ─── Step 4 — Regime detection standalone ────────────────────────────────────
 
 @app.get("/api/regime")
-def regime_endpoint(force_live: bool = False):
+def regime_endpoint(force_live: bool = False, request: Request = None):  # noqa: B008
     """Market regime per holding. Serves the daily chain's cached regime when
     fresh (<4h) — the live path re-downloads 8 symbols of OHLCV + FRED on every
     dashboard load for data the 10:30 chain already computed. ?force_live=true
@@ -2376,7 +2489,7 @@ def regime_endpoint(force_live: bool = False):
             pass
 
     try:
-        payload  = _resolved_payload()
+        payload  = _context_payload(request)
         symbols  = [h["symbol"] for h in payload["holdings"]]
         result   = detect_regimes(symbols)
         return {"status": "ok", "data": result}
@@ -2418,9 +2531,9 @@ def analysis_detail(run_id: int):
 # ─── Market Intelligence (SWS-style) ──────────────────────────────────────────────────
 
 @app.get("/api/market-data")
-def market_data_endpoint():
+def market_data_endpoint(request: Request = None):  # noqa: B008
     try:
-        payload = _resolved_payload()
+        payload = _context_payload(request)
         symbols = [h["symbol"] for h in payload["holdings"]]
         result  = get_all_market_data(symbols)
         return {"status": "ok", "data": result}
@@ -2443,10 +2556,10 @@ def agent_sec():
 
 
 @app.get("/api/agents/sec/history")
-def agent_sec_history(days: int = 30):
+def agent_sec_history(days: int = 30, request: Request = None):  # noqa: B008
     """Return cached SEC filing analyses from DB."""
     try:
-        payload = _resolved_payload()
+        payload = _context_payload(request)
         symbols = [h["symbol"] for h in payload["holdings"]]
         result  = get_filing_history(symbols, days=days)
         return {"status": "ok", "data": result}
@@ -2467,10 +2580,10 @@ def agent_news():
 
 
 @app.get("/api/agents/news/history")
-def agent_news_history(days: int = 7):
+def agent_news_history(days: int = 7, request: Request = None):  # noqa: B008
     """Return cached news sentiment from DB."""
     try:
-        payload = _resolved_payload()
+        payload = _context_payload(request)
         symbols = list({h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]})
         rows    = get_news_history(symbols, days=days)
         scores  = [r["sentiment_score"] for r in rows if isinstance(r.get("sentiment_score"), (int, float))]
@@ -2863,14 +2976,14 @@ def sections_status():
 # ─── FFT Cycle Detection ──────────────────────────────────────────────────────
 
 @app.get("/api/fft-cycles")
-def fft_cycles_endpoint():
+def fft_cycles_endpoint(request: Request = None):  # noqa: B008
     """
     Detect dominant price cycles via FFT for all current holdings.
     Returns period, phase position, direction, and BULLISH/NEUTRAL/BEARISH signal
     per holding. Zero extra cost — pure math on yfinance price data.
     """
     try:
-        payload = _resolved_payload()
+        payload = _context_payload(request)
         symbols = [h["symbol"] for h in payload["holdings"]]
         result  = batch_fft_cycles(symbols)
         return {"status": "ok", "data": result}
@@ -5180,11 +5293,11 @@ async def trading_deep_debate(symbol: str, request: Request):
 # ─── Phase 1-3 Enhancement Endpoints ─────────────────────────────────────────
 
 @app.get("/api/tax/harvest")
-async def api_tax_harvest():
+async def api_tax_harvest(request: Request = None):  # noqa: B008
     """Tax-loss harvesting candidates + wash-sale window status."""
     try:
         from tax_harvester import get_harvest_summary
-        payload = _resolved_payload()
+        payload = _context_payload(request)
         positions = {h["symbol"]: h for h in payload.get("holdings", [])}
         cost_basis = {h["symbol"]: h.get("average_buy_price") for h in payload.get("holdings", [])}
         result = get_harvest_summary(positions, cost_basis)
@@ -5194,11 +5307,11 @@ async def api_tax_harvest():
 
 
 @app.get("/api/benchmarks/{period}")
-async def api_benchmarks(period: str = "1mo"):
+async def api_benchmarks(period: str = "1mo", request: Request = None):  # noqa: B008
     """Thematic alpha benchmarking vs sector ETFs."""
     try:
         from benchmarks import batch_alpha
-        payload = _resolved_payload()
+        payload = _context_payload(request)
         tickers = [h["symbol"] for h in payload.get("holdings", [])]
         result  = batch_alpha(tickers, period)
         return _sanitize({"status": "ok", "period": period, "alpha_table": result})
@@ -5221,11 +5334,11 @@ async def api_explainability(symbol: str):
 
 
 @app.get("/api/crypto-correlation")
-async def api_crypto_correlation():
+async def api_crypto_correlation(request: Request = None):  # noqa: B008
     """Crypto-equity correlation risk summary for portfolio."""
     try:
         from crypto_correlation import crypto_risk_summary
-        payload  = _resolved_payload()
+        payload  = _context_payload(request)
         holdings = payload.get("holdings", [])
         result   = crypto_risk_summary(holdings)
         return _sanitize({"status": "ok", **result})
@@ -5234,11 +5347,11 @@ async def api_crypto_correlation():
 
 
 @app.get("/api/yield/landscape")
-async def api_yield_landscape():
+async def api_yield_landscape(request: Request = None):  # noqa: B008
     """DeFi & cash yield landscape for idle cash (informational)."""
     try:
         from defi_yield import get_yield_landscape
-        payload  = _resolved_payload()
+        payload  = _context_payload(request)
         cash_usd = float(payload.get("equity_summary", {}).get("cash", 0) or 0)
         result   = get_yield_landscape(cash_usd)
         return _sanitize({"status": "ok", **result})

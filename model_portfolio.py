@@ -35,7 +35,10 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
+
+from portfolio_valuation import to_decimal
 
 __all__ = [
     "MODEL_PORTFOLIO_ID", "SOURCE_LABEL", "METHODOLOGY",
@@ -95,17 +98,63 @@ def _num(v: Any) -> float | None:
     return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
-def content_version(holdings: list[dict], cash: float | None) -> str:
-    """Short, stable content hash of the published composition.
+def _canonical_decimal(value: object) -> str:
+    """One textual form per numeric VALUE, so equal amounts hash equally.
 
-    Stands in for an editorial version number until a real publication pipeline
-    exists: identical composition → identical version, any change to the
-    published holdings or cash → a new version. Deterministic across processes
-    (sorted keys, no clock)."""
+    1, 1.0, "1.0000" and Decimal("1.0000") are the same quantity and must not
+    produce different versions; -0 and 0 are the same value. Normalised through
+    Decimal (never float) and rendered without an exponent, so 1E+2 and 100 also
+    agree. Raises on a value that is not a finite number — a version computed
+    over NaN is meaningless."""
+    d = to_decimal(value)
+    if d is None:
+        raise ValueError(f"non-numeric value in model composition: {value!r}")
+    d = d.normalize()
+    if d == 0:
+        return "0"                      # collapses -0, 0, 0.000
+    sign, digits, exp = d.as_tuple()
+    if isinstance(exp, int) and exp > 0:      # 1E+2 -> 100
+        d = d.quantize(Decimal(1))
+    return format(d, "f")
+
+
+def content_version(holdings: list[dict], cash: object) -> str:
+    """Content fingerprint of the published composition — NOT an approval.
+
+    This identifies WHAT is published, not that anyone approved publishing it.
+    It is deliberately not called `publication_version`: there is no editorial
+    publish step yet (see the module docstring), and a name implying sign-off
+    over a value that changes whenever a price moves would be a lie in the API.
+
+    SCOPE: composition (symbol + quantity) AND cash. Cash is included because it
+    is a published field that changes the portfolio a customer sees; a version
+    that ignored it would report "unchanged" across a real change.
+
+    Canonicalisation, so equivalent inputs give one version:
+      * symbols trimmed and upper-cased  (`aapl`, ` AAPL ` -> AAPL)
+      * quantities and cash through `_canonical_decimal`
+      * holdings sorted by symbol (input order is not composition)
+      * duplicate symbols SUMMED, then hashed once — two 5-share AAPL rows and
+        one 10-share row are the same portfolio
+      * a symbol whose summed quantity is zero is dropped, so "held nothing"
+        hashes the same however it was expressed
+      * negative or non-finite quantities raise: they are not a portfolio this
+        module is willing to fingerprint silently
+    """
+    merged: dict[str, Decimal] = {}
+    for h in holdings or []:
+        sym = str(h.get("symbol") or "").strip().upper()
+        if not sym:
+            raise ValueError("holding without a symbol in model composition")
+        qty = to_decimal(h.get("quantity"))
+        if qty is None:
+            raise ValueError(f"{sym}: non-numeric quantity in model composition")
+        if qty < 0:
+            raise ValueError(f"{sym}: negative quantity in model composition")
+        merged[sym] = merged.get(sym, Decimal(0)) + qty
     basis = json.dumps(
-        {"h": sorted((str(h.get("symbol")), _num(h.get("quantity")))
-                     for h in holdings),
-         "c": _num(cash)},
+        {"h": [[s, _canonical_decimal(q)] for s, q in sorted(merged.items()) if q != 0],
+         "c": _canonical_decimal(cash if cash is not None else 0)},
         sort_keys=True, separators=(",", ":"))
     return "v" + hashlib.sha256(basis.encode()).hexdigest()[:12]
 
@@ -158,4 +207,56 @@ def publish(payload: dict, *, now: datetime | None = None) -> dict:
         "day_change_available": bool(eq.get("day_change_available")),
         "reconciles": True,      # by construction: total IS positions + cash
         "view": "model_book",
+    }
+
+
+# ── customer analysis context ────────────────────────────────────────────────
+# `publish()` shapes the model portfolio for a customer RESPONSE. Analysis
+# routes need the same data in the OWNER PAYLOAD SHAPE, because the engines
+# (ECG, regime, tax, benchmarks, FFT, market-data) read `holdings` /
+# `equity_summary` directly.
+#
+# Ten customer-reachable GETs were calling `_resolved_payload()` and feeding the
+# RAW owner payload to those engines. Scaling numbers downstream is not
+# sanitisation: it leaves every non-numeric private field (source tags, quote
+# sessions, execution state) and every NEW owner field untouched on the way IN.
+# This builds the engine-shaped context from the SAME allowlist as publish(), so
+# a customer analysis can only ever be computed from published facts.
+CONTEXT_HOLDING_FIELDS = ("symbol", "quantity", "current_price", "equity",
+                          "portfolio_percentage", "type")
+CONTEXT_EQUITY_FIELDS = ("portfolio_equity", "cash", "total", "account_equity",
+                         "adjusted_equity_previous_close")
+
+
+def build_customer_model_context(payload: dict) -> dict:
+    """Engine-shaped published context. Build-up allowlist, like publish().
+
+    Deliberately omits `average_buy_price` / `percent_change` / `equity_change`
+    (the operator's personal entry economics), `quote_provenance` (per-quote
+    session ids + brokerage provider tag), `source`, buying power / margin /
+    withdrawable / pending deposits, and all execution state. `total` is
+    RECOMPUTED from positions + cash so a customer analysis can never be based
+    on the broker headline the components do not support."""
+    eq_in = payload.get("equity_summary") or {}
+    holdings = [{k: h.get(k) for k in CONTEXT_HOLDING_FIELDS}
+                for h in (payload.get("holdings") or []) if isinstance(h, dict)]
+    positions_value = sum((_num(h.get("equity")) or 0.0) for h in holdings)
+    cash = _num(eq_in.get("cash")) or 0.0
+    equity_summary = {
+        "portfolio_equity": round(positions_value, 2),
+        "cash": round(cash, 2),
+        "total": round(positions_value + cash, 2),
+        "account_equity": round(positions_value + cash, 2),
+    }
+    prev = _num(eq_in.get("adjusted_equity_previous_close"))
+    if prev is not None:
+        equity_summary["adjusted_equity_previous_close"] = round(prev, 2)
+    return {
+        "as_of": payload.get("as_of"),
+        "holdings": holdings,
+        "equity_summary": equity_summary,
+        "watchlist": list(payload.get("watchlist") or []),
+        "offline": bool(payload.get("offline")),
+        "model_context": True,          # tell for tests and logs
+        "source_label": SOURCE_LABEL,
     }
