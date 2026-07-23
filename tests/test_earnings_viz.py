@@ -45,7 +45,12 @@ def test_no_key_no_yf_is_unavailable(monkeypatch):
     monkeypatch.setattr(ev, "_from_yfinance", lambda s: None)
     out = ev.get_earnings("AAPL")
     assert out["available"] is False
-    assert "FINNHUB_API_KEY" in out["reason"]
+    # Customer-facing copy must never name an internal environment variable
+    # (audit BUG-05: the UI told customers to "set FINNHUB_API_KEY").
+    assert "FINNHUB_API_KEY" not in out["reason"]
+    assert "API_KEY" not in out["reason"] and "$" not in out["reason"]
+    # …the operational detail is still available, out of band.
+    assert "FINNHUB_API_KEY" in out["diagnostic"]
 
 
 def test_finnhub_http_error_falls_back_to_yf(monkeypatch):
