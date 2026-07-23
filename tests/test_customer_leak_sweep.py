@@ -241,7 +241,6 @@ COVERED: dict[str, str] = {
     "/api/analyst/{symbol}": "/api/analyst/NVDA",
     "/api/watchlist": "/api/watchlist",
     "/api/gemini/status": "/api/gemini/status",
-    "/api/config": "/api/config",
     "/api/scanner/consolidation/{symbol}": "/api/scanner/consolidation/NVDA",
     "/api/scanner/sector/{symbol}": "/api/scanner/sector/NVDA",
     "/api/trades": "/api/trades",
@@ -283,6 +282,14 @@ EXCLUDED: dict[str, str] = {
                            "same '/api/mybook' mask-exempt prefix (masking would redact the "
                            "customer's own total_equity back at them); shape/isolation "
                            "locked by tests/test_mybook.py",
+    "/api/config": "OWNER-ONLY since 2026-07-23 (audit A-02): the operator's live "
+                   "trading-engine configuration — allocation %, per-trade dollar caps, "
+                   "max open positions/contracts, cash buffer, scanner params, and the "
+                   "auto_trade / paper_mode kill switches. The WRITE was owner-gated but "
+                   "the READ had no dependency at all, so any customer could read the "
+                   "operator's risk limits. No customer feature consumes it; the "
+                   "200-with-masking contract cannot apply to a route customers cannot "
+                   "read. Gate locked by tests/test_owner_surface_isolation.py",
     "/api/trading/gate-status": "OWNER-ONLY paper-trading order cap (require_api_key); "
                                 "reads owner trade_log counts — not a customer surface",
     "/api/long-term-macro": "public macro sentiment overlay (VIX / Fear-&-Greed / aggregate "
