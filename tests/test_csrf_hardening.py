@@ -25,6 +25,13 @@ SITE = "https://pay.geshfinance.com"
 EVIL = "https://evil.example.com"
 
 
+@pytest.fixture(autouse=True)
+def _explicit_origins(no_default_origin):
+    """This module tests the Origin policy itself, so the harness must NOT
+    default one in — absent/null/mismatched origins are the subject."""
+    return None
+
+
 @pytest.fixture
 def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
@@ -48,6 +55,10 @@ def client(au, monkeypatch):
                         lambda s: (100.0, {"source": "yahoo", "substituted": False}), raising=True)
     monkeypatch.setattr(server, "_prior_close", lambda s: 99.0, raising=True)
     monkeypatch.setattr(server, "_customer_scale_factor", lambda: 2.0, raising=True)
+    # Trusted origins come from DEPLOYMENT CONFIG, never from the Host header.
+    monkeypatch.setenv("APP_BASE_URL", SITE)
+    monkeypatch.delenv("GESH_ALLOWED_ORIGINS", raising=False)
+    monkeypatch.delenv("GESH_API_KEY", raising=False)
     c = TestClient(server.app, raise_server_exceptions=False, base_url=SITE)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     return server, c
@@ -92,13 +103,111 @@ def test_cross_origin_referer_is_refused(client):
     assert r.status_code == 403
 
 
-def test_missing_origin_is_allowed_for_non_browser_clients(client):
-    """Browsers always send Origin on a cross-origin mutation; cron/CLI clients
-    send none. Refusing on absence would break every headless caller while
-    blocking no attack."""
+def test_cookie_auth_without_origin_or_referer_is_refused(client):
+    """POLICY CHANGE (hardening pass). The earlier version allowed a missing
+    Origin so headless callers kept working — but a COOKIE-authenticated request
+    with no Origin is precisely the shape a forged navigation/redirect can take,
+    and "no Origin" is not evidence of a non-browser client. Headless callers now
+    prove themselves with X-API-Key instead (asserted below)."""
     _server, c = client
     r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 2})
-    assert r.status_code == 200
+    assert r.status_code == 403
+
+
+def test_api_key_client_needs_no_origin(client, monkeypatch):
+    """CSRF is a cookie problem. A caller that authenticates with the service
+    key carries no ambient authority for a hostile page to borrow."""
+    server, c = client
+    monkeypatch.setenv("GESH_API_KEY", "svc-key-123")
+    c.cookies.clear()
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 2},
+               headers={"X-API-Key": "svc-key-123"})
+    assert r.status_code != 403
+
+
+def test_api_key_is_not_inferred_from_a_missing_origin(client, monkeypatch):
+    """A wrong/absent key must not be treated as "probably an API client"."""
+    _server, c = client
+    monkeypatch.setenv("GESH_API_KEY", "svc-key-123")
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 2},
+               headers={"X-API-Key": "wrong"})
+    assert r.status_code == 403
+
+
+def test_json_content_type_with_charset_is_accepted(client):
+    """`application/json;charset=UTF-8` is a valid JSON content type."""
+    _server, c = client
+    r = c.post("/api/mybook", content='{"symbol":"NVDA","shares":1}',
+               headers={"Content-Type": "application/json;charset=UTF-8",
+                        "Origin": SITE})
+    assert r.status_code == 200, r.text
+
+
+def test_origin_null_is_refused(client):
+    """Sandboxed iframes and some redirects send the opaque origin."""
+    _server, c = client
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1},
+               headers={"Origin": "null"})
+    assert r.status_code == 403
+
+
+def test_bodyless_delete_without_origin_is_refused(client):
+    """A bodyless DELETE is exactly as forgeable as a POST."""
+    _server, c = client
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1},
+           headers={"Origin": SITE})
+    assert c.delete("/api/mybook/NVDA").status_code == 403
+
+
+def test_wrong_scheme_is_refused(client):
+    """netloc-only comparison would treat http:// and https:// as one origin."""
+    _server, c = client
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1},
+               headers={"Origin": "http://pay.geshfinance.com"})
+    assert r.status_code == 403
+
+
+def test_wrong_port_is_refused(client):
+    _server, c = client
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1},
+               headers={"Origin": SITE + ":8443"})
+    assert r.status_code == 403
+
+
+def test_default_port_is_equivalent_to_no_port(client):
+    """https://x and https://x:443 are the SAME origin."""
+    _server, c = client
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1},
+               headers={"Origin": SITE + ":443"})
+    assert r.status_code == 200, r.text
+
+
+def test_host_header_alone_cannot_authorise_an_origin(client, monkeypatch):
+    """The Host header is attacker-supplied. Keyed off it, "Origin: evil.test"
+    plus "Host: evil.test" would validate against itself."""
+    _server, c = client
+    monkeypatch.setenv("APP_BASE_URL", SITE)
+    monkeypatch.delenv("GESH_ALLOWED_ORIGINS", raising=False)
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1},
+               headers={"Origin": "https://evil.test", "Host": "evil.test"})
+    assert r.status_code == 403
+
+
+def test_method_override_header_is_refused(client):
+    """The app does not support overrides; ignoring one would let a request
+    reshape itself past the mutation check."""
+    _server, c = client
+    r = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 1},
+               headers={"Origin": SITE, "X-HTTP-Method-Override": "DELETE"})
+    assert r.status_code == 400
+
+
+def test_form_encoded_mutation_is_refused(client):
+    _server, c = client
+    r = c.post("/api/mybook", content="symbol=NVDA&shares=1",
+               headers={"Content-Type": "application/x-www-form-urlencoded",
+                        "Origin": SITE})
+    assert r.status_code == 415
 
 
 def test_bodyless_delete_is_not_blocked(client):
