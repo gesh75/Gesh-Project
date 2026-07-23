@@ -222,24 +222,18 @@ def test_no_reachable_operator_control_in_a_customer_document(client, monkeypatc
     assert not handlers, f"customer document can invoke operator action {action}()"
 
 
-def test_known_residue_is_tracked_not_hidden(client, monkeypatch):
-    """HONEST LIMIT, asserted so it cannot quietly grow.
+def test_operator_javascript_residue_is_zero(client, monkeypatch):
+    """Replaces the earlier test that PINNED the residue as a tracked limitation.
 
-    Operator JS FUNCTION BODIES still ship in the shared <script> bundle: they
-    are dead code for a customer (no control invokes them, and every endpoint
-    they name is authorization-gated server-side), but they do disclose internal
-    route paths. Extracting the operator JS into its own slot-loaded bundle is
-    required follow-up — see docs/REMEDIATION_2026-07-23…§9. This test pins the
-    CURRENT residue so the follow-up can be verified as a reduction to zero, and
-    so nobody mistakes the residue for something already fixed."""
+    Operator JS now lives in its own script block inside the owner partial
+    (templates/owner_console.html) and is spliced only for an owner session, so
+    the customer bundle carries no operator function definitions at all. Full
+    coverage lives in tests/test_owner_js_extraction.py."""
     server, c = client
     html = _customer_html(server, monkeypatch, c)
     still_defined = [a for a in _OWNER_ACTIONS
                      if re.search(rf"function\s+{re.escape(a)}\b", html)]
-    assert still_defined, (
-        "operator JS is no longer in the customer bundle — good. Remove this "
-        "test and the follow-up item in the remediation doc.")
-    # …but their DOM footprint must be zero, which the tests above assert.
+    assert not still_defined, f"operator JS still in the customer bundle: {still_defined}"
 
 
 # ─── composition is the mechanism; stripping is only a net ───────────────────
