@@ -418,8 +418,38 @@ def render_html(data: dict[str, Any]) -> str:
 
     srcs = _esc(" + ".join(str(s) for s in (gate.get("cohort_sources")
                                             or ENGINE_SOURCES_FALLBACK)))
+    # HEADLINE = the strategy being evaluated (audit Q-05 / §12). The page led with
+    # a blended "+22.2% vs SPY +0.9%" cumulative curve while the gated ENGINE cohort
+    # — the thing the autonomy gate measures and the thing a subscriber is buying —
+    # was −7.7% with a 0.65 profit factor. Both remain on the page; what changes is
+    # which one a reader meets first, and that neither can be read without the other.
+    eng, man = data["engine"], data["manual"]
+    eng_pnl = float(eng["total_pnl_pct"]) * 100
+    blended_pnl = float(data["total_pnl_pct"]) * 100
+    headline_html = (
+        f'<div style="background:{_SURFACE};border:1px solid {_BORDER};border-left:4px solid '
+        f'{_GREEN if eng_pnl >= 0 else _RED};border-radius:10px;padding:14px 16px;'
+        f'margin-bottom:16px">'
+        f'<div style="color:{_DIM};font-size:11px;text-transform:uppercase;letter-spacing:.5px;'
+        f'margin-bottom:6px">Headline — autonomous engine cohort (the gated strategy)</div>'
+        f'<div style="font-size:24px;font-weight:700;color:'
+        f'{_GREEN if eng_pnl >= 0 else _RED}" class="num" data-k="headline-engine-pnl">'
+        f'{eng_pnl:+.1f}%</div>'
+        f'<div style="color:{_DIM};font-size:12px;margin-top:4px">'
+        f'{int(eng["closed"])} closed paper trades · win rate '
+        f'{float(eng["win_rate"]) * 100:.0f}% · SPY over the same period '
+        f'{_fmt_spy(data.get("spy_return_period"))}</div>'
+        f'<div style="color:{_DIM};font-size:12px;margin-top:8px;line-height:1.55">'
+        f'This is the number to judge the product on. A separate blended figure of '
+        f'<b class="num" style="color:#e8eef6" data-k="headline-blended-pnl">{blended_pnl:+.1f}%</b> '
+        f'appears further down: it mixes in {int(man["closed"])} hand-rated MANUAL trades, '
+        f'which are not produced by the engine, are not reproducible by a subscriber, '
+        f'and never count toward the autonomy gate.</div>'
+        f'</div>'
+    )
     cohorts_html = (
-        f'<div style="background:{_SURFACE};border:1px solid {_BORDER};border-radius:10px;'
+        headline_html
+        + f'<div style="background:{_SURFACE};border:1px solid {_BORDER};border-radius:10px;'
         f'padding:12px 16px;margin-bottom:20px;font-size:13px">'
         f'<div style="color:{_DIM};font-size:11px;text-transform:uppercase;'
         f'letter-spacing:.5px;margin-bottom:6px">Cohorts — the autonomy gate measures '
@@ -497,11 +527,14 @@ def render_html(data: dict[str, Any]) -> str:
 
  <div style="background:{_SURFACE};border:1px solid {_BORDER};border-radius:10px;padding:16px;margin-bottom:8px">
    <div style="color:{_DIM};font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
-     Cumulative paper equity (normalised to 1.00)</div>
+     Cumulative paper equity — ALL SOURCES BLENDED (engine + manual), not the gated strategy</div>
    {_svg_equity_curve(data['equity_curve'])}
+   <div style="color:{_DIM};font-size:11px;margin-top:8px;line-height:1.5">This curve includes
+     hand-rated manual trades. The autonomy gate and the headline above are computed on the
+     ENGINE cohort alone; the per-cohort figures are listed above.</div>
  </div>
  <div style="display:flex;gap:24px;flex-wrap:wrap;color:{_DIM};font-size:12px;margin-bottom:24px">
-   <span><b style="color:#dfe8f2">All sources (full ledger):</b></span>
+   <span><b style="color:#dfe8f2">All sources BLENDED (engine + manual — not the gated strategy):</b></span>
    <span>Wins: <b style="color:{_GREEN}" class="num">{data['wins']}</b></span>
    <span>Losses: <b style="color:{_RED}" class="num">{data['losses']}</b></span>
    <span>Breakeven: <b class="num" style="color:{_DIM}">{data['breakeven']}</b></span>
