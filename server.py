@@ -365,6 +365,11 @@ def _login_clear(ip: str, email: str) -> None:
 from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
 import fair_value                       # canonical fair-value % (Codex #2)
 import price_cache                      # shared close-price cache (also used by cron digest)
+import portfolio_valuation              # CANONICAL money arithmetic — see module docstring
+import model_portfolio                  # the ONLY portfolio shape a customer receives
+import verdict_reconciliation           # ONE stance from the mechanical + valuation layers
+from urllib.parse import urlparse as _urlparse   # CSRF same-origin check
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import price_sanity                     # cross-source price quality + strict mode (Codex #3)
 import decision_quality                 # unified degraded-decision block (Codex #6)
 from auth import login, logout
@@ -497,6 +502,15 @@ _MASK_EXEMPT_PREFIXES = (
     # "$•••" — pure loss with nothing protected, since the customer reads the same PT
     # on Yahoo (GESH-7). The sentiment SCORE stays owner-only and is never in this body.
     "/api/news",
+    # The caller's OWN account data (GDPR/CCPA access + portability, Privacy §8).
+    # `export_user_data` keys strictly on the caller's user_id and holds zero owner
+    # data. Masking it was a REAL DEFECT, not a missing nicety: `shares`/`quantity`
+    # are in _QTY_KEYS, so the export multiplied the customer's own share counts by
+    # the owner's model-book factor (audit 2026-07-22: submit 1 → export 2.7971,
+    # = 100000/35750.87). `avg_cost` is not a masked key, so cost basis stayed raw
+    # while quantity moved — an export that no longer reconciled with itself.
+    # A portability artifact must be a byte-faithful copy of what we store.
+    "/api/account",
 )
 _MONEY_KEYS = {
     "equity", "cash", "deployable", "settled_cash", "buying_power",
@@ -514,6 +528,17 @@ _MONEY_KEYS = {
     # account equity (data_fetcher), `realized_pnl`/`total_realized_pnl` = trade $
     # P&L (trade_log, incl. nested best/worst_trade rows — scaled recursively).
     "equity_change", "extended_hours_equity", "realized_pnl", "total_realized_pnl",
+    # Reconciliation block (_reconcile_equity_summary): the broker's own account
+    # total and its delta against positions+cash. Both are OWNER DOLLARS — the
+    # leak sweep caught them passing through raw the moment they were added.
+    "reported_total", "reported_total_delta",
+    # Canonical valuation block (portfolio_valuation.as_dict) — every one of these
+    # is a dollar amount on whichever book the payload describes.
+    "positions_market_value", "prior_close_positions_value", "prior_close_equity",
+    "day_change_amount", "total_cost_basis", "unrealized_pnl", "prior_close",
+    # Published model portfolio (model_portfolio.publish): owner-denominated on
+    # the way out of the handler, scaled to the model notional here — exactly once.
+    "calculated_total_equity",
 }
 _QTY_KEYS = {"quantity", "qty", "shares", "fill_qty", "delta_shares",
              "shares_to_buy", "shares_to_trim"}
@@ -568,13 +593,30 @@ def _redact_prose(text: str) -> str:
 
 def _customer_scale_factor() -> float:
     """model_book / real_total from the live snapshot. Fail CLOSED: if the real
-    total can't be determined, return 0.0 so dollars zero out rather than leak."""
+    total can't be determined, return 0.0 so dollars zero out rather than leak.
+
+    The denominator is the DERIVED total (positions + cash), not the broker's
+    reported `total`. The broker figure includes sleeves this payload does not
+    model — on 2026-07-22 it read $35,750.87 against positions $26,052.67 + cash
+    $8,948.15 = $35,000.82. Scaling by the reported total put the model book's
+    headline at exactly $100,000 while its own components summed to $97,902
+    (audit Q-03): the $2,098 gap was the un-modelled $750.05 magnified by the
+    factor. Scaling by the component sum makes holdings + cash == the headline
+    by construction, for every possible snapshot."""
     try:
         snap = _json.loads((Path(__file__).parent / "live_portfolio_snapshot.json").read_text())
-        total = float(snap.get("equity_summary", {}).get("total", 0) or 0)
-        return _MODEL_BOOK_USD / total if total > 0 else 0.0
+        return _scale_factor_from_summary(snap.get("equity_summary", {}) or {})
     except Exception:
         return 0.0
+
+
+def _scale_factor_from_summary(es: dict) -> float:
+    """Pure half of _customer_scale_factor (kept separate so the arithmetic is
+    testable without patching the filesystem)."""
+    total = float(es.get("portfolio_equity") or 0) + float(es.get("cash") or 0)
+    if total <= 0:                           # pre-reconciliation snapshots
+        total = float(es.get("total", 0) or 0)
+    return _MODEL_BOOK_USD / total if total > 0 else 0.0
 
 
 def _scale_money(obj, factor: float, parent_key: str = ""):
@@ -619,6 +661,123 @@ def _scale_money(obj, factor: float, parent_key: str = ""):
     return obj
 
 
+# ─── Human-readable refusals for browser navigations ──────────────────────────
+# A customer who typed /invest saw the raw body `{"detail":"Owner-only view"}`,
+# and an unknown path rendered `{"detail":"Not Found","view":"model_book"}` —
+# framework internals presented as the product (audit BUG-08). API clients still
+# get JSON; only requests that ASK for HTML get a page.
+
+def _wants_html(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept and not request.url.path.startswith("/api/")
+
+
+_ERROR_PAGE = """<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} · GESH Financial</title>
+<style>
+ body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+   background:#0b0f14;color:#e6edf3;font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,sans-serif}}
+ main{{max-width:32rem;padding:2rem;text-align:center}}
+ h1{{font-size:1.35rem;margin:0 0 .6rem}}
+ p{{color:#8fa3bf;line-height:1.55;margin:0 0 1.4rem}}
+ a{{display:inline-block;padding:.6rem 1.1rem;border:1px solid #1f6feb;border-radius:6px;
+   color:#58a6ff;text-decoration:none}}
+</style>
+<main><h1>{title}</h1><p>{body}</p><a href="/">Back to your dashboard</a></main>
+"""
+
+
+def _refusal_response(request: Request, status: int, title: str, body: str = ""):
+    """One refusal, rendered for whoever asked: HTML for a browser, JSON for an API."""
+    if _wants_html(request):
+        import html as _h
+        return HTMLResponse(
+            status_code=status,
+            content=_ERROR_PAGE.format(title=_h.escape(title), body=_h.escape(body or title)))
+    return JSONResponse(status_code=status, content={"detail": title})
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Give browser navigations a page instead of a JSON fragment."""
+    if _wants_html(request):
+        titles = {404: "Page not found", 403: "Not available on your account",
+                  401: "Please sign in", 405: "Action not allowed"}
+        title = titles.get(exc.status_code, "Something went wrong")
+        detail = exc.detail if isinstance(exc.detail, str) else ""
+        # 5xx detail can carry internal context; never render it.
+        body = detail if (exc.status_code < 500 and detail and detail != "Not Found") else \
+            "The page you asked for isn't here."
+        return _refusal_response(request, exc.status_code, title, body)
+    # API clients keep the exact JSON contract they had before.
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail},
+                        headers=getattr(exc, "headers", None))
+
+
+# ─── CSRF / content-type hardening on cookie-authenticated mutations ──────────
+# The session cookie is HttpOnly + SameSite=Lax, which already withholds it from
+# cross-site POSTs — but the API also ACCEPTED `Content-Type: text/plain` on
+# JSON endpoints (audit CSRF finding), and text/plain is precisely the
+# content-type that makes a cross-origin POST a "simple request" with no
+# preflight. That combination is one SameSite regression away from exploitable,
+# so both halves are closed here:
+#
+#   * a mutation carrying a body must declare application/json;
+#   * a mutation whose Origin/Referer names a DIFFERENT host is refused.
+#
+# Absent Origin is allowed on purpose: browsers always send it on cross-origin
+# mutations, while legitimate non-browser clients (cron, the smoke script) send
+# none — and those authenticate with X-API-Key, not with an ambient cookie.
+_MUTATING_METHODS = frozenset(("POST", "PUT", "PATCH", "DELETE"))
+# HMAC-authenticated third-party callbacks: cross-origin by definition, never
+# cookie-authenticated, and their content-type is the sender's choice.
+_CSRF_EXEMPT_PREFIXES = ("/api/billing/webhook",)
+
+
+def _allowed_origin_hosts(request: Request) -> set[str]:
+    hosts = {h.strip().lower() for h in
+             os.getenv("GESH_ALLOWED_ORIGINS", "").split(",") if h.strip()}
+    # The tunnel rewrites the scheme but preserves Host, so the request's own
+    # Host header is the reliable same-origin reference.
+    for candidate in (request.headers.get("host"), request.url.netloc):
+        if candidate:
+            hosts.add(candidate.strip().lower())
+    return hosts
+
+
+@app.middleware("http")
+async def _csrf_guard_middleware(request: Request, call_next):
+    if (request.method not in _MUTATING_METHODS
+            or not request.url.path.startswith("/api/")
+            or any(request.url.path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)):
+        return await call_next(request)
+
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    has_body = bool(request.headers.get("content-length", "").strip("0 ")
+                    or request.headers.get("transfer-encoding"))
+    if has_body and ctype and ctype != "application/json":
+        return JSONResponse(
+            status_code=415,
+            content={"detail": "This endpoint accepts application/json only."})
+
+    origin = (request.headers.get("origin") or request.headers.get("referer") or "").strip()
+    if origin:
+        # PRESENT-but-unparseable is a refusal, not an absence: treating a
+        # garbage Origin as "no Origin" would hand an attacker the bypass.
+        try:
+            netloc = _urlparse(origin).netloc.lower()
+        except Exception:  # noqa: BLE001
+            netloc = ""
+        if netloc not in _allowed_origin_hosts(request):
+            logger.warning("cross-origin mutation refused: %s %s", request.method,
+                           request.url.path)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Cross-origin request refused."})
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _customer_view_middleware(request: Request, call_next):
     if not auth_users.auth_enabled():
@@ -629,7 +788,8 @@ async def _customer_view_middleware(request: Request, call_next):
 
     path = request.url.path
     if path == "/report" or any(path == p or path.startswith(p + "/") for p in _OWNER_ONLY_PATHS):
-        return JSONResponse(status_code=403, content={"detail": "Owner-only view"})
+        return _refusal_response(request, 403, "Owner-only view",
+                                 "This page is part of the operator console.")
 
     # Public single-ticker research cards carry no owner dollars — serve RAW so their
     # per-share price prose is not redacted into uselessness for the customer.
@@ -1670,14 +1830,167 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
+# Elements that never close (HTML void elements) — they can't wrap a subtree, so
+# the balancer must not look for a closing tag for them.
+_VOID_TAGS = frozenset((
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+))
+_TAG_OPEN_RE = re.compile(r"<(?P<close>/?)(?P<tag>[a-zA-Z][\w-]*)(?P<attrs>[^>]*?)(?P<selfclose>/?)>")
+_OWNER_CLASS_RE = re.compile(r"""\bclass\s*=\s*(?P<q>["'])(?P<val>[^"']*)(?P=q)""")
+_RAWTEXT_TAGS = ("script", "style")
+
+
+def _has_owner_only_class(attrs: str) -> bool:
+    """True when the tag carries the exact `owner-only` class TOKEN.
+
+    Token-exact on purpose: a substring test would also strip a hypothetical
+    `owner-only-note` or `not-owner-only`, and silently deleting the wrong
+    subtree is worse than not stripping at all."""
+    m = _OWNER_CLASS_RE.search(attrs)
+    return bool(m) and "owner-only" in m.group("val").split()
+
+
+def _strip_owner_only_html(html: str) -> str:
+    """Remove every element marked `class="… owner-only …"` from a document.
+
+    This is the SERVER-SIDE half of customer/owner separation. The dashboard
+    already hid these blocks with `body.customer .owner-only{display:none}`, but
+    CSS is a rendering hint, not an authorization boundary: the operator console
+    (owner positions, Buying Power, Equity-Curve Gate, Scanner config, Paper
+    Trade Log, Risk-Gate dry-run, /watch · /invest · /usage) was still delivered
+    to every customer and readable in one devtools toggle (audit A-01).
+
+    Written as an explicit scanner rather than a regex sweep because the template
+    contains JS template literals that themselves build `owner-only` markup — a
+    regex would cut into a backtick string and take the whole customer app down
+    with it. `<script>`/`<style>` bodies are therefore copied VERBATIM, and a tag
+    whose matching close cannot be found is left alone (fail-safe: an unstripped
+    element is a bug, a truncated document is an outage)."""
+    out: list[str] = []
+    i, n = 0, len(html)
+    while i < n:
+        lt = html.find("<", i)
+        if lt == -1:
+            out.append(html[i:])
+            break
+        out.append(html[i:lt])
+
+        if html.startswith("<!--", lt):                  # comment — copy verbatim
+            end = html.find("-->", lt)
+            end = n if end == -1 else end + 3
+            out.append(html[lt:end])
+            i = end
+            continue
+
+        m = _TAG_OPEN_RE.match(html, lt)
+        if not m:                                        # stray "<" — literal text
+            out.append(html[lt])
+            i = lt + 1
+            continue
+
+        tag = m.group("tag").lower()
+        if not m.group("close") and tag in _RAWTEXT_TAGS:   # raw text — copy verbatim
+            close = html.lower().find(f"</{tag}>", m.end())
+            end = n if close == -1 else close + len(tag) + 3
+            out.append(html[lt:end])
+            i = end
+            continue
+
+        if (m.group("close") or tag in _VOID_TAGS or m.group("selfclose")
+                or not _has_owner_only_class(m.group("attrs"))):
+            out.append(m.group(0))
+            i = m.end()
+            continue
+
+        # Owner-only subtree: balance same-name tags to find its real end.
+        depth, j, end = 1, m.end(), None
+        while depth and j < n:
+            inner = _TAG_OPEN_RE.search(html, j)
+            if not inner:
+                break
+            if inner.group("tag").lower() == tag and not inner.group("selfclose"):
+                depth += -1 if inner.group("close") else 1
+                if depth == 0:
+                    end = inner.end()
+                    break
+            j = inner.end()
+        if end is None:                                  # malformed — keep as-is
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        i = end                                          # drop [lt, end)
+    return "".join(out)
+
+
+# ─── Role-composed dashboard ──────────────────────────────────────────────────
+# The operator console lives in its OWN partial (templates/owner_console.html)
+# and is spliced into named slots in the shell. The customer document is
+# ASSEMBLED without it — it is never built and then cut down, which is what the
+# audit found (markup delivered, hidden with `body.customer .owner-only{...}`).
+#
+# Build-up, not tear-down: a new operator widget added to the partial can never
+# reach a customer, because customer rendering only ever fills slots with "".
+# `_strip_owner_only_html` remains as a SECONDARY net for any owner-only markup
+# a future edit puts directly in the shell; it is no longer the mechanism.
+OWNER_PARTIAL = Path(__file__).parent / "templates" / "owner_console.html"
+_SLOT_RE = re.compile(r"<!--GESH_SLOT:(?P<name>[A-Za-z0-9_]+)-->")
+_BLOCK_RE = re.compile(
+    r"<!--GESH_BLOCK:(?P<name>[A-Za-z0-9_]+)-->\n(?P<body>.*?)\n<!--/GESH_BLOCK:(?P=name)-->",
+    re.S)
+
+
+def _owner_blocks() -> dict[str, str]:
+    """Owner console blocks by slot name. Read per call so a template edit shows
+    up without a restart, matching how the shell is already read."""
+    try:
+        return {m.group("name"): m.group("body")
+                for m in _BLOCK_RE.finditer(OWNER_PARTIAL.read_text())}
+    except OSError:
+        logger.error("owner console partial missing at %s — rendering without it",
+                     OWNER_PARTIAL)
+        return {}
+
+
+def _render_dashboard(role: str) -> str:
+    """Compose the dashboard for `role`. Customer slots are filled with nothing."""
+    html = HTML.read_text()
+    blocks = _owner_blocks() if role == "owner" else {}
+    missing: list[str] = []
+
+    def fill(m: re.Match) -> str:
+        name = m.group("name")
+        if role != "owner":
+            return ""
+        if name not in blocks:
+            missing.append(name)
+            return ""
+        return blocks[name]
+
+    html = _SLOT_RE.sub(fill, html)
+    if missing:
+        # Never silently serve the owner a half-console.
+        logger.error("owner console slots unresolved: %s", ", ".join(missing))
+    if role != "owner":
+        # Secondary net only — the shell should contain no owner-only markup at
+        # all now, so this is expected to be a no-op (asserted by tests).
+        html = _strip_owner_only_html(html)
+        # `tab-overview` carries the initial `active` class and lives in the
+        # owner partial, so a customer document would open with NO active pane
+        # until applyRoleNav's fetch resolved. Promote the landing pane instead.
+        html = html.replace('<div class="tab-pane" id="tab-home">',
+                            '<div class="tab-pane active" id="tab-home">', 1)
+    return html
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    html = HTML.read_text()
     if auth_users.auth_enabled():
         email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
         role = "owner" if (email and auth_users.is_owner(email)) else "customer"
     else:
         role = "owner"
+    html = _render_dashboard(role)
     # Inject initial role synchronously so customer UI (hiding owner-only nav) applies
     # before first paint. This eliminates the 1-2s flash of full owner menu on refresh.
     html = html.replace('<body', f'<body data-initial-role="{role}"', 1)
@@ -1732,8 +2045,107 @@ def _regime_for_symbols(symbols: list[str], *, offline: bool = False) -> dict:
         return {"regimes": [], "regime_summary": "Live regime unavailable."}
 
 
+# How old a snapshot may be before the label changes. LIVE means a broker tick
+# now; CACHED means a stored snapshot inside the window; STALE means beyond it.
+_FRESHNESS_MAX_AGE_S = 3600
+
+
+def _attach_freshness(payload: dict) -> dict:
+    """One freshness model for the whole response.
+
+    The response used to carry `offline: true` next to `stale_snapshot: false`
+    while the UI printed "LIVE MARKET DATA" and a card said "just now" — three
+    independent notions of freshness that could, and did, contradict each other
+    in the same viewport (audit BUG-07). They are collapsed into ONE block with a
+    single `state` a caller can render directly, and the legacy booleans are
+    derived from it so nothing can drift apart again."""
+    age = payload.get("snapshot_age_seconds")
+    offline = bool(payload.get("offline"))
+    if not offline:
+        state, label = "live", "Live market data"
+    elif age is None:
+        state, label = "unknown", "Age of this data is unknown"
+    elif age > _FRESHNESS_MAX_AGE_S:
+        state, label = "stale", "Stored snapshot — older than an hour"
+    else:
+        state, label = "cached", "Stored snapshot — not live prices"
+    payload["data_freshness"] = {
+        "state": state,                       # live | cached | stale | unknown
+        "label": label,
+        "data_as_of": payload.get("as_of"),
+        "age_seconds": age,
+        "max_expected_age_seconds": _FRESHNESS_MAX_AGE_S,
+        "source": payload.get("source"),
+        "is_live": state == "live",
+    }
+    # Legacy keys stay, but are now DERIVED from the same state so a client
+    # reading either one cannot be told two different things.
+    payload["offline"] = state != "live"
+    payload["stale_snapshot"] = state == "stale"
+    return payload
+
+
+def _reconcile_equity_summary(eq: dict) -> dict:
+    """Make the headline total equal its own components, in place.
+
+    The broker's reported `total` legitimately covers sleeves this payload does
+    not itemize (options, crypto, unsettled activity). Displaying it as the sum
+    of the positions and cash we DO itemize is what made the model book read
+    $100,000 over components worth $97,902 (audit Q-03). So:
+
+      total / account_equity  → DERIVED (positions + cash), always reconciles
+      reported_total          → what the broker said, preserved verbatim
+      reported_total_delta    → the difference, so it is visible not vanished
+
+    Mutates and returns the same dict because callers already hold a reference
+    to `payload["equity_summary"]`."""
+    positions = eq.get("portfolio_equity")
+    cash = eq.get("cash")
+    if positions is None and cash is None:
+        return eq
+    val = portfolio_valuation.value_positions(
+        [], cash=cash or 0, reported_total=eq.get("total"))
+    derived = float(val.cash) + float(portfolio_valuation.to_decimal(positions) or 0)
+    reported = eq.get("total")
+    eq["total"] = round(derived, 2)
+    eq["account_equity"] = round(derived, 2)
+    eq["calculated_total_equity"] = round(derived, 2)
+    if reported is None:
+        # No broker headline to compare against — the calculated total simply
+        # stands. Not a degraded state: nothing disagrees.
+        eq["reported_total"] = None
+        eq["reported_total_delta"] = None
+        eq["reconciles"] = True
+        eq["valuation_source_state"] = "calculated"
+        return eq
+    delta = round(float(reported) - derived, 2)
+    eq["reported_total"] = reported
+    eq["reported_total_delta"] = delta
+    eq["reconciles"] = abs(delta) <= float(portfolio_valuation.MONEY_TOLERANCE)
+    eq["valuation_source_state"] = "calculated" if eq["reconciles"] else "degraded"
+    if not eq["reconciles"]:
+        # Log the variance (no dollar figures — the alert must not become the
+        # leak), mark the source degraded, and keep BOTH numbers internally.
+        # The calculated total is what every downstream financial calculation
+        # uses; the broker headline is diagnostic only.
+        logger.warning(
+            "equity variance: broker total disagrees with positions+cash by "
+            "%.4f%% — serving the calculated total, source marked degraded",
+            abs(delta) / derived * 100 if derived else 0.0)
+    return eq
+
+
+def _is_owner_request(request: Request | None) -> bool:
+    """True only for a confirmed owner session. Fails CLOSED: with the wall on
+    and no valid session, the caller is treated as a customer."""
+    if request is None or not auth_users.auth_enabled():
+        return True                      # single-tenant / wall-off = owner mode
+    email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
+    return bool(email and auth_users.is_owner(email))
+
+
 @app.get("/api/portfolio")
-def get_portfolio():
+def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direct calls
     try:
         try:
             payload = build_data_payload(DEFAULT_WATCHLIST)
@@ -1753,10 +2165,22 @@ def get_portfolio():
                     if suppressed else "")
 
         eq = payload["equity_summary"]
+        _reconcile_equity_summary(eq)
         prev = eq.get("adjusted_equity_previous_close", 0)
         curr = eq.get("portfolio_equity", 0)
-        eq["day_change"]     = round(curr - prev, 2)
-        eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0, 2)
+        # Day change on the OWNER book compares positions equity to the
+        # split/dividend-adjusted previous close of the same positions — both
+        # sides are position-only, so cash must not enter either.
+        if prev:
+            eq["day_change"] = round(curr - prev, 2)
+            eq["day_change_pct"] = round((curr - prev) / prev * 100, 2)
+            eq["day_change_available"] = True
+        else:
+            # No prior-close reference: report unavailable rather than a 0.0 that
+            # renders as a flat market (audit: fabricated day readings).
+            eq["day_change"] = None
+            eq["day_change_pct"] = None
+            eq["day_change_available"] = False
 
         # Surface snapshot age for the dashboard staleness badge (>24h → amber banner).
         raw_as_of = (payload.get("as_of") or "").strip()
@@ -1771,10 +2195,23 @@ def get_portfolio():
             except Exception:
                 pass
 
+        _attach_freshness(payload)
+
         # Log the equity snapshot for ECG only for LIVE data — never persist stale snapshot
         # values as if they were a fresh tick (would corrupt the equity curve).
         if not payload.get("offline"):
             _maybe_log_snapshot(payload["holdings"])
+
+        if not _is_owner_request(request):
+            # A customer never receives the owner brokerage payload — not even a
+            # rescaled one. `publish` is a build-up allowlist, so brokerage
+            # identifiers, quote-session metadata, buying power, cost basis and
+            # execution state cannot reach this response even if they are added
+            # to the owner payload later (audit A-01). Dollars are still
+            # normalised to the model-book notional by the masking middleware,
+            # which runs exactly once, after this.
+            return _sanitize({"status": "ok",
+                              "data": model_portfolio.publish(payload)})
 
         return _sanitize({"status": "ok", "data": payload})
     except Exception as e:
@@ -2131,18 +2568,52 @@ def kelly_endpoint():
 
 # ─── Price Chart ─────────────────────────────────────────────────────────────
 
+# Supported chart windows. Keys accept both the UI's yfinance-style spellings
+# ("1mo") and the conventional UI labels ("1M", "1d"/"1D") — matching is
+# case-insensitive. Anything not listed is a 400, never a silent substitution.
+_CHART_RANGES: dict[str, dict] = {
+    "1d":   {"period": "1d",  "yf_period": "1d",  "interval": "5m"},
+    "5d":   {"period": "5d",  "yf_period": "5d",  "interval": "5m"},
+    "1w":   {"period": "5d",  "yf_period": "5d",  "interval": "5m"},
+    "1mo":  {"period": "1mo", "yf_period": "1mo", "interval": "1d"},
+    "1m":   {"period": "1mo", "yf_period": "1mo", "interval": "1d"},
+    "3mo":  {"period": "3mo", "yf_period": "3mo", "interval": "1d"},
+    "3m":   {"period": "3mo", "yf_period": "3mo", "interval": "1d"},
+    "6mo":  {"period": "6mo", "yf_period": "6mo", "interval": "1d"},
+    "6m":   {"period": "6mo", "yf_period": "6mo", "interval": "1d"},
+    "1y":   {"period": "1y",  "yf_period": "1y",  "interval": "1d"},
+    "ytd":  {"period": "ytd", "yf_period": "ytd", "interval": "1d"},
+    "5y":   {"period": "5y",  "yf_period": "5y",  "interval": "1wk"},
+    "max":  {"period": "max", "yf_period": "max", "interval": "1wk"},
+}
+
+
 @app.get("/api/chart/{symbol}")
-def price_chart(symbol: str, period: str = "1mo"):
+def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # noqa: A002
     # 30s TTL cache — dashboard polls this per holding; without the cache
     # every refresh would spawn a fresh yfinance session + crumb fetch +
     # tz-cache file open, which is the dominant FD-leak path.
     sym = _safe_symbol(symbol)
+    # `range` is the REST-conventional spelling and what external clients reach
+    # for first. It used to be an unknown query param: FastAPI dropped it, the
+    # default period served, and every one of 1D/5D/1M/3M/6M/1Y/max came back as
+    # the same 21-point month (audit F-02). Unrecognized values are now a 400 —
+    # `period_map.get(period, "1mo")` silently answered a DIFFERENT question than
+    # the one asked, which for a price chart is a correctness bug, not leniency.
+    requested = (range if range is not None else period)
+    resolved = _CHART_RANGES.get(str(requested).strip().lower())
+    if resolved is None:
+        raise HTTPException(
+            status_code=400,
+            detail=("Unsupported range '" + str(requested)[:16] + "'. Supported: "
+                    + ", ".join(sorted(_CHART_RANGES))))
+    period = resolved["period"]
     key = (sym, period)
     now = time.monotonic()
     with _chart_cache_lock:
         hit = _chart_cache.get(key)
         if hit and (now - hit[0]) < CHART_TTL_SEC:
-            return hit[1]
+            return {**hit[1], "requested_range": str(requested)}
 
     try:
         # price_source, not raw yfinance: under the VPN finance-block Yahoo
@@ -2151,9 +2622,8 @@ def price_chart(symbol: str, period: str = "1mo"):
         # which Yahoo/RH-unauth can't serve here — route those to Alpaca via
         # price_source.intraday_5m (key-gated; honest fallback when unconfigured).
         import price_source
-        period_map = {"1d":"1d","5d":"5d","1w":"5d","1mo":"1mo","3mo":"3mo","6mo":"6mo","1y":"1y"}
-        yf_period = period_map.get(period, "1mo")
-        interval  = "5m" if period in ("1d","5d") else "1d"
+        yf_period = resolved["yf_period"]
+        interval = resolved["interval"]
         if period in ("1d", "5d"):
             raw = price_source.intraday_5m(sym, period)
             if raw is None or getattr(raw, "empty", True):
@@ -2161,10 +2631,13 @@ def price_chart(symbol: str, period: str = "1mo"):
                 # the frontend renders "try a daily range". Cache it briefly too.
                 result = {"symbol": sym, "period": period, "intraday_unavailable": True,
                           "dates": [], "prices": [], "pct_change": 0,
-                          "current": None, "start": None}
+                          "current": None, "start": None,
+                          "resolved_period": yf_period, "resolved_interval": interval,
+                          "point_count": 0, "first_timestamp": None, "last_timestamp": None,
+                          "source": None}
                 with _chart_cache_lock:
                     _chart_cache[key] = (now, result)
-                return result
+                return {**result, "requested_range": str(requested)}
         else:
             raw = price_source.yf_download(sym, period=yf_period, interval=interval,
                                            auto_adjust=True, progress=False)
@@ -2177,11 +2650,23 @@ def price_chart(symbol: str, period: str = "1mo"):
         import numpy as np
         prices = [round(float(v), 2) for v in np.array(closes).flatten()]
         pct_chg = round((prices[-1]/prices[0]-1)*100, 2) if len(prices)>1 else 0
+        try:
+            source = price_source.frame_source(raw)
+        except Exception:  # noqa: BLE001 — provenance is metadata, never a 500
+            source = None
         result = {"symbol":sym,"period":period,"dates":dates,"prices":prices,
-                  "pct_change":pct_chg,"current":prices[-1],"start":prices[0]}
+                  "pct_change":pct_chg,"current":prices[-1],"start":prices[0],
+                  # Contract metadata: a client must be able to VERIFY it got the
+                  # window it asked for instead of trusting that it did.
+                  "resolved_period": yf_period, "resolved_interval": interval,
+                  "point_count": len(prices),
+                  "first_timestamp": dates[0] if dates else None,
+                  "last_timestamp": dates[-1] if dates else None,
+                  "source": source,
+                  "data_as_of": _dt.now(_tz.utc).isoformat()}
         with _chart_cache_lock:
             _chart_cache[key] = (now, result)
-        return result
+        return {**result, "requested_range": str(requested)}
     except HTTPException:
         raise
     except Exception as e:
@@ -2497,8 +2982,13 @@ def earnings_symbol(symbol: str):
         return cached
     try:
         import earnings_viz
-        return _ticker_get_store("earnings", sym,
-                                 {"status": "ok", "data": earnings_viz.get_earnings(sym)})
+        data = earnings_viz.get_earnings(sym)
+        # `diagnostic` names providers and env vars — operator detail. Log it,
+        # never ship it (audit BUG-05: internal config surfaced in customer copy).
+        diag = data.pop("diagnostic", None)
+        if diag:
+            logger.info("earnings unavailable for %s: %s", sym, diag)
+        return _ticker_get_store("earnings", sym, {"status": "ok", "data": data})
     except Exception as e:
         raise _server_error(e)
 
@@ -2524,6 +3014,29 @@ def regime_symbol(symbol: str):
         raise _server_error(e)
 
 
+# Keys that merely ECHO the request rather than describe the company. yfinance
+# fills `company_name` with the ticker itself for symbols it has never heard of,
+# so these carry no evidence that the vendor knows the security.
+_FUNDAMENTAL_IDENTITY_KEYS = frozenset(
+    ("symbol", "company_name", "name", "sector_source", "error", "source", "as_of"))
+
+
+def _fundamentals_row_is_empty(row: dict) -> bool:
+    """True when a vendor answered with a shape but no facts.
+
+    Deliberately structural rather than an allow-list of metric names: vendors
+    disagree on field names (`pe_ratio` vs `trailing_pe`) and add new ones, and
+    a name list that falls behind starts 404-ing real companies. Any field that
+    is not pure request-echo and carries a value counts as knowledge."""
+    if not isinstance(row, dict):
+        return True
+    return not any(
+        v not in (None, "", [], {})
+        for k, v in row.items()
+        if k not in _FUNDAMENTAL_IDENTITY_KEYS
+    )
+
+
 @app.get("/api/fundamentals/{symbol}")
 def fundamentals_symbol(symbol: str):
     """Company fundamentals for ANY ticker. Robinhood is PRIMARY (VPN-safe: PE / P/B
@@ -2547,8 +3060,11 @@ def fundamentals_symbol(symbol: str):
             rows = fundamental_agent._fetch_fundamentals_batch([sym])
             row = rows[0] if rows and not rows[0].get("error") else None
             vendor = "yfinance"
-        if not row:
-            raise HTTPException(status_code=404, detail="No fundamentals")
+        if not row or _fundamentals_row_is_empty(row):
+            # yfinance echoes the ticker back as `company_name` with every metric
+            # null for symbols it does not know, which rendered as a real-looking
+            # fundamentals card sourced "yfinance · just now" (audit BUG-05 / J).
+            raise HTTPException(status_code=404, detail="No fundamentals for this symbol")
         if row.get("sector"):
             row["sector_source"] = vendor
         # Cross-source sanity: the 52-wk range here is RH-sourced; compare it to the
@@ -2574,6 +3090,54 @@ def fundamentals_symbol(symbol: str):
         raise _server_error(e)
 
 
+def _reconcile_card(sym: str, card: dict) -> dict | None:
+    """Combine this card's valuation opinion with the latest MECHANICAL verdict.
+
+    The mechanical reading is taken from the recorded signal history rather than
+    by re-running the 11-node consensus: the engine run costs seconds per symbol
+    and this endpoint is already the expensive one. A symbol with no recorded
+    verdict simply reconciles on the valuation side alone — which is honest, and
+    still better than printing two unrelated conclusions.
+
+    Fail-soft by contract: this block is presentation, so a missing table or a
+    malformed row must degrade to `None`, never to a 500 on a paid LLM call."""
+    try:
+        mech_verdict = mech_conf = None
+        try:
+            import signal_history
+            hist = signal_history.get_history(sym, days=1)
+            if hist:
+                mech_verdict = hist[-1].get("verdict")
+                mech_conf = hist[-1].get("confidence")
+        except Exception:  # noqa: BLE001 — optional context
+            pass
+        fv = card.get("fair_value") or {}
+        return verdict_reconciliation.reconcile(verdict_reconciliation.Inputs(
+            mechanical_verdict=mech_verdict,
+            mechanical_confidence=(float(mech_conf) if mech_conf is not None else None),
+            valuation_status=fv.get("status"),
+            valuation_pct_diff=fair_value.canonical_pct_diff(fv) if fv else None,
+            ai_verdict=card.get("verdict"),
+        )).as_dict()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _analyst_row_is_empty(row: dict) -> bool:
+    """True when a provider answered but carried NO actual coverage.
+
+    yfinance returns a fully-shaped row for symbols it has never heard of, with
+    `recommendation` defaulted to "Hold" and every number null. Rendered, that
+    reads exactly like a real Hold consensus. A row counts as coverage only if
+    at least one analyst or one price target is actually present."""
+    if not isinstance(row, dict):
+        return True
+    if row.get("num_analysts"):
+        return False
+    return not any(row.get(k) is not None for k in
+                   ("target_mean", "target_median", "target_high", "target_low"))
+
+
 @app.get("/api/analyst/{symbol}")
 def analyst_symbol(symbol: str):
     """Analyst ratings for ANY ticker. Robinhood is PRIMARY (VPN-safe buy/hold/sell
@@ -2591,8 +3155,12 @@ def analyst_symbol(symbol: str):
             yf_row = data.get(sym)
             row = yf_row if (yf_row and not yf_row.get("error")) else None
             vendor = "yfinance"
-        if not row:
-            raise HTTPException(status_code=404, detail="No analyst data")
+        if not row or _analyst_row_is_empty(row):
+            # An unknown/uncovered ticker used to come back 200 with
+            # `recommendation: "Hold", num_analysts: 0` — a fabricated neutral
+            # consensus indistinguishable from a real one (audit BUG-05 / J).
+            # No coverage is a 404, not a Hold.
+            raise HTTPException(status_code=404, detail="No analyst coverage for this symbol")
         # Real feed, not a constant (GESH-8).
         return _ticker_get_store("analyst", sym,
                                  {"status": "ok", "data": row, "source": vendor})
@@ -2920,6 +3488,11 @@ async def analyze_ticker_endpoint(request: Request):
                     "suspect": bool(suspect),
                     "suspect_reason": reason if suspect else None,
                 }
+                # ONE stance, with the disagreement stated. The mechanical verdict
+                # and this card's valuation opinion used to be rendered side by
+                # side with equal weight — "STRONG BUY" next to "HOLD, overvalued
+                # −18.1%" for the same symbol off the same snapshot (audit BUG-03).
+                card["reconciliation"] = _reconcile_card(sym, card)
             _ticker_card_store(sym, card)
             auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card, "cached": False}
@@ -2942,6 +3515,16 @@ def _cached_close(sym: str) -> float | None:
     Delegates to price_cache but passes THIS module's _latest_close, resolved at
     call time, so tests monkeypatching server._latest_close keep steering it."""
     return price_cache._cached_close(sym, fetch=_latest_close)
+
+
+def _prior_close(sym: str) -> float | None:
+    """Previous-session close — the denominator of day change. Module-level so
+    tests can stub it the same way they stub _latest_close. Fail-soft: None
+    disables day change for the book (never silently reports a flat day)."""
+    try:
+        return price_cache.prior_close(sym)
+    except Exception:  # noqa: BLE001 — a pricing hiccup must not 500 the book
+        return None
 
 
 def _customer_book_payload(positions: list[dict], equal_weight: bool = False) -> dict:
@@ -2967,30 +3550,72 @@ def _customer_book_payload(positions: list[dict], equal_weight: bool = False) ->
         (unpriced.append(p["symbol"]) if price is None or price <= 0
          else priced.append((p, price)))
     eq_each = (_EQUAL_WEIGHT_NOTIONAL / len(priced)) if (equal_weight and priced) else None
-    holdings, total = [], 0.0
+
+    # Build canonical Positions, then let portfolio_valuation do ALL the money
+    # arithmetic. Nothing downstream may re-derive equity, day change or P&L —
+    # every previous divergence (audit Q-02/Q-03) came from a second formula.
+    canonical: list[portfolio_valuation.Position] = []
     for p, price in priced:
         if equal_weight:
-            equity, qty, ac, pct_chg = round(eq_each, 2), round(eq_each / price, 6), None, 0.0
+            # Sizes-private mode: real share counts are deliberately NOT used, so
+            # the dollars here are illustrative by construction and are labeled as
+            # such. Cost basis and prior close are meaningless against a synthetic
+            # quantity, so both stay absent and day change/P&L report unavailable.
+            canonical.append(portfolio_valuation.Position.build(
+                p["symbol"], eq_each / price, current_price=price))
         else:
-            qty = p["shares"]
-            ac = p.get("avg_cost")
-            equity = round(qty * price, 2)
-            pct_chg = round((price - ac) / ac * 100, 2) if ac else 0.0
+            canonical.append(portfolio_valuation.Position.build(
+                p["symbol"], p["shares"], average_cost=p.get("avg_cost"),
+                current_price=price, prior_close=_prior_close(p["symbol"])))
+
+    val = portfolio_valuation.value_positions(canonical, cash=0)
+
+    holdings = []
+    for pos in canonical:
+        mv = pos.market_value
         holdings.append({
-            "symbol": p["symbol"], "quantity": qty, "average_buy_price": ac or 0.0,
-            "equity": equity, "percent_change": pct_chg,
-            "equity_change": round(equity - (ac or price) * qty, 2),
-            "current_price": price, "type": "stock", "pe_ratio": None,
-            "portfolio_percentage": 0.0,
+            "symbol": pos.symbol,
+            "quantity": float(pos.quantity),
+            "average_buy_price": float(pos.average_cost) if pos.average_cost else 0.0,
+            "equity": float(mv) if mv is not None else 0.0,
+            # `percent_change` is the LIFETIME return vs cost. It is None — not 0.0 —
+            # when there is no cost basis: the dashboard used to read a 0 here as a
+            # real "flat" reading and, worse, multiplied it into a "Day change".
+            "percent_change": (round(float((pos.current_price - pos.average_cost)
+                                           / pos.average_cost * 100), 2)
+                               if pos.average_cost else None),
+            "day_change_pct": (round(float((pos.current_price - pos.prior_close)
+                                           / pos.prior_close * 100), 2)
+                               if pos.prior_close else None),
+            "equity_change": (float(mv - pos.cost_basis)
+                              if (mv is not None and pos.cost_basis is not None) else None),
+            "current_price": float(pos.current_price),
+            "prior_close": float(pos.prior_close) if pos.prior_close else None,
+            "type": "stock", "pe_ratio": None, "portfolio_percentage": 0.0,
         })
-        total += equity
+    total = float(val.positions_market_value)
     for h in holdings:
         h["portfolio_percentage"] = round(h["equity"] / total * 100, 1) if total else 0.0
-    equity_summary = {"portfolio_equity": round(total, 2), "cash": 0.0, "buying_power": 0.0,
-                      "day_change": 0.0, "day_change_pct": 0.0}
+
+    valuation = val.as_dict()
+    equity_summary = {
+        "portfolio_equity": total, "cash": 0.0, "buying_power": 0.0,
+        # Canonical, and None when the inputs don't support it. Callers MUST check
+        # day_change_available instead of treating a missing value as zero.
+        "day_change": valuation["day_change_amount"],
+        "day_change_pct": valuation["day_change_percent"],
+        "day_change_available": valuation["day_change_available"] and not equal_weight,
+        "cost_basis_available": valuation["cost_basis_available"],
+        "total_cost_basis": valuation["total_cost_basis"],
+        "unrealized_pnl": valuation["unrealized_pnl"],
+        "unrealized_pnl_percent": valuation["unrealized_pnl_percent"],
+    }
+    if equal_weight:      # illustrative dollars — no real day change to report
+        equity_summary["day_change"] = None
+        equity_summary["day_change_pct"] = None
     return {"as_of": _dt.now(_tz.utc).isoformat(), "equity_summary": equity_summary,
             "holdings": holdings, "watchlist": [], "unpriced": unpriced,
-            "equal_weight": bool(equal_weight)}
+            "equal_weight": bool(equal_weight), "valuation": valuation}
 
 
 @app.get("/api/mybook")
@@ -3043,6 +3668,11 @@ def mybook_get(request: Request):
         return {"status": "ok", "data": {
             "positions": payload["holdings"],
             "total_equity": payload["equity_summary"]["portfolio_equity"],
+            # Canonical valuation block — the ONLY source the UI may use for
+            # day change / P&L. It previously recomputed "Day change" in the
+            # browser from lifetime-vs-cost returns and rendered
+            # "+$271,639 (5920.4%)" on a real book (audit Q-02).
+            "valuation": payload["valuation"],
             "unpriced": payload["unpriced"],
             "equal_weight": ew,
             "signals": signals,
@@ -3155,6 +3785,30 @@ def _load_mybook_job_state(user_id: str) -> tuple[dict | None, dict | None]:
         raise HTTPException(
             status_code=503,
             detail="Analysis state temporarily unavailable — please retry shortly.",
+        )
+
+
+class ValuationIntegrityError(RuntimeError):
+    """The book's own arithmetic does not reconcile — refuse to build on it."""
+
+
+def _assert_valuation_sound(payload: dict, *, where: str) -> None:
+    """Gate every downstream engine on a self-consistent valuation.
+
+    Kelly sizing, Monte-Carlo VaR and the AI narrative all take equity and
+    weights as ground truth. Running them on a book whose total does not equal
+    its own components produces confident, precise, wrong advice — which is
+    strictly worse than an error message. Structured-logged without any dollar
+    figure so the alert itself never becomes the leak."""
+    val = payload.get("valuation") or {}
+    failures = list(val.get("issues") or [])
+    if val.get("reconciles") is False or any("!=" in f for f in failures):
+        logger.error("valuation integrity failure (%s): %d issue(s), %d position(s)",
+                     where, len(failures), len(payload.get("holdings") or []))
+        raise ValuationIntegrityError(
+            "We could not reconcile this portfolio's value, so the analysis was "
+            "stopped rather than run on inconsistent numbers. Please re-check the "
+            "share counts on your positions."
         )
 
 
@@ -3332,6 +3986,7 @@ def _mybook_analyze_worker(
         if not payload["holdings"]:
             raise HTTPException(status_code=404,
                                 detail="No market data for any symbol on your book")
+        _assert_valuation_sound(payload, where=f"mybook job {job_id}")
         result = _run_book_engines(payload)
         # Stamp the book fingerprint this analysis was computed FOR — persisted via
         # save_book_analysis so /mybook/report can detect that the book has since
@@ -4075,9 +4730,16 @@ async def gemini_market_commentary_endpoint(request: Request):
 
 # ─── Allocation Config ────────────────────────────────────────────────────────
 
-@app.get("/api/config")
+@app.get("/api/config", dependencies=[Depends(require_api_key)])
 def get_config():
-    """Return current allocation config (caps, gates, scanner mode)."""
+    """Return current allocation config (caps, gates, scanner mode).
+
+    OWNER-ONLY — same gate as the write below. This is the operator's live
+    trading-engine configuration: allocation percentages, per-trade dollar caps,
+    max open positions/contracts, cash buffer, scanner parameters, and the
+    auto_trade / paper_mode kill switches. It was readable by any customer
+    session (audit A-02) purely because the read had no dependency while the
+    write did. There is no customer feature that consumes it."""
     try:
         cfg = load_config()
         return {"status": "ok", "data": cfg}
