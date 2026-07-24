@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+import portfolio_valuation
 from portfolio_valuation import to_decimal
 
 __all__ = [
@@ -72,7 +74,8 @@ PUBLISHED_TOP_LEVEL_FIELDS = (
     "model_portfolio_id", "version", "published_at", "data_as_of", "holdings",
     "cash", "calculated_total_equity", "source_label", "methodology", "stale",
     "freshness", "positions_market_value", "day_change", "day_change_pct",
-    "day_change_available", "reconciles", "view",
+    "day_change_available", "reconciles", "valuation_status",
+    "degraded_reason", "view",
 )
 
 # Anything matching these must never appear in a published payload. This is a
@@ -159,6 +162,61 @@ def content_version(holdings: list[dict], cash: object) -> str:
     return "v" + hashlib.sha256(basis.encode()).hexdigest()[:12]
 
 
+def _is_finite_number(x: object) -> bool:
+    return (isinstance(x, (int, float)) and not isinstance(x, bool)
+            and math.isfinite(x))
+
+
+def _reconciliation_verdict(holdings: list[dict], equity_summary: dict) -> tuple[bool, str, str | None]:
+    """COMPUTED reconciliation for the published model portfolio (GATE 3).
+
+    The published total is the sum of the rows shown, so the equity identity
+    (total == positions + cash) holds BY CONSTRUCTION for finite inputs — but a
+    literal ``reconciles: True`` also claims it for NaN/inf and missing prices,
+    which is exactly the case a customer must not be told reconciles. So the SAME
+    holdings are run through the canonical valuation (portfolio_valuation), and
+    the verdict is derived from real invariants:
+
+      * non-finite quantity / price / equity / cash  → unavailable (fail closed)
+      * any holding with no usable current price      → degraded (missing_price)
+      * the canonical identity fails                  → degraded (invariant_failure)
+      * otherwise                                     → reconciled
+
+    Returns customer-safe codes only; detailed diagnostics stay in logs via the
+    server's `_reconcile_equity_summary`. Never raises — a valuation that cannot
+    be evaluated is itself an "unavailable" verdict, not a 500."""
+    cash = equity_summary.get("cash")
+    if not _is_finite_number(cash):
+        return False, "unavailable", "non_finite_value"
+
+    canonical: list[portfolio_valuation.Position] = []
+    for h in holdings:
+        q, price, eqv = h.get("quantity"), h.get("current_price"), h.get("equity")
+        # NaN / inf anywhere → fail closed (unavailable). A value PRESENT but not
+        # finite has been corrupted; the arithmetic cannot be trusted.
+        for v in (q, price, eqv):
+            if v is not None and not _is_finite_number(v):
+                return False, "unavailable", "non_finite_value"
+        # A missing (None) price/equity is "we don't have it yet", not corruption
+        # → degraded/missing_price below, once the canonical valuation confirms it.
+        try:
+            canonical.append(portfolio_valuation.Position.build(
+                h.get("symbol", ""), q, current_price=price))
+        except Exception:  # noqa: BLE001 — an unbuildable value is fail-closed
+            return False, "unavailable", "non_finite_value"
+
+    try:
+        val = portfolio_valuation.value_positions(canonical, cash=cash)
+    except Exception:  # noqa: BLE001
+        return False, "unavailable", "valuation_error"
+
+    if val.unpriced_symbols:
+        return False, "degraded", "missing_price"
+    if not val.reconciles:
+        return False, "degraded", "invariant_failure"
+    return True, "reconciled", None
+
+
 def publish(payload: dict, *, now: datetime | None = None) -> dict:
     """Build the customer-facing published model portfolio from an owner payload.
 
@@ -182,9 +240,21 @@ def publish(payload: dict, *, now: datetime | None = None) -> dict:
     cash = _num(eq.get("cash")) or 0.0
     calculated_total = round(positions_value + cash, 2)
 
+    reconciles, valuation_status, degraded_reason = _reconciliation_verdict(holdings, eq)
+
+    # content_version() rejects a non-numeric composition by design (a version
+    # over garbage is meaningless). publish() is a customer-facing serializer,
+    # though, so a corrupt holding must degrade to an unavailable verdict, never
+    # 500 the /api/portfolio route.
+    try:
+        version = content_version(holdings, cash)
+    except (ValueError, TypeError):
+        version, reconciles, valuation_status, degraded_reason = (
+            "vunavailable", False, "unavailable", "non_finite_value")
+
     return {
         "model_portfolio_id": MODEL_PORTFOLIO_ID,
-        "version": content_version(holdings, cash),
+        "version": version,
         "published_at": stamp,
         "data_as_of": payload.get("as_of") or fresh.get("data_as_of"),
         "holdings": holdings,
@@ -205,7 +275,9 @@ def publish(payload: dict, *, now: datetime | None = None) -> dict:
         "day_change": eq.get("day_change"),
         "day_change_pct": eq.get("day_change_pct"),
         "day_change_available": bool(eq.get("day_change_available")),
-        "reconciles": True,      # by construction: total IS positions + cash
+        "reconciles": reconciles,          # COMPUTED — see _reconciliation_verdict
+        "valuation_status": valuation_status,   # reconciled | degraded | unavailable
+        "degraded_reason": degraded_reason,     # customer-safe code, None when reconciled
         "view": "model_book",
     }
 
