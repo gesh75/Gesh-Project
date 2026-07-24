@@ -11,8 +11,14 @@ pyotp==2.9.0
 yfinance==1.2.1
 pandas==3.0.2
 numpy==2.4.4
-openbb>=4.3.0
-openbb-yfinance>=1.6.0
+# openbb (optional) is NOT installable alongside this server stack: every
+# openbb-core requires uvicorn <0.25 or <0.41, and this app pins uvicorn==0.44.0
+# for fastapi 0.135.3. It was only ever installed --no-deps, its import is
+# guarded (fundamentals_openbb.py falls back to yfinance), and CI has always
+# stripped it. It now lives in requirements-openbb.txt as an explicit,
+# separately-installed optional integration so THIS file resolves cleanly.
+# (lxml — the one thing openbb provided transitively, for the FINRA scrape — is
+# declared explicitly below, so removing openbb here degrades nothing.)
 
 # AI / LLM
 anthropic==0.93.0
