@@ -2838,6 +2838,49 @@ def consensus_cached():
     return _cached_response("consensus")
 
 
+# ── Unified unknown / unavailable-symbol contract (GATE 2) ───────────────────
+# Per-symbol engines never emit a fabricated success for a symbol with no data.
+# Two explicit shapes, and only two:
+#   * HTTP 404                       — no such instrument / no coverage
+#                                      (analyst, fundamentals, chart, analyze-ticker)
+#   * {"status": "unavailable", …}   — a well-formed request with no substantive
+#                                      data to compute from (consensus, regime,
+#                                      momentum, fft-cycles, levels, earnings, and
+#                                      news for a symbol with no market identity)
+# `reason_code` separates the two failure modes the backend must distinguish:
+#   symbol_not_found  — the symbol has no market identity (no price anywhere)
+#   data_unavailable  — the symbol is real, but THIS engine's inputs are missing
+#                       right now (a provider outage — CASE B, not a bad ticker)
+# The envelope never carries status "ok" and never stamps a timestamp onto data
+# that does not exist. A genuinely NEUTRAL result for a real symbol (CASE C) has
+# real values and does not trip any engine's unavailability marker, so it flows
+# through untouched as status "ok".
+
+
+def _symbol_has_market_identity(sym: str) -> bool:
+    """Cheap cross-engine "does this ticker exist" probe: a real symbol has a
+    price. Cached, so the unavailable branch adds at most one lookup (usually a
+    cache hit from the engine's own failed attempt). Fail-closed — any error is
+    treated as no identity, yielding the more conservative symbol_not_found."""
+    try:
+        return bool(_cached_close(sym))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _unavailable_response(sym: str, *, data: object = None) -> dict:
+    """Canonical unavailable envelope (never status "ok", never a fake timestamp).
+    The engine's own unavailability payload is retained under `data` for
+    back-compat, so existing readers of data.available / data.error / data.regime
+    keep working and the frontend degrades exactly as before."""
+    reason = "data_unavailable" if _symbol_has_market_identity(sym) else "symbol_not_found"
+    body = {"status": "unavailable", "reason_code": reason, "symbol": sym,
+            "data_as_of": None, "source": None}
+    if data is not None:
+        body["data"] = data
+    return body
+
+
 @app.get("/api/consensus/{symbol}")
 def consensus_symbol(symbol: str):
     """Run the 11-node consensus engine on ANY ticker — not just held positions.
@@ -2851,6 +2894,11 @@ def consensus_symbol(symbol: str):
         from consensus import run_consensus_holding
         row = run_consensus_holding(sym, equity=0.0, total_portfolio=1.0,
                                     avg_cost=0.0, current_price=0.0)
+        # No node could vote (no price/history) → INSUFFICIENT DATA, not a
+        # fabricated balanced consensus.
+        if (not isinstance(row, dict) or row.get("verdict") == "INSUFFICIENT DATA"
+                or (row.get("active_nodes") or 0) == 0):
+            return _unavailable_response(sym, data=row)
         return {"status": "ok", "data": row}
     except HTTPException:
         raise
@@ -2996,7 +3044,10 @@ def fft_cycles_single(symbol: str):
     """FFT cycle analysis for a single symbol."""
     try:
         from fft_cycles import detect_fft_cycles
-        result = detect_fft_cycles(_safe_symbol(symbol))
+        sym = _safe_symbol(symbol)
+        result = detect_fft_cycles(sym)
+        if not isinstance(result, dict) or result.get("error"):
+            return _unavailable_response(sym, data=result)
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
@@ -3024,8 +3075,10 @@ def momentum_symbol(symbol: str):
         return cached
     try:
         import momentum_signal
-        return _ticker_get_store("momentum", sym,
-                                 {"status": "ok", "data": momentum_signal.compute(sym)})
+        mom = momentum_signal.compute(sym)
+        if isinstance(mom, dict) and mom.get("available") is False:
+            return _unavailable_response(sym, data=mom)
+        return _ticker_get_store("momentum", sym, {"status": "ok", "data": mom})
     except Exception as e:
         raise _server_error(e)
 
@@ -3047,6 +3100,10 @@ def levels_symbol(symbol: str):
         # On a data outage _latest_close is None → compute falls back to its own series.
         px, pmeta = _latest_close_meta(sym)
         data = trade_levels.compute(sym, current_price=px)
+        # No price → no support/resistance to compute. Return unavailable rather
+        # than a shaped card of nulls (audit: no fabricated levels).
+        if isinstance(data, dict) and data.get("available") is False:
+            return _unavailable_response(sym, data=data)
         # A setup grounded on a cross-source-suspect quote must never look tradeable
         # (Codex #3 / GESH-9). Strict mode refuses outright; the warn-only default
         # returns the levels but flags the setup non-actionable, which the dashboard
@@ -3101,6 +3158,8 @@ def earnings_symbol(symbol: str):
         diag = data.pop("diagnostic", None)
         if diag:
             logger.info("earnings unavailable for %s: %s", sym, diag)
+        if isinstance(data, dict) and data.get("available") is False:
+            return _unavailable_response(sym, data=data)
         return _ticker_get_store("earnings", sym, {"status": "ok", "data": data})
     except Exception as e:
         raise _server_error(e)
@@ -3120,7 +3179,10 @@ def regime_symbol(symbol: str):
         rows = out.get("regimes") or []
         if not rows:
             raise HTTPException(status_code=404, detail="No regime data")
-        return _ticker_get_store("regime", sym, {"status": "ok", "data": rows[0]})
+        row0 = rows[0]
+        if not isinstance(row0, dict) or str(row0.get("regime", "")).upper() == "UNKNOWN":
+            return _unavailable_response(sym, data=row0)
+        return _ticker_get_store("regime", sym, {"status": "ok", "data": row0})
     except HTTPException:
         raise
     except Exception as e:
@@ -3324,6 +3386,11 @@ def news_symbol(symbol: str):
         trimmed = [{"title": it.get("title", ""), "url": it.get("url", ""),
                     "source": it.get("source", ""), "published": it.get("published", "")}
                    for it in items[:8]]
+        # Empty news for a REAL symbol is legitimate ("no recent news"); empty
+        # news for a symbol with no market identity is an unknown ticker. Only the
+        # latter is unavailable — news availability is not proof a symbol exists.
+        if not trimmed and not _symbol_has_market_identity(sym):
+            return _unavailable_response(sym, data=[])
         resp = {"status": "ok", "data": trimmed}
         if feed:                      # omitted entirely when nothing served
             resp["source"] = feed
