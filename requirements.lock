@@ -6,10 +6,11 @@
 # Reproducible install:  pip install -r requirements.lock
 # Regenerate after changing requirements.txt; test-only tooling excluded.
 #
-# gesh-core is the private repo at IMMUTABLE COMMIT 37c5752 (the v0.6.0 release
-# content). It is referenced by SHA rather than by the `v0.6.0` tag because that
-# tag moved mid-review — see the comment in requirements.txt. CI needs
-# GESH_CORE_PAT to clone it. This SHA must equal the one in requirements.txt;
+# gesh-core is the private repo at commit 37c5752 — the peeled commit SHA of the
+# ANNOTATED tag v0.6.0 (whose tag-object SHA is 46ba329). Both identify the same
+# release content; the tag has not moved. The peeled commit is pinned so the
+# dependency is explicit and reproducible. CI needs GESH_CORE_PAT to clone it.
+# This SHA must equal the one in requirements.txt;
 # tests/test_dependency_sanity.py enforces that and also verifies the SHA that
 # was actually INSTALLED.
 #

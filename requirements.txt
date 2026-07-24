@@ -46,19 +46,21 @@ APScheduler==3.11.2
 httpx==0.28.1
 tenacity==9.1.4
 
-# Shared core package (Phase 3 de-duplication), pinned to an IMMUTABLE COMMIT.
+# Shared core package (Phase 3 de-duplication), pinned to the peeled COMMIT SHA.
 #
-# This is the v0.6.0 release content — but referenced by SHA, not by the tag.
-# A git tag is a movable pointer: `@v0.6.0` resolved to 37c5752 locally and to
-# 46ba329 in CI during PR #105, i.e. the lock and the tested tree were different
-# source. Two consequences, both unacceptable for a dependency that computes
-# money: builds were not reproducible, and gesh-core code could change under the
-# application with no diff in this repository to review.
+# v0.6.0 is an ANNOTATED Git tag. The identifier 46ba329… is the annotated
+# tag-object SHA, while 37c5752… is the peeled commit SHA. Both identify the
+# same release content — the tag has not moved, and no source-code difference
+# exists between the two references. (During PR #105 the two identifiers were
+# briefly read as a discrepancy; they are simply a tag object and its peeled
+# commit.)
 #
-# 37c5752 is the audited commit. Bumping it is a deliberate, reviewable edit
-# here — never a silent retag upstream. Keep this in lockstep with
-# requirements.lock (tests/test_dependency_sanity.py fails if they diverge, and
-# checks the INSTALLED distribution too, not just these two files).
+# Gesh-Project pins the full peeled commit SHA to make the application
+# dependency explicit and reproducible: every install path names one object, so
+# the lock and the installed tree are trivially comparable and a dependency bump
+# is a reviewable edit here. Keep this in lockstep with requirements.lock
+# (tests/test_dependency_sanity.py fails if they diverge, and checks the
+# INSTALLED distribution too, not just these two files).
 gesh-core @ git+https://github.com/gesh75/gesh-core.git@37c5752606faf5eb0cf9059ad4d021e1679dbabc
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core

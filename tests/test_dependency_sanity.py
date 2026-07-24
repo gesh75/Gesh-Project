@@ -20,11 +20,12 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The audited gesh-core commit (the v0.6.0 release content, referenced by SHA
-# because the tag moved mid-review: it resolved to 37c5752 locally and 46ba329
-# in CI for the same `@v0.6.0` spec). Declared as a LITERAL on purpose — bumping
-# the dependency then requires editing this line, so the change is reviewable in
-# the application repo instead of happening silently upstream.
+# The pinned gesh-core commit: the PEELED COMMIT SHA of the annotated tag
+# v0.6.0. (46ba329 is that tag's own tag-object SHA — the two identify the same
+# release content, and the tag has not moved.) Pinning the peeled commit makes
+# the dependency explicit and reproducible. Declared as a LITERAL on purpose —
+# bumping the dependency then requires editing this line, so the change is
+# reviewable in the application repo.
 GESH_CORE_SHA = "37c5752606faf5eb0cf9059ad4d021e1679dbabc"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
@@ -91,10 +92,11 @@ def test_lock_pins_gesh_core_to_an_immutable_commit():
 
 
 # ── gesh-core provenance: declared == locked == installed ────────────────────
-# A movable ref made these three diverge without any signal: `@v0.6.0` resolved
-# to 37c5752 locally and 46ba329 in CI, so the lock did not describe the tree CI
-# tested, and unreviewed dependency code could reach production with no diff
-# here. These tests close each link of that chain.
+# The pin is a full commit SHA, so every install path names exactly one object
+# and the three links are directly comparable. These tests assert that chain end
+# to end: a symbolic ref (tag or branch) in an install path would leave the
+# reader unable to tell, from this repository alone, which commit was built —
+# and only the last test can prove what pip actually installed.
 
 def _declared_ref(path: Path) -> str | None:
     m = _GESH_CORE_RE.search(path.read_text())
@@ -134,12 +136,18 @@ def test_lock_pins_gesh_core_to_the_same_audited_commit():
         f"{GESH_CORE_SHA} — the lock and the source pin must not diverge")
 
 
-def test_no_mutable_gesh_core_ref_in_any_install_path():
-    """A tag or branch anywhere pip reads reintroduces the whole defect."""
+def test_no_symbolic_gesh_core_ref_in_any_install_path():
+    """Install paths must name a commit, not a symbolic ref.
+
+    A tag or branch is resolved at install time, so the built commit is not
+    determinable from this repository alone — and an annotated tag additionally
+    has its own object SHA distinct from the commit it points at, which makes
+    install logs ambiguous to read. A 40-char commit SHA removes both problems.
+    """
     for path in (REQ, LOCK):
         ref = _declared_ref(path)
         assert ref and re.fullmatch(r"[0-9a-f]{40}", ref), (
-            f"{path.name} references gesh-core by a movable ref ({ref!r}); "
+            f"{path.name} references gesh-core by a symbolic ref ({ref!r}); "
             "install paths must use a 40-char commit sha")
 
 

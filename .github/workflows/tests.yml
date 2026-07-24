@@ -72,13 +72,16 @@ jobs:
           python -m pip install --upgrade pip
           # Install the RUNTIME FROM THE LOCK, not from requirements.txt. The
           # lock is the fully-resolved manifest, so the tree CI tests is exactly
-          # the tree that was reviewed — including gesh-core at its audited
-          # commit. Installing from requirements.txt while merely storing a lock
-          # beside it is what let `@v0.6.0` resolve to a different gesh-core
-          # commit in CI (46ba329) than in the lock (37c5752).
+          # the tree that was reviewed — including gesh-core at its pinned,
+          # peeled commit SHA. Installing from a fully-resolved lock also keeps
+          # the CI log unambiguous: it names one object, so there is nothing to
+          # reconcile against an annotated tag's own object SHA.
           # (openbb stays out entirely: the uvicorn-incompatible meta-package
           # lives in requirements-openbb.txt and fundamentals_openbb.py guards
           # its import.)
+          # No dependency cache is configured: every run installs freshly from
+          # the lock, which is deterministic. If caching is added later, the key
+          # must include the Python version and the requirements.lock hash.
           pip install -r requirements.lock
           # Fail fast on a broken dependency graph rather than at import time.
           pip check
