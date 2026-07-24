@@ -70,12 +70,14 @@ jobs:
       - name: Install runtime + test deps
         run: |
           python -m pip install --upgrade pip
-          # Install everything EXCEPT openbb: its resolver backtracks for 20+ min
-          # in CI and no test needs it (fundamentals_openbb.py guards its import).
-          # This pulls fastapi/starlette, praw, nltk, anthropic, robin-stocks, and
-          # the private gesh-core pin (cloned via the PAT configured above).
-          grep -vi 'openbb' requirements.txt > ci-requirements.txt
-          pip install -r ci-requirements.txt
+          # requirements.txt now resolves cleanly (the optional, uvicorn-
+          # incompatible openbb meta-package lives in requirements-openbb.txt and
+          # is never installed in CI — fundamentals_openbb.py guards its import).
+          # Pulls fastapi/starlette, praw, nltk, anthropic, robin-stocks, and the
+          # private gesh-core pin (cloned via the PAT configured above).
+          pip install -r requirements.txt
+          # Fail fast on a broken dependency graph rather than at import time.
+          pip check
           # Test + lint tooling (not in requirements.txt):
           pip install pytest pytest-cov ruff
 
@@ -117,8 +119,8 @@ jobs:
       - name: Install runtime + test deps
         run: |
           python -m pip install --upgrade pip
-          grep -vi 'openbb' requirements.txt > ci-requirements.txt
-          pip install -r ci-requirements.txt
+          pip install -r requirements.txt
+          pip check
           pip install pytest ruff
       - name: Customer-isolation leak sweep + XSS wiring (deterministic, in-process)
         run: |
