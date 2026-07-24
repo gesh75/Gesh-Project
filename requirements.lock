@@ -1,8 +1,17 @@
 # Fully-resolved lock for requirements.txt on Python 3.12 (the CI runtime).
+# THIS FILE IS THE AUTHORITATIVE INSTALL INPUT — CI installs the runtime from
+# here, not from requirements.txt, so the tested tree is the locked tree.
+#
 # Generated: pip freeze in a clean venv after 'pip install -r requirements.txt'.
 # Reproducible install:  pip install -r requirements.lock
 # Regenerate after changing requirements.txt; test-only tooling excluded.
-# gesh-core is the private v0.6.0 tag (CI needs GESH_CORE_PAT to clone it).
+#
+# gesh-core is the private repo at IMMUTABLE COMMIT 37c5752 (the v0.6.0 release
+# content). It is referenced by SHA rather than by the `v0.6.0` tag because that
+# tag moved mid-review — see the comment in requirements.txt. CI needs
+# GESH_CORE_PAT to clone it. This SHA must equal the one in requirements.txt;
+# tests/test_dependency_sanity.py enforces that and also verifies the SHA that
+# was actually INSTALLED.
 #
 alpaca-py==0.43.5
 annotated-doc==0.0.4

@@ -12,11 +12,23 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Single source of truth for the audited gesh-core commit, so this test and the
+# dependency-sanity suite can never disagree about what the pin should be.
+from test_dependency_sanity import GESH_CORE_SHA
+
 import ledger_host
 
 
-def test_requirements_pins_exactly_v0_6_0_and_no_v0_5_3_or_editable():
-    """Exact dependency pin requirement (active lines only)."""
+def test_requirements_pins_gesh_core_immutably_and_no_editable():
+    """Exact dependency pin requirement (active lines only).
+
+    Originally asserted the literal `@v0.6.0` tag. The tag turned out to be
+    MOVABLE — it resolved to 37c5752 locally and 46ba329 in CI during the same
+    review — so the tag was never the exact pin this test intended. The pin is
+    now the immutable commit that tag pointed at, which satisfies the original
+    requirement strictly rather than nominally: v0.6.0 content, one resolution,
+    forever. A version bump is a reviewable edit to this SHA.
+    """
     req = Path(__file__).parent.parent / "requirements.txt"
     active_lines = []
     for line in req.read_text().splitlines():
@@ -26,10 +38,11 @@ def test_requirements_pins_exactly_v0_6_0_and_no_v0_5_3_or_editable():
         active_lines.append(stripped)
 
     active_text = "\n".join(active_lines)
-    assert "gesh-core @ git+https://github.com/gesh75/gesh-core.git@v0.6.0" in active_text
+    assert (f"gesh-core @ git+https://github.com/gesh75/gesh-core.git@{GESH_CORE_SHA}"
+            in active_text)
     assert "v0.5.3" not in active_text
-    assert "@v0.6.0" in active_text
-    assert "git+https://github.com/gesh75/gesh-core.git@v0.6.0" in active_text
+    # A movable ref must never reappear in an INSTALL path.
+    assert "@v0.6.0" not in active_text, "mutable tag back in the install path"
     assert "-e ../gesh-core" not in active_text
     assert "--editable" not in active_text
     assert "main" not in active_text or "gesh-core.git@main" not in active_text
