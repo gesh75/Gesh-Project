@@ -596,7 +596,9 @@ gitignored (`*.db`) so recovery never needs a commit.
 yfinance 401s in the **sandbox** are burst rate-limiting from the shared egress IP, not a
 hard block — single calls succeed; the consensus engine's many parallel calls trip the
 limiter. The **host venv** has clean Yahoo access. For daily analysis, run the engine suite
-on the host (`./venv/bin/python3.14`) for complete data rather than degraded sandbox results.
+on the host (`./venv/bin/python`) for complete data rather than degraded sandbox results.
+(PR105-RUN-01: always the venv's GENERIC interpreter — this repo declares Python 3.12 in
+`.python-version`, so a hardcoded `python3.14` path does not exist in a conformant env.)
 
 ---
 
