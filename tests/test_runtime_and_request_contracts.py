@@ -17,13 +17,130 @@ Each test names the blocker it closes:
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def _write_executable(p: Path, content: str) -> None:
+    """Create an executable shell script (or python stub) at p."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    p.chmod(0o755)
+
+
+def _create_setup_harness(
+    tmp: Path,
+    declared: str = "3.12",
+    venv_version: str | None = None,
+) -> dict[str, Path]:
+    """Build a minimal temp harness for testing setup.sh and run_daily_analysis.sh
+    behavior under controlled Python runtimes. All paths are inside tmp.
+    """
+    # declared runtime
+    (tmp / ".python-version").write_text(f"{declared}\n")
+
+    # empty lock (setup will try to install from it)
+    (tmp / "requirements.lock").write_text("")
+
+    # minimal valid .env so setup does not abort on missing keys
+    (tmp / ".env").write_text(
+        "ROBINHOOD_USER=test@example.com\n"
+        "ANTHROPIC_API_KEY=test\n"
+        "FINNHUB_API_KEY=test\n"
+        "TELEGRAM_BOT_TOKEN=test\n"
+        "TELEGRAM_CHAT_ID=0\n"
+    )
+
+    venv_bin = tmp / "venv" / "bin"
+    venv_bin.mkdir(parents=True, exist_ok=True)
+
+    log = tmp / "venv_python_invocations.log"
+    bare_pip_log = tmp / "bare_pip.log"
+    bare_py3_log = tmp / "bare_python3.log"
+    log.touch()
+    bare_pip_log.touch()
+    bare_py3_log.touch()
+
+    # existing venv/bin/python: reports the supplied version for --version
+    # and for any -c query containing version_info; logs every argv
+    v_major, v_minor = (venv_version or declared).split(".")[:2]
+    _write_executable(
+        venv_bin / "python",
+        f'''#!/usr/bin/env bash
+echo "$(date +%s) $0 $*" >> "{log}"
+if [ "$1" = "--version" ]; then
+    echo "Python {v_major}.{v_minor}.0"
+    exit 0
+fi
+if [ "$1" = "-c" ]; then
+    if echo "$*" | grep -q "version_info"; then
+        echo "{v_major}.{v_minor}"
+        exit 0
+    fi
+    # other -c (e.g. import nltk) just succeed
+    exit 0
+fi
+# python -m pip ... etc. — succeed without real work
+exit 0
+''',
+    )
+
+    # no-op activate (setup may source it)
+    _write_executable(
+        venv_bin / "activate",
+        "#!/usr/bin/env bash\n# no-op for harness\nreturn 0\n",
+    )
+
+    # fakebin/ for PATH override: python3.12 returns 3.12, bare pip/python3 only log+exit
+    fakebin = tmp / "fakebin"
+    fakebin.mkdir(parents=True, exist_ok=True)
+
+    _write_executable(
+        fakebin / "python3.12",
+        '''#!/usr/bin/env bash
+echo "Python 3.12.0"
+exit 0
+''',
+    )
+
+    _write_executable(
+        fakebin / "pip",
+        f'''#!/usr/bin/env bash
+echo "$(date +%s) $0 $*" >> "{bare_pip_log}"
+exit 0
+''',
+    )
+
+    _write_executable(
+        fakebin / "python3",
+        f'''#!/usr/bin/env bash
+echo "$(date +%s) $0 $*" >> "{bare_py3_log}"
+exit 0
+''',
+    )
+
+    # also expose mkdir that can be overridden per-test to write marker + fail
+    _write_executable(
+        fakebin / "mkdir",
+        '#!/usr/bin/env bash\n# default no-op mkdir for most tests\nexit 0\n',
+    )
+
+    return {
+        "log": log,
+        "bare_pip_log": bare_pip_log,
+        "bare_py3_log": bare_py3_log,
+        "fakebin": fakebin,
+        "venv_bin": venv_bin,
+        "venv_python": venv_bin / "python",
+    }
 
 
 # ─── PR105-RUN-01: one coherent runtime ───────────────────────────────────────
@@ -312,3 +429,124 @@ def test_cookieless_request_is_not_csrf_refused(client):
 
     assert r.status_code != 403, "cookieless request must not be CSRF-refused"
     assert "cross-origin" not in r.text.lower()
+
+
+# ─── PR105-RUN-01 executable harness tests (setup + daily chain) ──────────────
+
+def test_setup_rejects_existing_venv_314(tmp_path):
+    """setup.sh must reject a venv whose python reports 3.14 when .python-version
+    declares 3.12, exit 1, print expected/actual + recreate guidance, and leave
+    the venv directory untouched."""
+    h = _create_setup_harness(tmp_path, declared="3.12", venv_version="3.14")
+    setup_script = tmp_path / "setup.sh"
+    shutil.copy(REPO / "setup.sh", setup_script)
+    setup_script.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(h["fakebin"]) + ":" + env.get("PATH", "")
+
+    proc = subprocess.run(
+        ["bash", str(setup_script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    combined = (proc.stdout + proc.stderr).lower()
+    assert "3.12" in combined and "3.14" in combined
+    assert "recreate" in combined
+    # does not delete venv
+    assert (tmp_path / "venv" / "bin" / "python").exists()
+
+
+def test_setup_accepts_existing_venv_312(tmp_path):
+    """When the existing venv matches the declared 3.12, setup exits 0."""
+    h = _create_setup_harness(tmp_path, declared="3.12", venv_version="3.12")
+    setup_script = tmp_path / "setup.sh"
+    shutil.copy(REPO / "setup.sh", setup_script)
+    setup_script.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(h["fakebin"]) + ":" + env.get("PATH", "")
+
+    proc = subprocess.run(
+        ["bash", str(setup_script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+
+
+def test_run_daily_rejects_fake_venv_314_before_lock(tmp_path):
+    """A temp copy of run_daily_analysis.sh must reject a 3.14 venv (rc 1) before
+    it reaches any lock/mkdir step. The fake mkdir (first in PATH) writes a
+    marker only if executed; we assert the marker is absent and the output
+    contains the expected/actual/recreate guidance. Uses GESH_CAFFEINATED=1
+    and GESH_SNAPSHOT_RETRY_WAITS=0 to keep the run deterministic and fast."""
+    h = _create_setup_harness(tmp_path, declared="3.12", venv_version="3.14")
+    daily_script = tmp_path / "run_daily_analysis.sh"
+    shutil.copy(REPO / "run_daily_analysis.sh", daily_script)
+    daily_script.chmod(0o755)
+
+    # override mkdir to write marker + fail (proves early exit before lock)
+    marker = tmp_path / "mkdir_marker"
+    _write_executable(
+        h["fakebin"] / "mkdir",
+        f'''#!/usr/bin/env bash
+echo "RAN" > "{marker}"
+exit 1
+''',
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = str(h["fakebin"]) + ":" + env.get("PATH", "")
+    env["GESH_CAFFEINATED"] = "1"
+    env["GESH_SNAPSHOT_RETRY_WAITS"] = "0"
+
+    proc = subprocess.run(
+        ["bash", str(daily_script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert not marker.exists(), "rejection must happen before any mkdir/lock"
+    combined = (proc.stdout + proc.stderr).lower()
+    assert "expected" in combined and "3.12" in combined
+    assert "actual" in combined and "3.14" in combined
+    assert "recreate" in combined
+
+
+def test_accepted_setup_logs_direct_venv_python_calls(tmp_path):
+    """When setup accepts a matching 3.12 venv it must invoke the *direct*
+    venv/bin/python (logged) for the pip upgrade, pip install -r lock, and
+    the nltk import check. Bare pip/python3 in PATH must never be called
+    (their logs stay empty)."""
+    h = _create_setup_harness(tmp_path, declared="3.12", venv_version="3.12")
+    setup_script = tmp_path / "setup.sh"
+    shutil.copy(REPO / "setup.sh", setup_script)
+    setup_script.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(h["fakebin"]) + ":" + env.get("PATH", "")
+
+    proc = subprocess.run(
+        ["bash", str(setup_script)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+
+    log = h["log"].read_text()
+    assert "-m pip install --quiet --upgrade pip" in log
+    assert "-m pip install --quiet -r requirements.lock" in log
+    assert "-c import nltk" in log
+
+    assert h["bare_pip_log"].read_text().strip() == ""
+    assert h["bare_py3_log"].read_text().strip() == ""

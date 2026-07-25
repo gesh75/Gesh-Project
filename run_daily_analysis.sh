@@ -47,6 +47,15 @@ if [ ! -x "$PY" ]; then
     echo "FATAL: no interpreter at $PY — run ./setup.sh first (Python 3.12)." >&2
     exit 1
 fi
+# stale-venv guard (post-exec check)
+DECLARED="$(tr -d ' \t\r\n' < "$GP/.python-version" 2>/dev/null || echo 3.12)"
+VENV_VER=$("$PY" --version 2>&1 | awk '{print $2}')
+VENV_MM=$(echo "$VENV_VER" | cut -d. -f1,2)
+if [ ! -r "$GP/.python-version" ] || [ -z "$VENV_MM" ] || [ "$VENV_MM" != "$DECLARED" ]; then
+  echo "expected: ${DECLARED}   actual: ${VENV_MM:-unknown}"
+  echo "recreate the venv (do not run setup automatically)"
+  exit 1
+fi
 LOG=/tmp/gesh_fullchain.log
 LOCK=/tmp/gesh_daily_chain.lock
 
