@@ -20,6 +20,9 @@ from collections.abc import Callable
 # upstream. Same 5-minute TTL the slice had inside server's per-ticker cache.
 CLOSE_TTL_SEC = 300
 _close_cache: dict[str, tuple[float, float]] = {}   # sym -> (monotonic_ts, price)
+# Previous-session close, same TTL/lock. Kept in its OWN map rather than widening
+# the tuple so every existing _close_cache reader keeps working unchanged.
+_prior_cache: dict[str, tuple[float, float]] = {}   # sym -> (monotonic_ts, prior_close)
 _close_lock = threading.Lock()
 
 
@@ -34,6 +37,7 @@ def clear() -> None:
     """Drop every cached close (test isolation between TestClient runs)."""
     with _close_lock:
         _close_cache.clear()
+        _prior_cache.clear()
 
 
 def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
@@ -135,11 +139,71 @@ def warm_close_cache_batch(symbols: list[str]) -> None:
             else:
                 continue                     # flat frame for a multi-symbol ask
             price, _substituted = _close_price_guarded(series)
+            prev = _prior_close_from_series(series)      # same frame, no extra fetch
         except Exception:
             continue
         if price is not None and price > 0:
             with _close_lock:
                 _close_cache[sym] = (time.monotonic(), price)
+                if prev is not None:
+                    _prior_cache[sym] = (time.monotonic(), prev)
+
+
+def _prior_close_from_series(closes) -> float | None:
+    """The session BEFORE the latest one, off the same Close series.
+
+    Day change is `equity - prior_close_equity` (portfolio_valuation), so the
+    previous session's close is an accounting input, not decoration. It comes
+    out of the frame `_latest_close_meta` already downloads — no extra request.
+    Returns None (never the latest close) when there is no prior bar: a missing
+    prior close must DISABLE day change, and defaulting it to today's price
+    would report a flat day we cannot evidence."""
+    try:
+        import numpy as np
+        arr = np.array(closes.dropna()).flatten().astype(float)
+    except Exception:
+        return None
+    if len(arr) < 2:
+        return None
+    prev = round(float(arr[-2]), 2)
+    if prev <= 0:
+        return None
+    if len(arr) >= 5:                       # same bad-tick guard as the latest close
+        med = float(np.median(arr[-20:]))
+        if med > 0 and not (med * 0.5 <= prev <= med * 2.0):
+            return None
+    return prev
+
+
+def prior_close(sym: str) -> float | None:
+    """Previous-session close for `sym`, cached alongside the latest close."""
+    now = time.monotonic()
+    with _close_lock:
+        hit = _prior_cache.get(sym)
+        if hit and now - hit[0] < CLOSE_TTL_SEC:
+            return hit[1]
+    try:
+        import price_source
+        raw = price_source.yf_download(sym, period="1mo", interval="1d",
+                                       auto_adjust=True, progress=False)
+        if raw is None or getattr(raw, "empty", True):
+            return None
+        close_obj = raw["Close"]
+        if getattr(close_obj, "ndim", 1) > 1:
+            cols = list(getattr(close_obj, "columns", []))
+            if sym in cols:
+                close_obj = close_obj[sym]
+            elif len(cols) == 1:
+                close_obj = close_obj[cols[0]]
+            else:
+                return None
+        value = _prior_close_from_series(close_obj.squeeze())
+    except Exception:
+        return None
+    if value is not None:
+        with _close_lock:
+            _prior_cache[sym] = (time.monotonic(), value)
+    return value
 
 
 def _latest_close(sym: str) -> float | None:

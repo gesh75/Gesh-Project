@@ -21,6 +21,9 @@ from typing import Generator
 import pytest
 from starlette.testclient import TestClient
 
+import model_portfolio
+import server as server_module
+
 # owner sentinels that must NEVER reach a customer body. This E2E asserts the
 # LIFECYCLE + masking integration on keys main already masks (portfolio_equity,
 # cash); exhaustive omitted-key coverage (equity_change/extended_hours_equity/…)
@@ -77,7 +80,9 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
         "as_of": "2026-07-05T13:00:00+00:00", "offline": True, "source": "test",
         "equity_summary": {"portfolio_equity": _OWNER_TOTAL, "cash": _OWNER_CASH,
                            "buying_power": _OWNER_CASH},
-        "holdings": [{"symbol": "NVDA", "quantity": 6.078929, "price": 194.51,
+        # `current_price` is the key data_fetcher emits (it normalizes the raw
+        # snapshot's `price` at load); the canonical holding calculation reads it.
+        "holdings": [{"symbol": "NVDA", "quantity": 6.078929, "current_price": 194.51,
                       "equity": 101.988616, "average_buy_price": 180.0,
                       "percent_change": -3.5}],
         "watchlist": [],
@@ -115,7 +120,11 @@ def test_full_subscriber_lifecycle(flow):
     assert r.status_code == 303
     assert au.COOKIE_NAME in r.cookies  # session cookie set on the client jar
 
-    # 3) DASHBOARD → the customer sees ONLY the masked model book, never owner dollars
+    # 3) DASHBOARD → the customer sees ONLY the PUBLISHED model portfolio, never
+    #    the owner brokerage payload. Since 2026-07-23 this is a distinct shape,
+    #    not the owner payload with rescaled numbers (audit A-01): no
+    #    `equity_summary`, no brokerage/session metadata, and a headline that is
+    #    the calculated total rather than the broker's reported one.
     r = client.get("/api/portfolio")
     assert r.status_code == 200
     body = r.json()
@@ -123,8 +132,22 @@ def test_full_subscriber_lifecycle(flow):
     blob = json.dumps(body)
     for sentinel in (f"{_OWNER_TOTAL}", f"{_OWNER_CASH}", "37,522.83", "509.70"):
         assert sentinel not in blob, f"owner value {sentinel} leaked to a customer"
-    # and the scaled model-book figure IS present (portfolio_equity * 2.5)
-    assert body["data"]["equity_summary"]["portfolio_equity"] == pytest.approx(_OWNER_TOTAL * 2.5)
+    data = body["data"]
+    assert "equity_summary" not in data, "owner payload shape reached a customer"
+    assert data["source_label"] == model_portfolio.SOURCE_LABEL
+    assert data["model_portfolio_id"] == model_portfolio.MODEL_PORTFOLIO_ID
+    # The headline is CALCULATED from the published components, never the
+    # broker's reported total — assert the identity rather than a literal, so
+    # this cannot pass by coincidence on a different fixture.
+    assert data["positions_market_value"] + data["cash"] == pytest.approx(
+        data["calculated_total_equity"], abs=0.05)
+    assert sum(h["equity"] for h in data["holdings"]) == pytest.approx(
+        data["positions_market_value"], abs=0.05)
+    # Scaled exactly once, by the published response's own component basis —
+    # so the customer book lands on the model notional rather than on an
+    # arbitrary multiple of the owner's balance.
+    assert sum(h["equity"] for h in data["holdings"]) + data["cash"] == pytest.approx(
+        server_module._MODEL_BOOK_USD, abs=0.05)
 
     # 4) REPLAY the magic token → single-use, rejected
     r2 = client.get(f"/auth/magic?token={token}", follow_redirects=False)

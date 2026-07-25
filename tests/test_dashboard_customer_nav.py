@@ -21,6 +21,17 @@ from pathlib import Path
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "dashboard.html"
 
+# Since 2026-07-23 the operator console is a SEPARATE partial spliced into named
+# slots for an owner session only (server._render_dashboard), so the sidebar nav
+# no longer lives in the shell. These checks therefore run against the COMPOSED
+# documents — which is the stronger question anyway: not "is the markup marked
+# owner-only?" but "does a customer receive it at all?".
+
+
+def _composed(role: str) -> str:
+    import server
+    return server._render_dashboard(role)
+
 # Split the markup on each sidebar GROUP container `<div class="sb-group"…>` /
 # `<div class="sb-group owner-only">` — but NOT on `<div class="sb-group-title">`
 # (the `-` after `sb-group` excludes it), so each chunk holds one whole group.
@@ -32,36 +43,40 @@ def _scanner_groups(html: str) -> list[str]:
     return [g for g in _GROUP_SPLIT.split(html) if 'data-tab="scanner"' in g]
 
 
-def test_scanner_nav_is_owner_only_for_customers():
-    html = TEMPLATE.read_text()
-    groups = _scanner_groups(html)
-    assert groups, "expected at least one Scanner sidebar nav item to check"
-    for group in groups:
-        group_open = group[: group.find(">") + 1]        # the <div class="sb-group…"> tag
-        group_owner_only = "owner-only" in group_open
-        for btn in _SCANNER_BTN.findall(group):
-            assert group_owner_only or "owner-only" in btn, (
-                "Scanner sidebar nav must be owner-only (deny-by-default) so it is "
-                "hidden from customers — the button or its sb-group needs the "
-                f"owner-only class:\n  {btn}"
-            )
-
-
-def test_at_least_one_scanner_nav_is_explicitly_owner_only():
-    """Teeth: prove the customer-facing Scanner button actually carries the class
-    (guards against the whole nav block being deleted, which would vacuously pass
-    the group-level check above)."""
-    html = TEMPLATE.read_text()
-    btns = _SCANNER_BTN.findall(html)
-    assert btns, "expected Scanner nav button(s) in the sidebar"
-    assert any("owner-only" in b for b in btns), (
-        "no Scanner nav button carries owner-only — the customer-facing Scanner "
-        "item must be marked owner-only"
+def test_scanner_nav_is_not_delivered_to_customers():
+    """The Scanner tab has no customer-reachable pane, so a Scanner nav item in a
+    customer document is a dead link. It is now absent outright rather than
+    present-and-hidden."""
+    assert not _SCANNER_BTN.findall(_composed("customer")), (
+        "Scanner sidebar nav reached a customer document — it belongs in the "
+        "owner console partial (templates/owner_console.html)."
     )
 
 
+def test_scanner_nav_still_exists_for_the_owner():
+    """Teeth: guards against the whole nav block being deleted, which would make
+    the customer-side check above pass vacuously."""
+    owner = _composed("owner")
+    btns = _SCANNER_BTN.findall(owner)
+    assert btns, "expected Scanner nav button(s) in the owner sidebar"
+    groups = _scanner_groups(owner)
+    assert groups, "expected the Scanner nav to sit inside an sb-group"
+
+
+def test_no_sidebar_nav_group_reaches_a_customer_unmarked():
+    """Deny-by-default, restated for composition: any sidebar group a customer
+    DOES receive must have a pane they can actually reach."""
+    customer = _composed("customer")
+    for group in _GROUP_SPLIT.split(customer):
+        if not group.startswith('<div class="sb-group'):
+            continue
+        for tab in re.findall(r'data-tab="(\w+)"', group):
+            assert f'id="tab-{tab}"' in customer, (
+                f"customer sidebar links to tab '{tab}' with no pane in their document")
+
+
 def test_margin_panel_makes_no_lt_macro_node_claim():
-    html = TEMPLATE.read_text()
+    html = TEMPLATE.read_text() + _composed("owner")
     assert "LT_Macro" not in html, (
         "The long-term-macro / margin-debt panel must not reference an 'LT_Macro' "
         "consensus node — it is an advisory long-term macro overlay, not a node."

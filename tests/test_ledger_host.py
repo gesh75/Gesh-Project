@@ -12,11 +12,23 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# Single source of truth for the audited gesh-core commit, so this test and the
+# dependency-sanity suite can never disagree about what the pin should be.
+from test_dependency_sanity import GESH_CORE_SHA
+
 import ledger_host
 
 
-def test_requirements_pins_exactly_v0_6_1_and_no_v0_5_3_or_editable():
-    """Exact dependency pin requirement (active lines only)."""
+def test_requirements_pins_gesh_core_immutably_and_no_editable():
+    """Exact dependency pin requirement (active lines only).
+
+    Originally asserted a literal release tag. v0.6.1 is an ANNOTATED tag:
+    7af8fad is the tag-object SHA and f11c460 is the peeled commit SHA, both
+    identifying the same release content (the tag has not moved). The pin is now
+    that peeled commit, which expresses the same requirement more explicitly —
+    the install path names the exact object built, so no reader has to peel a
+    tag to know what shipped. A version bump is a reviewable edit to this SHA.
+    """
     req = Path(__file__).parent.parent / "requirements.txt"
     active_lines = []
     for line in req.read_text().splitlines():
@@ -26,10 +38,12 @@ def test_requirements_pins_exactly_v0_6_1_and_no_v0_5_3_or_editable():
         active_lines.append(stripped)
 
     active_text = "\n".join(active_lines)
-    assert "gesh-core @ git+https://github.com/gesh75/gesh-core.git@v0.6.1" in active_text
+    assert (f"gesh-core @ git+https://github.com/gesh75/gesh-core.git@{GESH_CORE_SHA}"
+            in active_text)
     assert "v0.5.3" not in active_text
-    assert "@v0.6.1" in active_text
-    assert "git+https://github.com/gesh75/gesh-core.git@v0.6.1" in active_text
+    # The install path must name the commit, not the tag it is reachable from.
+    assert "@v0.6.0" not in active_text, "symbolic tag ref back in the install path"
+    assert "@v0.6.1" not in active_text, "symbolic tag ref back in the install path"
     assert "-e ../gesh-core" not in active_text
     assert "--editable" not in active_text
     assert "main" not in active_text or "gesh-core.git@main" not in active_text
