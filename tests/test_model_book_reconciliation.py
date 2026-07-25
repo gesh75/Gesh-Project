@@ -110,23 +110,34 @@ def test_customer_model_book_reconciles(client, monkeypatch):
 
 
 def test_scale_factor_uses_components_not_broker_total(client):
-    """The specific line that produced the $2,098 gap."""
+    """The basis is Σ ITEMISED holdings + cash.
+
+    Replaces the old `_scale_factor_from_summary(equity_summary)`. Its signature
+    was the defect: summary fields alone cannot say whether `portfolio_equity`
+    means positions (raw snapshot file) or account equity (normalized payload),
+    so `portfolio_equity + cash` double-counted cash for one of the two.
+    """
     server, _c = client
-    es = {"portfolio_equity": _POSITIONS, "cash": _CASH, "total": _REPORTED}
-    factor = server._scale_factor_from_summary(es)
-    assert factor == pytest.approx(server._MODEL_BOOK_USD / (_POSITIONS + _CASH))
-    assert factor != pytest.approx(server._MODEL_BOOK_USD / _REPORTED)
-    # …and the model book it produces reconciles exactly
-    assert (_POSITIONS + _CASH) * factor == pytest.approx(server._MODEL_BOOK_USD, abs=0.01)
+    payload = {
+        "holdings": [{"symbol": "OWN", "quantity": 100.0,
+                      "current_price": _POSITIONS / 100.0, "equity": _POSITIONS}],
+        "equity_summary": {"portfolio_equity": _REPORTED,   # ACCOUNT-level
+                           "cash": _CASH, "total": _REPORTED},
+    }
+    basis = server.model_basis_from_payload(payload)
+    assert basis == pytest.approx(_POSITIONS + _CASH, abs=0.02)
+    assert basis != pytest.approx(_REPORTED + _CASH), "cash double-counted"
+
+    factor = server._model_scale_factor(basis)
+    assert basis * factor == pytest.approx(server._MODEL_BOOK_USD, abs=0.01)
 
 
-def test_scale_factor_fails_closed_on_unusable_summary(client):
+def test_scale_factor_fails_closed_on_an_unusable_basis(client):
     server, _c = client
-    assert server._scale_factor_from_summary({}) == 0.0
-    assert server._scale_factor_from_summary({"portfolio_equity": 0, "cash": 0}) == 0.0
-    # legacy snapshots that only carry `total` still work
-    assert server._scale_factor_from_summary({"total": 50_000.0}) == pytest.approx(
-        server._MODEL_BOOK_USD / 50_000.0)
+    assert server._model_scale_factor(0) == 0.0
+    assert server._model_scale_factor(None) == 0.0
+    assert server._model_scale_factor(-1) == 0.0
+    assert server.model_basis_from_payload({}) == 0.0
 
 
 # ─── the reconciliation branch matrix ────────────────────────────────────────
@@ -148,17 +159,20 @@ def test_reconciliation_matrix(client, monkeypatch, positions, cash, reported,
     server, c = client
     _seed_payload(server, monkeypatch, positions, cash, reported)
     if reported is None:
+        # No broker headline at all: drop every account-level key so the only
+        # basis left is the itemised holdings + cash.
         base = server.build_data_payload
         monkeypatch.setattr(server, "build_data_payload",
                             lambda wl: {**base(wl), "equity_summary": {
-                                "portfolio_equity": positions, "cash": cash,
-                                "adjusted_equity_previous_close": positions}},
+                                "cash": cash,
+                                "adjusted_equity_previous_close": positions + cash}},
                             raising=True)
     _as(server, monkeypatch, c, OWNER)
 
     eq = c.get("/api/portfolio").json()["data"]["equity_summary"]
-    # The calculated total ALWAYS wins, in every branch.
+    # The ITEMISED total always wins, in every branch.
     assert eq["total"] == pytest.approx(positions + cash, abs=0.05)
+    assert eq["positions_market_value"] == pytest.approx(positions, abs=0.05)
     assert eq["calculated_total_equity"] == pytest.approx(positions + cash, abs=0.05)
     assert eq["reconciles"] is expect_reconciles
     assert eq["valuation_source_state"] == expect_state
@@ -214,6 +228,7 @@ def test_missing_position_price_does_not_fabricate_equity(client, monkeypatch):
     # … and the unpriced name is carried with a null price, not an invented one
     noprice = [h for h in d["holdings"] if h["symbol"] == "NOPRICE"][0]
     assert noprice["current_price"] is None
+
 
 
 def test_day_change_unavailable_when_no_prior_close(client, monkeypatch):

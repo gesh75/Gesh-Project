@@ -596,31 +596,47 @@ def _redact_prose(text: str) -> str:
 
 
 def _customer_scale_factor() -> float:
-    """model_book / real_total from the live snapshot. Fail CLOSED: if the real
-    total can't be determined, return 0.0 so dollars zero out rather than leak.
+    """Fallback model-book factor, from the on-disk snapshot.
 
-    The denominator is the DERIVED total (positions + cash), not the broker's
-    reported `total`. The broker figure includes sleeves this payload does not
-    model — on 2026-07-22 it read $35,750.87 against positions $26,052.67 + cash
-    $8,948.15 = $35,000.82. Scaling by the reported total put the model book's
-    headline at exactly $100,000 while its own components summed to $97,902
-    (audit Q-03): the $2,098 gap was the un-modelled $750.05 magnified by the
-    factor. Scaling by the component sum makes holdings + cash == the headline
-    by construction, for every possible snapshot."""
+    Used for owner-derived customer routes that are NOT the published portfolio
+    response (which carries its own exact basis — see the middleware). The
+    denominator is the canonical basis (Σ itemised holdings + cash), never a
+    summary field: the raw snapshot FILE stores positions in `portfolio_equity`
+    while the normalized payload stores ACCOUNT equity there, so any code that
+    reads that key without knowing which side of normalization it is on will get
+    it wrong half the time. Reading the holdings avoids the question entirely.
+
+    Fails CLOSED: an undeterminable basis returns 0.0 so dollars zero out."""
     try:
         snap = _json.loads((Path(__file__).parent / "live_portfolio_snapshot.json").read_text())
-        return _scale_factor_from_summary(snap.get("equity_summary", {}) or {})
+        return _model_scale_factor(model_basis_from_payload(snap))
     except Exception:
         return 0.0
 
 
-def _scale_factor_from_summary(es: dict) -> float:
-    """Pure half of _customer_scale_factor (kept separate so the arithmetic is
-    testable without patching the filesystem)."""
-    total = float(es.get("portfolio_equity") or 0) + float(es.get("cash") or 0)
-    if total <= 0:                           # pre-reconciliation snapshots
-        total = float(es.get("total", 0) or 0)
-    return _MODEL_BOOK_USD / total if total > 0 else 0.0
+def model_basis_from_payload(payload: dict) -> float:
+    """Canonical model-book basis for a payload: Σ canonical holding equity + cash.
+
+    Replaces `_scale_factor_from_summary`, whose signature (a bare
+    `equity_summary`) is what allowed the semantic error to recur: summary fields
+    alone cannot distinguish account-level equity from positions, so
+    `portfolio_equity + cash` silently double-counted cash. The basis is now read
+    from the ITEMISED holdings — the only place positions exist unambiguously —
+    plus cash."""
+    eq = payload.get("equity_summary") or {}
+    _rows, report = model_portfolio.canonical_holdings(
+        payload.get("holdings") or [], model_portfolio.PUBLISHED_HOLDING_FIELDS)
+    cash = portfolio_valuation.to_decimal(eq.get("cash")) or 0
+    return float(report["positions_value"]) + float(cash)
+
+
+def _model_scale_factor(basis: float) -> float:
+    """model notional / basis. Fails CLOSED (0.0) on a unusable basis, so dollars
+    zero out rather than leak."""
+    try:
+        return _MODEL_BOOK_USD / basis if basis and basis > 0 else 0.0
+    except (TypeError, ZeroDivisionError):
+        return 0.0
 
 
 def _scale_money(obj, factor: float, parent_key: str = ""):
@@ -896,7 +912,18 @@ async def _customer_view_middleware(request: Request, call_next):
         return resp
     body = b"".join([chunk async for chunk in resp.body_iterator])
     try:
-        masked = _scale_money(_json.loads(body), _customer_scale_factor())
+        decoded = _json.loads(body)
+        # A published model-portfolio response states its own component total, so
+        # scale by THAT rather than by a separately-read snapshot: the two can
+        # describe different moments, and only the response's own basis makes
+        # "Σ scaled holdings + scaled cash == the model notional" exact.
+        factor = None
+        if isinstance(decoded, dict):
+            data = decoded.get("data")
+            if (isinstance(data, dict)
+                    and data.get("model_portfolio_id") == model_portfolio.MODEL_PORTFOLIO_ID):
+                factor = _model_scale_factor(data.get("calculated_total_equity"))
+        masked = _scale_money(decoded, _customer_scale_factor() if factor is None else factor)
         if isinstance(masked, dict):
             masked["view"] = "model_book"   # UI/debug tell — customer-scaled response
         return JSONResponse(status_code=resp.status_code, content=masked)
@@ -2239,52 +2266,113 @@ def _attach_freshness(payload: dict) -> dict:
     return payload
 
 
-def _reconcile_equity_summary(eq: dict) -> dict:
-    """Make the headline total equal its own components, in place.
+def _positive_finite(value: object) -> float | None:
+    """A usable prior-close reference, or None.
 
-    The broker's reported `total` legitimately covers sleeves this payload does
-    not itemize (options, crypto, unsettled activity). Displaying it as the sum
-    of the positions and cash we DO itemize is what made the model book read
-    $100,000 over components worth $97,902 (audit Q-03). So:
+    The snapshot loader emits 0.0 for an ABSENT previous-close field, so zero
+    here means "we were not told", not "the book was worth nothing" — and a
+    zero/negative denominator cannot produce a return at all. Non-finite is
+    corruption. All of them are the same answer: unavailable."""
+    d = portfolio_valuation.to_decimal(value)
+    return float(d) if (d is not None and d > 0) else None
 
-      total / account_equity  → DERIVED (positions + cash), always reconciles
-      reported_total          → what the broker said, preserved verbatim
-      reported_total_delta    → the difference, so it is visible not vanished
 
-    Mutates and returns the same dict because callers already hold a reference
-    to `payload["equity_summary"]`."""
-    positions = eq.get("portfolio_equity")
-    cash = eq.get("cash")
-    if positions is None and cash is None:
+def _attach_account_day_change(eq: dict) -> dict:
+    """Owner ACCOUNT-level day change, in place. Account minus account."""
+    prior = _positive_finite(eq.get("adjusted_equity_previous_close"))
+    current = portfolio_valuation.to_decimal(eq.get("broker_account_equity"))
+    if current is None:
+        current = portfolio_valuation.to_decimal(eq.get("calculated_total_equity"))
+    if prior is None or current is None:
+        # Report unavailable rather than a 0.0 that renders as a flat market.
+        eq["day_change"] = None
+        eq["day_change_pct"] = None
+        eq["day_change_available"] = False
+        eq["prior_close_equity"] = None
         return eq
-    val = portfolio_valuation.value_positions(
-        [], cash=cash or 0, reported_total=eq.get("total"))
-    derived = float(val.cash) + float(portfolio_valuation.to_decimal(positions) or 0)
-    reported = eq.get("total")
+    amount = float(current) - prior
+    eq["day_change"] = round(amount, 2)
+    eq["day_change_pct"] = round(amount / prior * 100, 2)
+    eq["day_change_available"] = True
+    eq["prior_close_equity"] = round(prior, 2)
+    return eq
+
+
+def _reconcile_equity_summary(eq: dict, holdings: list | None = None) -> dict:
+    """Make the headline total equal its own ITEMISED components, in place.
+
+    FIELD SEMANTICS — verified against both production normalizers, because
+    getting this backwards is precisely the bug this function once had:
+
+      equity_summary.portfolio_equity   ACCOUNT-LEVEL equity (positions + cash).
+          Live: `get_total_equity()` -> `profile["equity"]`. Snapshot:
+          `load_snapshot_payload()` -> `account_equity or total or …`, which its
+          own comment documents as account-level.
+      equity_summary.cash               uninvested cash, SEPARATE and already
+          included in the account figure above.
+      holdings[].equity                 the itemised positions.
+
+    So `portfolio_equity + cash` DOUBLE-COUNTS cash: a 108,000 account with
+    20,000 cash reconciled to 128,000. Positions come from the holdings — the
+    only place they are itemised — via the canonical helper, never by
+    reconstructing them from an overloaded summary field.
+
+    Emits, under unambiguous names:
+      positions_market_value   Σ canonical holding equity
+      calculated_total_equity  positions_market_value + cash   (the display total)
+      broker_account_equity    what the broker said, kept for owner diagnostics
+      reported_total_delta     broker - calculated (unmodelled sleeves)
+
+    `total` / `account_equity` stay as compatibility aliases of the calculated
+    total for existing owner consumers."""
+    cash_d = portfolio_valuation.to_decimal(eq.get("cash"))
+    broker = portfolio_valuation.to_decimal(
+        eq.get("account_equity") if eq.get("account_equity") is not None
+        else (eq.get("portfolio_equity") if eq.get("portfolio_equity") is not None
+              else eq.get("total")))
+
+    rows, report = model_portfolio.canonical_holdings(
+        holdings or [], model_portfolio.PUBLISHED_HOLDING_FIELDS)
+    positions = report["positions_value"]
+
+    if cash_d is None or report.get("non_finite"):
+        # A corrupt input cannot produce a reconciled book; fail closed rather
+        # than substitute a zero.
+        eq["positions_market_value"] = float(positions)
+        eq["calculated_total_equity"] = None
+        eq["broker_account_equity"] = float(broker) if broker is not None else None
+        eq["reported_total_delta"] = None
+        eq["reconciles"] = False
+        eq["valuation_source_state"] = "unavailable"
+        return eq
+
+    derived = float(positions) + float(cash_d)
+    eq["positions_market_value"] = round(float(positions), 2)
+    eq["calculated_total_equity"] = round(derived, 2)
+    # Compatibility aliases — owner consumers (Kelly/consensus sizing) read these.
     eq["total"] = round(derived, 2)
     eq["account_equity"] = round(derived, 2)
-    eq["calculated_total_equity"] = round(derived, 2)
-    if reported is None:
-        # No broker headline to compare against — the calculated total simply
-        # stands. Not a degraded state: nothing disagrees.
+    eq["broker_account_equity"] = round(float(broker), 2) if broker is not None else None
+
+    if broker is None:
         eq["reported_total"] = None
         eq["reported_total_delta"] = None
         eq["reconciles"] = True
         eq["valuation_source_state"] = "calculated"
         return eq
-    delta = round(float(reported) - derived, 2)
-    eq["reported_total"] = reported
+
+    delta = round(float(broker) - derived, 2)
+    eq["reported_total"] = round(float(broker), 2)
     eq["reported_total_delta"] = delta
     eq["reconciles"] = abs(delta) <= float(portfolio_valuation.MONEY_TOLERANCE)
     eq["valuation_source_state"] = "calculated" if eq["reconciles"] else "degraded"
     if not eq["reconciles"]:
-        # Log the variance (no dollar figures — the alert must not become the
-        # leak), mark the source degraded, and keep BOTH numbers internally.
-        # The calculated total is what every downstream financial calculation
-        # uses; the broker headline is diagnostic only.
+        # Log the variance WITHOUT dollar figures — the alert must not become the
+        # leak. A broker headline legitimately covers sleeves we do not itemise
+        # (options, crypto, unsettled activity); the itemised total is what we show.
         logger.warning(
-            "equity variance: broker total disagrees with positions+cash by "
-            "%.4f%% — serving the calculated total, source marked degraded",
+            "equity variance: broker account equity disagrees with positions+cash "
+            "by %.4f%% — serving the itemised total, source marked degraded",
             abs(delta) / derived * 100 if derived else 0.0)
     return eq
 
@@ -2296,7 +2384,6 @@ def _is_owner_request(request: Request | None) -> bool:
         return True                      # single-tenant / wall-off = owner mode
     email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
     return bool(email and auth_users.is_owner(email))
-
 
 @app.get("/api/portfolio")
 def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direct calls
@@ -2319,29 +2406,14 @@ def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direc
                     if suppressed else "")
 
         eq = payload["equity_summary"]
-        _reconcile_equity_summary(eq)
-        # Day change through the CANONICAL valuation service. The dollar amount is
-        # unaffected by cash (it cancels), but the percentage denominator is the
-        # book TOTAL — positions + cash — because that is the number the book is
-        # reported as. Dividing by prior-close POSITIONS overstated the move by the
-        # cash fraction: +8,000 on 88,000 positions with 20,000 cash is 8.0% of a
-        # 100,000 book, not 10.0%. The positions-only figure is still available,
-        # under a name that cannot be mistaken for the total.
-        dc = portfolio_valuation.day_change_from_aggregates(
-            positions_value=eq.get("portfolio_equity"),
-            prior_close_positions_value=eq.get("adjusted_equity_previous_close"),
-            cash=eq.get("cash"),
-        )
-        eq["day_change"] = float(dc.amount) if dc.available and dc.amount is not None else None
-        eq["day_change_pct"] = (round(float(dc.percent), 2)
-                                if dc.available and dc.percent is not None else None)
-        # Unavailable is reported as such rather than as a 0.0 that renders as a
-        # flat market (audit: fabricated day readings).
-        eq["day_change_available"] = bool(dc.available)
-        eq["prior_close_equity"] = (float(dc.prior_close_equity)
-                                    if dc.prior_close_equity is not None else None)
-        eq["positions_day_change_pct"] = (round(float(dc.positions_percent), 2)
-                                          if dc.positions_percent is not None else None)
+        _reconcile_equity_summary(eq, payload.get("holdings"))
+        # OWNER day change is ACCOUNT vs ACCOUNT: `adjusted_equity_previous_close`
+        # is the broker's previous ACCOUNT equity, and today's account equity is
+        # the broker headline. Cash sits inside both sides already, so adding it
+        # to either would double-count it (and adding it to only one produces the
+        # 6.67% artefact). Comparing today's ITEMISED total against yesterday's
+        # ACCOUNT total would be the same category error in reverse.
+        _attach_account_day_change(eq)
 
         # Surface snapshot age for the dashboard staleness badge (>24h → amber banner).
         raw_as_of = (payload.get("as_of") or "").strip()
@@ -2372,7 +2444,8 @@ def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direc
             # normalised to the model-book notional by the masking middleware,
             # which runs exactly once, after this.
             return _sanitize({"status": "ok",
-                              "data": model_portfolio.publish(payload)})
+                              "data": model_portfolio.publish(
+                                  payload, prior_close=_prior_close)})
 
         return _sanitize({"status": "ok", "data": payload})
     except Exception as e:

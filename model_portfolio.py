@@ -311,7 +311,56 @@ def _reconciliation_verdict(holdings: list[dict], equity_summary: dict,
     return True, "reconciled", None
 
 
-def publish(payload: dict, *, now: datetime | None = None) -> dict:
+def _model_day_change(holdings: list[dict], cash: float, calculated_total: float,
+                      prior_close: object) -> dict:
+    """Day change for the PUBLISHED model — component prior vs component current.
+
+    The owner payload's `adjusted_equity_previous_close` is the broker's previous
+    ACCOUNT equity, which includes sleeves the published model does not itemise.
+    Comparing today's component total against that yesterday-account total mixes
+    two different books and yields a percentage that describes neither, so it is
+    deliberately NOT used here.
+
+    Instead the prior is rebuilt from the SAME components: Σ quantity × previous
+    session close, plus prior-close cash (current cash, matching
+    value_positions' policy — intraday cash moves only on a trade or transfer).
+
+    `prior_close` is a callable(symbol) -> price | None. If it is absent, or any
+    published holding has no usable previous close, the day change is reported
+    UNAVAILABLE. An honest null beats a percentage built on a mismatched basis."""
+    unavailable = {"day_change": None, "day_change_pct": None,
+                   "day_change_available": False}
+    if prior_close is None or not holdings:
+        return unavailable
+
+    prior_positions = Decimal(0)
+    for h in holdings:
+        qty = to_decimal(h.get("quantity"))
+        if qty is None:
+            return unavailable
+        try:
+            prev = to_decimal(prior_close(h.get("symbol")))
+        except Exception:  # noqa: BLE001 — a pricing hiccup is "unavailable"
+            return unavailable
+        if prev is None or prev <= 0:
+            return unavailable
+        prior_positions += (qty * prev).quantize(Decimal("0.01"))
+
+    prior_cash = to_decimal(cash) or Decimal(0)
+    prior_total = prior_positions + prior_cash
+    if prior_total <= 0:
+        return unavailable
+    current = to_decimal(calculated_total)
+    if current is None:
+        return unavailable
+    amount = current - prior_total
+    return {"day_change": round(float(amount), 2),
+            "day_change_pct": round(float(amount / prior_total * Decimal(100)), 2),
+            "day_change_available": True}
+
+
+def publish(payload: dict, *, now: datetime | None = None,
+            prior_close: object = None) -> dict:
     """Build the customer-facing published model portfolio from an owner payload.
 
     Copies ONLY `PUBLISHED_HOLDING_FIELDS` / `PUBLISHED_TOP_LEVEL_FIELDS`. Uses
@@ -366,9 +415,7 @@ def publish(payload: dict, *, now: datetime | None = None) -> dict:
             "age_seconds": fresh.get("age_seconds"),
             "max_expected_age_seconds": fresh.get("max_expected_age_seconds"),
         },
-        "day_change": eq.get("day_change"),
-        "day_change_pct": eq.get("day_change_pct"),
-        "day_change_available": bool(eq.get("day_change_available")),
+        **_model_day_change(holdings, cash, calculated_total, prior_close),
         "reconciles": reconciles,          # COMPUTED — see _reconciliation_verdict
         "valuation_status": valuation_status,   # reconciled | degraded | unavailable
         "degraded_reason": degraded_reason,     # customer-safe code, None when reconciled
