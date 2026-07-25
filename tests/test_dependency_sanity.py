@@ -21,12 +21,12 @@ REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
 # The pinned gesh-core commit: the PEELED COMMIT SHA of the annotated tag
-# v0.6.0. (46ba329 is that tag's own tag-object SHA — the two identify the same
+# v0.6.1. (7af8fad is that tag's own tag-object SHA — the two identify the same
 # release content, and the tag has not moved.) Pinning the peeled commit makes
 # the dependency explicit and reproducible. Declared as a LITERAL on purpose —
 # bumping the dependency then requires editing this line, so the change is
 # reviewable in the application repo.
-GESH_CORE_SHA = "37c5752606faf5eb0cf9059ad4d021e1679dbabc"
+GESH_CORE_SHA = "f11c460f628fea484c739b6ab25ea0e12c0c8f85"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 

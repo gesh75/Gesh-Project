@@ -22,8 +22,8 @@ import ledger_host
 def test_requirements_pins_gesh_core_immutably_and_no_editable():
     """Exact dependency pin requirement (active lines only).
 
-    Originally asserted the literal `@v0.6.0` tag. v0.6.0 is an ANNOTATED tag:
-    46ba329 is the tag-object SHA and 37c5752 is the peeled commit SHA, both
+    Originally asserted a literal release tag. v0.6.1 is an ANNOTATED tag:
+    7af8fad is the tag-object SHA and f11c460 is the peeled commit SHA, both
     identifying the same release content (the tag has not moved). The pin is now
     that peeled commit, which expresses the same requirement more explicitly —
     the install path names the exact object built, so no reader has to peel a
@@ -43,6 +43,7 @@ def test_requirements_pins_gesh_core_immutably_and_no_editable():
     assert "v0.5.3" not in active_text
     # The install path must name the commit, not the tag it is reachable from.
     assert "@v0.6.0" not in active_text, "symbolic tag ref back in the install path"
+    assert "@v0.6.1" not in active_text, "symbolic tag ref back in the install path"
     assert "-e ../gesh-core" not in active_text
     assert "--editable" not in active_text
     assert "main" not in active_text or "gesh-core.git@main" not in active_text
@@ -251,7 +252,7 @@ def test_success_logging_contains_only_compact_counts_and_no_sensitive_data(caps
 
 
 def test_real_temporary_sqlite_integration_uses_supplied_db_path_and_reuses_on_retry(tmp_path):
-    """Real integration test using only tmp_path and the actual gesh-core v0.6.0 adapter.
+    """Real integration test using only tmp_path and the actual gesh-core v0.6.1 adapter.
 
     Creates analysis_runs row, calls real record_daily_analysis_ledger_nonfatal,
     verifies tenant/analysis_run_id, retry reuses IDs, no duplicates.
@@ -309,10 +310,11 @@ def test_real_temporary_sqlite_integration_uses_supplied_db_path_and_reuses_on_r
     assert res1 is not None
 
     # Verify through direct DB queries on supplied tmp_path only.
-    # Table names are the released v0.6.0 schema: portfolio_snapshots,
-    # market_quote_snapshots, recommendations. Only `recommendations` carries
-    # analysis_run_id — the two snapshot tables are content-addressed and have
-    # no run-provenance column (gesh_core/ledger/schema.py).
+    # The ledger table names are unchanged in released gesh-core v0.6.1:
+    # portfolio_snapshots, market_quote_snapshots, recommendations. Only
+    # `recommendations` carries analysis_run_id — the two snapshot tables are
+    # content-addressed and have no run-provenance column
+    # (gesh_core/ledger/schema.py).
     c = sqlite3.connect(db_path)
     assert c.execute("SELECT COUNT(*) FROM portfolio_snapshots").fetchone()[0] == 1
     assert c.execute("SELECT COUNT(*) FROM market_quote_snapshots").fetchone()[0] == 1

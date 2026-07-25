@@ -6,8 +6,8 @@
 # Reproducible install:  pip install -r requirements.lock
 # Regenerate after changing requirements.txt; test-only tooling excluded.
 #
-# gesh-core is the private repo at commit 37c5752 — the peeled commit SHA of the
-# ANNOTATED tag v0.6.0 (whose tag-object SHA is 46ba329). Both identify the same
+# gesh-core is the private repo at commit f11c460 — the peeled commit SHA of the
+# ANNOTATED tag v0.6.1 (whose tag-object SHA is 7af8fad). Both identify the same
 # release content; the tag has not moved. The peeled commit is pinned so the
 # dependency is explicit and reproducible. CI needs GESH_CORE_PAT to clone it.
 # This SHA must equal the one in requirements.txt;
@@ -32,7 +32,7 @@ docstring_parser==0.18.0
 fastapi==0.135.3
 fredapi==0.5.2
 frozendict==2.4.7
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@37c5752606faf5eb0cf9059ad4d021e1679dbabc
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@f11c460f628fea484c739b6ab25ea0e12c0c8f85
 google-auth==2.56.2
 google-genai==1.73.1
 h11==0.16.0

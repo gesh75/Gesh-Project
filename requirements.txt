@@ -48,12 +48,11 @@ tenacity==9.1.4
 
 # Shared core package (Phase 3 de-duplication), pinned to the peeled COMMIT SHA.
 #
-# v0.6.0 is an ANNOTATED Git tag. The identifier 46ba329… is the annotated
-# tag-object SHA, while 37c5752… is the peeled commit SHA. Both identify the
+# v0.6.1 is an ANNOTATED Git tag. The identifier 7af8fad… is the annotated
+# tag-object SHA, while f11c460… is the peeled commit SHA. Both identify the
 # same release content — the tag has not moved, and no source-code difference
-# exists between the two references. (During PR #105 the two identifiers were
-# briefly read as a discrepancy; they are simply a tag object and its peeled
-# commit.)
+# exists between the two references. (A tag object and its peeled commit are two
+# names for one release, not a discrepancy.)
 #
 # Gesh-Project pins the full peeled commit SHA to make the application
 # dependency explicit and reproducible: every install path names one object, so
@@ -61,7 +60,12 @@ tenacity==9.1.4
 # is a reviewable edit here. Keep this in lockstep with requirements.lock
 # (tests/test_dependency_sanity.py fails if they diverge, and checks the
 # INSTALLED distribution too, not just these two files).
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@37c5752606faf5eb0cf9059ad4d021e1679dbabc
+#
+# v0.6.1 adds recommendation identity v2: normalized decision_at participates in
+# the recommendation ID, so two executions over an identical decision context no
+# longer collide. Exact retries stay idempotent and existing v1 rows remain
+# readable — no DDL and no migration.
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@f11c460f628fea484c739b6ab25ea0e12c0c8f85
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core
 alpaca-py
