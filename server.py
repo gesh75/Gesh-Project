@@ -614,25 +614,76 @@ def _customer_scale_factor() -> float:
         return 0.0
 
 
-def model_basis_from_payload(payload: dict) -> float:
-    """Canonical model-book basis for a payload: Σ canonical holding equity + cash.
+# Raw snapshot writers (build_snapshot_from_mcp.py, fetch_live_snapshot.py) emit
+# `price`; only data_fetcher.load_snapshot_payload() renames it to
+# `current_price`. `_customer_scale_factor()` reads the FILE directly and so
+# never sees that rename — which silently classified every raw holding as
+# unpriced and collapsed the scaling basis to cash alone (on the real snapshot:
+# a factor of 11.17 instead of 2.95, inflating every fallback-route dollar ~3.8x).
+#
+# Normalizing here, at the raw boundary, is deliberate. `canonical_holdings()`
+# is RIGHT to require the normalized `current_price`: a global `price` fallback
+# inside it would also hide a genuine normalization regression on the live path,
+# where `current_price` is the contract.
+_RAW_PRICE_KEYS = ("current_price", "price")
 
-    Replaces `_scale_factor_from_summary`, whose signature (a bare
-    `equity_summary`) is what allowed the semantic error to recur: summary fields
-    alone cannot distinguish account-level equity from positions, so
-    `portfolio_equity + cash` silently double-counted cash. The basis is now read
-    from the ITEMISED holdings — the only place positions exist unambiguously —
-    plus cash."""
+
+def _basis_rows(holdings: list) -> list[dict] | None:
+    """Minimal normalized rows for a basis calculation, or None if unusable.
+
+    Accepts both the raw snapshot shape (`price`) and the normalized payload
+    shape (`current_price`). Source `equity` is carried through only as evidence
+    for canonical_holdings' mismatch check — never as the calculation."""
+    rows: list[dict] = []
+    for h in holdings or []:
+        if not isinstance(h, dict):
+            return None
+        price = next((h[k] for k in _RAW_PRICE_KEYS if h.get(k) is not None), None)
+        qty = h.get("quantity")
+        # Holdings are PRESENT but unusable -> refuse. Falling through to a
+        # cash-only basis would publish a fabricated stock-portfolio factor.
+        if portfolio_valuation.to_decimal(qty) is None:
+            return None
+        price_d = portfolio_valuation.to_decimal(price)
+        if price_d is None or price_d <= 0:
+            return None
+        rows.append({"symbol": h.get("symbol"), "quantity": qty,
+                     "current_price": price, "equity": h.get("equity")})
+    return rows
+
+
+def model_basis_from_payload(payload: dict) -> float | None:
+    """Canonical model-book basis: Σ canonical holding equity + cash.
+
+    Returns None when the basis cannot be determined, so an unavailable basis is
+    never confused with a genuine cash-only book of 0.0 — `_model_scale_factor`
+    turns None into a fail-closed 0.0.
+
+    Replaces `_scale_factor_from_summary`, whose bare-`equity_summary` signature
+    is what allowed the account-vs-positions error to recur: summary fields alone
+    cannot say which side of normalization they came from. The basis is read from
+    the ITEMISED holdings — the only unambiguous source of positions — plus cash.
+    """
+    if not isinstance(payload, dict):
+        return None
     eq = payload.get("equity_summary") or {}
-    _rows, report = model_portfolio.canonical_holdings(
-        payload.get("holdings") or [], model_portfolio.PUBLISHED_HOLDING_FIELDS)
-    cash = portfolio_valuation.to_decimal(eq.get("cash")) or 0
+    cash = portfolio_valuation.to_decimal(eq.get("cash"))
+    if cash is None:
+        return None                      # non-finite / missing / non-numeric cash
+    rows = _basis_rows(payload.get("holdings") or [])
+    if rows is None:
+        return None
+    _published, report = model_portfolio.canonical_holdings(
+        rows, model_portfolio.PUBLISHED_HOLDING_FIELDS)
+    if report.get("non_finite") or report.get("unpriced"):
+        return None
     return float(report["positions_value"]) + float(cash)
 
 
-def _model_scale_factor(basis: float) -> float:
-    """model notional / basis. Fails CLOSED (0.0) on a unusable basis, so dollars
-    zero out rather than leak."""
+def _model_scale_factor(basis: float | None) -> float:
+    """model notional / basis. Fails CLOSED (0.0) on an unusable or absent basis,
+    so dollars zero out rather than leak. `None` means "could not be determined"
+    — kept distinct from a real 0.0 so the two are never conflated."""
     try:
         return _MODEL_BOOK_USD / basis if basis and basis > 0 else 0.0
     except (TypeError, ZeroDivisionError):

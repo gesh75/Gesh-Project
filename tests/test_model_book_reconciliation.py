@@ -137,7 +137,11 @@ def test_scale_factor_fails_closed_on_an_unusable_basis(client):
     assert server._model_scale_factor(0) == 0.0
     assert server._model_scale_factor(None) == 0.0
     assert server._model_scale_factor(-1) == 0.0
-    assert server.model_basis_from_payload({}) == 0.0
+    # An UNDETERMINABLE basis is now None, kept distinct from a real 0.0 so the
+    # two are never conflated; _model_scale_factor turns either into a
+    # fail-closed 0.0.
+    assert server.model_basis_from_payload({}) is None
+    assert server._model_scale_factor(server.model_basis_from_payload({})) == 0.0
 
 
 # ─── the reconciliation branch matrix ────────────────────────────────────────
