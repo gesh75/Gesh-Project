@@ -106,7 +106,13 @@ def test_a_new_owner_field_cannot_leak():
 
 def test_published_total_is_calculated_not_the_broker_headline():
     out = model_portfolio.publish(_OWNER_PAYLOAD)
-    assert out["calculated_total_equity"] == pytest.approx(3372.01 + 8948.15, abs=0.02)
+    # CANONICAL equity (quantity × current_price), not the source `equity` field:
+    # 15.768482 × 213.85 = 3372.09, vs a source equity of 3372.01. The 0.08 gap is
+    # inside the price-display tolerance, so this still reconciles — but the number
+    # published is the one derived from the quantity and price actually shown.
+    canonical_position = round(15.768482 * 213.85, 2)
+    assert out["calculated_total_equity"] == pytest.approx(canonical_position + 8948.15,
+                                                           abs=0.02)
     assert out["calculated_total_equity"] != pytest.approx(35750.87)
     assert out["positions_market_value"] + out["cash"] == pytest.approx(
         out["calculated_total_equity"], abs=0.02)
@@ -186,7 +192,9 @@ def test_dollars_are_scaled_exactly_once(client, monkeypatch):
     _as(server, monkeypatch, c, CUSTOMER)
     d = c.get("/api/portfolio").json()["data"]
     assert d["cash"] == pytest.approx(8948.15 * 2.0, abs=0.05)
-    assert d["holdings"][0]["equity"] == pytest.approx(3372.011 * 2.0, abs=0.05)
+    # canonical (quantity × price) scaled once, not the source equity scaled once
+    assert d["holdings"][0]["equity"] == pytest.approx(
+        round(15.768482 * 213.85, 2) * 2.0, abs=0.05)
 
 
 def test_owner_still_receives_the_full_brokerage_payload(client, monkeypatch):

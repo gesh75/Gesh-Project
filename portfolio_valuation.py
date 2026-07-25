@@ -297,3 +297,65 @@ def value_positions(
         unavailable=tuple(unavailable),
         issues=tuple(issues),
     )
+
+
+@dataclass(frozen=True)
+class DayChange:
+    """Day change over a TOTAL book (positions + cash), or an explicit absence.
+
+    `amount`/`percent` are None exactly when the inputs did not support the
+    calculation — never 0.0, which reads as a flat market. `positions_percent`
+    is the positions-only return, exposed separately and named unambiguously so
+    it can never be mistaken for the total-book figure.
+    """
+    amount: Decimal | None
+    percent: Decimal | None
+    prior_close_equity: Decimal | None
+    positions_percent: Decimal | None
+    available: bool
+    reason: str | None = None
+
+
+def day_change_from_aggregates(
+    *,
+    positions_value: object,
+    prior_close_positions_value: object,
+    cash: object = 0,
+    prior_close_cash: object = None,
+) -> DayChange:
+    """Cash-aware day change from AGGREGATE position values.
+
+    `value_positions` needs per-holding prior closes; the owner snapshot instead
+    supplies one aggregate `adjusted_equity_previous_close`. This is the same
+    arithmetic for that shape — one canonical definition, not a third formula.
+
+    The customer's book total is positions + cash, so the percentage denominator
+    must be the prior-close TOTAL. Using prior-close POSITIONS overstates the
+    move by the cash fraction: +8,000 on 88,000 positions with 20,000 cash is
+    8.0% of a 100,000 book, not 10.0%.
+
+    `prior_close_cash` defaults to `cash` — matching `value_positions` semantics:
+    intraday cash only moves on a trade or transfer, and a caller that knows
+    better passes the real figure.
+    """
+    pos = to_decimal(positions_value)
+    prior_pos = to_decimal(prior_close_positions_value)
+    cash_d = to_decimal(cash) or _ZERO
+    prior_cash = to_decimal(prior_close_cash)
+    if prior_cash is None:
+        prior_cash = cash_d
+
+    if pos is None or prior_pos is None:
+        return DayChange(None, None, None, None, False, "missing_prior_close")
+
+    prior_total = _money(prior_pos + prior_cash)
+    amount = _money((pos + cash_d) - prior_total)
+    if prior_total <= 0:
+        return DayChange(amount, None, prior_total, None, False,
+                         "prior_close_equity_not_positive")
+
+    percent = (amount / prior_total * Decimal(100)).quantize(Decimal("0.0001"))
+    positions_percent = (
+        ((pos - prior_pos) / prior_pos * Decimal(100)).quantize(Decimal("0.0001"))
+        if prior_pos > 0 else None)
+    return DayChange(amount, percent, prior_total, positions_percent, True, None)

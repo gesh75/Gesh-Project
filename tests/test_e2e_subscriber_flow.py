@@ -79,7 +79,9 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
         "as_of": "2026-07-05T13:00:00+00:00", "offline": True, "source": "test",
         "equity_summary": {"portfolio_equity": _OWNER_TOTAL, "cash": _OWNER_CASH,
                            "buying_power": _OWNER_CASH},
-        "holdings": [{"symbol": "NVDA", "quantity": 6.078929, "price": 194.51,
+        # `current_price` is the key data_fetcher emits (it normalizes the raw
+        # snapshot's `price` at load); the canonical holding calculation reads it.
+        "holdings": [{"symbol": "NVDA", "quantity": 6.078929, "current_price": 194.51,
                       "equity": 101.988616, "average_buy_price": 180.0,
                       "percent_change": -3.5}],
         "watchlist": [],

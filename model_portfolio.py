@@ -167,7 +167,89 @@ def _is_finite_number(x: object) -> bool:
             and math.isfinite(x))
 
 
-def _reconciliation_verdict(holdings: list[dict], equity_summary: dict) -> tuple[bool, str, str | None]:
+# ── canonical published holdings (the single holding-level calculation) ──────
+# Both customer serializers (publish + build_customer_model_context) MUST derive
+# holding equity the same way, from the same numbers. They previously each summed
+# the SOURCE `equity` field while the reconciliation verdict was computed from
+# quantity × current_price, so the two were never compared: a row carrying
+# quantity=10, current_price=100, equity=900 published a 1,000 total as
+# `reconciles: true` while the canonical total was 1,100.
+
+# Displayed prices are rounded to the cent, so `quantity × displayed_price` can
+# differ legitimately from a broker equity computed at full precision by up to
+# half a cent per share. The allowance is therefore proportional to size, not a
+# flat percentage: a blanket percentage would wave through a real 5% error on a
+# large position while flagging honest rounding on a small one.
+_DISPLAYED_PRICE_UNIT = Decimal("0.01")
+
+
+def _equity_tolerance(quantity: Decimal) -> Decimal:
+    """max(MONEY_TOLERANCE, |quantity| × half-a-cent + MONEY_TOLERANCE)."""
+    half_unit = _DISPLAYED_PRICE_UNIT / Decimal(2)
+    return max(portfolio_valuation.MONEY_TOLERANCE,
+               abs(quantity) * half_unit + portfolio_valuation.MONEY_TOLERANCE)
+
+
+def canonical_holdings(raw: list, fields: tuple) -> tuple[list[dict], dict]:
+    """Published rows built from CANONICAL equity, plus what the check found.
+
+    Returns (rows, report). Every priced row carries
+    ``equity = quantity × current_price`` — the source `equity` is evidence to
+    be checked, never the authoritative calculation — and
+    ``portfolio_percentage`` is recomputed from those canonical equities so the
+    weights always describe the numbers actually shown.
+
+    `current_price` is the normalized key: data_fetcher emits it on BOTH the
+    live and snapshot paths (it maps the raw snapshot's `price` at load), so a
+    row without it here is genuinely unpriced rather than differently spelled.
+
+    report keys:
+      non_finite     — a present-but-corrupt quantity/price/equity (fail closed)
+      unpriced       — symbols with no usable current price
+      mismatch       — priced rows whose source equity is outside tolerance
+      positions_value(Decimal) — Σ canonical equity over priced rows
+    """
+    rows: list[dict] = []
+    report = {"non_finite": False, "unpriced": [], "mismatch": [],
+              "positions_value": Decimal(0)}
+
+    for h in raw:
+        if not isinstance(h, dict):
+            continue
+        row = {k: h.get(k) for k in fields}
+        q_raw, p_raw, e_raw = h.get("quantity"), h.get("current_price"), h.get("equity")
+        for v in (q_raw, p_raw, e_raw):
+            if v is not None and not _is_finite_number(v):
+                report["non_finite"] = True
+        qty, price, src_equity = to_decimal(q_raw), to_decimal(p_raw), to_decimal(e_raw)
+        if qty is None and q_raw is not None:
+            report["non_finite"] = True
+
+        if qty is None or price is None or price <= 0:
+            report["unpriced"].append(str(h.get("symbol") or ""))
+            if "equity" in row:
+                row["equity"] = None            # never invent a value for an unpriced row
+        else:
+            canonical = (qty * price).quantize(Decimal("0.01"))
+            report["positions_value"] += canonical
+            if src_equity is not None and abs(src_equity - canonical) > _equity_tolerance(qty):
+                report["mismatch"].append(str(h.get("symbol") or ""))
+            if "equity" in row:
+                row["equity"] = float(canonical)
+        rows.append(row)
+
+    total = report["positions_value"]
+    for row in rows:
+        if "portfolio_percentage" not in row:
+            continue
+        eqv = to_decimal(row.get("equity"))
+        row["portfolio_percentage"] = (
+            round(float(eqv / total * 100), 1) if (eqv is not None and total > 0) else 0.0)
+    return rows, report
+
+
+def _reconciliation_verdict(holdings: list[dict], equity_summary: dict,
+                            *, report: dict | None = None) -> tuple[bool, str, str | None]:
     """COMPUTED reconciliation for the published model portfolio (GATE 3).
 
     The published total is the sum of the rows shown, so the equity identity
@@ -185,6 +267,13 @@ def _reconciliation_verdict(holdings: list[dict], equity_summary: dict) -> tuple
     Returns customer-safe codes only; detailed diagnostics stay in logs via the
     server's `_reconcile_equity_summary`. Never raises — a valuation that cannot
     be evaluated is itself an "unavailable" verdict, not a 500."""
+    # The holding-level findings come from canonical_holdings, which already
+    # compared each source equity against quantity × current_price. Ranked
+    # worst-first: corruption fails closed before anything else is considered.
+    report = report or {}
+    if report.get("non_finite"):
+        return False, "unavailable", "non_finite_value"
+
     cash = equity_summary.get("cash")
     if not _is_finite_number(cash):
         return False, "unavailable", "non_finite_value"
@@ -210,8 +299,13 @@ def _reconciliation_verdict(holdings: list[dict], equity_summary: dict) -> tuple
     except Exception:  # noqa: BLE001
         return False, "unavailable", "valuation_error"
 
-    if val.unpriced_symbols:
+    if val.unpriced_symbols or report.get("unpriced"):
         return False, "degraded", "missing_price"
+    if report.get("mismatch"):
+        # Source equity disagreed with quantity × price beyond the price-display
+        # tolerance. The customer output uses the canonical figure; the row-level
+        # detail stays in server logs, so the code shipped here is generic.
+        return False, "degraded", "holding_equity_mismatch"
     if not val.reconciles:
         return False, "degraded", "invariant_failure"
     return True, "reconciled", None
@@ -230,17 +324,17 @@ def publish(payload: dict, *, now: datetime | None = None) -> dict:
     eq = payload.get("equity_summary") or {}
     fresh = payload.get("data_freshness") or {}
 
-    holdings: list[dict] = []
-    for h in (payload.get("holdings") or []):
-        if not isinstance(h, dict):
-            continue
-        holdings.append({k: h.get(k) for k in PUBLISHED_HOLDING_FIELDS})
-
-    positions_value = sum((_num(h.get("equity")) or 0.0) for h in holdings)
+    # Canonical rows: equity = quantity × current_price, weights recomputed from
+    # those equities. The source `equity` is CHECKED against this, never trusted
+    # as the calculation (see canonical_holdings).
+    holdings, report = canonical_holdings(payload.get("holdings") or [],
+                                          PUBLISHED_HOLDING_FIELDS)
+    positions_value = float(report["positions_value"])
     cash = _num(eq.get("cash")) or 0.0
     calculated_total = round(positions_value + cash, 2)
 
-    reconciles, valuation_status, degraded_reason = _reconciliation_verdict(holdings, eq)
+    reconciles, valuation_status, degraded_reason = _reconciliation_verdict(
+        holdings, eq, report=report)
 
     # content_version() rejects a non-numeric composition by design (a version
     # over garbage is meaningless). publish() is a customer-facing serializer,
@@ -310,9 +404,11 @@ def build_customer_model_context(payload: dict) -> dict:
     RECOMPUTED from positions + cash so a customer analysis can never be based
     on the broker headline the components do not support."""
     eq_in = payload.get("equity_summary") or {}
-    holdings = [{k: h.get(k) for k in CONTEXT_HOLDING_FIELDS}
-                for h in (payload.get("holdings") or []) if isinstance(h, dict)]
-    positions_value = sum((_num(h.get("equity")) or 0.0) for h in holdings)
+    # SAME canonical holding calculation as publish() — the response serializer
+    # and the analysis-context serializer must never compute equity differently.
+    holdings, report = canonical_holdings(payload.get("holdings") or [],
+                                          CONTEXT_HOLDING_FIELDS)
+    positions_value = float(report["positions_value"])
     cash = _num(eq_in.get("cash")) or 0.0
     equity_summary = {
         "portfolio_equity": round(positions_value, 2),

@@ -2320,21 +2320,28 @@ def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direc
 
         eq = payload["equity_summary"]
         _reconcile_equity_summary(eq)
-        prev = eq.get("adjusted_equity_previous_close", 0)
-        curr = eq.get("portfolio_equity", 0)
-        # Day change on the OWNER book compares positions equity to the
-        # split/dividend-adjusted previous close of the same positions — both
-        # sides are position-only, so cash must not enter either.
-        if prev:
-            eq["day_change"] = round(curr - prev, 2)
-            eq["day_change_pct"] = round((curr - prev) / prev * 100, 2)
-            eq["day_change_available"] = True
-        else:
-            # No prior-close reference: report unavailable rather than a 0.0 that
-            # renders as a flat market (audit: fabricated day readings).
-            eq["day_change"] = None
-            eq["day_change_pct"] = None
-            eq["day_change_available"] = False
+        # Day change through the CANONICAL valuation service. The dollar amount is
+        # unaffected by cash (it cancels), but the percentage denominator is the
+        # book TOTAL — positions + cash — because that is the number the book is
+        # reported as. Dividing by prior-close POSITIONS overstated the move by the
+        # cash fraction: +8,000 on 88,000 positions with 20,000 cash is 8.0% of a
+        # 100,000 book, not 10.0%. The positions-only figure is still available,
+        # under a name that cannot be mistaken for the total.
+        dc = portfolio_valuation.day_change_from_aggregates(
+            positions_value=eq.get("portfolio_equity"),
+            prior_close_positions_value=eq.get("adjusted_equity_previous_close"),
+            cash=eq.get("cash"),
+        )
+        eq["day_change"] = float(dc.amount) if dc.available and dc.amount is not None else None
+        eq["day_change_pct"] = (round(float(dc.percent), 2)
+                                if dc.available and dc.percent is not None else None)
+        # Unavailable is reported as such rather than as a 0.0 that renders as a
+        # flat market (audit: fabricated day readings).
+        eq["day_change_available"] = bool(dc.available)
+        eq["prior_close_equity"] = (float(dc.prior_close_equity)
+                                    if dc.prior_close_equity is not None else None)
+        eq["positions_day_change_pct"] = (round(float(dc.positions_percent), 2)
+                                          if dc.positions_percent is not None else None)
 
         # Surface snapshot age for the dashboard staleness badge (>24h → amber banner).
         raw_as_of = (payload.get("as_of") or "").strip()
