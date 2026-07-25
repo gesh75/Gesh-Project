@@ -849,17 +849,50 @@ def _canonical_origin(raw: str) -> str:
 
     Comparing raw strings would treat https://x.test and https://x.test:443 as
     different origins; comparing bare netloc would treat http:// and https://
-    as the same one. Both are wrong."""
+    as the same one. Both are wrong.
+
+    PR105-SEC-01: EVERY parse AND property access happens inside the exception
+    boundary. `urlparse()` itself rarely raises, but `u.port` raises ValueError on
+    a non-numeric port ("https://x:notaport") or one out of range
+    ("https://x:65536") — and that access used to sit OUTSIDE the try, so a
+    malformed Origin header produced a pre-auth HTTP 500 with a traceback instead
+    of a controlled refusal. Fail closed: anything unparseable is "" (invalid),
+    which the caller treats as a refusal, never as a match.
+    """
     try:
         u = _urlparse(raw.strip())
-    except Exception:  # noqa: BLE001
+        scheme = (u.scheme or "").lower()
+        # Only web origins can carry an ambient browser cookie; ftp://, file://,
+        # data:// and friends are never a legitimate same-origin mutation source.
+        if scheme not in ("http", "https"):
+            return ""
+        # userinfo in an Origin is malformed per the Origin grammar and is a
+        # classic spoofing vector ("https://evil@trusted.test"). Refuse it rather
+        # than silently discarding the credentials portion.
+        if u.username is not None or u.password is not None:
+            return ""
+        host = (u.hostname or "").lower()
+        port = str(u.port) if u.port else _DEFAULT_PORTS.get(scheme, "")
+    except Exception:  # noqa: BLE001 — malformed host/port/syntax => invalid origin
         return ""
-    scheme = (u.scheme or "").lower()
-    host = (u.hostname or "").lower()
-    if not scheme or not host:
+    if not host:
         return ""
-    port = str(u.port) if u.port else _DEFAULT_PORTS.get(scheme, "")
     return f"{scheme}://{host}:{port}"
+
+
+def _raw_header_values(request: Request, name: str) -> list[str]:
+    """Every raw ASGI value for `name`, lowercased-key matched.
+
+    `request.headers.get()` collapses duplicates to the first occurrence, which
+    hides a conflicting second value — exactly the ambiguity a security decision
+    must not resolve by luck (PR105-SEC-02b). Reading the raw scope is the only
+    way to see that a singleton header arrived twice."""
+    want = name.lower().encode()
+    try:
+        pairs = request.scope.get("headers") or []
+    except Exception:  # noqa: BLE001 — a malformed scope must not 500 the guard
+        return []
+    return [v.decode("latin-1").strip().lower() for k, v in pairs if k.lower() == want]
 
 
 def _is_api_key_authenticated(request: Request) -> bool:
@@ -901,12 +934,26 @@ async def _csrf_guard_middleware(request: Request, call_next):
             return JSONResponse(status_code=400,
                                 content={"detail": "Method override is not supported."})
 
+    # PR105-SEC-02b: a SINGLETON security header appearing twice is ambiguous —
+    # `request.headers.get()` silently returns the first, so a proxy or raw client
+    # could present one value to us and another downstream. Read the raw ASGI
+    # headers and refuse the ambiguity rather than pick a winner.
+    for singleton in ("origin", "content-type"):
+        values = _raw_header_values(request, singleton)
+        if len(values) > 1 and len(set(values)) > 1:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": f"Ambiguous duplicate {singleton} header."})
+
     ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
     has_body = bool(request.headers.get("content-length", "").strip("0 ")
                     or request.headers.get("transfer-encoding"))
-    if has_body and ctype and ctype != "application/json":
-        # Parameters after the media type (charset=UTF-8) are valid JSON and are
-        # stripped above — only a genuinely different media type is refused.
+    # PR105-SEC-02: a body-bearing mutation must DECLARE application/json. The old
+    # `and ctype` short-circuit meant an ABSENT Content-Type skipped the check
+    # entirely, so raw JSON bytes with no declared type bypassed the JSON-only
+    # contract. Parameters after the media type (charset=UTF-8) are stripped above,
+    # so only a genuinely different — or missing — media type is refused.
+    if has_body and ctype != "application/json":
         return JSONResponse(
             status_code=415,
             content={"detail": "This endpoint accepts application/json only."})
