@@ -3,6 +3,7 @@
 **As of:** 2026-07-25, Europe/Sofia  
 **Decision:** NO-GO for paid/customer release  
 **Canonical pack:** `docs/GESH_CONTROL_PACK_2026-07-25/`
+**Phase 1 result:** complete as a clean, reviewed, undeployed containment candidate; see `GESH_09_P0_CONTAINMENT_RESULT.md`.
 
 ## What GESH is
 
@@ -13,22 +14,23 @@ The important data domains are:
 1. **My Book:** private positions owned by one authenticated customer UUID.
 2. **Model Book:** intended customer-visible model strategy; no durable publication domain exists yet.
 3. **Owner portfolio:** real operator brokerage data from Robinhood/MCP; owner-only by policy.
-4. **Trades:** global real and paper trade tables with free-text notes; currently not tenant/publication scoped.
+4. **Trades:** global real and paper trade tables with free-text notes; not tenant/publication scoped and now denied to customers in Phase 1.
 5. **Track record:** public aggregation from the sibling trading tracker database.
 
 Do not treat these as aliases.
 
 ## Repository and runtime baseline
 
-- `origin/main`: `cef1fe604d84b2e9d4cc72384e3998387dc9a0bd` after merged PR #106 (`gesh-core` v0.6.1).
-- Checked branch: `fix/audit-p0-p1-remediation` at `09f757c3b61a6d89da6588e3cc17e9853ec39519`.
-- Checked branch is 12 commits ahead and 4 behind `origin/main`; the worktree contains unrelated tracked and untracked user changes.
-- PR #105 head: `fe65a816cf33a76b710e8f9746f2ef32f5c0b2b2`.
-- PR #105: OPEN, non-draft, conflicting/dirty, not merged. CI at that ref: 2,077 passed, 1 skipped, 62.16% coverage; isolation: 83 passed.
+- Recorded exact then-current `origin/main` base: `68287dfd80eab51b40d4270eab07b0bd73267992`, including squash-merged PR #105.
+- Phase 1 branch: `codex/p0-data-boundary-containment-20260725`.
+- Clean implementation commit: `8ff34b531b31248d71178c6ed23cb88182cf1724`; after the documentation-only descendant is committed, its exact SHA is resolved by the GESH-09 export placeholder and a new clean-final release manifest. The recorded candidate manifest identifies the implementation commit only.
+- Clean base suite: 2,078 passed, zero failed/skipped.
+- Clean implementation suite: 2,206 passed, zero failed/skipped, 62.52% coverage, three warnings.
+- Candidate runtime: 80-member deterministic USTAR, 1,556,480 bytes, SHA-256 `a0d8a80a0255e393675352422992eb343df30bb60c016b17ec659d3e8324e345`.
 - Port-9000 launchd process started 2026-07-23 06:29 EEST with reload disabled. Several relevant files changed afterward.
-- No runtime endpoint identifies commit SHA, build time/artifact digest, or schema version. Live behavior cannot be attributed to a single ref.
+- Candidate `/api/version` safely identifies service, exact commit, UTC build time, and `dirty:false`; adjacent manifest carries digest/lock/test evidence. Production remains unidentified because no deployment occurred.
 
-Do not restart the live process from the current dirty/conflicting worktree.
+Do not restart the live process from a mutable worktree. Promote only an approved saved artifact after staging/rollback gates.
 
 ## Restored authorized test-account baseline
 
@@ -60,11 +62,11 @@ Never reproduce credentials, cookies, tokens, or private trade-note content in o
 - One `/api/mybook/analyze` job completed via 202 polling; immediate repeat was cached.
 - Visible owner-operation cards are absent from normal customer UI.
 
-## Current release blockers
+## Phase 1 containment and current release blockers
 
-### P0 — owner-derived portfolio
+### P0 — owner-derived portfolio: contained in candidate
 
-Customer `/api/portfolio` returns a response with `source=robinhood_mcp`, ten owner-derived holdings, cash/account fields, stale/offline state, and `reconciles:false`.
+Before containment, customer `/api/portfolio` returned `source=robinhood_mcp`, ten owner-derived holdings, cash/account fields, stale/offline state, and `reconciles:false`. Phase 1 now returns the exact `model_book_unavailable` 403 before handler/cache/connector access. Query tampering cannot alter scope, and the denial contains no owner field.
 
 Fresh numerical bridge:
 
@@ -77,13 +79,13 @@ Fresh numerical bridge:
 
 This is not classic query IDOR. Authentication and query tamper resistance work. The normal customer dataset is wrong: `view=model_book` is merely response metadata, and the model is dynamically derived from a real owner snapshot without consent, approval, immutable version, entitlement, or rollback.
 
-### P0 — real trade and private note
+### P0 — real trade and private note: contained in candidate
 
-Customer `/api/trades` returns a global row with `is_paper:0`, execution/provenance fields, and a private free-text note. `/api/trades/stats` belongs to the same unscoped domain. The global tables have no tenant/publication key; code uses `SELECT *`.
+Before containment, customer `/api/trades` returned a global `is_paper:0` row, execution/provenance fields, and a private free-text note. Phase 1 returns the exact `customer_trade_ledger_unavailable` 403 for both `/api/trades` and `/api/trades/stats` before repository access. The owner tables remain internal and unchanged.
 
 ### Other blockers
 
-- Customer JavaScript still polls `/api/portfolio` and owner ECG/regime flows, then throws null-DOM errors; one repeats every 30 seconds.
+- **Resolved in Phase 1 candidate:** customer web and Android contain zero removed owner endpoint fetches/retries/polls; real Chromium emits no related console error across two refresh intervals.
 - Track Record shows engine `+6.7%`, PF `0.91`, win rate `18%`, max drawdown `27%`, Deflated Sharpe `0.44`, and SPY `+nan%`. Headline sums per-trade percentages while PF uses dollar P&L; it is not a capital-matched portfolio return.
 - Tested TSLA combined stance is `REDUCE` and mechanical consensus is `SELL`, but the trade setup still presents a long entry/stop/target.
 - My Book has no cost basis for the baseline holding.
@@ -91,13 +93,13 @@ Customer `/api/trades` returns a global row with `is_paper:0`, execution/provena
 - True mobile device emulation is unverified; static CSS suggests possible 320px clipping.
 - A missing `Content-Type` on a JSON mutation is accepted in current code.
 - My Book can accept a syntactically valid unknown and create work before existence validation.
-- Dirty-tree full test result: 1,639 passed, 4 failed, 59.15% coverage, 975 warnings. One failure was environment-induced; three genuine failures come from uncommitted `ai_analyzer.py` streaming changes whose test fakes implement only `.create()`.
+- Historical dirty-tree result was 1,639 passed/4 failed; it remains classified evidence. It did not reproduce on exact clean base (2,078 passed) or Phase 1 implementation (2,206 passed). No test was skipped, weakened, deleted, or xfailed.
 
 ## Target decision already made
 
 Use:
 
-- **B immediately:** customer portfolio/trades/stats fail closed.
+- **B immediately — implemented in Phase 1 candidate:** customer portfolio/trades/stats fail closed.
 - **C durably:** separate curated, immutable Model Book dataset.
 - **D by default:** synthetic/paper source.
 - **E only by exception:** explicitly consented real snapshot, quarantined, stripped, reviewed, reconciled, approved, and published as an immutable derivative.
@@ -115,18 +117,17 @@ Required model records:
 
 No active approved version must fail closed—never fall back to owner data.
 
-## Exact next action
+## Exact next action after Phase 1
 
-Create a clean hotfix branch from current `origin/main` and implement containment before attempting the durable model migration:
+Do not repeat the broad audit and do not reopen the contained routes. Review/merge the clean Phase 1 result through the normal process, then perform staging and rollback proof on the saved artifact. Phase 2 may implement only the separately approved durable publication work:
 
-1. owner-gate customer `/api/portfolio`, `/api/trades`, and `/api/trades/stats`;
-2. stop all customer initialization/interval calls to owner portfolio/ECG/regime functions;
-3. add explicit build SHA/build time/schema version and private/no-store financial response headers;
-4. add negative customer leak tests using arbitrary text and source sentinels;
-5. run the focused, full, browser-console, and clean-deploy smoke gates on staging;
-6. deploy only from the clean reviewed SHA, then verify that SHA live.
+1. preserve the three exact 403 contracts and zero customer owner-domain requests;
+2. design/approve immutable Model Book schema, consent/quarantine, assignment, publication event, and atomic rollback;
+3. use synthetic/paper provenance by default; do not migrate owner snapshots or notes;
+4. close the existing financial, track-record, recommendation, accessibility, mobile, mutation, staging, and rollback gates;
+5. deploy only through a separately authorized production change and verify the live SHA.
 
-After containment, rebuild the useful PR #105 changes on current main rather than merging the conflicting branch blindly, and implement the immutable Model Book publication schema.
+PR #105 reconstruction is no longer an action: it is already in the recorded Phase 1 base.
 
 ## Required evidence references
 
@@ -138,23 +139,27 @@ After containment, rebuild the useful PR #105 changes on current main rather tha
 - Dependency-ordered tickets: `GESH_05_ENGINEERING_BACKLOG.md`
 - Blocking test design: `GESH_06_TEST_AND_CI_PLAN.md`
 - Recovery order and rollback points: `GESH_07_30_DAY_RECOVERY_SEQUENCE.md`
+- Phase 1 containment result and exact evidence: `GESH_09_P0_CONTAINMENT_RESULT.md`
 
 ## Ready-to-paste continuation prompt
 
 ```text
-Continue GESH from the canonical 2026-07-25 control pack at:
-/Users/georgigaydarov/Projects/gesh-project/docs/GESH_CONTROL_PACK_2026-07-25/
+Continue GESH from the canonical 2026-07-25 control pack on branch:
+codex/p0-data-boundary-containment-20260725
 
-Read all nine files, CLAUDE.md, and current AGENTS instructions before acting. Use Grok 4.5 for repository analysis/implementation as required. Re-fetch origin/main and PR #105 state; do not assume refs are unchanged. Preserve unrelated dirty-worktree changes and do not restart/deploy from that tree.
+First fetch/check out the exact final control-pack commit recorded by the
+GESH-09 `export-subst` value or its adjacent final release manifest. Then read:
+docs/GESH_CONTROL_PACK_2026-07-25/
 
-Start with the exact first-24-hour containment work in GESH_05/GESH_07:
-1) create a clean branch from current origin/main;
-2) owner-gate customer /api/portfolio, /api/trades, and /api/trades/stats;
-3) stop customer polling of portfolio/ECG/regime owner flows;
-4) add leak-sentinel, role/route, browser-console, build-identity, and no-store tests;
-5) verify on a clean staging artifact with an observable SHA.
+Read all ten control-pack files, CLAUDE.md, and current AGENTS instructions before acting. Do not use a similarly named directory from an unrelated or stale worktree. Use Grok 4.5 for repository analysis/implementation as required. Re-fetch origin/main state; do not assume refs are unchanged. Preserve unrelated dirty-worktree changes and do not restart/deploy from that tree.
 
-Do not place trades, move money, delete accounts, expose secrets, or inspect more private data than necessary. Treat My Book, curated Model Book, owner Robinhood data, global trades, and public track record as separate domains. Do not merge PR #105 wholesale while it is conflicting; port only reviewed changes after containment.
+Phase 1 containment is complete in the clean candidate recorded by GESH-09. Preserve:
+1) exact customer 403 contracts for /api/portfolio, /api/trades, and /api/trades/stats;
+2) zero customer web/Android owner-domain fetches;
+3) owner behavior;
+4) repository/cache/tamper/sentinel/browser/build-identity/artifact gates.
 
-Return evidence: exact commit/ref, diff, tests, staging responses, deployed SHA, rollback point, and updated status for every affected canonical finding. Do not call a serializer-only change a complete Model Book fix. Continue next with the immutable model-publication schema using synthetic/paper provenance by default.
+Do not place trades, move money, delete accounts, expose secrets, or inspect more private data than necessary. Treat My Book, curated Model Book, owner Robinhood data, global trades, and public track record as separate domains.
+
+Continue only with separately authorized Phase 2 immutable model-publication work using synthetic/paper provenance by default. Return exact commit/ref, diff, tests, staging/rollback evidence, and updated canonical status. Do not call deny mode or a serializer-only change a complete Model Book publication fix.
 ```

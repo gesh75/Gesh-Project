@@ -1,7 +1,7 @@
 # GESH 06 — Test, CI, Staging, and Release-Gate Plan
 
 **Evidence cutoff:** 2026-07-25  
-**Current test verdict:** Focused audit tests are useful but insufficient. The checked dirty tree fails the full suite, PR #105 conflicts with current main, and the live process cannot identify its source SHA. **No paid/customer release is permitted.**
+**Current test verdict:** Exact clean base and Phase 1 candidate suites pass, and Phase 1 boundary/artifact gates are implemented. Durable publication, staging, accessibility/mobile, rollback, and live identity remain incomplete. **No paid/customer release is permitted.**
 
 ## 1. What the current test evidence actually says
 
@@ -10,9 +10,10 @@
 | Checked dirty H (`09f757c3`) — focused audit matrix | Exact command below | **436 passed in 19.75s** | Strong evidence for the selected fixtures. It does not prove that the test contracts are safe, that other tests pass, or that live runs this code. |
 | Checked dirty H — full CI-style suite | Exact command below | **1,639 passed, 4 failed, 59.15% coverage, 975 warnings** | One failure was caused by verification-time `GESH_DB_PATH` import contamination and passed under the normal workflow environment. Three are genuine dirty-tree regressions: `ai_analyzer.py` uses `client.messages.stream()`, while fakes in `test_ai_analyzer_caching.py` and `test_analyze_ticker.py` provide only `.create()`. |
 | Checked dirty H — lint | `./venv/bin/ruff check tests/` | **Passed** | Tests are lint-clean; product code was not certified by this command. |
-| Checked dirty H — current customer-isolation subset | Exact command below | **83 passed** | False-green risk: the suite treats scaled `model_book`, `/api/trades`, and `/api/trades/stats` responses as permitted customer behavior. |
-| PR #105 P (`fe65a816`) | GitHub Actions run `30150094753`, Python 3.12.13 | **2,077 passed, 1 skipped, 62.16% coverage; customer-isolation job 83 passed** | Reproducible clean CI is stronger than H, but PR #105 is one commit behind current main and merge-conflicting. Its tests still encode the shared model/trade contract. Green is not release approval. |
-| Merged M (`cef1fe6`) | No fresh full execution in this audit | **Not run** | No inference from the H or P result is allowed. |
+| Historical checked dirty H — customer-isolation subset | Exact command below | **83 passed** | Historical false-green: the suite treated scaled `model_book`, `/api/trades`, and `/api/trades/stats` responses as permitted customer behavior. |
+| Historical PR #105 P (`fe65a816`) | GitHub Actions run `30150094753`, Python 3.12.13 | **2,077 passed, 1 skipped, 62.16% coverage; customer-isolation job 83 passed** | Historical evidence; PR #105 was subsequently squash-merged into recorded base `68287dfd`. |
+| Recorded clean base M (`68287dfd`) | Fresh locked Python 3.12.13 full run | **2,078 passed, 0 failed, 0 skipped; 61.75% coverage; 3 warnings** | Exact pre-change baseline. Historical dirty four-failure result did not reproduce; no unrelated product fix was added. |
+| Phase 1 implementation (`8ff34b5`) | Exact full command with commit-bound JUnit | **2,206 passed, 0 failed, 0 skipped; 62.52% coverage; 3 warnings** | Clean candidate proof. Unsafe P0 expectations are inverted; browser, repository/cache, identity, and artifact tests are included. Not production proof. |
 | Live L | Browser/API checks | Product checks reproduced both verified fixes and P0 defects | No build/SHA endpoint means live cannot be mapped to M, H, or P. |
 
 ### Exact focused command already run
@@ -39,6 +40,17 @@
   tests/ --cov=. --cov-report=term --cov-fail-under=45
 ```
 
+### Exact Phase 1 clean-candidate full command
+
+```bash
+venv/bin/pytest -p no:cacheprovider \
+  --basetemp /tmp/gesh-phase1-evidence/code/basetemp -q tests/ \
+  --cov=. --cov-report=term --cov-fail-under=45 \
+  --junitxml=/tmp/gesh-phase1-evidence/code/full.xml
+```
+
+JUnit properties bind the evidence to `8ff34b531b31248d71178c6ed23cb88182cf1724` and `git_dirty=false`. The release builder parses and rejects failures, errors, zero/negative/inconsistent counts, dirty/mismatched SHA properties, non-finite/negative duration, and non-finite JSON.
+
 ### Exact isolation subset already run
 
 ```bash
@@ -50,7 +62,7 @@
 
 ## 2. Test policy
 
-1. **The contract comes before the implementation.** A test may not bless transformed owner data merely because the current code intentionally returns it.
+1. **The contract comes before the implementation.** A test may not bless transformed owner data merely because legacy/pre-containment code intentionally returned it.
 2. **Every financial assertion uses `Decimal` or integer cents.** `pytest.approx` remains acceptable only for market-model statistics where an explicit tolerance is part of the contract, not for accounting identities.
 3. **Every customer-boundary fixture contains unmistakable sentinels.** Sentinels cover arbitrary text, identifiers, symbols, quantities, prices, cash, buying power, notes, account numbers, source labels, timestamps, and nested objects.
 4. **All tests are offline and database-isolated by default.** No production DB, live Robinhood connector, real email, real billing, real LLM, or mutable live endpoint is used in CI.
@@ -142,15 +154,15 @@ In the following test tables, `RB` means **release blocker** and `NB` means a no
 
 | Test ID | Required test | Release contract | Current coverage |
 |---|---|---|---|
-| **TEN-I001** | Customer routes with `build_data_payload`, Robinhood MCP, owner DB, and trade DB patched to raise. | `/`, `/api/me`, `/api/mybook`, analysis, charts, customer export, preferences, and watchlist still succeed without touching an owner connector. | Missing |
+| **TEN-I001** | Customer routes with `build_data_payload`, Robinhood MCP, owner DB, and trade DB patched to raise. | `/`, `/api/me`, `/api/mybook`, analysis, charts, customer export, preferences, and watchlist still succeed without touching an owner connector. | Phase 1 target routes pass before owner seams; broader all-customer-route inventory remains partial |
 | **TEN-I002** | Owner snapshot changes between two customer requests. | Customer model bytes, version, and `published_at` remain identical until an explicit activation transaction. | Missing |
 | **TEN-I003** | Draft, failed-validation, unapproved, revoked, and unassigned publications. | None can be served. Active immutable version is served atomically. | Missing |
-| **TEN-I004** | Customer `/api/portfolio` contract. | Return the customer’s own book or an entitled immutable curated/synthetic model version. Never return owner `source`, account totals, buying power, cost basis, quote sessions, raw timestamps, or an owner-derived request-time snapshot. | Existing tests assert a weaker unsafe contract. |
-| **TEN-I005** | Customer `/api/trades` and `/api/trades/stats`. | Default target: 403/404. If model trades are retained, only versioned synthetic/paper rows pass a build-up serializer; arbitrary text and real rows are forbidden. | Missing; current tests require 200. |
-| **TEN-I006** | Two-customer cache and single-flight collision matrix. | Cache key includes immutable user/publication/version; no cross-user job, result, quote-derived total, or export. | Partial |
+| **TEN-I004** | Customer `/api/portfolio` contract. | Return the customer’s own book or an entitled immutable curated/synthetic model version. Never return owner `source`, account totals, buying power, cost basis, quote sessions, raw timestamps, or an owner-derived request-time snapshot. | Phase 1 exact 403/source/value/tamper/repository/cache contract passes; durable publication missing |
+| **TEN-I005** | Customer `/api/trades` and `/api/trades/stats`. | Default target: 403/404. If model trades are retained, only versioned synthetic/paper rows pass a build-up serializer; arbitrary text and real rows are forbidden. | Phase 1 exact 403/real-row/stat/note/repository/cache contract passes |
+| **TEN-I006** | Two-customer cache and single-flight collision matrix. | Cache key includes immutable user/publication/version; no cross-user job, result, quote-derived total, or export. | Phase 1 owner/customer warmed endpoint and role-document cache replay passes; broader job/result matrix partial |
 | **TEN-I007** | Publication assignment/entitlement. | Customer A can read assigned version; customer B cannot; revocation is immediate and audited. | Missing |
 | **TEN-I008** | Publication audit log. | Actor, source class, consent reference, draft hash, active version, validation result, activation, rollback, and revocation are append-only. | Missing |
-| **TEN-C009** | Recursive response key/value sentinel scan. | No owner string or number appears anywhere in any customer response, HTML, browser storage, network body, log, or error. | Numeric masking exists; arbitrary strings/provenance are incomplete. |
+| **TEN-C009** | Recursive response key/value sentinel scan. | No owner string or number appears anywhere in any customer response, HTML, browser storage, network body, log, or error. | Phase 1 target responses/HTML/network/log metadata pass arbitrary source/value/note sentinels; global all-route/storage inventory remains partial |
 
 ### Authentication and authorization contracts
 
@@ -170,7 +182,7 @@ In the following test tables, `RB` means **release blocker** and `NB` means a no
 | **WEB-C001** | Media-type matrix: absent, blank, malformed, `text/plain`, form-urlencoded, multipart, JSON with charset, valid JSON, invalid JSON, duplicate headers. | RB |
 | **WEB-C002** | Same-origin and hostile Origin/Referer matrix for every mutation. | RB |
 | **WEB-C003** | CSP/HSTS/frame/nosniff/referrer/permissions headers; nonce/hash CSP and no newly introduced inline script. | RB |
-| **PRIV-C004** | `private, no-store` and `Pragma: no-cache` for session/account/financial responses; correct `Vary`; public market cache tested separately. | RB |
+| **PRIV-C004** | `private, no-store` and `Pragma: no-cache` for session/account/financial responses; correct `Vary`; public market cache tested separately. | RB — Phase 1 owner-domain/root scope passes; remaining inventory open |
 | **ERR-C005** | Typed, redacted API errors; accessible HTML for browser pages; no stack trace, filesystem path, provider key name, prompt, or raw exception. | RB |
 | **SEC-I006** | Malicious external news/filing fixture cannot change system instructions, tools, tenant IDs, or output schema. | RB |
 | **SEC-C007** | Security log records denied cross-account/object reads without sensitive payloads. | RB |
@@ -194,7 +206,7 @@ In the following test tables, `RB` means **release blocker** and `NB` means a no
 
 ## 7. Browser E2E, accessibility, and mobile gates
 
-Browser tests must run against the staged artifact with network recording, console capture, trace, screenshots, and the exact `/api/version` response attached.
+Browser tests must run against the staged artifact with network recording, console capture, trace, screenshots, and the exact `/api/version` response attached. Phase 1 already runs a strict real-Chromium customer trace for two refresh intervals; staging/device/accessibility artifacts remain open.
 
 | Test ID | Journey | Required assertions | Gate |
 |---|---|---|---:|
@@ -261,26 +273,40 @@ All budgets are recorded by route, build SHA, status, cache state, provider stat
    - Changed lines ≥90%; tenant/publication/auth/financial serializers and current-P0 sentinel branches 100%.
 
 7. **`frontend-contract` — paid-release blocking**
-   - Build the real customer and owner bundles separately.
-   - Customer bundle string/route inventory must contain no owner action or owner endpoint.
+   - **Phase 1 implemented:** server-compose separate customer/owner documents; customer static/Android inventory contains no removed owner action/endpoint and real Chromium records zero matching requests.
+   - Future published-model, accessibility, and device contracts remain blocking.
 
 ### Candidate/staging jobs
 
 8. **`build-artifact` — blocking**
-   - Only from a clean merged commit.
-   - Generate immutable manifest:
+   - **Phase 1 implemented for the clean candidate:** exact clean HEAD/current-base ancestry, exact code/resource allowlist, deterministic USTAR, validated JUnit evidence, adjacent build identity and manifest, external output only.
+   - The candidate runtime SHA-256 is `a0d8a80a0255e393675352422992eb343df30bb60c016b17ec659d3e8324e345`; normal merge/promotion remains open.
+   - Actual Phase 1 manifest shape (abridged):
 
 ```json
 {
-  "commit_sha": "<40-char SHA>",
-  "tree_dirty": false,
-  "build_id": "<opaque CI ID>",
+  "schema_version": 1,
+  "service": "gesh-financial",
+  "base_sha": "<40-char base SHA>",
+  "final_sha": "<40-char build SHA>",
   "built_at": "<UTC ISO-8601>",
-  "python_version": "<exact>",
-  "dependency_lock_sha256": "<hash>",
-  "schema_version": "<exact>",
-  "model_publication_schema": "<exact>",
-  "test_run_id": "<opaque CI run>"
+  "clean_tree": true,
+  "artifact": {
+    "name": "gesh-financial-runtime.tar",
+    "format": "ustar",
+    "sha256": "<hash>",
+    "size_bytes": "<integer>",
+    "member_count": "<integer>"
+  },
+  "build_info": {"name": "GESH_BUILD_INFO.json", "sha256": "<hash>"},
+  "requirements_lock_sha256": "<hash>",
+  "runtime": {
+    "python": "<exact>",
+    "python_implementation": "<exact>"
+  },
+  "runtime_members": ["<exact allowlisted paths>"],
+  "tests": ["<parsed command/count/SHA/clean JUnit evidence>"],
+  "production_deployment": false
 }
 ```
 
@@ -335,20 +361,18 @@ Any G0–G9 failure is a **NO-GO**. Disclaimers, masking, CSS hiding, a green no
 
 ## 11. Deployment identity and observability
 
-Add a minimal `/api/version` response that is safe for authenticated users and operational probes:
+Phase 1 adds a minimal principal-neutral `/api/version` response that reads one adjacent validated release sidecar and returns only:
 
 ```json
 {
-  "build_id": "opaque-build-id",
-  "commit_sha": "40-char-sha",
-  "artifact_sha256": "sha256",
-  "schema_version": "integer-or-migration-id",
-  "started_at": "UTC timestamp",
-  "environment": "staging|production"
+  "service": "gesh-financial",
+  "commit_sha": "40-lowercase-hex",
+  "built_at": "YYYY-MM-DDTHH:MM:SSZ",
+  "dirty": false
 }
 ```
 
-Do not expose paths, environment values, provider names that reveal secrets, tokens, dirty diffs, or host identity.
+Missing, malformed, oversized, extra-key, dirty, or non-UTC metadata fails closed with one generic 503 contract. Artifact digest, dependency-lock hash, member inventory, and test evidence stay in the adjacent release manifest rather than expanding the public API. Schema/process-start identity remains a future deployment concern. Do not expose paths, environment values, provider names, tokens, dirty diffs, or host identity.
 
 Required telemetry:
 
@@ -401,8 +425,8 @@ Required telemetry:
 ## 14. Existing tests that must be inverted or supplemented
 
 1. **`tests/test_customer_leak_sweep.py`**
-   - Current: requires customer-readable `/api/portfolio`, `/api/trades`, and `/api/trades/stats`, requires `view=model_book`, and proves owner numbers were scaled.
-   - Required: customer routes must not touch owner connectors or global real-trade tables; trade routes deny or serialize only curated versioned paper/model rows.
+   - **Phase 1 resolved:** now requires exact customer 403 on `/api/portfolio`, `/api/trades`, and `/api/trades/stats`; proves owner source/numbers/notes are absent and owner seams are untouched.
+   - Future: replace deny mode only with a separately curated versioned publication domain.
 
 2. **`tests/test_model_portfolio_boundary.py`**
    - Current: build-up field allowlist over a request-time owner payload.
@@ -421,8 +445,7 @@ Required telemetry:
    - Required: browser asserts an ALL/MAX control exists and sends `max`.
 
 6. **Owner-surface tests**
-   - Current: remove `<script>` bodies before checking the delivered document and therefore miss initialization-time owner fetches.
-   - Required: execute the real customer bundle; capture network/console for two refresh intervals.
+   - **Phase 1 resolved:** inspect the composed customer document and execute the real customer bundle; capture network/console for two refresh intervals.
 
 7. **Track Record tests**
    - Current: cohort ordering and disclosures.
@@ -436,15 +459,15 @@ Required telemetry:
 
 | Gate area | State on 2026-07-25 |
 |---|---|
-| P0 tenant/publication sentinels | **FAIL — missing; unsafe behavior is encoded as expected** |
-| Real trade/note customer denial | **FAIL — live and code paths open** |
+| P0 tenant/publication sentinels | **PASS ON PHASE 1 CANDIDATE — denial/owner seam/cache/tamper/source/note proofs; durable publication still absent** |
+| Real trade/note customer denial | **PASS ON PHASE 1 CANDIDATE — exact 403 before repository access; not deployed** |
 | Financial model-book bridge | **FAIL — live `reconciles:false` with unexplained `$28,616.88` holdings-to-portfolio gap** |
-| Dirty H full suite | **FAIL — three genuine regressions plus one environment artifact** |
-| PR integration | **FAIL — PR #105 conflicts with current main** |
+| Clean base/final-candidate suite | **PASS — base 2,078; implementation 2,206; zero failed/skipped** |
+| PR/base integration | **PARTIAL — PR #105 is in recorded base; Phase 1 branch is clean/reviewed but not merged** |
 | Coverage policy | **FAIL — contradictory thresholds** |
 | Accessibility/mobile | **FAIL/UNABLE — no blocker suite and current a11y defects** |
-| Staging artifact test | **FAIL — no evidence supplied** |
-| Runtime SHA identity | **FAIL — live source unidentifiable** |
+| Candidate artifact test | **PASS LOCALLY — deterministic digest/import/version/customer-denial smoke; staging still FAIL/not run** |
+| Runtime SHA identity | **PARTIAL — safe candidate contract exists; live source remains unidentifiable** |
 | Rollback drill | **FAIL — no evidence supplied** |
 
-The next valid engineering move is to implement the P0 boundary tests first, watch them fail against the current contract, then change the architecture until they pass. Running more broad tests without changing those contracts would only produce a larger false-green number.
+Phase 1 completed the P0 boundary red/green cycle. The next valid engineering move is Phase 2 durable publication plus the still-failing financial, staging, accessibility/mobile, rollback, and production-identity gates—not reopening the owner-domain endpoints.

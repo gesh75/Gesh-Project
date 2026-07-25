@@ -3,6 +3,7 @@
 **Cut:** 2026-07-25  
 **Release decision:** NO-GO  
 **Rule:** priority describes current impact; status uses the master prompt’s exact taxonomy
+**Phase 1 update:** the clean candidate contains the immediate P0 routes; durable publication and production deployment remain open.
 
 ## Severity definition
 
@@ -19,24 +20,24 @@
 
 | ID | Pri. | Status | Evidence | Canonical finding |
 |---|---:|---|---|---|
-| TEN-01 / A-01 | P0 | **RECLASSIFIED — formerly “IDOR/cross-role exposure”; now “authorized-by-current-code global model view with unsafe real-account provenance, consent, publication, and data authorization.” Practical risk remains open.** | VERIFIED CURRENT | Customer `/api/portfolio` is derived from the operator `robinhood_mcp` snapshot, not an approved model dataset or the customer’s My Book. |
-| TEN-02 / A-03 | P0 | **OPEN** | VERIFIED CURRENT | Customer `/api/trades` returns a global non-paper trade row and private free-text note; `/api/trades/stats` shares the unscoped domain. |
+| TEN-01 / A-01 | P0 | **PARTIALLY FIXED — Phase 1 customer denial is complete in the candidate; durable Model Book publication remains open.** | VERIFIED CANDIDATE / VERIFIED PRE-CONTAINMENT | Customer `/api/portfolio` now returns 403 before owner cache/connector access; no approved model dataset exists yet. |
+| TEN-02 / A-03 | P0 | **PARTIALLY FIXED — Phase 1 customer denial is complete in the candidate; curated customer trade events remain open.** | VERIFIED CANDIDATE / VERIFIED PRE-CONTAINMENT | Customer `/api/trades` and `/api/trades/stats` now return 403 before global repository access; owner tables remain internal. |
 | FIN-03 | P1 | **OPEN** | VERIFIED CURRENT | Customer-visible model portfolio does not reconcile; `$28,616.88` of reported portfolio equity is not represented by listed holdings. |
 | FIN-04 | P1 | **OPEN** | VERIFIED CURRENT / INFERRED | Model-book day change uses a base that cannot be bridged to visible current/prior components; this is separate from repaired My Book day change. |
 | FIN-06 | P1 | **PARTIALLY FIXED** | SUPPORTED BY LATEST EVIDENCE | My Book downstream inputs use a reconciled base, but model weights, Kelly, VaR, and Monte Carlo remain untrustworthy wherever they inherit the unreconciled owner-derived model. |
-| DEPLOY-01 | P1 | **OPEN** | VERIFIED CURRENT | No immutable live build identity; process predates changed files; current main, local branch, PR #105, and live behavior cannot be tied together. |
-| DEPLOY-02 | P1 | **OPEN** | VERIFIED CURRENT | Restarting from the current mutable, dirty, divergent worktree would deploy an unidentified mixture; only a clean immutable artifact may replace production. |
-| BUILD-01 | P1 | **OPEN** | VERIFIED CURRENT | Audit remediation is not integrated; PR #105 is open and conflicting with current main. |
-| BUILD-02 | P1 | **REGRESSED** | VERIFIED CURRENT | Dirty checked tree has three genuine AI test regressions; one additional full-suite failure was a verification-environment artifact. |
-| QA-01 | P1 | **OPEN** | VERIFIED CURRENT | Green isolation tests encode customer-readable trades and miss arbitrary note leakage, production valuation semantics, rendered MAX, and browser accessibility. |
+| DEPLOY-01 | P1 | **PARTIALLY FIXED** | VERIFIED CANDIDATE | Safe `/api/version`, exact clean commit/build time, dependency-lock hash, and deterministic artifact exist; production remains unidentified because no deployment occurred. |
+| DEPLOY-02 | P1 | **PARTIALLY FIXED** | VERIFIED CANDIDATE | Builder produces only from an exact clean HEAD and refuses in-repository output; staging/promotion/rollback remain unperformed. |
+| BUILD-01 | P1 | **PARTIALLY FIXED** | VERIFIED CANDIDATE | PR #105 is in recorded base `68287dfd`; Phase 1 is a clean reviewed descendant, not yet merged/deployed. |
+| BUILD-02 | P1 | **NO LONGER REPRODUCIBLE** | VERIFIED CLEAN BASE/CANDIDATE | Base: 2,078 passed; Phase 1 implementation: 2,206 passed; zero failed/skipped. Historical dirty failures were classified and not suppressed. |
+| QA-01 | P1 | **PARTIALLY FIXED** | VERIFIED CANDIDATE | P0 tests now deny all three routes and cover arbitrary notes/source, repository/cache, query tampering, and real browser requests; model publication, MAX, and accessibility gaps remain. |
 | TRK-01 / FIN-07 | P1 | **RECLASSIFIED — formerly “PF below 1 makes positive return impossible”; now “dollar PF and unweighted trade-return sum can differ, but the bases are misleadingly combined.”** | VERIFIED CURRENT | The arithmetic is possible; the underlying “total P&L”/return-unit contract remains open and is not capital-matched. |
 | TRK-02 | P1 | **PARTIALLY FIXED** | VERIFIED CURRENT | Cohorts are separated, but poor quality remains visually subordinated to a positive headline. |
 | TRK-03 | P1 | **OPEN** | VERIFIED CURRENT | SPY renders `+nan%`. |
 | TRK-04 | P1 | **OPEN** | VERIFIED CURRENT / INFERRED | Benchmark and engine result are not demonstrably period- and capital-matched. |
 | AI-01 | P1 | **PARTIALLY FIXED** | VERIFIED CURRENT | Top combined stance aligns for tested TSLA, but the same page gives a long-biased setup under `REDUCE`/mechanical `SELL`. |
-| TEN-03 | P1 | **PARTIALLY FIXED** | VERIFIED CURRENT | Owner widgets are visually removed, but customer JavaScript still polls owner/model endpoints and calls absent renderers. |
+| TEN-03 | P1 | **PARTIALLY FIXED** | VERIFIED CANDIDATE | Customer role composition and Android contain no removed owner loaders/polls; owner behavior remains in the owner-only partial. Not deployed. |
 | REL-02 | P1 | **PARTIALLY FIXED** | VERIFIED CURRENT / UNKNOWN | Normal async analysis completed and cached, but timeout, crash, retry, reservation release, navigation-away, and durable retrieval are not fully verified. |
-| REL-03 | P1 | **OPEN** | VERIFIED CURRENT | Customer page throws uncaught null-DOM errors; one repeats every 30 seconds and drives unnecessary `/api/portfolio` requests. |
+| REL-03 | P1 | **PARTIALLY FIXED** | VERIFIED CANDIDATE | Real Chromium two-refresh trace records zero removed owner-domain requests and zero console errors. Not deployed. |
 | A11Y-01 | P1 | **OPEN** | VERIFIED CURRENT | Customer shell has no heading hierarchy, main/nav landmarks, async live region, or complete accessible input names. |
 | FIN-05 | P1 | **OPEN** | VERIFIED CURRENT | My Book lacks cost basis for the baseline position, so unrealized P&L and return-on-cost cannot be calculated. |
 | DATA-04 | P1 | **PARTIALLY FIXED** | VERIFIED CURRENT | Stale flags improved, but live/model/cached/owner/synthetic provenance is still not one durable customer contract. |
@@ -46,7 +47,7 @@
 | AI-02 | P1 | **OPEN** | VERIFIED CURRENT | The tested 1 bull/2 bear/3 neutral/3 no-data vote showed 60% confidence without a documented denominator/calibration. |
 | DATA-02 | P2 | **OPEN** | VERIFIED CURRENT | Backend `max` works; customer UI has no ALL/MAX control. |
 | DATA-05 | P2 | **OPEN** | VERIFIED CURRENT | Intraday chart responses omit source/provenance. |
-| PRIV-03 | P2 | **OPEN** | VERIFIED CURRENT | Authenticated financial GETs lack explicit private/no-store cache policy. |
+| PRIV-03 | P2 | **PARTIALLY FIXED** | VERIFIED CANDIDATE | Phase 1 owner-domain and role-composed responses use private/no-store, Pragma, and Vary Cookie; the remaining sensitive route inventory is open. |
 | WEB-03 | P2 | **PARTIALLY FIXED** | VERIFIED CURRENT | Major security headers are present; CSP still allows inline script and style execution. |
 | MOB-01 | P2 | **UNABLE TO VERIFY** | UNKNOWN / REQUIRES ACCESS | True device emulation was unavailable; static layout indicates possible 320px clipping. |
 | ERR-01 | P2 | **PARTIALLY FIXED** | SUPPORTED BY LATEST EVIDENCE | Candidate adds Accept-aware HTML errors; live coverage was incomplete. |
@@ -64,20 +65,20 @@
 | AI-04 | P3 | **NO LONGER REPRODUCIBLE** | VERIFIED CURRENT | Direct prompt-injection strings did not create an information leak or persistent cross-user artifact. |
 | CONC-01 | P3 | **NO LONGER REPRODUCIBLE** | VERIFIED CURRENT | Controlled same-symbol writes left one untorn row; coverage gap is QA-02. |
 | UX-03 / F-04 | P3 | **OPEN** | HISTORICAL ONLY / SUPPORTED BY CURRENT GAP | Tiny fractions can still render in scientific notation, and no verified minimum-lot/formatting contract closes the historical defect. |
-| WARN-01 | P3 | **OPEN** | VERIFIED CURRENT | Full local test run emits 975 warnings, reducing signal and increasing upgrade risk. |
+| WARN-01 | P3 | **PARTIALLY FIXED** | VERIFIED CLEAN CANDIDATE | The clean candidate emits three dependency deprecation warnings, not 975; eliminating the remaining warnings remains open. |
 | API-01 | P3 | **OPEN** | VERIFIED CURRENT | Analysis responses expose internal fingerprint/job identifiers not required by the customer contract. |
 
 ## P0 details
 
 ### TEN-01 / A-01 — Owner-derived portfolio presented as customer Model Book
 
-**Status:** RECLASSIFIED — practical risk open  
-**Evidence:** VERIFIED CURRENT  
+**Status:** PARTIALLY FIXED — Phase 1 candidate is fail-closed; durable publication/live deployment remain open.  
+**Evidence:** VERIFIED CANDIDATE / VERIFIED PRE-CONTAINMENT  
 **Affected:** `/api/portfolio`, customer response middleware, `model_portfolio.py`, `data_fetcher.py`, `build_snapshot_from_mcp.py`, shared customer JavaScript
 
 #### Failure mode
 
-An authenticated customer receives a portfolio response whose source and composition derive from the operator’s real Robinhood/MCP snapshot. Query tampering does not select it; the normal customer path selects it. The page continues fetching the route even though the relevant owner cards are hidden.
+Before containment, an authenticated customer received a portfolio response whose source and composition derived from the operator’s real Robinhood/MCP snapshot. Query tampering did not select it; the normal customer path selected it. Phase 1 now denies the request before handler/cache/connector access, and customer clients do not fetch the route.
 
 #### Root cause
 
@@ -97,7 +98,7 @@ An authenticated customer receives a portfolio response whose source and composi
 
 #### Immediate control
 
-Return 403/404 to customers and remove browser polling until a separate active approved model version exists. Preserve owner access through explicitly owner-only routes.
+**Implemented in the Phase 1 candidate:** return an exact 403 to customers, remove customer browser/Android polling, and preserve owner access. Keep deny mode until a separate active approved model version exists.
 
 #### Closure standard
 
@@ -105,22 +106,22 @@ Closure requires source separation, not removal of a source string. See GESH-02 
 
 ### TEN-02 / A-03 — Global real-trade ledger and notes customer-readable
 
-**Status:** OPEN  
-**Evidence:** VERIFIED CURRENT  
+**Status:** PARTIALLY FIXED — Phase 1 candidate is fail-closed; curated customer events/live deployment remain open.  
+**Evidence:** VERIFIED CANDIDATE / VERIFIED PRE-CONTAINMENT  
 **Affected:** `/api/trades`, `/api/trades/stats`, `trade_log.py`, customer leak tests
 
 #### Failure mode
 
-An authenticated customer receives a global row marked non-paper plus execution/provenance fields and a private note. The note is intentionally redacted from this pack.
+Before containment, an authenticated customer received a global row marked non-paper plus execution/provenance fields and a private note. The note is intentionally redacted from this pack. Phase 1 denies both trade routes before repository access.
 
 #### Root cause
 
-- route has no owner-only or model-publication policy;
-- tables are global and contain no tenant/publication key;
-- query uses `SELECT *`;
-- serialization is subtractive masking, not an explicit public DTO;
-- tests require a customer 200 and use fixtures that do not include arbitrary text sentinels;
-- stats does not enforce its apparent paper filter.
+- pre-containment routes had no owner-only or model-publication policy;
+- the underlying tables remain global and contain no tenant/publication key;
+- owner handlers still query those internal tables broadly;
+- pre-containment customer serialization was subtractive masking, not an explicit public DTO;
+- legacy tests required a customer 200 and used fixtures that did not include arbitrary text sentinels; Phase 1 inverted those expectations and added sentinels;
+- the internal stats implementation still does not enforce its apparent paper filter, but Phase 1 prevents customer access before it executes.
 
 #### Impact
 
@@ -130,7 +131,7 @@ An authenticated customer receives a global row marked non-paper plus execution/
 
 #### Immediate control
 
-Owner-gate both routes. Do not “fix” this by filtering only `is_paper=1` in the existing global table; a separately published model-event schema is required for customer model trades.
+**Implemented in the Phase 1 candidate:** owner-gate both routes before handler/repository access. Do not “fix” the remaining publication gap by filtering only `is_paper=1` in the existing global table; a separately published model-event schema is required for future customer model trades.
 
 ## P1 details
 
@@ -157,34 +158,36 @@ reported account total                     $128,616.89
 
 The response mixes a scaled `$100k` composition with an account-level equity/cash identity. Missing broker components, timing, and semantics prevent a complete dollar bridge. The correct fix is one canonical publication balance sheet, not forcing `reconciles:true`.
 
-### DEPLOY-01 — Deployment identity is unknowable
+### DEPLOY-01 — Candidate identity exists; production identity remains unknowable
 
-**Status:** OPEN  
-**Evidence:** VERIFIED CURRENT
+**Status:** PARTIALLY FIXED  
+**Evidence:** VERIFIED CANDIDATE / VERIFIED PRE-CONTAINMENT
 
 - launchd service `com.gesh.main` runs port 9000;
 - process start: 2026-07-23 06:29 EEST;
 - Uvicorn reload: disabled;
 - server/template/model files changed after process start;
-- local tree is dirty and divergent;
-- `origin/main`, checked branch, PR #105, and live behavior differ;
-- no response identifies commit, build time, artifact digest, migration version, or configuration version.
+- the historical local tree was dirty and divergent;
+- PR #105 is now in the exact recorded base `68287dfd`;
+- the clean Phase 1 candidate exposes only service, exact commit, UTC build time, and `dirty:false`;
+- the deterministic runtime archive SHA-256 is `a0d8a80a0255e393675352422992eb343df30bb60c016b17ec659d3e8324e345`;
+- no production response identifies the candidate because deployment was explicitly out of scope.
 
 This prevents reliable claims that a code fix is deployed and makes rollback selection unsafe.
 
-### BUILD-01 and BUILD-02 — Candidate and dirty-tree state are not releasable
+### BUILD-01 and BUILD-02 — Clean Phase 1 line established; promotion remains open
 
-**Statuses:** BUILD-01 OPEN; BUILD-02 REGRESSED  
-**Evidence:** VERIFIED CURRENT
+**Statuses:** BUILD-01 PARTIALLY FIXED; BUILD-02 NO LONGER REPRODUCIBLE  
+**Evidence:** VERIFIED CLEAN BASE/CANDIDATE
 
-- Focused dirty-tree suite: 436/436.
-- Full dirty-tree suite: 1,639 passed, 4 failed, 59.15% coverage, 975 warnings.
-- One failure was a verification-environment artifact.
-- Three genuine failures are caused by an uncommitted `ai_analyzer.py` change from `messages.create()` to `messages.stream()` without compatible test fakes.
-- PR #105 CI: 2,077 passed, 1 skipped, 62.16% coverage; isolation: 83 passed.
-- PR #105 is nevertheless open and conflicting against current main.
+- Historical focused dirty-tree suite: 436/436.
+- Historical full dirty-tree suite: 1,639 passed, 4 failed; one environment artifact and three genuine uncommitted regressions.
+- Fresh exact base `68287dfd`: 2,078 passed, zero failed/skipped.
+- Clean Phase 1 implementation `8ff34b5`: 2,206 passed, zero failed/skipped, 62.52% coverage, three warnings.
+- PR #105 is squash-merged into the recorded base.
+- Three independent current-tree reviews returned no findings.
 
-Green CI on one ref does not certify a different dirty ref or the unidentified live process.
+Green candidate evidence still does not certify an unidentified live process; staging/promotion/rollback remain required.
 
 ### QA-01 — Passing tests encode false safety
 
@@ -193,12 +196,12 @@ Green CI on one ref does not certify a different dirty ref or the unidentified l
 
 Known false positives:
 
-- customer-isolation tests expect `/api/trades` and stats to return 200;
-- trade fixtures test numeric scaling, not arbitrary notes or real provenance;
+- **resolved in Phase 1:** customer-isolation tests require exact 403 for portfolio/trade/stats;
+- **resolved in Phase 1:** fixtures cover arbitrary notes, source/provenance, owner values, repository seams, warmed caches, and query tampering;
 - chart tests pass `MAX` as data but do not inspect rendered controls;
 - My Book tests assert that unknown `ZZZZ9` persistence is correct;
 - local model tests used source-field semantics later proven wrong by PR #105 fixes;
-- static dashboard tests do not execute the page, detect console errors, announce async results, or measure overflow;
+- **partially resolved in Phase 1:** the real page executes for two refresh intervals with network/console assertions; accessibility announcements and viewport overflow remain open;
 - track-record tests verify cohort order but not a positive headline under poor risk-quality metrics.
 
 ### TRK-01 through TRK-04 — Track-record contract and framing
@@ -319,19 +322,17 @@ True device emulation remains unavailable, not passed. Static geometry suggests 
 
 ### Security headers and caching
 
-HSTS, frame denial, MIME sniffing protection, referrer policy, permissions policy, and CSP are present. Remaining work:
+HSTS, frame denial, MIME sniffing protection, referrer policy, permissions policy, and CSP are present. Phase 1 adds private/no-store, Pragma, and Vary Cookie for its role-composed and owner-domain scope. Remaining work:
 
 - nonce/hash-based CSP without `unsafe-inline`;
-- `Cache-Control: private, no-store` on authenticated financial/account responses;
-- `Pragma: no-cache` where legacy intermediaries matter;
-- appropriate `Vary` semantics;
+- complete the same explicit cache contract across the remaining authenticated financial/account inventory;
 - automated header contracts at the edge and application.
 
 ## Release blockers derived from this register
 
 The product remains NO-GO while any of the following is true:
 
-1. TEN-01 or TEN-02 is not closed by source separation and live proof.
+1. TEN-01 or TEN-02 is reopened before durable source separation, staging, and live proof.
 2. FIN-03 can return an active unreconciled model version.
 3. DEPLOY-01 prevents identifying and rolling back the deployed build.
 4. Full tests fail on the exact merge candidate.

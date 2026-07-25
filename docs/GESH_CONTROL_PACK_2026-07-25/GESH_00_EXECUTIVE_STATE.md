@@ -4,6 +4,7 @@
 **Product:** `https://pay.geshfinance.com`  
 **Repository:** `gesh75/Gesh-Project`  
 **Decision:** **NO-GO for paid/customer release or promotion**
+**Phase 1 update:** P0 customer exposure is contained in the clean candidate; no production deployment was performed.
 
 ## Current verdict
 
@@ -11,14 +12,16 @@ GESH is a substantial working fintech application, not a prototype shell. It has
 
 The customer-owned part of the product is now materially healthier than it was on 2026-07-22. The live test account’s TSLA quantity is consistent between `/api/mybook` and `/api/account/export`; customer-book valuation and day-change arithmetic reconcile; chart ranges return distinct datasets; customer access to `/api/config` is denied; unsafe `text/plain` mutation is rejected; owner/admin routes resist harmless query and mass-assignment tampering; and controlled same-symbol writes did not create duplicate or torn rows.
 
-That progress does **not** make the current product commercially releasable. Two customer-reachable routes still cross the intended data-product boundary:
+That progress does **not** make the current product commercially releasable. The canonical audit reproduced two customer-reachable data-product boundary failures before containment:
 
 1. `/api/portfolio` returns a model-book response derived from the operator’s real `robinhood_mcp` snapshot rather than from an independently published model dataset.
 2. `/api/trades` returns a global non-paper trade row and an internal free-text note.
 
-Those are **VERIFIED CURRENT P0** findings. They are not ordinary anonymous access or a query-parameter IDOR. Authentication and many route guards work. The failure is deeper: current code intentionally authorizes a customer to a dataset whose provenance, consent, publication state, and sanitization are not suitable for that customer-facing use.
+Those were **VERIFIED PRE-CONTAINMENT P0** findings. They were not ordinary anonymous access or a query-parameter IDOR. Authentication and many route guards worked; the failure was that pre-containment code intentionally authorized a customer to a dataset whose provenance, consent, publication state, and sanitization were unsuitable for customer use.
 
-The newest remediation candidate, PR #105, is not the deployed truth and does not close either root architecture. It is open, conflicting, and one commit behind current `main`. Its model publisher is a stronger allowlist, but remains a request-time transformation of the current owner snapshot without durable publication, consent, approval, versioning, assignment, or rollback. Its tests still encode customer-readable `/api/trades`.
+Phase 1 now fails closed before handler, repository, connector, or cache access. Authenticated non-owner `GET`/`HEAD` requests to `/api/portfolio`, `/api/trades`, and `/api/trades/stats` return exact 403 unavailable contracts; query tampering cannot change principal scope; customer web and Android clients make zero requests to those owner-domain routes; owner behavior remains available; and principal-dependent responses use private/no-store cache controls. This closes the immediate disclosure path, not the missing durable Model Book publication architecture.
+
+PR #105 was squash-merged before this phase; the exact Phase 1 base was then-current `origin/main` `68287dfd80eab51b40d4270eab07b0bd73267992`. The clean implementation commit is `8ff34b531b31248d71178c6ed23cb88182cf1724`. No production deployment was performed.
 
 ## Score
 
@@ -26,12 +29,12 @@ The newest remediation candidate, PR #105, is not the deployed truth and does no
 
 | Dimension | Score | Reason |
 |---|---:|---|
-| Identity, privacy, tenant/data boundary | 8/20 | Authentication and UUID scoping are real; two owner/global datasets remain customer-readable. |
+| Identity, privacy, tenant/data boundary | 8/20 | Immediate customer access to the two owner/global domains is contained; a durable approved Model Book publication boundary still does not exist. |
 | Financial and quantitative integrity | 10/20 | My Book arithmetic is repaired; model portfolio does not reconcile and track-record bases are mixed. |
 | Product coherence and truthfulness | 8/20 | Combined stance improved; trade setup can still contradict it, and model/real/simulated provenance is unclear. |
-| Reliability, testability, and release control | 10/20 | Large test base and focused checks exist; dirty branch fails three genuine tests and live build identity is unknowable. |
-| UX, accessibility, and mobile | 5/15 | Core journeys work; customer page polls absent owner widgets and throws errors; semantics and labels are missing; true mobile is unverified. |
-| Operational evidence | 3/5 | Logs and process are inspectable, but no immutable deployed SHA/version or clean reproducible deployment record exists. |
+| Reliability, testability, and release control | 10/20 | The clean base and Phase 1 candidate are green and reproducible; staging, deployment, rollback, and the broader release gates remain incomplete. |
+| UX, accessibility, and mobile | 5/15 | Owner polling is removed from the customer bundle; semantics, labels, accessibility, and true mobile verification remain incomplete. |
+| Operational evidence | 3/5 | A deterministic artifact and safe version contract now exist, but no immutable artifact has been deployed or verified in production. |
 
 This score is a fresh 2026-07-25 control score, not a continuation of the earlier 41, 43, or 58-point rubrics. The verified P0 boundary failures impose a release cap regardless of the number of smaller fixes.
 
@@ -79,32 +82,32 @@ As of 2026-07-25:
 - **FIXED AND VERIFIED — analyze job contract:** one analysis job completed through the 202/poll flow, and an immediate repeat used the cache.
 - **FIXED AND VERIFIED — visible owner controls:** the customer does not normally see the owner operations widgets.
 
-### Changes present only in an unmerged candidate
+### Merged baseline and Phase 1 candidate
 
-PR #105 (`fe65a816cf33a76b710e8f9746f2ef32f5c0b2b2`) contains additional remediation, including a stricter model-portfolio allowlist, broader financial invariants, unknown-ticker work, response/HTML separation, frontend extraction, and reproducible-dependency work. These are **SUPPORTED BY LATEST EVIDENCE** as candidate code, not production fixes. The PR is open, conflicting, and not release-ready.
+PR #105 was squash-merged as `68287dfd80eab51b40d4270eab07b0bd73267992`. Phase 1 was implemented from that exact clean base on `codex/p0-data-boundary-containment-20260725`; the clean implementation commit is `8ff34b531b31248d71178c6ed23cb88182cf1724`. The candidate full suite passed 2,206 tests with zero failures/skips; the deterministic runtime archive SHA-256 is `a0d8a80a0255e393675352422992eb343df30bb60c016b17ec659d3e8324e345`. These remain candidate facts, not production-deployment proof.
 
 ### Current `main`
 
-`origin/main` is `cef1fe604d84b2e9d4cc72384e3998387dc9a0bd` after PR #106 updated `gesh-core` to v0.6.1. It does not contain PR #105’s remediation series. It retains the original owner-derived portfolio and customer-readable global trade architecture.
+At Phase 1 worktree creation, the exact then-current remote main was `68287dfd80eab51b40d4270eab07b0bd73267992`, including the squash merge of PR #105. Phase 1 is a separate reviewed candidate based on that SHA; it has not been merged or deployed by this task.
 
 ## What is only cosmetic or partial
 
-- **PARTIALLY FIXED — owner console separation:** owner widgets are no longer visibly rendered for the customer, but shared customer JavaScript still fetches `/api/portfolio`, `/api/ecg`, and regime data, calls owner-only render functions whose DOM does not exist, and repeats at least one error every 30 seconds.
+- **FIXED IN PHASE 1 CANDIDATE — owner console separation:** the customer document excludes owner loaders, components, retries, and polling; the real-browser two-refresh trace makes zero removed owner-domain requests and emits no console errors. The Android customer client no longer defines or schedules the owner portfolio request.
 - **PARTIALLY FIXED — model publication:** the checked branch and PR #105 strip more fields, but still derive customer content dynamically from the current owner snapshot. A serializer allowlist is not a consented publication system.
 - **PARTIALLY FIXED — unified answer:** the top combined stance now aligns with the mechanical and valuation evidence for the tested TSLA case, but the same page still shows a long-biased trade setup under a `REDUCE`/`SELL` conclusion.
 - **PARTIALLY FIXED — track record:** engine, manual, and blended cohorts are more visibly separated, but the engine headline sums per-trade percentages while profit factor is dollar-weighted; the benchmark renders `+nan%`; the comparison is not capital- and period-matched.
 - **PARTIALLY FIXED — chart product:** backend `max` works, but the UI exposes only 1D through 1Y; intraday responses omit a source label.
 - **PARTIALLY FIXED — unknown assets:** the tested `/api/analyze-ticker` rejects an unknown symbol before returning analysis, but `/api/mybook/analyze` and position validation do not have a general synchronous listed-asset contract at every entry point.
-- **PARTIALLY FIXED — web hardening:** major security headers are present; CSP still permits `unsafe-inline`, and authenticated financial GET responses lack explicit private/no-store cache policy.
+- **PARTIALLY FIXED — web hardening:** major security headers are present; Phase 1 adds `private, no-store`, `Pragma: no-cache`, and `Vary: Cookie` to the contained owner-domain and role-composed responses. CSP and the remaining authenticated-response inventory stay open.
 
-## Current P0 risks
+## P0 containment result and remaining root risks
 
 ### TEN-01 / A-01 — Owner-derived brokerage portfolio published to customers
 
-**Status:** RECLASSIFIED — previously described as IDOR/cross-role exposure; now verified as an intentionally customer-readable global model view with unsafe real-account provenance. The practical P0 risk remains open.  
-**Evidence:** VERIFIED CURRENT
+**Status:** CONTAINED IN PHASE 1 CANDIDATE; durable publication root cause remains open.  
+**Evidence:** VERIFIED PRE-CONTAINMENT plus clean candidate regression proof.
 
-`/api/portfolio` returned `source=robinhood_mcp`, ten real-source holdings, cash and account-level figures to an authenticated customer. Harmless `view`, `user`, and `account` query overrides made no difference. This proves the risk is the authorized dataset itself, not a successful identity switch.
+Before containment, `/api/portfolio` returned `source=robinhood_mcp`, ten real-source holdings, cash and account-level figures to an authenticated customer. Harmless `view`, `user`, and `account` query overrides made no difference. Phase 1 now returns 403 before any owner seam and proves that the denial contains no source, holdings, cash, buying power, or account values.
 
 The returned numbers also do not reconcile:
 
@@ -120,12 +123,12 @@ The missing `$28,616.88` cannot be bridged from the published holdings. The resp
 
 ### TEN-02 / A-03 — Global real-trade row and internal note published to customers
 
-**Status:** OPEN  
-**Evidence:** VERIFIED CURRENT
+**Status:** CONTAINED IN PHASE 1 CANDIDATE; curated customer trade publication remains unimplemented.  
+**Evidence:** VERIFIED PRE-CONTAINMENT plus clean candidate regression proof.
 
-`/api/trades` returned a row with `is_paper:0`, execution/provenance fields, and a non-empty internal note. The note content is intentionally omitted from this pack. The underlying global tables have no customer tenant key; handlers query and serialize global rows.
+Before containment, `/api/trades` returned a row with `is_paper:0`, execution/provenance fields, and a non-empty internal note. The note content is intentionally omitted from this pack. Phase 1 now denies both trade routes before global repository access and proves that rows, statistics, and private notes are absent.
 
-The sibling `/api/trades/stats` path is part of the same boundary and must be contained even where its current output looks aggregated.
+The sibling `/api/trades/stats` path receives the same exact customer fail-close policy.
 
 ## Most likely root cause
 
@@ -149,17 +152,17 @@ Do not dynamically proxy the owner’s Robinhood account. Do not auto-migrate ex
 
 ## Next five decisions
 
-1. **Contain now:** make customer `/api/portfolio`, `/api/trades`, and `/api/trades/stats` fail closed until a safe dataset exists; stop the customer browser from polling them.
+1. **Contain now — COMPLETE IN CANDIDATE:** customer `/api/portfolio`, `/api/trades`, and `/api/trades/stats` fail closed; customer web and Android clients do not call them.
 2. **Approve the data-product contract:** My Book is customer-owned; Model Book is a separate curated publication; the owner brokerage account is owner-only.
 3. **Approve provenance policy:** synthetic/paper is the default; a real-account snapshot requires explicit consent, review, stripping, versioning, and audit evidence.
-4. **Choose the remediation branch strategy:** recreate or rebase the useful parts of PR #105 onto current `main`, resolve conflicts, remove tests that encode unsafe customer trade access, and do not merge the branch wholesale.
-5. **Adopt release identity and gates:** every deployment must come from a clean, reviewed commit and expose its SHA/build time/schema version; P0 leak, reconciliation, test, browser, accessibility, and rollback gates must pass on staging before promotion.
+4. **Remediation branch strategy — RESOLVED FOR PHASE 1:** PR #105 is already merged in the recorded base; Phase 1 is a fresh reviewed branch from that exact main SHA.
+5. **Adopt release identity and gates — PARTIAL:** the candidate exposes a safe commit/build-time identity and is packaged deterministically; staging, production, accessibility, rollback, and the remaining release gates must still pass before promotion.
 
 ## Next three engineering moves
 
-1. **24-hour containment patch:** owner-gate the three global routes, remove customer polling of owner endpoints, add explicit `Cache-Control: private, no-store`, and deploy from a clean hotfix commit with an exposed build SHA.
+1. **24-hour containment patch — COMPLETE AS AN UNDEPLOYED CANDIDATE:** the three routes fail closed, customer owner polling is removed, targeted private/no-store controls are explicit, and safe build identity is packaged. Production deployment was intentionally not performed.
 2. **Model-publication foundation:** implement immutable model portfolio/version/holding/trade-event/assignment/publication-event tables and a fail-closed serving API; seed only a reviewed synthetic/paper publication.
-3. **Trust and release correction:** standardize track-record units/benchmark, make trade setup obey or explicitly override the unified stance, reconcile PR #105 against current `main`, and make the complete regression/release suite blocking.
+3. **Trust and release correction:** standardize track-record units/benchmark, make trade setup obey or explicitly override the unified stance, and make the complete regression/release suite blocking.
 
 ## Release gate
 
@@ -174,4 +177,4 @@ No customer release, marketing claim, or paid expansion until all of the followi
 - the repository is clean, the candidate merges without conflicts, all blocking tests pass, and the deployed SHA is observable;
 - desktop and true mobile browser journeys pass with zero uncaught console errors and the required accessibility semantics.
 
-Until then, the safe operating state is **authorized internal testing only**, with the current P0 routes disabled for customers.
+Until then, the safe operating state is **authorized internal testing only**. Keep the Phase 1 routes in deny mode; do not deploy or reopen them without the remaining gates.

@@ -2,6 +2,7 @@
 
 **Evidence cut:** 2026-07-25, Europe/Sofia  
 **Purpose:** one reconciled history and present-state baseline; not a transcript summary
+**Phase 1 update:** exact-base containment evidence was added without replacing the historical audit record.
 
 ## Evidence method
 
@@ -24,9 +25,9 @@ Important statements are labelled:
 
 | Label | Exact object | Meaning |
 |---|---|---|
-| Current remote main | `cef1fe604d84b2e9d4cc72384e3998387dc9a0bd` | Latest merged source after PR #106. |
+| Recorded Phase 1 remote-main base | `68287dfd80eab51b40d4270eab07b0bd73267992` | Exact then-current `origin/main` at clean worktree creation; includes the squash merge of PR #105. |
 | Checked branch | `09f757c3b61a6d89da6588e3cc17e9853ec39519` | Local `fix/audit-p0-p1-remediation`; 12 unique commits and 4 behind `origin/main`; dirty worktree. |
-| Latest audit candidate | `fe65a816cf33a76b710e8f9746f2ef32f5c0b2b2` | PR #105 head; open, conflicting, CI green at the checked time, not merged. |
+| Phase 1 implementation candidate | `8ff34b531b31248d71178c6ed23cb88182cf1724` | Clean commit on `codex/p0-data-boundary-containment-20260725`; full suite 2,206/2,206; runtime SHA-256 `a0d8a80a0255e393675352422992eb343df30bb60c016b17ec659d3e8324e345`. |
 | Live runtime | unknown immutable ref | Process on port 9000 started 2026-07-23 before several current files changed; no build/version endpoint identifies a SHA. |
 
 ## Source inventory
@@ -51,13 +52,14 @@ Important statements are labelled:
 | SRC-REV-03 | 2026-07-23 | `docs/SESSION_REVIEW_PACKET_2026-07-23.md` | Independent-review packet and build concerns | Useful but untracked/self-authored; claims require recheck |
 | SRC-REM-01 | 2026-07-23 | `docs/REMEDIATION_2026-07-23_AUDIT_P0_P1.md` at checked branch | Root-cause and remediation record | Tier 1 for that branch only |
 | SRC-GIT-02 | 2026-07-23–25 | Audit branch commits through `fe65a81` | Valuation, publication, verdict, track record, UI, tests, security, build work | Tier 1 at each ref; later commits disprove earlier closure claims |
-| SRC-PR-01 | Checked 2026-07-25 | GitHub PR #105 | Audit candidate state and CI | OPEN, non-draft, conflicting, not production |
+| SRC-PR-01 | Resolved before Phase 1 | GitHub PR #105 / squash merge `68287dfd` | Audit remediation integrated into the recorded base | Merged; not itself production-deployment proof |
 | SRC-MAIN-01 | 2026-07-25 | PR #106 / `origin/main` `cef1fe6` | `gesh-core` v0.6.1 dependency update | Merged current-main evidence |
 | SRC-LIVE-01 | 2026-07-25 | Authenticated browser and API observations | Customer UI, endpoint contracts, state, charts, analysis, track record, headers, console | **VERIFIED CURRENT**; sensitive fields minimized/redacted |
 | SRC-RUN-01 | 2026-07-25 | Local process, launchd, file times, `/tmp/gesh_main.log` | Port-9000 runtime identity and repeated polling | **VERIFIED CURRENT** locally; no immutable deployed SHA |
 | SRC-CODE-01 | 2026-07-25 | Source/schema review at all three refs | Identity, customer tables, model portfolio, trades, track record, browser bundle | Tier 1 at exact refs |
 | SRC-TEST-01 | 2026-07-25 | Focused and full local test runs | Regression, isolation, build health | **VERIFIED CURRENT** for dirty checked worktree only |
 | SRC-REVIEW-01 | 2026-07-25 | Coordinated history, architecture, verification, and Grok 4.5 review lanes | Adversarial synthesis | Advisory; conclusions retained only where supported by primary evidence |
+| SRC-P1-01 | 2026-07-25 | Clean base/candidate Git refs, JUnit, browser trace, Android build, artifact manifest, three independent reviews | Phase 1 containment implementation | **VERIFIED CANDIDATE**; no production deployment |
 
 The historical attachment is a concatenated transcript. Its “rounds” are evidence units from related sessions, not independent third-party audit reports.
 
@@ -127,9 +129,9 @@ Agreement between UI and API is not the only proof: the quantities and amounts w
 
 The `$28,616.88` difference cannot be explained from customer-visible holding rows. The response combines at least two accounting bases. The one-cent `$100,000.01` result shows a scaled model-notional layer, while `$128,616.89` preserves an owner-account component.
 
-## Current endpoint evidence
+## Endpoint evidence: pre-containment observations with current candidate overlay
 
-All calls used the authorized test account. Parameters and responses below are sanitized.
+All calls used the authorized test account. Parameters and responses below are sanitized. The `Actual status` column records the controlled live/pre-containment observation made before Phase 1; it is not a claim about the undeployed candidate. Rows whose candidate contract changed are explicitly classified that way below.
 
 | Surface | Method | Sanitized parameters/body | Expected result | Actual status/minimal sanitized response | UI result | Persistence | Evidence date | Current classification |
 |---|---|---|---|---|---|---|---|---|
@@ -142,9 +144,9 @@ All calls used the authorized test account. Parameters and responses below are s
 | `/api/mybook` | POST, isolated local proof | Valid JSON bytes, no `Content-Type` | 415; zero side effects | 200; accepted | N/A | Position can persist | 2026-07-25 local/code | OPEN |
 | `/api/mybook/{symbol}` | DELETE | Temporary path symbol `SPY` | Delete caller’s row only | 200 | Temporary row disappeared | SPY removed; baseline restored | 2026-07-25 | VERIFIED CURRENT |
 | `/api/account/export` | GET | None | Caller-only export; exact quantities | 200; TSLA `2.7971`, no other tenant | Download/API agreed with My Book | None | 2026-07-25 | FIXED AND VERIFIED |
-| `/api/portfolio` | GET | Baseline plus harmless `view=owner` and user/account sentinels | 403 or entitled immutable curated model | 200; same owner-derived `robinhood_mcp` model response | Owner cards hidden, but customer page fetched data in background | None | 2026-07-25 | RECLASSIFIED — TEN-01 practical P0 remains open |
-| `/api/trades` | GET | None | 403 or curated versioned model events only | 200; one global `is_paper:0` row and non-empty private note | No dedicated visible customer result inspected | None | 2026-07-25 | OPEN (TEN-02 P0) |
-| `/api/trades/stats` | GET / code contract | Default and paper-like query semantics reviewed | Same boundary as customer trades; no global aggregate | Customer-readable handler; aggregate ignores intended paper boundary | N/A | None | 2026-07-25 code | OPEN (TEN-02 boundary) |
+| `/api/portfolio` | GET | Baseline plus harmless `view=owner` and user/account sentinels | 403 or entitled immutable curated model | **Pre-containment:** 200; same owner-derived `robinhood_mcp` model response | **Pre-containment:** owner cards hidden, but customer page fetched data in background | None | 2026-07-25 | HISTORICAL; PHASE 1 CANDIDATE CONTAINED, NOT DEPLOYED |
+| `/api/trades` | GET | None | 403 or curated versioned model events only | **Pre-containment:** 200; one global `is_paper:0` row and non-empty private note | No dedicated visible customer result inspected | None | 2026-07-25 | HISTORICAL; PHASE 1 CANDIDATE CONTAINED, NOT DEPLOYED |
+| `/api/trades/stats` | GET / code contract | Default and paper-like query semantics reviewed | Same boundary as customer trades; no global aggregate | **Pre-containment:** customer-readable handler; aggregate ignored intended paper boundary | N/A | None | 2026-07-25 code | HISTORICAL; PHASE 1 CANDIDATE CONTAINED, NOT DEPLOYED |
 | `/api/config` | GET and POST | GET none; POST unchanged/sanitized config body | 403 for customer | 403 / 403 | No customer config UI | No change | 2026-07-25 | FIXED AND VERIFIED |
 | `/api/preferences` | GET and POST | Existing boolean values only | Caller-only round trip | 200 / 200 | Preferences remained unchanged | Original values restored | 2026-07-25 | VERIFIED CURRENT |
 | `/api/watchlist` | GET, POST, DELETE | Temporary `SPY` add/delete | Caller-only exact list | All 200 | Temporary symbol appeared then disappeared | `[T, TSLA, NVDA]` restored | 2026-07-25 | VERIFIED CURRENT |
@@ -155,7 +157,9 @@ All calls used the authorized test account. Parameters and responses below are s
 | Track Record | GET page | Public, no body | Finite, reproducible, correctly labelled quality/return/benchmark | 200; engine +6.7%, PF 0.91, win 18%, drawdown 27%, SPY `nan` | Cohorts visible; non-finite benchmark shown | None | 2026-07-25 | PARTIALLY FIXED |
 | `/watch`, `/invest`, `/usage`, `/api/usage/summary` | GET | Customer session; no body | 403 | 403 | Forbidden/no owner UI | None | 2026-07-25 | FIXED AND VERIFIED |
 | `/api/account/delete` | GET only | No destructive confirmation | 405; no mutation | 405 | N/A | No deletion | 2026-07-25 | NO LONGER REPRODUCIBLE for GET trigger |
-| Customer dashboard | Browser/network/console | Authenticated customer, idle across refresh intervals | No owner fetches and zero uncaught errors | Owner widgets hidden; owner-data polling and null-DOM errors continue | One error repeated about every 30s | No intended mutation | 2026-07-25 | PARTIALLY FIXED |
+| Customer dashboard | Browser/network/console | Authenticated customer, idle across refresh intervals | No owner fetches and zero uncaught errors | **Pre-containment:** owner widgets hidden; owner-data polling and null-DOM errors continued | **Pre-containment:** one error repeated about every 30s | No intended mutation | 2026-07-25 | HISTORICAL; PHASE 1 CANDIDATE VERIFIED, NOT DEPLOYED |
+
+Phase 1 candidate overlay: authenticated non-owner `GET`/`HEAD` requests to all three owner-domain paths now receive exact private/no-store 403 contracts before handler/cache/repository access; query variants do not change scope. The customer HTML/Android client contains no removed owner-domain request, and the real-browser two-refresh trace records zero such requests and zero console errors. Owner behavior remains on the owner-composed surface.
 
 ### Chart counts
 
@@ -210,15 +214,17 @@ These successive corrections prove that earlier “all P0 exit criteria met” o
 - **2026-07-25 — VERIFIED CURRENT:** live P0 portfolio and trade exposures were reproduced with minimum evidence.
 - **2026-07-25 — VERIFIED CURRENT:** financial bridges, all chart ranges, My Book parity/day change, controlled mutations, async analysis, headers, route guards, browser errors, accessibility semantics, and track-record calculations were checked.
 - **2026-07-25 — VERIFIED CURRENT:** current `main`, dirty checked branch, PR #105, CI state, process age, file timestamps, tests, and logs were compared.
-- **2026-07-25 — VERIFIED CURRENT:** PR #106 merged and moved `origin/main` to `cef1fe6`; PR #105 remained open/conflicting.
+- **2026-07-25 — HISTORICAL SNAPSHOT:** PR #106 moved `origin/main` to `cef1fe6`; PR #105 was then open/conflicting.
+- **2026-07-25 — VERIFIED PHASE 1 BASE:** PR #105 was subsequently squash-merged; the exact clean base recorded before edits was `68287dfd80eab51b40d4270eab07b0bd73267992`.
+- **2026-07-25 — VERIFIED PHASE 1 CANDIDATE:** the clean implementation commit `8ff34b531b31248d71178c6ed23cb88182cf1724` passed 2,206 tests, removed customer owner-domain requests, and produced deterministic runtime SHA-256 `a0d8a80a0255e393675352422992eb343df30bb60c016b17ec659d3e8324e345`.
 
 ## Contradictions resolved
 
 | Apparent contradiction | Canonical resolution |
 |---|---|
 | Export quantity looked like a second store or migration error. | One UUID-scoped store existed. Broad customer middleware scaled export quantities while `/api/mybook` was exempt. The `2.7971` factor was presentation transformation, not migration. |
-| A-01 was described as IDOR/cross-role access, but query tampering failed. | Reclassified: authentication and parameter resistance work. Current code intentionally gives customers a global owner-derived “model book.” The practical privacy risk remains P0. |
-| Owner console was “rendered” yet later “removed.” | It was delivered and CSS-hidden, not necessarily normally visible. Visible markup separation improved; customer JS still polls owner endpoints and calls missing owner renderers. |
+| A-01 was described as IDOR/cross-role access, but query tampering failed. | Reclassified: authentication and parameter resistance worked. Pre-containment code intentionally gave customers a global owner-derived “model book”; Phase 1 now denies that read while the durable publication root risk remains. |
+| Owner console was “rendered” yet later “removed.” | It was delivered and CSS-hidden in the audited live state. Phase 1 server-composes separate role documents; customer web/Android clients contain no removed owner fetch/poll path, while owner loaders remain in the owner partial. |
 | “Day” was fixed, but model day change still failed. | Two defects existed: My Book used lifetime cost return as Day; model portfolio mixed account/component/prior-close bases. They require separate tests. |
 | Model reconciliation changed from roughly `$2.1k` to roughly `$28.6k`. | Account data, scaling, and field semantics changed. Later commits reveal multiple causal layers. Do not merge the historical figures into one invariant delta. |
 | Fifteen analyze POSTs looked like duplicate expensive jobs. | The contract polls with POST after 202. A unique job guard existed; the real browser defect was duplicate polling loops. Fresh testing saw one job complete and then cache. |
@@ -226,14 +232,14 @@ These successive corrections prove that earlier “all P0 exit criteria met” o
 | PF below 1 with positive return was called mathematically impossible. | It can occur when profit factor is dollar-weighted while the headline sums unweighted per-trade percentages. The inconsistency is the undisclosed mixed basis and misleading “total P&L” label. |
 | RSI values disagreed. | Different lookbacks/timeframes can legitimately differ. The current defect is missing basis labels unless a same-window recomputation proves a math error. |
 | Unknown ticker was both rejected and accepted. | Different entry points were tested. `/api/analyze-ticker` now rejects the tested unknown; My Book position/analyze flows still need one synchronous listed-asset contract. |
-| “Fixed in code” was treated as “fixed live.” | PR #105 is unmerged and conflicting; the running process has no SHA and predates later file changes. Branch, current main, and live claims are separate. |
+| “Fixed in code” was treated as “fixed live.” | PR #105 is now merged and Phase 1 has a clean identifiable artifact, but the running production process was not changed. Candidate, recorded base, and live claims remain separate. |
 | Grok review suggested Model Book should simply equal My Book. | Rejected as an architecture shortcut. My Book is customer-owned. Model Book is a distinct product and must be a curated immutable publication if retained. |
 
 ## Evidence gaps and limits
 
 - **UNKNOWN / REQUIRES ACCESS:** exact immutable commit/container/build that produced the current live process.
 - **UNABLE TO VERIFY:** true iOS/Android phone and tablet layouts; in-app viewport control did not change the rendering viewport and Chrome control was unavailable.
-- **UNABLE TO VERIFY:** a clean, conflict-resolved PR #105 successor on top of `cef1fe6`; it does not yet exist.
+- **RESOLVED FOR PHASE 1:** PR #105 is present in recorded base `68287dfd`; the clean Phase 1 successor is `8ff34b531b31248d71178c6ed23cb88182cf1724`.
 - **UNABLE TO VERIFY:** a complete account export-to-restore round trip. Export was read; destructive/full restore was not appropriate during this audit.
 - **UNABLE TO VERIFY:** reconciliation of every missing model-portfolio dollar because the public response omits the position/account components needed to bridge `$28,616.88`.
 - **UNABLE TO VERIFY:** a full independent recomputation of the live Kelly and Monte Carlo outputs. The completed analysis contained those sections, but this pass did not preserve their complete input/assumption vectors; branch property tests are supporting evidence, not a live quantitative proof.

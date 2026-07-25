@@ -1,8 +1,9 @@
 # GESH 02 — Architecture and Data Flow
 
-**Code anchors:** checked branch `09f757c3` unless a ref is stated explicitly  
+**Code anchors:** Phase 1 base `68287dfd80eab51b40d4270eab07b0bd73267992`; clean implementation `8ff34b531b31248d71178c6ed23cb88182cf1724` unless a historical ref is stated explicitly  
 **Live evidence:** 2026-07-25  
 **Architecture decision:** separate customer, model-publication, owner, and public-proof domains
+**Phase 1 state:** customer reads of owner portfolio/trade domains are denied before their data seams; durable Model Book publication remains unimplemented.
 
 ## Canonical architecture in one view
 
@@ -33,13 +34,14 @@ flowchart LR
 
     OwnerBrowser --> OwnerConnector
     OwnerConnector --> OwnerSnapshot
-    OwnerSnapshot -. "current defect:<br/>dynamic model response" .-> App
-    TradeDB -. "current defect:<br/>customer-readable global rows" .-> App
+    OwnerSnapshot -->|"owner behavior preserved"| App
+    TradeDB -->|"owner behavior preserved"| App
+    App -. "customer portfolio/trade reads:<br/>403 before data access" .-> Browser
 
     Proof --> Trading
 ```
 
-The dashed paths are the two P0 data-product boundary failures. They are authenticated paths, but authentication alone does not make their data appropriate for a customer.
+The dashed paths represent the two pre-containment P0 data-product boundary failures. Phase 1 now terminates those authenticated customer reads with 403 before data access; authentication alone would not make the underlying data appropriate for a customer.
 
 ## Domain model that actually exists
 
@@ -48,9 +50,9 @@ The dashed paths are the two P0 data-product boundary failures. They are authent
 **VERIFIED CURRENT**
 
 - A signed, expiring, purpose-bound session carries an immutable user UUID (`auth_users.py:124-190`).
-- Global login middleware protects non-public surfaces (`server.py:459`; `auth_users.py:1487`).
-- Owner status is resolved through a durable UUID marker in `auth_metadata`, not a query parameter or email string (`auth_users.py:1410-1431`).
-- The following tables are keyed to the authenticated UUID (`auth_users.py:204-301`):
+- Global login middleware protects non-public surfaces (`server.py:464-478`; `auth_users.py:1478-1513`).
+- Owner status is resolved through a durable UUID marker in `auth_metadata`, not a query parameter or email string (`auth_users.py:1423-1444`).
+- The following tables are keyed to the authenticated UUID (`auth_users.py:207-304`):
   - `customer_positions`;
   - `watchlist`;
   - `customer_analyses`;
@@ -58,7 +60,7 @@ The dashed paths are the two P0 data-product boundary failures. They are authent
   - `customer_book_prefs`;
   - `mybook_jobs`;
   - `usage_reservations`.
-- Their normal queries include the user UUID (`auth_users.py:1560-1701`, `1742-1779`, `1881-2037`).
+- Their normal queries include the user UUID (`auth_users.py:1573-1793`, `1798-2038`).
 
 This is real tenant isolation. Harmless `user`, `user_id`, `account`, `account_id`, `view`, `role`, and owner-like inputs did not switch the live caller or modify another object.
 
@@ -66,7 +68,7 @@ This is real tenant isolation. Harmless `user`, `user_id`, `account`, `account_i
 
 **VERIFIED CODE; VERIFIED CURRENT response**
 
-`view=model_book` is not a persisted assignment to a model portfolio. `/api/me` determines customer versus owner, and customer response middleware stamps `view=model_book` onto non-owner JSON (`server.py:781-810`; `/api/me` at `server.py:899-909`).
+`view=model_book` is not a persisted assignment to a model portfolio. `/api/me` reports customer versus owner, and customer response middleware stamps `view=model_book` onto eligible non-owner JSON (`server.py:972-1041`; `/api/me` at `server.py:1155-1165`). The three contained owner-domain reads terminate earlier in that middleware and do not receive the presentation stamp.
 
 The present selection logic is effectively:
 
@@ -105,17 +107,17 @@ session subject UUID
 → caller's private response
 ```
 
-Relevant code is in `server.py:3505-3712`, with persistence in `auth_users.py`. The live customer had one TSLA row. Its quantity, export, valuation, prior-close value, and day change agreed and reconciled independently.
+Relevant valuation/route code is in `server.py:3965-4168`, with persistence in `auth_users.py`. The live customer had one TSLA row. Its quantity, export, valuation, prior-close value, and day change agreed and reconciled independently.
 
 Cost basis is optional and currently absent for the baseline position, so unrealized P&L is correctly unavailable rather than fabricated.
 
 ### 4. Model Book / `/api/portfolio`
 
-**OPEN P0 in live and `origin/main`; PARTIALLY FIXED in candidate branches**
+**CONTAINED IN PHASE 1 CANDIDATE; durable publication remains open**
 
 This route does not read `customer_positions`.
 
-Current/legacy path:
+Verified pre-containment path:
 
 ```text
 owner Robinhood connector OR global owner snapshot file
@@ -126,14 +128,14 @@ owner Robinhood connector OR global owner snapshot file
 
 Checked-branch anchors:
 
-- handler and source selection: `server.py:2147-2216`;
-- data fetch/cache path: `data_fetcher.py:43-140`, `300-313`;
+- owner handler and source selection: `server.py:2522-2586`;
+- data fetch/cache path: `data_fetcher.py:43-140`, `data_fetcher.py:300-313`;
 - raw snapshot construction: `build_snapshot_from_mcp.py:40-56`, `80-142`;
-- candidate serializer: `model_portfolio.py:22-30`.
+- defense-in-depth candidate serializer: `model_portfolio.py:362-423`.
 
-`origin/main:server.py:1776-1822` directly builds the live/global owner object and relies on customer response transformation. The live response still exposes `source=robinhood_mcp`, proving that the production path is not the safe end-state claimed by later branch documentation.
+The audited live/main path built the global owner object and relied on customer response transformation. The pre-containment live response exposed `source=robinhood_mcp`. Phase 1 leaves the owner handler intact but denies non-owner requests in `_customer_view_middleware` (`server.py:972-1008`) before the handler, cache, connector, or repository can execute.
 
-The checked branch and PR #105 call a `model_portfolio.publish()`-style allowlist. That is a useful serializer boundary, but not a publication system:
+The merged base still contains a `model_portfolio.publish()`-style allowlist. Phase 1 does not serve that projection to customers. The allowlist remains defense-in-depth, not a publication system:
 
 - it derives content at request time from the current owner snapshot;
 - changing the owner snapshot can change the customer result without an approval event;
@@ -149,9 +151,9 @@ Removing the text `robinhood_mcp` or stripping account IDs changes serialization
 
 ### 5. Trades
 
-**OPEN P0**
+**CONTAINED IN PHASE 1 CANDIDATE; curated customer trade publication remains open**
 
-`/api/trades` and `/api/trades/stats` do not query a customer-owned trade domain:
+The owner `/api/trades` and `/api/trades/stats` handlers still query a global trade domain. The pre-containment customer path was:
 
 ```text
 authenticated request
@@ -163,14 +165,14 @@ authenticated request
 
 Anchors:
 
-- unguarded read handlers: `server.py:4847-4864`;
+- owner-facing global read handlers (customer-gated by middleware): `server.py:5269-5286`;
 - global schemas: `trade_log.py:26-97`;
 - row serialization: `trade_log.py:233-267`;
 - aggregate path: `trade_log.py:383-397`.
 
 The global tables have no `user_id`, `tenant_id`, publication status, consent field, public schema version, or model-version key. Both real and paper tables contain `notes`. `/api/trades/stats` accepts a paper-like parameter but its aggregation returns both classes.
 
-The broad customer masker is not a safe control for this domain. It targets selected strings/numbers and does not reject arbitrary operational text. PR #105’s tests explicitly expect these paths to return 200 to customers and inspect only monetary sentinel behavior (`tests/test_customer_leak_sweep.py:131-141`, `246-247`, `339-353`, `386-411`).
+The broad customer masker is not used as the Phase 1 control for this domain. Non-owner reads now return exact 403 contracts before either handler executes. The previously unsafe 200 expectations were inverted; arbitrary note/source sentinels, query tampering, repository seams, and warmed owner-cache replay are covered.
 
 ### 6. `robinhood_mcp`
 
@@ -200,7 +202,7 @@ session UUID
 → caller-only export
 ```
 
-The export assembly is in `auth_users.py:2128-2186`. The historical `2.7971` discrepancy did not come from a second position store. A broad response transformation scaled the export after correct UUID-scoped retrieval. Exempting account export and centralizing quantity semantics repaired the live mismatch.
+The export assembly is in `auth_users.py:2141-2199`. The historical `2.7971` discrepancy did not come from a second position store. A broad response transformation scaled the export after correct UUID-scoped retrieval. Exempting account export and centralizing quantity semantics repaired the live mismatch.
 
 There is no corresponding full account-import/restore endpoint, so “round trip” currently means write/read/export parity, not a proven export-to-restore workflow.
 
@@ -220,9 +222,9 @@ authenticated UUID
 
 Anchors:
 
-- symbol syntax guard: `server.py:212-221`;
-- route/job orchestration: `server.py:3736-3770`, `3972-4110`;
-- reservations/jobs: `auth_users.py:1931-2025`.
+- symbol syntax guard: `server.py:216-222`;
+- route/job orchestration: `server.py:4171-4545`;
+- reservations/jobs: `auth_users.py:1894-2038`.
 
 Strengths:
 
@@ -243,9 +245,9 @@ External news/research content and model output are untrusted data. They must re
 
 **FIXED backend; PARTIALLY FIXED product**
 
-Checked code validates period/range, supports `max`, and caches briefly (`server.py:2574-2673`). Fresh live tests proved materially distinct 1D, 5D, 1M, 3M, 6M, 1Y, and max datasets.
+Checked code validates period/range, supports `max`, and caches briefly (`server.py:2942-3041`). Fresh live tests proved materially distinct 1D, 5D, 1M, 3M, 6M, 1Y, and max datasets.
 
-The rendered UI has no ALL/MAX control (`templates/owner_console.html:94-99`; `templates/dashboard.html` around the range controls). Intraday responses also lack a populated source label, unlike longer Yahoo-backed periods.
+The rendered owner chart has no ALL/MAX control (`templates/owner_console.html:94-99`). Intraday responses also lack a populated source label, unlike longer Yahoo-backed periods.
 
 ### 10. Preferences and watchlist
 
@@ -269,9 +271,9 @@ public visitor
 
 Anchors:
 
-- page/aggregation: `proof_page.py:41-55`, `93-157`, `176-293`;
+- page/aggregation: `proof_page.py:41-55`, `proof_page.py:93-157`, `proof_page.py:176-293`;
 - engine-first presentation on candidate branches: `proof_page.py:370-461`;
-- sibling gate/tracker contract: `trading/tracker.py:829-861`.
+- sibling engine gate/tracker contract (external repository): `trading/tracker.py:829-861`.
 
 The architecture now distinguishes engine, manual, and blended cohorts more clearly. The calculation contract still mixes:
 
@@ -283,9 +285,9 @@ These measures may legitimately have different signs, but the page does not make
 
 ## Browser/runtime architecture finding
 
-**VERIFIED CURRENT**
+**VERIFIED PRE-CONTAINMENT; VERIFIED PHASE 1 CANDIDATE, NOT DEPLOYED**
 
-Visible owner controls were removed from the normal customer page, but shared JavaScript still initializes owner-oriented data flows:
+Before Phase 1, visible owner controls were removed from the normal customer page, but shared JavaScript still initialized owner-oriented data flows:
 
 - `loadPortfolioWithECG()` runs on initialization and repeats on the refresh interval;
 - it fetches `/api/portfolio`;
@@ -293,9 +295,9 @@ Visible owner controls were removed from the normal customer page, but shared Ja
 - render functions dereference `null`, causing ECG, stats, and regime errors;
 - at least the stats failure repeats every 30 seconds.
 
-The customer page therefore still receives and processes owner/model data even when the cards are cosmetically hidden. This is both proof of incomplete UI separation and an unnecessary P0 data fetch.
+Phase 1 moves those functions, retries, status polling, and intervals to `templates/owner_console.html`. Customer role composition inserts no owner blocks; the Android API interface no longer exposes `getPortfolio`; and a real-browser trace across two refresh intervals records zero removed owner-domain requests and zero console errors.
 
-The port-9000 process started on 2026-07-23 at 06:29, while key source/template files changed later. Uvicorn reload is disabled. Static/runtime-read files and in-memory imported Python may therefore represent different revisions. No build endpoint resolves the ambiguity.
+The port-9000 process started on 2026-07-23 at 06:29, while key source/template files changed later. Uvicorn reload is disabled. Static/runtime-read files and in-memory imported Python may therefore represent different revisions. The undeployed candidate adds safe `/api/version` identity, but the existing production process was not replaced and therefore remains unresolved.
 
 ## Trust-boundary analysis
 
@@ -304,20 +306,20 @@ The port-9000 process started on 2026-07-23 at 06:29, while key source/template 
 | Customer identity/session | Confidential auth data | auth DB, signed cookie | Auth middleware/account owner | No current bypass reproduced |
 | My Book | Customer private financial data | UUID-scoped `customer_positions` | Same customer; support only under explicit policy | Healthy core boundary; missing cost basis and universal asset preflight |
 | Customer watchlist/preferences/jobs | Customer private/product data | UUID-scoped tables | Same customer | Healthy core boundary |
-| Model Book publication | Customer-visible licensed product data | No durable model tables; dynamic owner snapshot projection | Entitled customers | No consent/version/approval/assignment; P0 provenance |
-| Owner brokerage snapshot | Highly confidential operator financial data | connector + global snapshot file | Owner/internal jobs only | Dynamically feeds customer model route |
-| Real trade ledger/notes | Highly confidential operator strategy/execution data | global trade DB | Owner/internal only | Customer route serializes it |
+| Model Book publication | Customer-visible licensed product data | No durable model tables; customer route is in Phase 1 deny mode | Entitled customers only after Phase 2 publication | No consent/version/approval/assignment; publication root risk remains |
+| Owner brokerage snapshot | Highly confidential operator financial data | connector + global snapshot file | Owner/internal jobs only | Phase 1 blocks customer handler/cache access; owner behavior preserved |
+| Real trade ledger/notes | Highly confidential operator strategy/execution data | global trade DB | Owner/internal only | Phase 1 blocks customer handler/repository access |
 | Paper/synthetic model events | Customer-visible only after publication | Mixed into global trade infrastructure | Entitled customers | No curated public schema |
 | AI/provider inputs | Third-party/untrusted data | caches/provider responses | Analysis pipeline | Needs strict structured boundary/provenance |
 | Public track record | Public marketing/proof data | sibling tracker DB | Anyone | Metric bases/benchmark presentation not contract-safe |
-| Deployment identity | Operational control | launchd process + filesystem | Operators/auditors | No SHA/schema/build identity |
+| Deployment identity | Operational control | deterministic candidate archive + adjacent validated build-info/manifest | Operators/auditors | Candidate is identifiable; production remains unknown because deployment was out of scope |
 
 ## Why this is not merely an authorization bug
 
 The architecture must distinguish:
 
 1. **Authentication:** is there a valid session? Mostly sound in tested paths.
-2. **Route authorization:** may this role invoke the handler? Mostly sound for owner routes; intentionally permissive for the two P0 handlers.
+2. **Route authorization:** may this role invoke the handler? Phase 1 explicitly denies the three owner-domain reads to non-owners before handler execution.
 3. **Object authorization:** is the selected row/object owned or entitled? Sound for UUID customer tables; absent for global model/trade data.
 4. **Data provenance:** where did the information originate? Real operator brokerage/trade records.
 5. **Sanitization:** which fields may be published? Incomplete and historically broad/transformational.
@@ -434,11 +436,11 @@ flowchart LR
 
 1. Owner snapshot mutation does not change a customer model response until explicit publication.
 2. Draft, rejected, revoked, and unentitled versions never serialize.
-3. No customer response contains owner source markers, account/cash-management metadata, buying power, cost basis, provider/session identifiers, real trade rows, or private notes.
+3. **PHASE 1 CONTAINMENT PROVEN:** denied customer responses contain no owner source marker, holding/cash/buying-power/account data, trade row/statistic, or private note.
 4. Holdings plus approved model cash equal declared model notional within one cent; holding weights plus the explicit cash weight equal 100% within the documented tolerance.
 5. My Book remains separately UUID-scoped and cannot be selected through Model Book query parameters.
 6. Model trade events come only from their structured public table.
-7. Customer `/api/trades` and `/api/trades/stats` return 403 unless deliberately replaced by a separately named curated model-events API.
+7. **PHASE 1 CONTAINMENT PROVEN:** customer `/api/trades` and `/api/trades/stats` return exact 403 contracts unless a future separately named curated model-events API is implemented.
 8. Every publication and rollback has an append-only actor/time/hash event.
 9. Every response reports version, source kind, data-as-of, published-at, methodology, stale state, and reconciliation.
-10. A clean deployed SHA and schema version are observable at runtime.
+10. A clean candidate SHA and build time are observable through the safe version contract; a deployed SHA/schema match remains an open production gate.

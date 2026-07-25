@@ -4,19 +4,20 @@
 **Ordering rule:** dependency and risk reduction, not feature appeal  
 **Release posture:** no customer release until every P0/P1 ticket and every explicitly mandatory release gate—including the P2 mobile, chart, mutation-contract, and response-hardening gates—passes CP-016 on the exact artifact  
 **Evidence labels:** `VERIFIED CURRENT`, `SUPPORTED BY LATEST EVIDENCE`, `INFERRED`
+**Phase 1 update:** CP-001 is complete in an undeployed clean candidate; CP-002/008/014 are partially advanced; Phase 2+ tickets remain open.
 
-The only canonical current **P0 findings** are **TEN-01**, the owner-derived customer portfolio, and **TEN-02**, the global real trade/note exposure. Several tickets below are P0 work packages because they jointly close those two findings; they do not represent additional P0 findings. Financial reconciliation, release identity/conflicts, track-record methodology, recommendation coherence, and accessibility are P1 release blockers. Mobile verification is P2 but remains mandatory before a public paid release.
+The only canonical **P0 findings** are **TEN-01**, the owner-derived customer portfolio, and **TEN-02**, the global real trade/note exposure. Phase 1 contains both customer read paths but does not implement their durable publication-domain closure. Several tickets below are P0 work packages because they jointly close those root findings; they do not represent additional P0 findings. Financial reconciliation, deployment, track-record methodology, recommendation coherence, and accessibility are P1 release blockers. Mobile verification is P2 but remains mandatory before a public paid release.
 
 ## 1. Planning baseline
 
 The backlog is based on four states that must not be conflated:
 
-1. **Live customer behavior — VERIFIED CURRENT, 2026-07-25.** An authenticated customer can read an owner-derived `robinhood_mcp` portfolio through `GET /api/portfolio`, and a global non-paper trade plus a sensitive free-text note through `GET /api/trades`. The portfolio does not reconcile: itemized holdings total **$73,597.62**, source `portfolio_equity` is **$102,214.50**, cash is **$26,402.39**, and account equity is **$128,616.89**. The unitemized gap between holdings and source portfolio equity is **$28,616.88**.
-2. **Checked local branch — SUPPORTED BY LATEST EVIDENCE.** `fix/audit-p0-p1-remediation` at `09f757c` contains partial hardening, including a build-up model serializer, but the worktree is dirty, the branch is four commits behind and twelve ahead of `origin/main`, and the running process predates several changed source files.
-3. **PR #105 — SUPPORTED BY LATEST EVIDENCE.** Head `fe65a816` has green GitHub checks (2,077 passed, one skipped; isolation lane 83 passed) but is open, one commit behind current main, and merge-conflicting. Green checks do not make it deployed or merge-ready.
-4. **Current main — VERIFIED CURRENT CODE.** `origin/main` is `cef1fe6` after PR #106 and does not contain the complete audit remediation.
+1. **Live customer behavior — VERIFIED PRE-CONTAINMENT, 2026-07-25.** An authenticated customer could read an owner-derived `robinhood_mcp` portfolio and a global non-paper trade/private note. The numerical evidence below remains the historical root-cause record.
+2. **Recorded Phase 1 base — VERIFIED CLEAN.** Exact then-current `origin/main` `68287dfd80eab51b40d4270eab07b0bd73267992`, including squash-merged PR #105, reproduced 2,078 passed with zero failed/skipped.
+3. **Phase 1 candidate — VERIFIED CLEAN.** `8ff34b531b31248d71178c6ed23cb88182cf1724` on `codex/p0-data-boundary-containment-20260725`; 2,206 passed with zero failed/skipped; three independent reviews approved.
+4. **Artifact — VERIFIED CANDIDATE.** Deterministic 1,556,480-byte USTAR, 80 exact runtime members, SHA-256 `a0d8a80a0255e393675352422992eb343df30bb60c016b17ec659d3e8324e345`; safe build identity sidecar; no deployment.
 
-The local focused financial/security matrix passed **436/436** tests. The dirty-tree full suite passed 1,639 and failed four: one environment-contamination artifact and three genuine uncommitted `ai_analyzer` streaming/test-double incompatibilities. A missing `Content-Type` on a JSON mutation is also accepted and persists, despite explicit `text/plain` correctly returning 415. These are release facts, not reasons to weaken tests.
+The historical dirty-tree failures were classified and not suppressed. They did not reproduce on the exact clean base or Phase 1 candidate. Unrelated open contracts, including missing-`Content-Type` mutation behavior, remain in their existing backlog tickets.
 
 ## 2. Remediation option decision for TEN-01 and TEN-02
 
@@ -30,7 +31,7 @@ These are the canonical IDs for the findings historically reported as A-01 and A
 | **D. Synthetic/paper model source** | Removes real-brokerage provenance and consent risk; gives deterministic seed data and reproducible tests | Must still be honestly labeled and financially reconciled | **Default source inside C** |
 | **E. Explicitly consented, stripped snapshot** | Can publish a deliberately selected real strategy composition without exposing account metadata | Consent, withdrawal, sanitization, reconciliation, and editorial approval remain mandatory; no raw note or account field may cross the quarantine boundary | Optional ingestion mode inside C, disabled by default |
 
-**Decision:** build **C with D as the default source**. Permit **E only as an explicitly consented ingestion path**. Use **B now**. Continue using **A for the customer's own `mybook`**, not as a substitute for the shared model portfolio.
+**Decision:** build **C with D as the default source**. Permit **E only as an explicitly consented ingestion path**. **B is implemented in the Phase 1 candidate and remains the required mode.** Continue using **A for the customer's own `mybook`**, not as a substitute for the shared model portfolio.
 
 The target flow is:
 
@@ -70,16 +71,16 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 
 ### CP-001 — Contain customer access to owner portfolio and global trades
 
-- **Priority / status / effort:** P0 / **OPEN in live production** / S
+- **Priority / status / effort:** P0 / **COMPLETE IN PHASE 1 CANDIDATE; NOT DEPLOYED** / S
 - **Owner discipline:** Incident/Security DRI, implemented by Backend/API DRI; Release/SRE DRI deploys.
 - **Affected code/data:** `server.py` customer middleware and `GET /api/portfolio`, `GET /api/trades`, `GET /api/trades/stats`; `templates/dashboard.html` portfolio/ECG/regime/trade polling; global `trade_log` and snapshot files remain untouched.
-- **Evidence:** `VERIFIED CURRENT` customer responses contain owner-derived brokerage composition and a non-paper global trade. Customer JavaScript still runs `loadPortfolioWithECG()` at initialization and every refresh, even where owner DOM nodes are absent.
-- **Reproduction:** authenticate as a non-owner customer; call the three endpoints; inspect only structural fields; load the dashboard and observe recurring `/api/portfolio` requests and `renderStats`/ECG/regime null-element errors.
+- **Evidence:** pre-containment responses contained owner brokerage composition and a non-paper global trade. Candidate tests prove exact customer 403s before owner seams, private/no-store cache isolation, zero web/Android removed owner requests, zero browser console errors, and preserved owner behavior.
+- **Reproduction:** run the Phase 1 API, repository/cache, static frontend/Android, and real-browser regression suites listed in GESH-09.
 - **Root cause:** authentication succeeds, but authorization is expressed as generic “authenticated customer may receive model_book.” The portfolio handler builds an owner brokerage payload, the customer middleware transforms/stamps it, and the trade handlers read unscoped global tables. UI CSS hiding does not change either server delivery or background fetches.
-- **Implementation plan:** from a clean branch based on current `origin/main`, add an explicit customer deny policy for all three routes. Non-owner calls return a stable 403 contract. Keep owner behavior unchanged. Remove customer initialization and intervals for portfolio, ECG, regime, trade stats, and trade history; the customer book loader uses `/api/mybook`, while separately authorized public-market research routes remain available. The safe fallback mode is always `deny`, never “serve legacy model.”
+- **Implementation result:** the clean Phase 1 branch adds an explicit deny policy for all three routes before handler access. Non-owner calls return stable 403 contracts; owner behavior is unchanged. Customer initialization, retry, polling, portfolio/ECG/exact-global-regime/trade loaders are absent; `/api/mybook` and separately authorized public-market research remain available. The safe fallback is `deny`, never “serve legacy model.”
 - **Migration / old data:** none. Do not delete, rewrite, export, or migrate any snapshot or trade row during containment.
 - **Backward-compatibility risk:** customer clients that currently assume 200 responses will receive 403. Ship the customer UI removal in the same artifact, keep the owner contract unchanged, and document the temporary unavailable state; do not preserve the unsafe response for compatibility.
-- **Acceptance criteria:** customer receives 403 from all three routes; owner contract remains intact; a customer dashboard sends zero requests to them; no owner connector or global trade query executes for a customer; no related console error recurs for ten minutes; denied reads emit metadata-only audit events.
+- **Acceptance criteria:** **passed on candidate** — customer receives exact 403 from all three routes; owner contract remains intact; customer dashboard/Android sends zero removed owner requests; no owner connector/global trade query executes; real browser has zero related console errors for two refresh intervals; denied reads are rate-limited and emit throttled metadata-only logs.
 - **Tests:** unit role-policy matrix; integration tests with owner/customer sessions; API contract tests for exact 403 bodies; browser E2E asserting no matching network requests and zero console errors; security regression with owner connector/global trade function patched to raise if touched.
 - **Rollback:** roll back UI independently if necessary, but keep the backend in deny mode. If the hotfix cannot serve the dashboard, use authenticated maintenance mode; never roll back to the exposed endpoint behavior.
 - **Observability:** counters by route and role for allow/deny, without symbols, balances, or notes; alert on any successful non-owner response or invocation of an owner connector on a customer request.
@@ -87,13 +88,13 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 
 ### CP-002 — Establish a clean, identifiable release line and resolve PR #105
 
-- **Priority / status / effort:** P1 release blocker / **OPEN** / M
+- **Priority / status / effort:** P1 release blocker / **PARTIALLY FIXED; DEPLOYMENT OPEN** / M
 - **Owner discipline:** Release/SRE DRI; Backend and Security reviewers approve the reconstructed delta.
 - **Affected code/data:** git branch/PR history, dependency pins, CI workflow, launchd deployment path, application health/version response, startup logs.
-- **Evidence:** `origin/main=cef1fe6`; local checked branch is dirty/diverged; PR #105 is green but conflicting; the live process started before several current file modifications and exposes no commit/version identity.
+- **Evidence:** PR #105 is in recorded base `68287dfd`; Phase 1 is a clean reviewed descendant; clean base/candidate full suites pass; candidate archive and safe version identity are reproducible. The live process remains unchanged and unidentified.
 - **Reproduction:** compare `git rev-parse` values, PR metadata, process start time, and source mtimes; no live endpoint can prove which SHA supplies in-memory handlers.
 - **Root cause:** the application runs directly from a mutable worktree with `reload=False`; source changes and merges are not coupled to an immutable build artifact, promotion record, or runtime SHA.
-- **Implementation plan:** create a fresh remediation branch from `cef1fe6`; reconstruct or rebase PR #105 deliberately, preserving PR #106's `gesh-core` pin and resolving conflicts in reviewable commits. Fix the three genuine `ai_analyzer` streaming/test-double failures. Add build metadata (`git_sha`, build time, schema version, dependency-lock hash) injected at packaging time and exposed through a non-sensitive version/health contract plus startup log. Deploy from a clean, immutable release directory or artifact, not the development worktree.
+- **Implementation result/remaining plan:** fresh Phase 1 branch from exact main, clean full-suite reconciliation, dependency/test pins, deterministic exact-commit artifact, JUnit provenance binding, and non-sensitive `/api/version` are implemented. Normal merge, staging, schema/migration identity, startup logging, promotion, and rollback proof remain open. Deploy from the immutable artifact, never the development worktree.
 - **Migration / old data:** none. Record the current live process metadata as evidence before replacement. Do not restart the dirty tree.
 - **Backward-compatibility risk:** deployment scripts and health probes may assume a mutable worktree or the old health shape. Version the response, update probes before promotion, and retain the previous immutable artifact without exposing filesystem or configuration details.
 - **Acceptance criteria:** clean worktree; one reviewable PR based on current main; full test suite has zero genuine failures; customer-isolation lane green; built artifact hash recorded; staging and production report the promoted SHA; source changes after process start cannot alter the running release; release record identifies previous and current artifact.
@@ -134,7 +135,7 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 - **Owner discipline:** Data/Publication DRI is accountable; Security and Product/Editorial are required policy reviewers for consent, retention, and source use.
 - **Affected code/data:** new ingestion service, synthetic/paper generator, quarantine store, consent ledger, existing snapshot files and global trade notes.
 - **Evidence:** live model data is derived from `robinhood_mcp`; the current allowlist removes fields at serialization time but does not establish consent or prevent automatic composition changes.
-- **Reproduction:** inspect the live source tag and current handler path; there is no explicit source-consent or draft-review step.
+- **Reproduction:** inspect the pre-containment live source tag and legacy owner-backed handler path; there is no explicit source-consent or draft-review step.
 - **Root cause:** collection, transformation, approval, and publication were collapsed into one request path.
 - **Implementation plan:** make `source_kind=synthetic|paper` the only enabled default. Generate deterministic seed portfolios and trade events under a disclosed model methodology. For optional E ingestion, require a non-revoked consent record before reading a source; write raw material only to access-restricted, encrypted, TTL-bound quarantine; strip account IDs, source session metadata, cash/buying power unless explicitly part of the model, margin, deposits, cost basis, personal performance, execution IDs, and **all free-text notes** before a draft can be created. Convert rationale to reviewed reason codes. A separate validator and separate human approver promote a draft.
 - **Migration / old data:** inventory existing snapshot files and trade-note stores by checksum and access class. Do not copy any existing owner snapshot, trade row, or note into model tables. Start the first publication from a new synthetic/paper seed. Restrict legacy data to owner/internal access; apply the documented legal retention period; expire or securely remove transient quarantine blobs after that period while retaining non-sensitive checksums and audit events. If a prior snapshot is later proposed under E, re-ingest it through current consent and quarantine controls as new material.
@@ -150,8 +151,8 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 - **Priority / status / effort:** P0 work package for TEN-01 / **OPEN** / L
 - **Owner discipline:** Data/Publication DRI is accountable; Backend/API implements serving and Financial Integrity independently signs reconciliation.
 - **Affected code/data:** publication transaction, active-version resolver, `/api/portfolio` compatibility contract or a new `/api/model-portfolios/{id}/current`, assignments/entitlements, cache keys.
-- **Evidence:** current customer portfolio changes with the owner request-time source and has no durable assignment. `view=model_book` is stamped for every non-owner JSON response rather than loaded as a persisted portfolio entitlement.
-- **Reproduction:** customer identity has role/tier but no durable model portfolio/version; current handler can build from the owner connector on each call.
+- **Evidence:** pre-containment customer portfolio changed with the owner request-time source and had no durable assignment. Phase 1 denies customer `/api/portfolio` before handler/connector access; no durable Model Book version/assignment exists.
+- **Reproduction:** customer identity has role/tier but no durable model portfolio/version; Phase 1 returns 403 rather than invoking the legacy owner-backed handler.
 - **Root cause:** response middleware is standing in for a domain model and data authorization policy.
 - **Implementation plan:** publish in one transaction: validate draft, freeze holdings/trade events, compute content hash, write approval/publication event, set published status, then atomically change `active_version_id`. Resolve a customer by immutable `user_id` through `model_portfolio_assignments`; return only the referenced published version. Customer reads query the publication DB only—never owner connectors. Response includes model ID, immutable version, `published_at`, `data_as_of`, source class (`synthetic` or `paper` by default), methodology version, stale state, and reconciliation evidence. Cache keys include portfolio/version/entitlement; drafts and revoked versions are never cacheable.
 - **Migration / old data:** create an explicitly reviewed synthetic/paper v1 and assign only authorized test users in staging. Do not create assignments to a legacy owner-derived version.
@@ -167,8 +168,8 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 - **Priority / status / effort:** P0 work package for TEN-02 / **OPEN** / M
 - **Owner discipline:** Backend/API DRI; Security and Product/Editorial review.
 - **Affected code/data:** `server.py` `/api/trades` and `/api/trades/stats`; `trade_log.py`; new `model_trade_events`; internal paper/autopilot ledgers.
-- **Evidence:** a customer receives a global `is_paper=0` row and sensitive note. The route defaults `paper=false`; the stats handler does not honor a customer dataset boundary. Current leak-sweep tests still encode customer-reachable 200 behavior and only test monetary masking.
-- **Reproduction:** non-owner calls `/api/trades` and `/api/trades/stats`; response is not keyed by immutable customer ID or a published model version.
+- **Evidence:** before containment, a customer received a global `is_paper=0` row and sensitive note. Phase 1 now denies both customer routes before repository access; leak-sweep tests require exact 403 and arbitrary text/source absence.
+- **Reproduction:** non-owner calls `/api/trades` and `/api/trades/stats`; Phase 1 returns 403 because no immutable customer/publication-scoped trade domain exists.
 - **Root cause:** global operational tables were exposed as if they were a customer model feed; response masking cannot remove structural provenance or reliably sanitize prose.
 - **Implementation plan:** keep real/internal `trade_log`, paper books, orders, risk decisions, and notes owner-only. Customer trade APIs read only `model_trade_events` associated with the customer's assigned published model. Public events use structured reason codes and reviewed, template-rendered rationale—no free text. Stats take an explicit portfolio/version/cohort and use the same model event set. If no published model event set exists, return an honest empty result, not internal fallback.
 - **Migration / old data:** do not migrate any global real or discretionary trade or its note. Retain/archive it only under the internal retention policy and remove customer permissions. Curate new model events from synthetic/paper activity; any E-derived event must pass CP-004 as a new record.
@@ -206,10 +207,10 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 
 ### CP-008 — Cut the customer frontend over to explicit customer and model domains
 
-- **Priority / status / effort:** P1 with P0 privacy impact / **PARTIALLY FIXED cosmetically** / M
+- **Priority / status / effort:** P1 with P0 privacy impact / **PARTIALLY FIXED — Phase 1 customer cutover complete; published-model UI pending** / M
 - **Owner discipline:** Frontend/A11y DRI with Backend and Security review.
 - **Affected code/data:** `templates/dashboard.html` or extracted customer bundle/templates; role bootstrap from `/api/me`; My Book and Model Book navigation/components.
-- **Evidence:** owner widgets are visually hidden, but owner loaders and 30-second intervals still run and call absent DOM renderers, producing recurring console errors and repeated owner-data requests.
+- **Evidence:** customer role composition now ships no owner blocks/loaders/retries/polls; Android no longer exposes the owner portfolio request; real Chromium observes zero removed owner requests and zero console errors. A future durable published-model surface remains pending.
 - **Reproduction:** load the customer dashboard, inspect the network and console for at least ten minutes.
 - **Root cause:** customer/owner separation is CSS- and runtime-conditional inside one large page instead of server-composed routes/bundles with explicit data dependencies.
 - **Implementation plan:** render a customer-specific shell/bundle that does not ship or invoke owner operations code. Separate “My Book” (`/api/mybook`) from “Published Model” (CP-005) in navigation, labels, state, cache, and error copy. Display source class, version, publication time, data time, and stale state. Guard every renderer by a real component contract, not null checks scattered after fetch. Remove duplicate timers and cancel polling on navigation.
@@ -308,10 +309,10 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 
 ### CP-014 — Harden private-response caching, CSP, and error contracts
 
-- **Priority / status / effort:** P2 defense-in-depth / **OPEN** / M
+- **Priority / status / effort:** P2 defense-in-depth / **PARTIALLY FIXED** / M
 - **Owner discipline:** Backend/API DRI is accountable; Frontend/Security implement CSP extraction and Release/SRE validates origin and edge behavior.
 - **Affected code/data:** security-header middleware, authenticated HTML/API responses, Cloudflare/cache behavior, inline scripts/styles and event handlers, browser/API error renderers.
-- **Evidence:** current security headers are present, but CSP still permits `unsafe-inline`; authenticated and financially sensitive GET responses do not send an explicit private/no-store contract. Edge responses were dynamic, but current safety depends on edge defaults rather than the origin contract.
+- **Evidence:** current security headers are present and Phase 1 adds private/no-store, Pragma, and Vary Cookie for contained owner-domain and role-composed responses. CSP still permits `unsafe-inline`, and the remaining sensitive route inventory needs explicit classification.
 - **Reproduction:** inspect response headers for `/`, `/api/me`, `/api/mybook`, export, model, analyses, and account routes; inspect CSP and customer error navigation.
 - **Root cause:** headers were added as broad middleware protection around an inline-script application, without classifying responses by sensitivity or extracting executable code into nonce/hash-compatible assets.
 - **Implementation plan:** classify response types. Send `Cache-Control: no-store` (plus compatibility headers where required) on authenticated financial/account responses and `Vary: Cookie` on session-dependent representations. Keep deliberately public, versioned market/proof assets separately cacheable. Extract customer JavaScript/event handlers during CP-008, adopt CSP nonces or hashes, and remove `unsafe-inline` from `script-src`; plan style extraction without weakening other directives. Return stable sanitized JSON errors for APIs and an accessible customer error state for browser navigation.
@@ -345,7 +346,7 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 - **Priority / status / effort:** P1 release control / **OPEN** / M
 - **Owner discipline:** Release/SRE DRI; each domain DRI owns its gate; independent release approver has final no-go authority.
 - **Affected code/data:** CI, staging, migration rehearsal, browser suites, deploy/promotion script, post-deploy smoke, release manifest.
-- **Evidence:** focused tests pass while the dirty full suite has genuine failures; PR #105 checks pass while the PR is conflicting and live behavior remains unsafe. Some tests explicitly accept customer access to global trades and unknown-symbol persistence.
+- **Evidence:** Phase 1 unsafe portfolio/trade expectations are inverted; clean base/candidate full suites pass; exact-commit artifact/JUnit gates are implemented. Unknown-symbol, durable publication, staging, accessibility/mobile, rollback, and live identity still block CP-016.
 - **Reproduction:** compare test expectations, PR state, live responses, and runtime identity.
 - **Root cause:** CI proves a branch's encoded behavior, not that the behavior is safe, mergeable, deployed, identifiable, or financially correct.
 - **Implementation plan:** update unsafe expectations first. Add required lanes for tenant/connector independence, model publication state machine, migration rollback, decimal reconciliation, mutation contracts, track-record math, decision coherence, browser network/console, axe, and device emulation. Promotion requires current-main ancestry, clean reproducible artifact, migrations rehearsed, two-person P0 approval, staging E2E, live SHA match, sanitized smoke, and baseline restoration. Persist a signed release manifest.
@@ -360,8 +361,8 @@ Every ticket has one accountable DRI. “Engineering” as an owner is not accep
 ## 5. Critical path and parallel work
 
 ```text
-CP-001 containment
-    └─> CP-002 clean release identity
+CP-001 containment [candidate complete; deploy open]
+    └─> CP-002 clean release identity [candidate partial; promotion open]
             └─> CP-003 durable schema
                     └─> CP-004 safe ingestion
                             └─> CP-007 financial gate

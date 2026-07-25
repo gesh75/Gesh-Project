@@ -6,6 +6,7 @@
 **Default model source:** synthetic/paper  
 **Optional source:** explicitly consented snapshot ingestion after quarantine and sanitization  
 **Safe degraded state:** customer model/trade routes return 403 or a clear unavailable response; they never fall back to owner data
+**Phase 1 update:** the containment candidate and immutable artifact are complete; production deployment was intentionally not performed, so the live gate remains open.
 
 ## 1. Recovery rules
 
@@ -36,7 +37,7 @@ Run a 15-minute daily recovery review using only: gate state, new evidence, bloc
 
 ### Hours 0–2: declare and preserve
 
-- Open one P0 incident/change record for TEN-01 and TEN-02 (historical IDs A-01 and A-03), recording sanitized evidence, affected routes, evidence time, current live-process start time, current main SHA, local SHA, and PR #105 state.
+- Record TEN-01/TEN-02 evidence and Phase 1 provenance: exact base `68287dfd80eab51b40d4270eab07b0bd73267992`, clean implementation `8ff34b531b31248d71178c6ed23cb88182cf1724`, branch, tests, artifact digest, and no-deployment state.
 - Freeze model/trade customer feature changes and public claims. Do not delete existing snapshot or trade data.
 - Capture a metadata-only inventory of snapshot files, trade tables, process command/cwd, schema versions, and release configuration. Hash evidence where practical; do not copy sensitive note contents into the incident record.
 - Assign all DRIs and the independent reviewer.
@@ -45,32 +46,32 @@ Run a 15-minute daily recovery review using only: gate state, new evidence, bloc
 
 ### Hours 2–6: build the minimal containment release
 
-- Branch from current `origin/main=cef1fe6`, not the dirty audit branch.
-- Implement CP-001:
+- **Completed:** branch from exact then-current `origin/main=68287dfd`, not the dirty audit branch.
+- **Completed in candidate:** implement CP-001:
   - non-owner `GET /api/portfolio`, `GET /api/trades`, and `GET /api/trades/stats` return 403;
   - customer dashboard no longer initializes or schedules owner portfolio/ECG/regime/trade loaders;
   - owner behavior remains explicit and tested;
   - denied reads create metadata-only audit events.
-- Add a minimal immutable build identity to the artifact/startup log so the containment deploy can be proven.
-- Update tests that currently accept customer access to global trade routes. Seed an owner sentinel and patch owner connectors/global trade reads to raise for customer requests.
+- **Completed in candidate:** add a minimal validated build identity plus deterministic artifact/manifest.
+- **Completed:** invert unsafe customer trade expectations; seed owner source/value/note sentinels and patch owner connector/repository seams to raise if touched.
 
-### Hours 6–12: verify and deploy containment
+### Hours 6–12: verify containment; deployment remains a separate gate
 
-- Run focused authorization, finance, mutation, customer network, and console tests on the exact artifact.
-- Run the full suite. Triage rather than suppress the known environment artifact; fix genuine failures on the release branch.
-- Deploy the clean containment artifact. Do not restart the current dirty working tree.
-- Verify live SHA, role, and route behavior with minimum-proof customer reads. Load the customer dashboard for ten minutes and confirm zero forbidden requests and zero related console errors.
+- **Completed on candidate:** run focused authorization, finance, mutation, customer network, console, repository/cache, artifact, and version tests.
+- **Completed on clean base/candidate:** full suites are green; historical dirty failures were classified and not suppressed.
+- **Not performed by this task:** deploy. Do not restart the current dirty working tree; promote only the saved reviewed artifact after staging approval.
+- **Candidate proof complete; live proof open:** extracted-artifact `/api/version`, tampered customer 403s, and two-refresh browser network/console gates pass. Production SHA/behavior is unchanged.
 - Restore and verify the authorized test-account baseline after any controlled mutation.
 
-**Gate G0 — containment:** all three routes are denied to customers; customer UI does not call them; owner connectors/global ledgers are not touched in a customer request; live SHA is known.
+**Gate G0 — containment:** **PASS on the clean candidate** for all three denials, zero customer calls, owner seams untouched, and candidate SHA identity. **Live portion remains open** because production deployment was out of scope.
 
 **Checkpoint R1:** if the new dashboard fails, keep backend deny mode and serve a maintenance/customer-lite page. The previous exposed backend is not an allowed rollback.
 
 ### Hours 12–24: establish the recovery baseline
 
-- Publish the incident containment result internally with exact SHA and smoke evidence.
-- Reconstruct PR #105 onto current main in a fresh branch; classify each commit as retain, rewrite, or supersede. Preserve PR #106 dependency state.
-- Fix the three genuine local `ai_analyzer` stream/test-double failures. Add the missing-`Content-Type` mutation regression.
+- Publish the Phase 1 result as GESH-09 with exact base/implementation/final provenance, tests, digest, smoke evidence, rollback, and risks.
+- **Resolved before Phase 1:** PR #105 is squash-merged into the recorded main base; Phase 1 is a fresh reviewed descendant.
+- Historical dirty `ai_analyzer` failures do not reproduce on clean base/candidate. The unrelated missing-`Content-Type` mutation regression remains in its existing ticket.
 - Draft and approve the schema/publication RFC for CP-003–CP-007, including:
   - model portfolios, immutable versions, holdings, model trade events;
   - assignments/entitlements;
@@ -81,15 +82,15 @@ Run a 15-minute daily recovery review using only: gate state, new evidence, bloc
   - deny-mode and active-pointer rollback.
 - Decide and document retention/access treatment for existing snapshot files and internal free-text notes. The default is no migration and no customer accessibility.
 
-**24-hour exit criteria:** G0 is green; runtime identity is visible; one clean remediation branch exists; target schema and legacy-data policy have named approvers; no customer reopening is scheduled yet.
+**24-hour exit criteria:** candidate G0 is green; candidate identity is visible; one clean remediation branch/artifact exists; target schema and legacy-data policy still need their Phase 2 approvals; no customer reopening is scheduled.
 
 ## 4. Days 2–7 — clean release line and approve the durable design
 
 ### Days 2–3: make branch and CI evidence trustworthy
 
-- Complete CP-002: resolve PR #105 conflicts against `cef1fe6`, preserve the `gesh-core` v0.6.1 pin, and split changes into reviewable privacy, finance, web-contract, and UI commits.
-- Remove test assumptions that encode unsafe behavior:
-  - customer 200 responses from global trade routes;
+- Complete the remaining CP-002 promotion work: PR #105 is already in recorded base `68287dfd`; review/merge Phase 1, stage the exact artifact, and preserve dependency-lock integrity.
+- **Completed in Phase 1:** remove customer-200 assumptions for global trade routes and keep the exact 403/sentinel/repository gates blocking.
+- Remove remaining test assumptions that encode unsafe behavior:
   - late unknown-symbol persistence as success;
   - literal `reconciles=true` without recomputation.
 - Require full-suite zero genuine failures, the isolation lane, a clean install, dependency-lock verification, and live-version contract.
@@ -246,7 +247,7 @@ If G1 fails by day 7, keep containment in place and extend the design phase. Do 
 | **Privacy/tenant** | Customer cannot reach owner connectors, snapshots, global ledgers, notes, drafts, revoked versions, or another assignment | Yes | Deny model/trade routes |
 | **Financial** | Holdings, cash, total, weights, day change, timestamps, model stats, and benchmark independently reconcile | Yes | Reject publication; keep prior valid version or deny |
 | **Consent/provenance** | Source kind, methodology, consent where applicable, sanitization version, actors, and immutable publication event exist | Yes | Reject/quarantine draft |
-| **Mutation/security** | Strict media type, Origin policy, no-side-effect rejects, symbol-before-spend, cache separation | Yes | Fail closed |
+| **Mutation/security** | Strict media type, Origin policy, no-side-effect rejects, symbol-before-spend, cache separation | Yes | Phase 1 cache separation passes for contained owner-domain/root scope; remaining items fail closed |
 | **Decision integrity** | One versioned final action; setup direction and actionability obey it | Yes | Suppress setup |
 | **Track record** | Finite reproducible metrics, correct labels/period/denominator, honest quality-first framing | Yes | Render conservative table/`n/a` |
 | **Accessibility/mobile** | Automated plus manual AA evidence and true device projects | Yes for public paid release | Keep internal beta |
