@@ -42,7 +42,7 @@ tenacity==9.1.4
 
 # Shared core package (Phase 3 de-duplication). Pinned to a tagged release so a
 # fresh clone / CI installs reproducibly without needing gesh-core side-by-side.
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@v0.6.0
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@v0.6.1
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core
 alpaca-py
