@@ -177,6 +177,33 @@ def test_valid_origins_still_canonicalize():
     assert server._canonical_origin("http://x.test:8080") == "http://x.test:8080"
 
 
+@pytest.mark.parametrize("origin", [
+    "https://x:notaport",
+    "https://x:65536",
+])
+def test_cookie_authenticated_malformed_origin_is_controlled_refusal(
+    client, origin
+):
+    """The exact original failure sequence, end to end through the real ASGI
+    middleware: a session cookie is PRESENT, so the CSRF guard must actually
+    validate the Origin (a cookieless request carries no ambient authority and
+    is deliberately passed through). On the unfixed code `u.port` raised
+    ValueError OUTSIDE the try, so this exact request answered a pre-auth HTTP
+    500; the contract is a controlled cross-origin refusal — 403, no internals."""
+    import auth_users
+
+    response = client.post(
+        "/api/watchlist",
+        json={"symbol": "AAA"},
+        headers={"Origin": origin},
+        cookies={auth_users.COOKIE_NAME: "invalid-but-present-session"},
+    )
+
+    assert response.status_code == 403
+    assert "traceback" not in response.text.lower()
+    assert "valueerror" not in response.text.lower()
+
+
 # ─── PR105-SEC-02: declared Content-Type ──────────────────────────────────────
 
 def test_body_without_content_type_is_rejected(client):
