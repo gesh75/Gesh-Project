@@ -25,7 +25,6 @@ the production helper under test.
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -55,6 +54,14 @@ def _h(symbol="NVDA", quantity=10, price=100.0, equity=None, **extra):
            "equity": equity, "portfolio_percentage": 100.0, "type": "stock"}
     row.update(extra)
     return row
+
+
+def _scaled_publication(server, payload: dict, *, prior_close=None):
+    """Exercise dormant publication math without opening an HTTP data path."""
+    published = model_portfolio.publish(payload, prior_close=prior_close)
+    basis = published["positions_market_value"] + published["cash"]
+    factor = server._model_scale_factor(basis)
+    return server._scale_money(published, factor), published, factor
 
 
 # CASE A — substantial mismatch (the exact negative control)
@@ -192,10 +199,9 @@ def client(tmp_path: Path, monkeypatch):
     return server, monkeypatch
 
 
-def test_holding_identity_holds_through_the_published_route(client):
-    """The one route-level assertion worth keeping in this file: whatever the
-    aggregate semantics, a published row's equity must equal quantity × price."""
-    server, monkeypatch = client
+def test_holding_identity_holds_in_dormant_scaled_publication(client):
+    """A dormant published row's equity must equal quantity × price."""
+    server, _monkeypatch = client
     payload = {
         "as_of": "2026-07-25T00:00:00+00:00",
         "holdings": [{"symbol": "NVDA", "quantity": 12.5, "current_price": 88.0,
@@ -206,14 +212,9 @@ def test_holding_identity_holds_through_the_published_route(client):
                            "adjusted_equity_previous_close": 1_500.0},
         "watchlist": [],
     }
-    monkeypatch.setattr(server, "build_data_payload",
-                        lambda wl: json.loads(json.dumps(payload)), raising=True)
-    monkeypatch.setattr(server, "_prior_close", lambda s: None, raising=True)
-    monkeypatch.setattr(server.auth_users, "authenticate_session",
-                        lambda tok: CUSTOMER, raising=True)
-    c = TestClient(server.app, raise_server_exceptions=False)
-    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
-    d = c.get("/api/portfolio").json()["data"]
+    d, published, scale = _scaled_publication(
+        server, payload, prior_close=lambda _symbol: None)
+    assert published["calculated_total_equity"] == pytest.approx(1_644.96)
     # Published equity is quantized to the cent BEFORE the model factor is
     # applied, so post-scaling the identity holds to (half a cent × factor) —
     # not to floating precision. The tolerance is derived from the factor rather
@@ -221,7 +222,7 @@ def test_holding_identity_holds_through_the_published_route(client):
     # off by orders of magnitude), while accepting honest cent-rounding.
     factor = d["calculated_total_equity"] / (
         sum(h["equity"] for h in d["holdings"]) + d["cash"])
-    scale = d["calculated_total_equity"] / 1_644.96      # basis of this fixture
+    assert scale == pytest.approx(server._MODEL_BOOK_USD / 1_644.96)
     for h in d["holdings"]:
         assert h["equity"] == pytest.approx(h["quantity"] * h["current_price"],
                                             abs=0.005 * scale + 0.01)
@@ -231,3 +232,37 @@ def test_holding_identity_holds_through_the_published_route(client):
     # no per-holding prior closes available -> honest null, never a fabricated 0
     assert d["day_change_available"] is False
     assert d["day_change"] is None and d["day_change_pct"] is None
+
+
+def test_customer_portfolio_http_is_exact_403_and_never_promoted(client):
+    """Query tampering cannot turn a customer principal into the owner."""
+    server, monkeypatch = client
+    owner_checks: list[str] = []
+
+    monkeypatch.setattr(
+        server, "build_data_payload",
+        lambda _watchlist: pytest.fail("customer request reached owner repository"),
+        raising=True)
+    monkeypatch.setattr(
+        server.auth_users, "authenticate_session", lambda _token: CUSTOMER,
+        raising=True)
+
+    def record_owner_check(email: str) -> bool:
+        owner_checks.append(email)
+        return email == OWNER
+
+    monkeypatch.setattr(
+        server.auth_users, "is_owner", record_owner_check, raising=False)
+    c = TestClient(server.app, raise_server_exceptions=False)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    response = c.get(
+        f"/api/portfolio?role=owner&principal={OWNER}&email={OWNER}")
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Owner data is unavailable to customer accounts.",
+        "code": "model_book_unavailable",
+    }
+    assert owner_checks
+    assert set(owner_checks) == {CUSTOMER}

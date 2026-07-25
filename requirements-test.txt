@@ -1,0 +1,5 @@
+# Test-only dependencies. Runtime dependencies remain locked in requirements.lock.
+pytest==8.4.2
+pytest-cov==7.0.0
+ruff==0.12.5
+playwright==1.61.0

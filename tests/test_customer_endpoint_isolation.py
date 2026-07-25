@@ -1,15 +1,16 @@
 """Cross-endpoint customer isolation matrix (BLOCKER 1).
 
-`/api/portfolio` got the published serializer; TEN other customer-reachable GETs
-kept calling `_resolved_payload()` and fed the RAW owner payload straight into
-their engines. The response mask scales NUMBERS on the way out — it does nothing
-about private non-numeric fields on the way IN (source tags, quote sessions,
-execution state), and nothing at all about a field added to the owner payload
-next month.
+Phase 1 fails closed on the three owner-domain reads that have no customer
+repository or immutable publication: `/api/portfolio`, `/api/trades`, and
+`/api/trades/stats`. Other customer-reachable analysis GETs still use the
+allow-listed model context and response mask; their existing structural
+sentinel coverage remains intact.
 
 These tests inject sentinels at MULTIPLE NESTING LEVELS, including fields that
 do not exist today, and assert structurally (exact allowed key sets, recursively)
-rather than by substring.
+rather than by substring. The denied endpoints are checked independently so a
+403 can never be mistaken for successful masking on a route that remains
+customer-readable.
 """
 
 from __future__ import annotations
@@ -26,12 +27,22 @@ OWNER = "georgy75@gmail.com"
 CUSTOMER = "cust@x.com"
 SCALE = 2.0
 
-# Customer-reachable GETs that consume portfolio context.
+# Customer-readable GETs that consume the allow-listed model context.
 CUSTOMER_CONTEXT_ROUTES = [
-    "/api/portfolio", "/api/ecg", "/api/regime", "/api/market-data",
+    "/api/ecg", "/api/regime", "/api/market-data",
     "/api/agents/sec/history", "/api/agents/news/history", "/api/fft-cycles",
     "/api/tax/harvest", "/api/benchmarks/1mo", "/api/crypto-correlation",
     "/api/yield/landscape",
+]
+
+# Owner-domain reads with no customer publication/repository in Phase 1.
+CUSTOMER_DENIED_OWNER_ROUTES = [
+    ("/api/portfolio", "model_book_unavailable"),
+    ("/api/trades", "customer_trade_ledger_unavailable"),
+    ("/api/trades/stats", "customer_trade_ledger_unavailable"),
+]
+ALL_CUSTOMER_GET_ROUTES = CUSTOMER_CONTEXT_ROUTES + [
+    route for route, _code in CUSTOMER_DENIED_OWNER_ROUTES
 ]
 
 # Owner-only analysis routes: a customer must never reach the engines at all.
@@ -134,6 +145,18 @@ def _walk_strings(obj, path="$"):
         yield path, str(obj)
 
 
+def _assert_customer_denial(response, code: str) -> dict:
+    assert response.status_code == 403, response.text
+    assert "application/json" in response.headers.get("content-type", "")
+    body = response.json()
+    assert body == {
+        "detail": "Owner data is unavailable to customer accounts.",
+        "code": code,
+    }
+    assert "view" not in body
+    return body
+
+
 # ─── the boundary serializer, structurally ───────────────────────────────────
 
 def test_context_holdings_have_exactly_the_allowed_keys():
@@ -165,6 +188,17 @@ def test_context_carries_no_sentinel_at_any_depth(sentinel):
 
 # ─── the endpoint matrix ─────────────────────────────────────────────────────
 
+@pytest.mark.parametrize(("route", "code"), CUSTOMER_DENIED_OWNER_ROUTES)
+@pytest.mark.parametrize("sentinel", sorted(SENTINELS))
+def test_customer_denied_owner_route_emits_no_owner_sentinel(
+        env, route, code, sentinel):
+    server, monkeypatch = env
+    c = _client(server, monkeypatch, "customer")
+    body = _assert_customer_denial(c.get(route), code)
+    for path, value in _walk_strings(body):
+        assert sentinel not in value, f"{sentinel} at {path} in denied {route}"
+
+
 @pytest.mark.parametrize("route", CUSTOMER_CONTEXT_ROUTES)
 @pytest.mark.parametrize("sentinel", sorted(SENTINELS))
 def test_customer_route_emits_no_owner_sentinel(env, route, sentinel):
@@ -174,6 +208,17 @@ def test_customer_route_emits_no_owner_sentinel(env, route, sentinel):
     assert r.status_code == 200, f"{route} -> {r.status_code}"
     for path, value in _walk_strings(r.json()):
         assert sentinel not in value, f"{sentinel} at {path} in {route}"
+
+
+def test_customer_portfolio_stays_denied_for_offline_snapshot(env):
+    server, monkeypatch = env
+    payload = {**_owner_payload(), "offline": True, "snapshot_age_seconds": 900}
+    c = _client(server, monkeypatch, "customer", payload=payload)
+    body = _assert_customer_denial(
+        c.get("/api/portfolio"), "model_book_unavailable")
+    blob = json.dumps(body)
+    for sentinel in SENTINELS:
+        assert sentinel not in blob
 
 
 @pytest.mark.parametrize("route", CUSTOMER_CONTEXT_ROUTES)
@@ -187,6 +232,25 @@ def test_customer_route_survives_an_offline_snapshot(env, route):
     blob = json.dumps(r.json())
     for sentinel in SENTINELS:
         assert sentinel not in blob, f"{sentinel} leaked on the offline path of {route}"
+
+
+def test_customer_portfolio_stays_denied_for_empty_snapshot(env):
+    server, monkeypatch = env
+    payload = {
+        "as_of": "2026-07-23T00:00:00+00:00",
+        "holdings": [],
+        "equity_summary": {
+            "portfolio_equity": 0.0,
+            "cash": 0.0,
+            "total": 0.0,
+        },
+        "watchlist": [],
+        "source": "robinhood_mcp SRC-SENTINEL",
+    }
+    c = _client(server, monkeypatch, "customer", payload=payload)
+    body = _assert_customer_denial(
+        c.get("/api/portfolio"), "model_book_unavailable")
+    assert "SRC-SENTINEL" not in json.dumps(body)
 
 
 @pytest.mark.parametrize("route", CUSTOMER_CONTEXT_ROUTES)
@@ -213,7 +277,7 @@ def test_customer_cannot_reach_the_analysis_engines_at_all(env, route):
     assert r.status_code == 403, f"{route} reachable by a customer ({r.status_code})"
 
 
-@pytest.mark.parametrize("route", CUSTOMER_CONTEXT_ROUTES)
+@pytest.mark.parametrize("route", ALL_CUSTOMER_GET_ROUTES)
 def test_unauthenticated_request_is_treated_as_a_customer(env, route):
     """Fails closed — no session must never mean owner."""
     server, monkeypatch = env
@@ -261,7 +325,10 @@ def test_provider_error_does_not_fall_back_to_raw_owner_data(env):
     server, monkeypatch = env
     from data_fetcher import RobinhoodOfflineError
     c = _client(server, monkeypatch, "customer", raiser=RobinhoodOfflineError)
-    for route in ("/api/portfolio", "/api/ecg", "/api/regime"):
+    _assert_customer_denial(
+        c.get("/api/portfolio"), "model_book_unavailable")
+    for route in ("/api/ecg", "/api/regime"):
         r = c.get(route)
+        assert r.status_code == 200
         for sentinel in SENTINELS:
             assert sentinel not in r.text, f"{sentinel} leaked via the error path of {route}"

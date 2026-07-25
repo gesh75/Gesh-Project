@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import data_fetcher as df
+import server
 
 
 def _fresh_ts(age_seconds: int = 3600) -> str:
@@ -161,16 +162,27 @@ def test_non_object_snapshot_rejected(tmp_path, body):
         df.load_snapshot_payload(p)
 
 
-# ── Codex round-2 MEDIUM-1: BOTH portfolio loaders must render the offline/cached badge ──
+# ── Codex round-2 MEDIUM-1: owner loaders keep the offline/cached badge ────────
 
-def test_dashboard_loaders_are_offline_aware():
-    """Guard against the regression Codex found: the interval loader (loadPortfolioWithECG)
-    showed cached data as green 'Live'. Both loaders must route the badge through the single
-    offline-aware helper, and the unconditional pattern must not reappear."""
-    html = (Path(__file__).resolve().parents[1] / "templates" / "dashboard.html").read_text()
-    assert "setConn(true);setTs()" not in html            # the buggy unconditional pattern is gone
-    assert "function applyPortfolioConn(" in html          # single source of truth exists
-    # both loaders delegate to it
+def test_composed_owner_loaders_are_offline_aware_and_absent_for_customer():
+    """Both owner loaders retain the offline-aware badge after role composition.
+
+    Phase 1 moved their source into the owner partial, so the assertion must
+    inspect the composed owner document rather than the shared shell. The
+    customer composition must contain neither loader nor its portfolio fetch.
+    """
+    owner_html = server._render_dashboard("owner")
+    customer_html = server._render_dashboard("customer")
+
+    assert "setConn(true);setTs()" not in owner_html
+    assert "function applyPortfolioConn(" in owner_html
     for fn in ("loadPortfolio", "loadPortfolioWithECG"):
-        seg = html.split(f"async function {fn}(", 1)[1].split("async function", 1)[0]
+        marker = f"async function {fn}("
+        assert marker in owner_html, f"owner lost {fn}"
+        seg = owner_html.split(marker, 1)[1].split("async function", 1)[0]
         assert "applyPortfolioConn(d)" in seg, f"{fn} does not use applyPortfolioConn"
+        assert marker not in customer_html, f"customer received owner loader {fn}"
+
+    assert "fetch('/api/portfolio')" in owner_html
+    assert "fetch('/api/portfolio')" not in customer_html
+    assert "setInterval(loadPortfolioWithECG" not in customer_html

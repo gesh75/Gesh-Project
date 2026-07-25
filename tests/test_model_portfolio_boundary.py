@@ -7,9 +7,11 @@ per-quote `session` identifiers, buying power, average costs — passed through 
 middleware that only rescaled the dollar VALUES. Transformed owner account data
 is still owner account data (audit A-01).
 
-`model_portfolio.publish()` is a build-up allowlist, so the property under test
-is not "today's known bad fields are absent" but "only named fields are
-present". A field added to the owner payload next month cannot leak.
+`model_portfolio.publish()` remains a dormant build-up allowlist for a future
+publication domain. The owner-domain `/api/portfolio` route is not that domain:
+customers are refused before its loader runs. The properties under test are
+therefore both "only named fields can be published directly" and "the owner
+route never publishes anything to a customer".
 """
 
 from __future__ import annotations
@@ -167,33 +169,56 @@ def _as(server, monkeypatch, c, email):
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
 
 
+def _assert_customer_portfolio_denial(response):
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Owner data is unavailable to customer accounts.",
+        "code": "model_book_unavailable",
+    }
+    assert "data" not in response.json()
+
+
 @pytest.mark.parametrize("sentinel", _SENTINELS)
 def test_customer_route_leaks_no_brokerage_data(client, monkeypatch, sentinel):
     server, c = client
     _as(server, monkeypatch, c, CUSTOMER)
-    blob = c.get("/api/portfolio").text
-    assert sentinel not in blob, f"reached a customer via /api/portfolio: {sentinel}"
+    monkeypatch.setattr(
+        server,
+        "build_data_payload",
+        lambda _watchlist: pytest.fail("customer request reached owner portfolio loader"),
+        raising=True,
+    )
+    response = c.get("/api/portfolio")
+    _assert_customer_portfolio_denial(response)
+    assert sentinel not in response.text, (
+        f"reached a customer via /api/portfolio: {sentinel}"
+    )
 
 
-def test_customer_route_returns_the_published_shape(client, monkeypatch):
-    server, c = client
-    _as(server, monkeypatch, c, CUSTOMER)
-    d = c.get("/api/portfolio").json()["data"]
+def test_dormant_model_publication_returns_the_published_shape():
+    d = model_portfolio.publish(_OWNER_PAYLOAD)
     assert "equity_summary" not in d and "quote_provenance" not in d
     assert d["source_label"] == model_portfolio.SOURCE_LABEL
     assert d["positions_market_value"] + d["cash"] == pytest.approx(
         d["calculated_total_equity"], abs=0.05)
 
 
-def test_dollars_are_scaled_exactly_once(client, monkeypatch):
-    """publish() must NOT scale — the masking middleware is the single scaler.
-    Double application would show as a book that misses the model notional."""
-    server, c = client
-    _as(server, monkeypatch, c, CUSTOMER)
-    d = c.get("/api/portfolio").json()["data"]
+def test_dormant_publication_scales_exactly_once_when_explicitly_composed():
+    """Publication does not scale itself; an explicit scaler can normalise it once.
+
+    This preserves the future model-book arithmetic without making the dormant
+    serializer customer-reachable through the owner portfolio route.
+    """
+    import server
+
+    published = model_portfolio.publish(_OWNER_PAYLOAD)
     basis_cash, basis_pos = 8948.15, round(15.768482 * 213.85, 2)
-    factor = server._MODEL_BOOK_USD / (basis_pos + basis_cash)
-    # exactly one application of exactly that factor
+    assert published["cash"] == pytest.approx(basis_cash, abs=0.01)
+    assert published["holdings"][0]["equity"] == pytest.approx(basis_pos, abs=0.01)
+
+    factor = server._model_scale_factor(published["calculated_total_equity"])
+    d = server._scale_money(published, factor)
+
     assert d["cash"] == pytest.approx(basis_cash * factor, abs=0.05)
     assert d["holdings"][0]["equity"] == pytest.approx(basis_pos * factor, abs=0.05)
     assert sum(h["equity"] for h in d["holdings"]) + d["cash"] == pytest.approx(
@@ -210,10 +235,32 @@ def test_owner_still_receives_the_full_brokerage_payload(client, monkeypatch):
     assert d["source"] == "robinhood_mcp"
 
 
-def test_unauthenticated_caller_is_treated_as_a_customer(client, monkeypatch):
-    """Fails CLOSED: no valid session must never mean 'owner'."""
+def test_unauthenticated_caller_gets_401_without_owner_resolution(client, monkeypatch):
+    """No valid session is authentication failure, never customer publication."""
     server, c = client
-    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
-    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, ck: "allow", raising=False)
-    d = c.get("/api/portfolio").json()["data"]
-    assert "equity_summary" not in d
+    c.cookies.clear()
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda _tok: None)
+    monkeypatch.setattr(
+        server.auth_users,
+        "gate_decision",
+        lambda _path, _cookie: "unauthorized",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        server.auth_users,
+        "is_owner",
+        lambda _email: pytest.fail("unauthenticated request reached owner resolution"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        server,
+        "build_data_payload",
+        lambda _watchlist: pytest.fail("unauthenticated request reached owner loader"),
+        raising=True,
+    )
+
+    response = c.get("/api/portfolio")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authentication required — sign in"}
+    assert "robinhood_mcp" not in response.text

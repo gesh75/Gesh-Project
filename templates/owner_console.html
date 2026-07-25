@@ -630,6 +630,211 @@
     </div>
   </div>
 <!--/GESH_BLOCK:owner_block_18-->
+<!--GESH_BLOCK:owner_runtime_status-->
+<span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
+<span class="ts" id="ts">—</span>
+<!--/GESH_BLOCK:owner_runtime_status-->
+<!--GESH_BLOCK:owner_runtime_refresh-->
+<button class="btn-ref" onclick="loadPortfolio()" title="Reloads the latest portfolio snapshot. Live Robinhood prices appear only when the brokerage session is online; otherwise the most recent cached snapshot is shown (the daily chain refreshes it each morning).">↻ Refresh</button>
+<!--/GESH_BLOCK:owner_runtime_refresh-->
+<!--GESH_BLOCK:owner_runtime_alerts-->
+<!-- Alert banners — ECG suspended + cash warning (hidden by default) -->
+<div id="alert-bar" style="display:none;background:var(--card);border-bottom:1px solid var(--border);padding:0 24px">
+  <div style="max-width:1700px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px 0" id="alert-bar-inner"></div>
+</div>
+<!--/GESH_BLOCK:owner_runtime_alerts-->
+<!--GESH_BLOCK:owner_runtime_macro_bar-->
+<!-- Macro regime banner (shown after regime loads) -->
+<div id="macro-bar" style="display:none;background:linear-gradient(90deg,rgba(0,212,255,.04),transparent);border-bottom:1px solid rgba(0,212,255,.12);padding:7px 24px">
+  <div style="max-width:1700px;margin:0 auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap" id="macro-bar-inner">
+    <span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)">Macro:</span>
+  </div>
+</div>
+<!--/GESH_BLOCK:owner_runtime_macro_bar-->
+<!--GESH_BLOCK:owner_runtime_load_portfolio-->
+async function loadPortfolio(){
+  try{
+    const r=await fetch('/api/portfolio');
+    if(!r.ok) throw new Error(r.status);
+    const body=await r.json();
+    const d=body.data;
+    applyViewDisclosure(body);
+    renderPortfolioPanels(d);
+    initChartSymbols(d.holdings);
+    applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
+    // Long-term macro visible UI (always load on portfolio refresh)
+    loadLongTermMacro(true);
+  }catch(e){console.error(e);setConn(false);}
+}
+<!--/GESH_BLOCK:owner_runtime_load_portfolio-->
+<!--GESH_BLOCK:owner_runtime_load_regime-->
+async function loadRegime(){
+  try{
+    const r=await fetch('/api/regime');
+    if(!r.ok) throw new Error(r.status);
+    const d=(await r.json()).data;
+    const panel=$('regime-panel');
+    if(!d.regimes||!d.regimes.length){panel.innerHTML='<div class="empty" style="padding:20px">No data</div>';return;}
+    const regimeCls={
+      'TRENDING':'regime-trending','RANGING':'regime-ranging',
+      'BREAKOUT-READY':'regime-breakout-ready',
+      'MOMENTUM-HIGH':'regime-momentum-high','MOMENTUM-LOW':'regime-momentum-low'
+    };
+    panel.innerHTML=`<div class="regime-grid">${d.regimes.map(re=>{
+      const rc=regimeCls[re.regime]||'';
+      const stats=[re.adx!=null?`ADX ${re.adx.toFixed(0)}`:null,re.bb_width!=null?`BB-W ${re.bb_width.toFixed(1)}%`:null,re.rsi!=null?`RSI ${re.rsi.toFixed(0)}`:null,re.pct_b!=null?`%B ${re.pct_b.toFixed(0)}`:null].filter(Boolean).join(' · ');
+      return `<div class="regime-card">
+        <div style="display:flex;align-items:center;gap:7px"><span class="regime-sym">${daEsc(re.symbol)}</span><span class="regime-label ${rc}">${daEsc(re.icon||'')} ${daEsc(re.regime)}</span></div>
+        <div class="regime-stat">${stats}</div>
+        <div class="regime-desc">${daEsc(re.description)}</div>
+      </div>`;
+    }).join('')}</div>`;
+    $('regime-ts').textContent='Updated '+new Date().toLocaleTimeString();
+    // Update macro banner from first regime's macro context
+    updateMacroBar(d.regimes||[]);
+  }catch(e){console.error('Regime',e);}
+}
+<!--/GESH_BLOCK:owner_runtime_load_regime-->
+<!--GESH_BLOCK:owner_runtime_portfolio_poll-->
+let _lastHoldings=[];
+const _origLoad=loadPortfolio;
+loadPortfolio=async function(){
+  await _origLoad();
+};
+
+async function loadPortfolioWithECG(){
+  try{
+    // Retry transient failures (Cloudflare tunnel 5xx blips — the observed
+    // intermittent 530s) before surfacing an error or flipping the conn badge.
+    let r=null;
+    for(let attempt=0;attempt<3;attempt++){
+      try{ r=await fetch('/api/portfolio'); }catch(_netErr){ r=null; }
+      if(r&&r.ok) break;
+      if(attempt<2) await new Promise(res=>setTimeout(res,1500*(attempt+1)));
+    }
+    if(!r||!r.ok) throw new Error(r?('HTTP '+r.status):'network unreachable');
+    const body=await r.json();
+    const d=body.data;
+    applyViewDisclosure(body);   // Codex P1: this loader used to DISCARD body.view
+    _lastHoldings=d.holdings;
+    renderPortfolioPanels(d);
+    initChartSymbols(d.holdings);
+    applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
+    loadLongTermMacro(true);        // ensure long-term macro panel is populated on auto-refresh too
+  }catch(e){console.error(e);setConn(false);}
+}
+<!--/GESH_BLOCK:owner_runtime_portfolio_poll-->
+<!--GESH_BLOCK:owner_runtime_init-->
+loadPortfolioWithECG();
+setInterval(loadPortfolioWithECG,REFRESH);
+// Load ECG + regime on init so alert bar and macro bar populate immediately
+if(typeof loadECG==='function') loadECG();   // owner-only bundle
+loadRegime();
+loadLongTermMacro(true);  // make long-term features (VIX/F&G/MD + bias) visible immediately
+<!--/GESH_BLOCK:owner_runtime_init-->
+<!--GESH_BLOCK:owner_runtime_scanner-->
+async function runScanner(){
+  const btn=$('btn-scanner');
+  btn.disabled=true; btn.textContent='⏳ Scanning…';
+  $('sector-container').innerHTML='<div class="empty"><span class="spin"></span> Running sector pre-filter…</div>';
+  $('cz-container').innerHTML='<div class="empty"><span class="spin"></span> Waiting for sector results…</div>';
+
+  // Get symbols — either user input, or portfolio holdings
+  let symsRaw=$('scanner-syms').value.trim();
+  let symbols=[];
+  if(symsRaw){
+    symbols=symsRaw.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+  } else {
+    try{
+      const pd=await fetch('/api/portfolio');
+      if(pd.ok){
+        const pj=await pd.json();
+        const h=pj.data.holdings||[];
+        const wl=pj.data.watchlist||[];
+        symbols=[...h.map(x=>x.symbol),...wl.map(x=>x.symbol||x)];
+      }
+    }catch(e){}
+  }
+  if(!symbols.length){
+    $('sector-container').innerHTML='<div class="empty" style="color:var(--red)">No symbols found — enter symbols or ensure portfolio is loaded.</div>';
+    btn.disabled=false; btn.textContent='▶ Run Scanner';
+    return;
+  }
+
+  // Step 1 — sector filter
+  try{
+    const sr=await fetch('/api/scanner/sector',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbols})});
+    if(!sr.ok) throw new Error(await sr.text());
+    const sdRaw=await sr.json();
+    const sd=(sdRaw&&sdRaw.data)||sdRaw||{};
+    renderSectorResults(sd, symbols.length);
+
+    // Step 2 — consolidation zones (hot symbols, or all if none are hot)
+    const hotSyms=(sd.hot||[]).map(x=>x.symbol);
+    const scanSyms = hotSyms.length ? hotSyms : symbols;
+    const fallback = !hotSyms.length;
+    if(fallback){
+      $('cz-container').innerHTML='<div class="empty" style="color:var(--yellow);margin-bottom:8px">⚠️ No sectors above 1.2× volume threshold — scanning all symbols anyway (low-volume session).</div>';
+    }
+    $('cz-container').innerHTML+= `<div class="empty"><span class="spin"></span> Scanning ${scanSyms.length} symbols for consolidation zones…</div>`;
+
+    const tf=$('scanner-tf').value;
+    const rr=parseFloat($('scanner-rr').value)||2.0;
+    const tfParams={daily:{interval:'1d',period:'60d'},'1HR':{interval:'1h',period:'5d'},'5MIN':{interval:'5m',period:'1d'},premarket:{interval:'5m',period:'1d'},stock:{interval:'1d',period:'30d'}};
+    const params=tfParams[tf]||tfParams.daily;
+
+    const czr=await fetch('/api/scanner/consolidation',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbols:scanSyms,interval:params.interval,period:params.period,min_rr:rr})});
+    if(!czr.ok) throw new Error(await czr.text());
+    const czdRaw=await czr.json();
+    const czd=(czdRaw&&czdRaw.data)||czdRaw||{};
+    renderCZResults(czd, scanSyms.length, fallback);
+  }catch(e){
+    $('sector-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
+    $('cz-container').innerHTML='';
+  }
+  btn.disabled=false; btn.textContent='▶ Run Scanner';
+}
+<!--/GESH_BLOCK:owner_runtime_scanner-->
+<!--GESH_BLOCK:owner_runtime_sparklines-->
+// KPI sparklines from portfolio equity history (graceful when empty)
+let _sparkSeries=null, _sparkLoading=false;
+async function loadKpiSparklines(dayChange){
+  const paint=()=>{
+    if(!_sparkSeries||_sparkSeries.length<2) return;
+    const up=(dayChange||0)>=0;
+    const accent=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    const grn=getComputedStyle(document.documentElement).getPropertyValue('--green').trim();
+    const red=getComputedStyle(document.documentElement).getPropertyValue('--red').trim();
+    drawSparkline('spark-equity', _sparkSeries, accent);
+    drawSparkline('spark-day', _sparkSeries, up?grn:red);
+  };
+  if(_sparkSeries){ paint(); return; }
+  if(_sparkLoading) return; _sparkLoading=true;
+  try{
+    const r=await fetch('/api/portfolio/history?points=60'); const j=await r.json();
+    _sparkSeries=(j&&j.series)||[];
+  }catch(e){ _sparkSeries=[]; }
+  finally{ _sparkLoading=false; paint(); }
+}
+<!--/GESH_BLOCK:owner_runtime_sparklines-->
+<!--GESH_BLOCK:owner_runtime_badges-->
+// ── Sidebar section freshness badges (populated from backend in Pass 5) ──
+async function refreshSectionBadges(){
+  try{
+    const r=await fetch('/api/sections/status'); if(!r.ok) return;
+    const s=await r.json();
+    Object.entries(s).forEach(([tab,info])=>{
+      const b=document.getElementById('navb-'+tab); if(!b||!info) return;
+      b.classList.remove('fresh','stale');
+      if(tab==='overview') return;                 // live tab, no badge
+      if(info.fresh) b.classList.add('fresh'); else b.classList.add('stale');
+      b.title=info.ran_at?('Last run '+new Date(info.ran_at).toLocaleString()):'Cached result available';
+    });
+  }catch(e){/* endpoint optional — silent */}
+}
+refreshSectionBadges();
+setInterval(refreshSectionBadges, 60000);
+<!--/GESH_BLOCK:owner_runtime_badges-->
 <!--GESH_BLOCK:owner_console_js-->
 <script>
 /* OPERATOR-ONLY JAVASCRIPT — spliced in only when rendering for an owner.
@@ -1500,6 +1705,11 @@ async function runPaperSession(){
 
 
 /* Operator entries for the command palette, appended to the shared (empty) list. */
+CMDK_TABS.splice(0,CMDK_TABS.length,
+  ['overview','Overview'],['risk','Risk'],['scanner','Scanner'],
+  ['analysis','AI Analysis'],['intelligence','Intelligence'],['radar','Radar'],
+  ['daily','Daily Analysis'],['signals','Signals'],['trading','Paper Trades']
+);
 CMDK_ACTIONS.push(
   ['Run Deep Analysis',()=>{switchTab('analysis');runDeepAnalysis&&runDeepAnalysis();}],
   ['Run Consensus',()=>{switchTab('signals');runConsensus&&runConsensus();}],

@@ -34,6 +34,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import data_fetcher
+import model_portfolio
 
 OWNER = "georgy75@gmail.com"
 CUSTOMER = "cust@x.com"
@@ -121,25 +122,33 @@ def env(tmp_path: Path, monkeypatch):
     return server, monkeypatch
 
 
-def _get(server, monkeypatch, raw: dict, role: str, priors: dict | None = None):
+def _get_owner(server, monkeypatch, raw: dict):
     payload = _normalized(raw)          # production semantics, every time
     payload["offline"] = False          # exercise the live-shaped branch by default
     monkeypatch.setattr(server, "build_data_payload",
                         lambda wl: json.loads(json.dumps(payload)), raising=True)
-    monkeypatch.setattr(server, "_prior_close",
-                        lambda sym: (priors or {}).get(sym), raising=True)
     monkeypatch.setattr(server.auth_users, "authenticate_session",
-                        lambda tok: {"owner": OWNER, "customer": CUSTOMER}[role],
+                        lambda tok: OWNER,
                         raising=True)
     c = TestClient(server.app, raise_server_exceptions=False)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     return c.get("/api/portfolio").json()["data"]
 
 
+def _published_model(server, raw: dict, priors: dict | None = None):
+    """Exercise the dormant publication math without exposing it over HTTP."""
+    payload = _normalized(raw)
+    published = model_portfolio.publish(
+        payload, prior_close=lambda symbol: (priors or {}).get(symbol))
+    basis = published["positions_market_value"] + published["cash"]
+    factor = server._model_scale_factor(basis)
+    return server._scale_money(published, factor), published, factor
+
+
 # CASE A — production-shaped totals and account day return
 def test_A_account_total_is_not_double_counted(env):
     server, monkeypatch = env
-    d = _get(server, monkeypatch, _raw_snapshot(), "owner")
+    d = _get_owner(server, monkeypatch, _raw_snapshot())
     eq = d["equity_summary"]
     assert eq["calculated_total_equity"] == pytest.approx(108_000.0)
     assert eq["calculated_total_equity"] != pytest.approx(128_000.0), "cash counted twice"
@@ -151,18 +160,20 @@ def test_A_account_day_change_is_account_minus_account(env):
     """108,000 vs a 100,000 previous ACCOUNT close = +8,000 = 8.0%.
     Cash is inside both sides already and must not be added to either."""
     server, monkeypatch = env
-    eq = _get(server, monkeypatch, _raw_snapshot(), "owner")["equity_summary"]
+    eq = _get_owner(server, monkeypatch, _raw_snapshot())["equity_summary"]
     assert eq["day_change"] == pytest.approx(8_000.0)
     assert eq["day_change_pct"] == pytest.approx(8.0, abs=0.01)
     assert eq["day_change_pct"] != pytest.approx(6.67, abs=0.01), "cash added to prior"
     assert eq["day_change_pct"] != pytest.approx(10.0, abs=0.01), "positions-only denominator"
 
 
-def test_A_customer_model_day_change_from_per_holding_priors(env):
-    """The published model is component-only, so its prior must be component-only
-    too: 1000 × 80.00 = 80,000 positions + 20,000 cash = 100,000 -> +8.0%."""
-    server, monkeypatch = env
-    d = _get(server, monkeypatch, _raw_snapshot(), "customer", priors={"NVDA": 80.0})
+def test_A_dormant_model_day_change_from_per_holding_priors(env):
+    """The dormant model is component-only, so its prior is component-only too:
+    1000 × 80.00 = 80,000 positions + 20,000 cash = 100,000 -> +8.0%."""
+    server, _monkeypatch = env
+    d, published, _factor = _published_model(
+        server, _raw_snapshot(), priors={"NVDA": 80.0})
+    assert published["day_change"] == pytest.approx(8_000.0)
     assert d["day_change_available"] is True
     assert d["day_change_pct"] == pytest.approx(8.0, abs=0.01)
 
@@ -171,7 +182,7 @@ def test_A_customer_model_day_change_from_per_holding_priors(env):
 def test_B_unmodelled_sleeve_degrades_and_does_not_move_the_total(env):
     server, monkeypatch = env
     raw = _raw_snapshot(account_equity=110_000.0)     # 2,000 above components
-    eq = _get(server, monkeypatch, raw, "owner")["equity_summary"]
+    eq = _get_owner(server, monkeypatch, raw)["equity_summary"]
     assert eq["calculated_total_equity"] == pytest.approx(108_000.0)
     assert eq["broker_account_equity"] == pytest.approx(110_000.0)
     assert eq["reported_total_delta"] == pytest.approx(2_000.0)
@@ -179,10 +190,14 @@ def test_B_unmodelled_sleeve_degrades_and_does_not_move_the_total(env):
     assert eq["valuation_source_state"] == "degraded"
 
 
-# CASE C — exact customer scaling, through the REAL middleware
-def test_C_customer_book_scales_to_exactly_the_model_notional(env):
-    server, monkeypatch = env
-    d = _get(server, monkeypatch, _raw_snapshot(), "customer", priors={"NVDA": 80.0})
+# CASE C — exact dormant-publication scaling, without an HTTP customer route
+def test_C_dormant_book_scales_to_exactly_the_model_notional(env):
+    server, _monkeypatch = env
+    d, published, factor = _published_model(
+        server, _raw_snapshot(), priors={"NVDA": 80.0})
+    assert factor == pytest.approx(
+        server._MODEL_BOOK_USD
+        / (published["positions_market_value"] + published["cash"]))
     total = sum(h["equity"] for h in d["holdings"]) + d["cash"]
     assert total == pytest.approx(server._MODEL_BOOK_USD, abs=0.05)
     assert d["calculated_total_equity"] == pytest.approx(server._MODEL_BOOK_USD, abs=0.05)
@@ -192,9 +207,13 @@ def test_C_customer_book_scales_to_exactly_the_model_notional(env):
 
 def test_C_scaling_denominator_is_the_component_total(env):
     """With a 110,000 broker headline over 108,000 components, scaling by the
-    headline would land the customer book at ~98,182, not the notional."""
-    server, monkeypatch = env
-    d = _get(server, monkeypatch, _raw_snapshot(account_equity=110_000.0), "customer")
+    headline would land the dormant model at ~98,182, not the notional."""
+    server, _monkeypatch = env
+    d, published, factor = _published_model(
+        server, _raw_snapshot(account_equity=110_000.0))
+    assert published["calculated_total_equity"] == pytest.approx(108_000.0)
+    assert factor == pytest.approx(server._MODEL_BOOK_USD / 108_000.0)
+    assert factor != pytest.approx(server._MODEL_BOOK_USD / 110_000.0)
     total = sum(h["equity"] for h in d["holdings"]) + d["cash"]
     assert total == pytest.approx(server._MODEL_BOOK_USD, abs=0.05)
 
@@ -226,7 +245,7 @@ def test_E_zero_previous_close_is_unavailable_not_a_return(env):
     normalized = _normalized(raw)
     assert normalized["equity_summary"]["adjusted_equity_previous_close"] == 0.0, (
         "loader no longer emits 0 for a missing prior — fixture needs updating")
-    eq = _get(server, monkeypatch, raw, "owner")["equity_summary"]
+    eq = _get_owner(server, monkeypatch, raw)["equity_summary"]
     assert eq["day_change_available"] is False
     assert eq["day_change"] is None
     assert eq["day_change_pct"] is None
@@ -235,7 +254,7 @@ def test_E_zero_previous_close_is_unavailable_not_a_return(env):
 @pytest.mark.parametrize("prior", [0.0, -5.0])
 def test_E_zero_or_negative_prior_is_unavailable(env, prior):
     server, monkeypatch = env
-    eq = _get(server, monkeypatch, _raw_snapshot(prior=prior), "owner")["equity_summary"]
+    eq = _get_owner(server, monkeypatch, _raw_snapshot(prior=prior))["equity_summary"]
     assert eq["day_change_available"] is False
     assert eq["day_change"] is None
 
@@ -243,22 +262,27 @@ def test_E_zero_or_negative_prior_is_unavailable(env, prior):
 def test_E_positive_cash_cannot_manufacture_a_return(env):
     """Cash must never turn a missing prior into an available day change."""
     server, monkeypatch = env
-    eq = _get(server, monkeypatch, _raw_snapshot(prior=0.0, cash=50_000.0),
-              "owner")["equity_summary"]
+    eq = _get_owner(
+        server, monkeypatch, _raw_snapshot(prior=0.0, cash=50_000.0)
+    )["equity_summary"]
     assert eq["day_change_available"] is False
 
 
 # CASE F — non-finite account fields
-@pytest.mark.parametrize("field", ["account_equity", "cash"])
-def test_F_non_finite_account_field_never_claims_reconciliation(env, field):
-    server, monkeypatch = env
+def test_F_non_finite_account_headline_is_rejected_by_normalizer():
     raw = _raw_snapshot()
-    raw["equity_summary"][field] = float("nan")
-    if field == "account_equity":
-        raw["equity_summary"]["total"] = float("nan")
-    try:
-        d = _get(server, monkeypatch, raw, "customer", priors={"NVDA": 80.0})
-    except Exception:
-        return          # the loader refusing a non-finite headline is also correct
-    assert d.get("reconciles") is not True
-    assert d.get("valuation_status") in ("degraded", "unavailable")
+    raw["equity_summary"]["account_equity"] = float("nan")
+    raw["equity_summary"]["total"] = float("nan")
+    with pytest.raises(data_fetcher.RobinhoodOfflineError):
+        _normalized(raw)
+
+
+def test_F_non_finite_cash_fails_closed_in_dormant_publication(env):
+    server, _monkeypatch = env
+    raw = _raw_snapshot()
+    raw["equity_summary"]["cash"] = float("nan")
+    d, _published, _factor = _published_model(
+        server, raw, priors={"NVDA": 80.0})
+    assert d["reconciles"] is False
+    assert d["valuation_status"] == "unavailable"
+    assert d["degraded_reason"] == "non_finite_value"

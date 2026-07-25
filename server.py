@@ -18,6 +18,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+import build_identity
 import price_source  # locked yf.download adapter (thread-safety)
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
@@ -489,12 +490,24 @@ async def _auth_gate_middleware(request: Request, call_next):
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
 # /watch is the INTERNAL cockpit (raw paper P&L, provisional win rate) — owner only.
 _OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage")
+# Phase 1 containment: these reads have no customer-owned repository or immutable
+# publication behind them.  They therefore fail closed at the principal boundary,
+# before a handler can touch the singleton Robinhood snapshot/cache or trade DB.
+_CUSTOMER_DENIED_OWNER_READS = {
+    "/api/portfolio": "model_book_unavailable",
+    "/api/trades": "customer_trade_ledger_unavailable",
+    "/api/trades/stats": "customer_trade_ledger_unavailable",
+}
+_PRINCIPAL_SENSITIVE_READS = frozenset(("/", *_CUSTOMER_DENIED_OWNER_READS))
 # Customer research endpoints whose bodies carry NO owner dollars — single-ticker AI
 # research cards (public per-share fair value / price forecasts, not the owner's book).
 # Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
 # gut the customer analysis surface, so they are served RAW. ONLY add paths here that
 # provably contain no owner position/cash data.
 _MASK_EXEMPT_PREFIXES = (
+    # Immutable, non-secret release identity. It must be byte-for-byte identical
+    # for every authenticated principal, never stamped as a model-book response.
+    "/api/version",
     "/api/analyze-ticker",
     # The customer's OWN book — positions THEY entered, valued from public quotes.
     # Masking would redact the customer's own dollars back at them. Responses are
@@ -940,6 +953,21 @@ def _csrf_refusal(request: Request, why: str):
                         content={"detail": "Cross-origin request refused."})
 
 
+def _mark_private_no_store(response):
+    """Prevent owner-domain responses from being reused across principals."""
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["Pragma"] = "no-cache"
+    vary = {
+        item.strip()
+        for item in response.headers.get("Vary", "").split(",")
+        if item.strip()
+    }
+    if not any(item.lower() == "cookie" for item in vary):
+        vary.add("Cookie")
+    response.headers["Vary"] = ", ".join(sorted(vary, key=str.lower))
+    return response
+
+
 @app.middleware("http")
 async def _customer_view_middleware(request: Request, call_next):
     if not auth_users.auth_enabled():
@@ -949,6 +977,36 @@ async def _customer_view_middleware(request: Request, call_next):
         return await call_next(request)
 
     path = request.url.path
+    if request.method in {"GET", "HEAD"}:
+        denial_code = _CUSTOMER_DENIED_OWNER_READS.get(path)
+        if denial_code:
+            ip = request.client.host if request.client else "unknown"
+            if not _rate_ok(ip, heavy=False):
+                return _mark_private_no_store(JSONResponse(
+                    status_code=429,
+                    content={"detail": "Rate limit exceeded — slow down"},
+                ))
+            # Metadata only: never log the principal email, query string, account,
+            # holdings, balances, trade rows, or notes while recording a refusal.
+            suppressed = _throttled_log_due(
+                f"customer-owner-data-read:{request.method}:{path}"
+            )
+            if suppressed is not None:
+                logger.warning(
+                    "customer owner-data read refused: %s %s "
+                    "(suppressed %d repeats)",
+                    request.method,
+                    path,
+                    suppressed,
+                )
+            return _mark_private_no_store(JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "Owner data is unavailable to customer accounts.",
+                    "code": denial_code,
+                },
+            ))
+
     if path == "/report" or any(path == p or path.startswith(p + "/") for p in _OWNER_ONLY_PATHS):
         return _refusal_response(request, 403, "Owner-only view",
                                  "This page is part of the operator console.")
@@ -1008,6 +1066,9 @@ _CSP = (
 @app.middleware("http")
 async def _security_headers_middleware(request: Request, call_next):
     resp = await call_next(request)
+    if (request.method in {"GET", "HEAD"}
+            and request.url.path in _PRINCIPAL_SENSITIVE_READS):
+        _mark_private_no_store(resp)
     resp.headers.setdefault("Content-Security-Policy", _CSP)
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
@@ -1029,6 +1090,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 HTML = Path(__file__).parent / "templates" / "dashboard.html"
+BUILD_INFO_PATH = Path(__file__).with_name(build_identity.BUILD_INFO_FILENAME)
 
 
 # ─── Login wall routes (active only when GESH_AUTH_ENABLED) ────────────────────
@@ -1067,6 +1129,27 @@ document.getElementById('m').textContent='If that email has access, a sign-in li
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "auth": auth_users.auth_enabled()}
+
+
+@app.get("/api/version")
+def api_version():
+    """Return only validated immutable build identity; fail closed if absent."""
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+    try:
+        identity = build_identity.load_build_info(BUILD_INFO_PATH)
+    except build_identity.BuildIdentityError:
+        # Do not log the path, file content, branch, environment, or parse error:
+        # the public contract needs only to say that provenance is unavailable.
+        logger.error("immutable build identity unavailable")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Build identity is unavailable.",
+                "code": "build_identity_unavailable",
+            },
+            headers=headers,
+        )
+    return JSONResponse(content=identity, headers=headers)
 
 
 @app.get("/api/me")

@@ -8,17 +8,10 @@ a real verdict. Expectations here are computed independently of that helper.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
-from starlette.testclient import TestClient
 
 import model_portfolio
 import portfolio_valuation
-
-OWNER = "georgy75@gmail.com"
-CUSTOMER = "cust@x.com"
 
 
 def _payload(holdings, cash, *, reported_total=None):
@@ -96,50 +89,17 @@ def test_publish_never_raises_on_garbage():
     assert out["valuation_status"] in ("unavailable", "degraded")
 
 
-# ─── route level: a degraded source cannot surface reconciles:true to a customer ─
-
-@pytest.fixture
-def client(tmp_path: Path, monkeypatch):
-    import auth_users
-    import server
-    monkeypatch.setattr(auth_users, "AUTH_DB_PATH", tmp_path / "auth.db")
-    auth_users.init_auth_db()
-    for e in (OWNER, CUSTOMER):
-        auth_users.create_user(e, "test-password")
-    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
-    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server.auth_users, "is_owner", lambda e: e == OWNER, raising=False)
-    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: CUSTOMER, raising=True)
-    monkeypatch.setattr(server, "_maybe_log_snapshot", lambda h: None, raising=True)
-    monkeypatch.setattr(server, "_customer_scale_factor", lambda: 1.0, raising=True)
-    c = TestClient(server.app, raise_server_exceptions=False)
-    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
-    return server, c
+# ─── dormant publication composition ─────────────────────────────────────────
 
 
-def test_route_degraded_payload_does_not_claim_reconciled(client, monkeypatch):
-    server, c = client
-    bad = _payload([_h(price=float("nan"))], 500.0)
-    monkeypatch.setattr(server, "build_data_payload", lambda wl: json.loads(
-        json.dumps(bad, default=lambda o: "NaN")), raising=True)
-    # rebuild with real NaN (json can't round-trip it) — patch the loader directly
-    monkeypatch.setattr(server, "build_data_payload", lambda wl: {
-        "as_of": "2026-07-24T00:00:00+00:00", "source": "robinhood_mcp",
-        "holdings": [_h(price=float("nan"))],
-        "equity_summary": {"portfolio_equity": 0.0, "cash": 500.0}, "watchlist": []},
-        raising=True)
-    body = c.get("/api/portfolio").json()["data"]
-    assert body["reconciles"] is False, "customer told a NaN-priced book reconciles"
+def test_dormant_publication_degraded_payload_does_not_claim_reconciled():
+    body = model_portfolio.publish(_payload([_h(price=float("nan"))], 500.0))
+    assert body["reconciles"] is False, "publication claimed a NaN-priced book reconciles"
     assert body["valuation_status"] == "unavailable"
 
 
-def test_route_valid_payload_reconciles(client, monkeypatch):
-    server, c = client
-    monkeypatch.setattr(server, "build_data_payload", lambda wl: {
-        "as_of": "2026-07-24T00:00:00+00:00", "source": "robinhood_mcp",
-        "holdings": [_h()], "equity_summary": {"portfolio_equity": 1000.0, "cash": 500.0},
-        "watchlist": []}, raising=True)
-    body = c.get("/api/portfolio").json()["data"]
+def test_dormant_publication_valid_payload_reconciles():
+    body = model_portfolio.publish(_payload([_h()], 500.0))
     assert body["reconciles"] is True and body["valuation_status"] == "reconciled"
 
 

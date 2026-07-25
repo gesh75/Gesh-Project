@@ -8,9 +8,6 @@ import androidx.lifecycle.viewModelScope
 import com.gesh.financial.model.DeepAnalysis
 import com.gesh.financial.model.PortfolioData
 import com.gesh.financial.network.RetrofitClient
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 sealed class UiState<out T> {
@@ -31,25 +28,15 @@ class PortfolioViewModel(app: Application) : AndroidViewModel(app) {
     private val _analysisModel = MutableLiveData<String>("")
     val analysisModel: LiveData<String> = _analysisModel
 
-    private var refreshJob: Job? = null
+    private val ownerPortfolioUnavailable =
+        "Owner portfolio data is unavailable in the customer app."
 
     init {
-        loadPortfolio()
-        startAutoRefresh()
+        _portfolio.value = UiState.Error(ownerPortfolioUnavailable)
     }
 
     fun loadPortfolio() {
-        viewModelScope.launch {
-            _portfolio.value = UiState.Loading
-            try {
-                val resp = RetrofitClient.getApiService(getApplication()).getPortfolio()
-                _portfolio.value = if (resp.isSuccessful && resp.body() != null)
-                    UiState.Success(resp.body()!!.data)
-                else UiState.Error("Server error ${resp.code()}")
-            } catch (e: Exception) {
-                _portfolio.value = UiState.Error(e.message ?: "Connection failed — check server IP in Settings")
-            }
-        }
+        _portfolio.value = UiState.Error(ownerPortfolioUnavailable)
     }
 
     fun runDeepAnalysis() {
@@ -70,23 +57,8 @@ class PortfolioViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun startAutoRefresh(intervalMs: Long = 30_000L) {
-        refreshJob?.cancel()
-        refreshJob = viewModelScope.launch {
-            while (isActive) {
-                delay(intervalMs)
-                try {
-                    val resp = RetrofitClient.getApiService(getApplication()).getPortfolio()
-                    if (resp.isSuccessful && resp.body() != null)
-                        _portfolio.value = UiState.Success(resp.body()!!.data)
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
     fun invalidateAndReload() {
         RetrofitClient.saveBaseUrl(getApplication(), RetrofitClient.getBaseUrl(getApplication()))
         loadPortfolio()
-        startAutoRefresh()
     }
 }

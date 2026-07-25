@@ -20,6 +20,8 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
+import model_portfolio
+
 OWNER = "georgy75@gmail.com"
 
 
@@ -38,23 +40,27 @@ def client(monkeypatch, tmp_path):
     return server, TestClient(server.app, raise_server_exceptions=False)
 
 
-def _seed_payload(server, monkeypatch, positions_value, cash, reported_total):
+def _payload(positions_value, cash, reported_total):
     """A snapshot shaped exactly like the audited one: broker total > components."""
+    return {
+        "as_of": "2026-07-23T00:00:00+00:00",
+        "holdings": [{"symbol": "OWN", "quantity": 100.0, "equity": positions_value,
+                      "current_price": positions_value / 100, "average_buy_price": 1.0,
+                      "percent_change": 0.0, "equity_change": 0.0, "type": "stock",
+                      "portfolio_percentage": 100.0}],
+        "equity_summary": {
+            "portfolio_equity": positions_value, "cash": cash,
+            "total": reported_total, "account_equity": reported_total,
+            "adjusted_equity_previous_close": positions_value,
+        },
+        "watchlist": [],
+    }
+
+
+def _seed_payload(server, monkeypatch, positions_value, cash, reported_total):
     monkeypatch.setattr(
         server, "build_data_payload",
-        lambda wl: {
-            "as_of": "2026-07-23T00:00:00+00:00",
-            "holdings": [{"symbol": "OWN", "quantity": 100.0, "equity": positions_value,
-                          "current_price": positions_value / 100, "average_buy_price": 1.0,
-                          "percent_change": 0.0, "equity_change": 0.0, "type": "stock",
-                          "portfolio_percentage": 100.0}],
-            "equity_summary": {
-                "portfolio_equity": positions_value, "cash": cash,
-                "total": reported_total, "account_equity": reported_total,
-                "adjusted_equity_previous_close": positions_value,
-            },
-            "watchlist": [],
-        },
+        lambda _watchlist: _payload(positions_value, cash, reported_total),
         raising=True)
 
 
@@ -90,20 +96,19 @@ def test_broker_reported_total_is_preserved_and_diffed(client, monkeypatch):
     assert eq["reconciles"] is False          # honestly flagged, not hidden
 
 
-def test_customer_model_book_reconciles(client, monkeypatch):
-    """The headline a customer sees must equal the components they see."""
-    server, c = client
-    _seed_payload(server, monkeypatch, _POSITIONS, _CASH, _REPORTED)
-    _as(server, monkeypatch, c, "cust@x.com")
-    monkeypatch.setattr(
-        server, "_customer_scale_factor",
-        lambda: server._MODEL_BOOK_USD / (_POSITIONS + _CASH), raising=True)
-
-    body = c.get("/api/portfolio").json()
-    assert body["view"] == "model_book"
-    d = body["data"]
+def test_dormant_model_book_reconciles_after_scaling(client):
+    """Dormant publication math stays reconciled without an HTTP customer path."""
+    server, _c = client
+    published = model_portfolio.publish(
+        _payload(_POSITIONS, _CASH, _REPORTED))
+    basis = published["positions_market_value"] + published["cash"]
+    factor = server._model_scale_factor(basis)
+    d = server._scale_money(published, factor)
     holdings = sum(h["equity"] for h in d["holdings"])
 
+    assert basis == pytest.approx(_POSITIONS + _CASH, abs=0.05)
+    assert factor == pytest.approx(
+        server._MODEL_BOOK_USD / (_POSITIONS + _CASH))
     assert holdings + d["cash"] == pytest.approx(d["calculated_total_equity"], abs=0.05)
     assert d["calculated_total_equity"] == pytest.approx(server._MODEL_BOOK_USD, abs=0.05)
     assert d["reconciles"] is True
@@ -203,35 +208,35 @@ def test_variance_is_logged_without_dollar_figures(client, monkeypatch, caplog):
         assert secret not in msg
 
 
-def test_missing_position_price_does_not_fabricate_equity(client, monkeypatch):
+def test_missing_position_price_does_not_fabricate_equity(client):
     """An unpriced holding must not silently contribute 0 to a headline that
     still claims to be the whole book."""
-    server, c = client
-    monkeypatch.setattr(
-        server, "build_data_payload",
-        lambda wl: {
-            "as_of": "2026-07-23T00:00:00+00:00",
-            "holdings": [
-                {"symbol": "OK", "quantity": 10.0, "equity": 1000.0,
-                 "current_price": 100.0, "type": "stock", "portfolio_percentage": 100.0},
-                {"symbol": "NOPRICE", "quantity": 5.0, "equity": 0.0,
-                 "current_price": None, "type": "stock", "portfolio_percentage": 0.0},
-            ],
-            "equity_summary": {"portfolio_equity": 1000.0, "cash": 500.0,
-                               "total": 1500.0,
-                               "adjusted_equity_previous_close": 1000.0},
-            "watchlist": [],
-        }, raising=True)
-    _as(server, monkeypatch, c, "cust@x.com")
-    monkeypatch.setattr(server, "_customer_scale_factor", lambda: 1.0, raising=True)
-
-    d = c.get("/api/portfolio").json()["data"]
+    server, _c = client
+    payload = {
+        "as_of": "2026-07-23T00:00:00+00:00",
+        "holdings": [
+            {"symbol": "OK", "quantity": 10.0, "equity": 1000.0,
+             "current_price": 100.0, "type": "stock", "portfolio_percentage": 100.0},
+            {"symbol": "NOPRICE", "quantity": 5.0, "equity": 0.0,
+             "current_price": None, "type": "stock", "portfolio_percentage": 0.0},
+        ],
+        "equity_summary": {"portfolio_equity": 1000.0, "cash": 500.0,
+                           "total": 1500.0,
+                           "adjusted_equity_previous_close": 1000.0},
+        "watchlist": [],
+    }
+    published = model_portfolio.publish(payload)
+    basis = published["positions_market_value"] + published["cash"]
+    factor = server._model_scale_factor(basis)
+    d = server._scale_money(published, factor)
     # identity still holds over what IS priced …
     assert d["positions_market_value"] + d["cash"] == pytest.approx(
         d["calculated_total_equity"], abs=0.05)
     # … and the unpriced name is carried with a null price, not an invented one
     noprice = [h for h in d["holdings"] if h["symbol"] == "NOPRICE"][0]
     assert noprice["current_price"] is None
+    assert d["reconciles"] is False
+    assert d["valuation_status"] == "degraded"
 
 
 

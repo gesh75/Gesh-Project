@@ -497,7 +497,10 @@ body:not(.customer) .customer-only { display: none !important; }
 // This prevents the 1-2s flash of the full owner menu for customers on refresh.
 (function(){
   try {
-    var role = document.body.getAttribute('data-initial-role') || 'owner';
+    var suppliedRole = document.body.getAttribute('data-initial-role');
+    var role = suppliedRole === 'owner' ? 'owner' : 'customer';
+    window.__geshInitialRole = role;
+    window.__isCustomer = role !== 'owner';
     if (role === 'customer') {
       document.body.classList.add('customer');
       // Show customer My Book nav and tools immediately
@@ -574,30 +577,19 @@ body:not(.customer) .customer-only { display: none !important; }
 
 <!-- ═══ TOPBAR ═══ -->
 <header class="topbar">
-  <span class="badge" id="modelbook-badge" title="Customer view: absolute dollar amounts are normalized to a model portfolio so real account size stays private — percentages, prices, and signals are all real; only the dollar sizing is illustrative." style="display:none;background:rgba(255,184,0,.12);color:#ffb800;border:1px solid rgba(255,184,0,.35)">📊 Illustrative sizing · signals are real</span>
   <span class="badge b-cyan" id="model-badge" title="Deep analysis runs on {{ model }}">✨ Powered by Claude</span>
-  <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
-  <span class="ts" id="ts">—</span>
+  <!--GESH_SLOT:owner_runtime_status-->
   <!--GESH_SLOT:owner_block_06-->
   <!--GESH_SLOT:owner_block_07-->
   <!--GESH_SLOT:owner_block_08-->
-  <button class="btn-ref" onclick="loadPortfolio()" title="Reloads the latest portfolio snapshot. Live Robinhood prices appear only when the brokerage session is online; otherwise the most recent cached snapshot is shown (the daily chain refreshes it each morning).">↻ Refresh</button>
+  <!--GESH_SLOT:owner_runtime_refresh-->
 </header>
 
 <!-- Persistent stats bar -->
 <!--GESH_SLOT:owner_block_09-->
 
-<!-- Alert banners — ECG suspended + cash warning (hidden by default) -->
-<div id="alert-bar" style="display:none;background:var(--card);border-bottom:1px solid var(--border);padding:0 24px">
-  <div style="max-width:1700px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px 0" id="alert-bar-inner"></div>
-</div>
-
-<!-- Macro regime banner (shown after regime loads) -->
-<div id="macro-bar" style="display:none;background:linear-gradient(90deg,rgba(0,212,255,.04),transparent);border-bottom:1px solid rgba(0,212,255,.12);padding:7px 24px">
-  <div style="max-width:1700px;margin:0 auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap" id="macro-bar-inner">
-    <span style="font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted)">Macro:</span>
-  </div>
-</div>
+<!--GESH_SLOT:owner_runtime_alerts-->
+<!--GESH_SLOT:owner_runtime_macro_bar-->
 
 <!-- Command palette + toast host -->
 <div class="cmdk-overlay" id="cmdk" onclick="if(event.target===this)closeCmdk()">
@@ -917,7 +909,7 @@ function setTs(asOf,ageS){
     $('ts').textContent='As of '+t+age;return;}
   $('ts').textContent='Updated '+new Date().toLocaleTimeString();
 }
-// Single source of truth for the connection badge/timestamp from an /api/portfolio payload —
+// Single source of truth for the owner snapshot connection badge/timestamp —
 // both loaders MUST call this so a cached (offline) snapshot is never shown as green "Live"
 // (Codex MEDIUM-1). Snapshot fallback → amber "Cached · as of …"; live → green "Live".
 function updateSnapshotStalenessBanner(stale,ageS,asOf){
@@ -949,7 +941,7 @@ function applyPortfolioConn(d){
 // response view=model_book. ONE shared helper (both portfolio loaders call it —
 // the duplicate inline copies drifted once already, Codex P1): show the
 // disclosure badge, hide owner-only header links + owner-only run buttons.
-window.__isCustomer=false;
+window.__isCustomer=window.__geshInitialRole!=='owner';
 function applyViewDisclosure(body){
   if(!body || body.view!=='model_book') return;
   window.__isCustomer=true;
@@ -973,20 +965,7 @@ function friendlyErr(e){
     : m;
 }
 
-async function loadPortfolio(){
-  try{
-    const r=await fetch('/api/portfolio');
-    if(!r.ok) throw new Error(r.status);
-    const body=await r.json();
-    const d=body.data;
-    applyViewDisclosure(body);
-    renderPortfolioPanels(d);
-    initChartSymbols(d.holdings);
-    applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
-    // Long-term macro visible UI (always load on portfolio refresh)
-    loadLongTermMacro(true);
-  }catch(e){console.error(e);setConn(false);}
-}
+<!--GESH_SLOT:owner_runtime_load_portfolio-->
 // Owner and customer receive DIFFERENT portfolio shapes: the owner gets the
 // brokerage payload (equity_summary, cost basis), the customer gets the PUBLISHED
 // model portfolio (calculated_total_equity, no equity_summary). `renderStats`
@@ -1307,32 +1286,7 @@ function cancelDeepAnalysis(){
 
 /* ── ECG ── */
 /* ── Regime ── */
-async function loadRegime(){
-  try{
-    const r=await fetch('/api/regime');
-    if(!r.ok) throw new Error(r.status);
-    const d=(await r.json()).data;
-    const panel=$('regime-panel');
-    if(!d.regimes||!d.regimes.length){panel.innerHTML='<div class="empty" style="padding:20px">No data</div>';return;}
-    const regimeCls={
-      'TRENDING':'regime-trending','RANGING':'regime-ranging',
-      'BREAKOUT-READY':'regime-breakout-ready',
-      'MOMENTUM-HIGH':'regime-momentum-high','MOMENTUM-LOW':'regime-momentum-low'
-    };
-    panel.innerHTML=`<div class="regime-grid">${d.regimes.map(re=>{
-      const rc=regimeCls[re.regime]||'';
-      const stats=[re.adx!=null?`ADX ${re.adx.toFixed(0)}`:null,re.bb_width!=null?`BB-W ${re.bb_width.toFixed(1)}%`:null,re.rsi!=null?`RSI ${re.rsi.toFixed(0)}`:null,re.pct_b!=null?`%B ${re.pct_b.toFixed(0)}`:null].filter(Boolean).join(' · ');
-      return `<div class="regime-card">
-        <div style="display:flex;align-items:center;gap:7px"><span class="regime-sym">${daEsc(re.symbol)}</span><span class="regime-label ${rc}">${daEsc(re.icon||'')} ${daEsc(re.regime)}</span></div>
-        <div class="regime-stat">${stats}</div>
-        <div class="regime-desc">${daEsc(re.description)}</div>
-      </div>`;
-    }).join('')}</div>`;
-    $('regime-ts').textContent='Updated '+new Date().toLocaleTimeString();
-    // Update macro banner from first regime's macro context
-    updateMacroBar(d.regimes||[]);
-  }catch(e){console.error('Regime',e);}
-}
+<!--GESH_SLOT:owner_runtime_load_regime-->
 
 /* ── Monte Carlo ── */
 let mcBarChart=null;
@@ -1924,36 +1878,11 @@ async function runFFTCycle(){
   }
 }
 
-let _lastHoldings=[];
-const _origLoad=loadPortfolio;
-loadPortfolio=async function(){
-  await _origLoad();
-};
-
-async function loadPortfolioWithECG(){
-  try{
-    // Retry transient failures (Cloudflare tunnel 5xx blips — the observed
-    // intermittent 530s) before surfacing an error or flipping the conn badge.
-    let r=null;
-    for(let attempt=0;attempt<3;attempt++){
-      try{ r=await fetch('/api/portfolio'); }catch(_netErr){ r=null; }
-      if(r&&r.ok) break;
-      if(attempt<2) await new Promise(res=>setTimeout(res,1500*(attempt+1)));
-    }
-    if(!r||!r.ok) throw new Error(r?('HTTP '+r.status):'network unreachable');
-    const body=await r.json();
-    const d=body.data;
-    applyViewDisclosure(body);   // Codex P1: this loader used to DISCARD body.view
-    _lastHoldings=d.holdings;
-    renderPortfolioPanels(d);
-    initChartSymbols(d.holdings);
-    applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
-    loadLongTermMacro(true);        // ensure long-term macro panel is populated on auto-refresh too
-  }catch(e){console.error(e);setConn(false);}
-}
+<!--GESH_SLOT:owner_runtime_portfolio_poll-->
 
 // ── Tab switching ─────────────────────────────────────────────────────────
 function switchTab(name, btn){
+  if(window.__isCustomer && name!=='home' && name!=='analyze') return;
   document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
   const pane=document.getElementById('tab-'+name);
   if(pane) pane.classList.add('active');
@@ -1967,7 +1896,7 @@ function switchTab(name, btn){
   // lazy-load data per tab (cached results render by default → never empty)
   if(name==='overview'&&!priceChart&&typeof chartSymbols!=='undefined'&&chartSymbols.length){ loadChart(); }
   if(name==='home'){ if(typeof loadHomeHero==='function') loadHomeHero(); if(typeof loadPreferences==='function') loadPreferences(); }
-  if(name==='risk'){ if(typeof loadECG==='function') loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
+  if(name==='risk'){ if(typeof loadECG==='function') loadECG(); if(typeof loadRegime==='function') loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
   if(name==='analysis'){ if(typeof tryLoadCachedAnalysis==='function') tryLoadCachedAnalysis(); }
   if(name==='signals'){ if(typeof loadCachedConsensus==='function') loadCachedConsensus(); if(typeof loadCachedKelly==='function') loadCachedKelly(); }
   if(name==='radar'){ if(typeof loadCachedScreener==='function') loadCachedScreener(); }
@@ -1990,8 +1919,14 @@ let _cachedAnalysisLoaded=false;
 // owner book (portfolio tabs, KPI header, watch/invest) is hidden via the
 // body.customer CSS class. applyViewDisclosure (response-driven) is the backstop.
 async function applyRoleNav(){
-  let role='owner';
-  try{ const r=await fetch('/api/me'); if(r.ok) role=(await r.json()).role||'owner'; }catch(e){}
+  const initialRole=window.__geshInitialRole==='owner'?'owner':'customer';
+  let role='customer';
+  try{
+    const r=await fetch('/api/me');
+    const reported=r.ok?((await r.json()).role||'customer'):'customer';
+    // Both independently derived role signals must agree before owner UI starts.
+    role=(initialRole==='owner'&&reported==='owner')?'owner':'customer';
+  }catch(e){ role='customer'; }
   document.body.classList.remove('role-pending');
   document.body.classList.add('role-known');
   if(role==='customer'){
@@ -2009,6 +1944,7 @@ async function applyRoleNav(){
   }
   loadWatchlist();
   loadMyBook();
+  return role;
 }
 
 // ── customer Home hero — one answer above the fold ────────────────────────────
@@ -2938,12 +2874,7 @@ async function analyzeChart(sym,period){
   }catch(e){ el.innerHTML='<div class="deep-ph-text" style="padding:40px 0;text-align:center">Chart unavailable.</div>'; }
 }
 
-loadPortfolioWithECG();
-setInterval(loadPortfolioWithECG,REFRESH);
-// Load ECG + regime on init so alert bar and macro bar populate immediately
-if(typeof loadECG==='function') loadECG();   // owner-only bundle
-loadRegime();
-loadLongTermMacro(true);  // make long-term features (VIX/F&G/MD + bias) visible immediately
+<!--GESH_SLOT:owner_runtime_init-->
 applyRoleNav();
 
 // ══════════════════════════════════════════════════════════════════════
@@ -3008,67 +2939,7 @@ function daCancelAnalysis(){
 
 // ── Scanner Tab ───────────────────────────────────────────────────────────
 
-async function runScanner(){
-  const btn=$('btn-scanner');
-  btn.disabled=true; btn.textContent='⏳ Scanning…';
-  $('sector-container').innerHTML='<div class="empty"><span class="spin"></span> Running sector pre-filter…</div>';
-  $('cz-container').innerHTML='<div class="empty"><span class="spin"></span> Waiting for sector results…</div>';
-
-  // Get symbols — either user input, or portfolio holdings
-  let symsRaw=$('scanner-syms').value.trim();
-  let symbols=[];
-  if(symsRaw){
-    symbols=symsRaw.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
-  } else {
-    try{
-      const pd=await fetch('/api/portfolio');
-      if(pd.ok){
-        const pj=await pd.json();
-        const h=pj.data.holdings||[];
-        const wl=pj.data.watchlist||[];
-        symbols=[...h.map(x=>x.symbol),...wl.map(x=>x.symbol||x)];
-      }
-    }catch(e){}
-  }
-  if(!symbols.length){
-    $('sector-container').innerHTML='<div class="empty" style="color:var(--red)">No symbols found — enter symbols or ensure portfolio is loaded.</div>';
-    btn.disabled=false; btn.textContent='▶ Run Scanner';
-    return;
-  }
-
-  // Step 1 — sector filter
-  try{
-    const sr=await fetch('/api/scanner/sector',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbols})});
-    if(!sr.ok) throw new Error(await sr.text());
-    const sdRaw=await sr.json();
-    const sd=(sdRaw&&sdRaw.data)||sdRaw||{};
-    renderSectorResults(sd, symbols.length);
-
-    // Step 2 — consolidation zones (hot symbols, or all if none are hot)
-    const hotSyms=(sd.hot||[]).map(x=>x.symbol);
-    const scanSyms = hotSyms.length ? hotSyms : symbols;
-    const fallback = !hotSyms.length;
-    if(fallback){
-      $('cz-container').innerHTML='<div class="empty" style="color:var(--yellow);margin-bottom:8px">⚠️ No sectors above 1.2× volume threshold — scanning all symbols anyway (low-volume session).</div>';
-    }
-    $('cz-container').innerHTML+= `<div class="empty"><span class="spin"></span> Scanning ${scanSyms.length} symbols for consolidation zones…</div>`;
-
-    const tf=$('scanner-tf').value;
-    const rr=parseFloat($('scanner-rr').value)||2.0;
-    const tfParams={daily:{interval:'1d',period:'60d'},'1HR':{interval:'1h',period:'5d'},'5MIN':{interval:'5m',period:'1d'},premarket:{interval:'5m',period:'1d'},stock:{interval:'1d',period:'30d'}};
-    const params=tfParams[tf]||tfParams.daily;
-
-    const czr=await fetch('/api/scanner/consolidation',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({symbols:scanSyms,interval:params.interval,period:params.period,min_rr:rr})});
-    if(!czr.ok) throw new Error(await czr.text());
-    const czdRaw=await czr.json();
-    const czd=(czdRaw&&czdRaw.data)||czdRaw||{};
-    renderCZResults(czd, scanSyms.length, fallback);
-  }catch(e){
-    $('sector-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
-    $('cz-container').innerHTML='';
-  }
-  btn.disabled=false; btn.textContent='▶ Run Scanner';
-}
+<!--GESH_SLOT:owner_runtime_scanner-->
 
 function renderSectorResults(d, total){
   const hot=d.hot||[], cold=d.cold||[];
@@ -3241,26 +3112,7 @@ function relTime(iso){
   if(s<86400) return Math.floor(s/3600)+'h ago';
   return Math.floor(s/86400)+'d ago';
 }
-// KPI sparklines from portfolio equity history (graceful when empty)
-let _sparkSeries=null, _sparkLoading=false;
-async function loadKpiSparklines(dayChange){
-  const paint=()=>{
-    if(!_sparkSeries||_sparkSeries.length<2) return;
-    const up=(dayChange||0)>=0;
-    const accent=getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-    const grn=getComputedStyle(document.documentElement).getPropertyValue('--green').trim();
-    const red=getComputedStyle(document.documentElement).getPropertyValue('--red').trim();
-    drawSparkline('spark-equity', _sparkSeries, accent);
-    drawSparkline('spark-day', _sparkSeries, up?grn:red);
-  };
-  if(_sparkSeries){ paint(); return; }
-  if(_sparkLoading) return; _sparkLoading=true;
-  try{
-    const r=await fetch('/api/portfolio/history?points=60'); const j=await r.json();
-    _sparkSeries=(j&&j.series)||[];
-  }catch(e){ _sparkSeries=[]; }
-  finally{ _sparkLoading=false; paint(); }
-}
+<!--GESH_SLOT:owner_runtime_sparklines-->
 function toast(msg, type='info', ms=4200){
   const wrap=document.getElementById('toast-wrap'); if(!wrap) return;
   const el=document.createElement('div'); el.className='toast '+type;
@@ -3312,7 +3164,7 @@ function drawSparkline(canvasId, series, color){
 }
 
 // ── Command palette (Cmd/Ctrl+K) ──
-const CMDK_TABS=[['overview','Overview'],['risk','Risk'],['scanner','Scanner'],['analysis','AI Analysis'],['intelligence','Intelligence'],['radar','Radar'],['daily','Daily Analysis'],['signals','Signals'],['trading','Paper Trades']];
+const CMDK_TABS=[['home','Home'],['analyze','Analyze']];
 // Command-palette actions. Every entry here runs an OPERATOR action, so the
 // shared bundle ships an EMPTY list and the owner-only script appends its
 // entries (see templates/owner_console.html). A customer's palette therefore
@@ -3328,7 +3180,7 @@ function renderCmdk(q){
   const items=[];
   CMDK_TABS.forEach(([id,label])=>{ if(!q||label.toLowerCase().includes(q)) items.push({label:'Go to '+label,kind:'tab',run:()=>switchTab(id)}); });
   CMDK_ACTIONS.forEach(([label,fn])=>{ if(!q||label.toLowerCase().includes(q)) items.push({label,kind:'action',run:fn}); });
-  (typeof chartSymbols!=='undefined'?chartSymbols:[]).forEach(s=>{ if(!q||s.toLowerCase().includes(q)) items.push({label:s,kind:'symbol',run:()=>{switchTab('overview');const sel=document.getElementById('chart-sym');if(sel){sel.value=s;loadChart&&loadChart();}}}); });
+  (typeof chartSymbols!=='undefined'?chartSymbols:[]).forEach(s=>{ if(!q||s.toLowerCase().includes(q)) items.push({label:s,kind:'symbol',run:()=>{if(window.__isCustomer){switchTab('analyze');if(typeof analyzeTicker==='function')analyzeTicker(s);}else{switchTab('overview');const sel=document.getElementById('chart-sym');if(sel){sel.value=s;loadChart&&loadChart();}}}}); });
   _cmdkItems=items; _cmdkSel=0;
   const list=document.getElementById('cmdk-list');
   list.innerHTML = items.length? items.map((it,i)=>`<div class="cmdk-item${i===0?' sel':''}" data-i="${i}"><span>${daEsc(it.label)}</span><span class="cmdk-kind">${daEsc(it.kind)}</span></div>`).join('') : '<div class="cmdk-empty">No matches</div>';
@@ -3343,22 +3195,7 @@ document.addEventListener('keydown',e=>{
 });
 document.addEventListener('input',e=>{ if(e.target&&e.target.id==='cmdk-input') renderCmdk(e.target.value); });
 
-// ── Sidebar section freshness badges (populated from backend in Pass 5) ──
-async function refreshSectionBadges(){
-  try{
-    const r=await fetch('/api/sections/status'); if(!r.ok) return;
-    const s=await r.json();
-    Object.entries(s).forEach(([tab,info])=>{
-      const b=document.getElementById('navb-'+tab); if(!b||!info) return;
-      b.classList.remove('fresh','stale');
-      if(tab==='overview') return;                 // live tab, no badge
-      if(info.fresh) b.classList.add('fresh'); else b.classList.add('stale');
-      b.title=info.ran_at?('Last run '+new Date(info.ran_at).toLocaleString()):'Cached result available';
-    });
-  }catch(e){/* endpoint optional — silent */}
-}
-refreshSectionBadges();
-setInterval(refreshSectionBadges, 60000);
+<!--GESH_SLOT:owner_runtime_badges-->
 
 </script>
 <!--GESH_SLOT:owner_console_js-->

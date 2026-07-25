@@ -29,6 +29,8 @@ from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
 
+import model_portfolio
+
 CUSTOMER = "cust@x.com"
 OWNER = "georgy75@gmail.com"
 
@@ -168,37 +170,31 @@ def test_export_is_still_tenant_scoped(client, monkeypatch, au):
     assert _export_positions(c) == {}
 
 
-def test_owner_book_masking_still_applies_to_owner_endpoints(client, monkeypatch):
-    """Exempting the export must NOT disable model-book masking elsewhere:
-    /api/portfolio still has to reach a customer scaled, never raw."""
-    server, c = client
-    _login(server, monkeypatch, c)
-
+def test_dormant_model_scaling_preserves_holding_identity(client):
+    """The dormant model serializer remains mathematically valid for later use."""
+    server, _c = client
     raw_total = 1000.0
-    monkeypatch.setattr(
-        server, "build_data_payload",
-        lambda wl: {
-            "as_of": "2026-07-23T00:00:00+00:00",
-            "holdings": [{"symbol": "OWN", "quantity": 10.0, "equity": raw_total,
-                          "current_price": 100.0, "average_buy_price": 50.0,
-                          "percent_change": 0.0, "equity_change": 0.0,
-                          "type": "stock", "portfolio_percentage": 100.0}],
-            "equity_summary": {"portfolio_equity": raw_total, "cash": 0.0,
-                               "total": raw_total,
-                               "adjusted_equity_previous_close": raw_total},
-            "watchlist": [],
-        },
-        raising=True)
-    monkeypatch.setattr(server, "_maybe_log_snapshot", lambda h: None, raising=True)
+    payload = {
+        "as_of": "2026-07-23T00:00:00+00:00",
+        "holdings": [{"symbol": "OWN", "quantity": 10.0, "equity": raw_total,
+                      "current_price": 100.0, "average_buy_price": 50.0,
+                      "percent_change": 0.0, "equity_change": 0.0,
+                      "type": "stock", "portfolio_percentage": 100.0}],
+        "equity_summary": {"portfolio_equity": raw_total, "cash": 0.0,
+                           "total": raw_total,
+                           "adjusted_equity_previous_close": raw_total},
+        "watchlist": [],
+    }
+    published = model_portfolio.publish(payload)
+    basis = published["positions_market_value"] + published["cash"]
+    factor = server._model_scale_factor(basis)
+    d = server._scale_money(published, factor)
 
-    body = c.get("/api/portfolio").json()
-    assert body.get("view") == "model_book"
-    d = body["data"]
-    # /api/portfolio is scaled by the PUBLISHED RESPONSE's own component basis
-    # (not by a separately-read snapshot), so the customer book lands on the
-    # model notional exactly and the per-share price is preserved.
+    assert basis == pytest.approx(raw_total)
+    assert factor == pytest.approx(server._MODEL_BOOK_USD / raw_total)
     h = d["holdings"][0]
     assert sum(x["equity"] for x in d["holdings"]) + d["cash"] == pytest.approx(
         server._MODEL_BOOK_USD, abs=0.05)
     assert h["equity"] == pytest.approx(h["quantity"] * h["current_price"], rel=1e-6)
     assert h["quantity"] != pytest.approx(10.0), "quantity was not scaled at all"
+    assert "average_buy_price" not in h

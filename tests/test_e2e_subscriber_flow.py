@@ -1,12 +1,12 @@
 """End-to-end subscriber lifecycle — the founder-invitation flow, exercised across
-the real webhook → provision → magic-link → session → masked-dashboard → cancel →
+the real webhook → provision → magic-link → session → owner-read denial → cancel →
 lockout chain (Mission C, 8th-pass). No network: email + data seams are mocked, the
 auth/billing DBs are a temp SQLite, but the auth wall, typed tokens, single-use magic
-tokens, model-book masking, and revoke re-check are the REAL code paths.
+tokens, Phase 1 principal boundary, and revoke re-check are the REAL code paths.
 
-This is the integration proof behind the GO/NO-GO checklist: it verifies a paying
-customer can sign in and sees ONLY the masked $100K model book — never the owner's
-real equity — and that cancelling immediately locks the session out.
+This is the integration proof behind the GO/NO-GO checklist: a paying customer can
+sign in, but the owner portfolio/trade domains fail closed until an immutable Model
+Book publication exists. Cancelling immediately locks the same session out.
 """
 
 from __future__ import annotations
@@ -21,15 +21,18 @@ from typing import Generator
 import pytest
 from starlette.testclient import TestClient
 
-import model_portfolio
-import server as server_module
-
 # owner sentinels that must NEVER reach a customer body. This E2E asserts the
-# LIFECYCLE + masking integration on keys main already masks (portfolio_equity,
-# cash); exhaustive omitted-key coverage (equity_change/extended_hours_equity/…)
-# lives in tests/test_customer_leak_sweep.py.
+# lifecycle + fail-closed integration; exhaustive field coverage lives in
+# tests/test_customer_leak_sweep.py.
 _OWNER_TOTAL = 37522.83
 _OWNER_CASH = 509.70
+_OWNER_SOURCE = "robinhood_mcp"
+_OWNER_PRIVATE_NOTE = "OWNER-PRIVATE-NOTE-E2E"
+_DENIED_OWNER_READS = (
+    ("/api/portfolio", "model_book_unavailable"),
+    ("/api/trades", "customer_trade_ledger_unavailable"),
+    ("/api/trades/stats", "customer_trade_ledger_unavailable"),
+)
 
 
 def _sign(raw: bytes, secret: str = "whsec_test") -> str:
@@ -74,24 +77,65 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
     monkeypatch.setattr("billing.email_sender.send_magic_link", email_sender.send_magic_link)
 
     import server
-    # deterministic model/real factor + a payload carrying owner sentinels the mask must scale
+    owner_reads = {"portfolio": 0, "trades": 0, "stats": 0}
+
+    # If the principal boundary regresses, every owner seam returns unmistakable
+    # sentinels. A correct 403 occurs before any of these functions is called.
     monkeypatch.setattr(server, "_customer_scale_factor", lambda: 2.5)
-    monkeypatch.setattr(server, "build_data_payload", lambda *a, **k: {
-        "as_of": "2026-07-05T13:00:00+00:00", "offline": True, "source": "test",
-        "equity_summary": {"portfolio_equity": _OWNER_TOTAL, "cash": _OWNER_CASH,
-                           "buying_power": _OWNER_CASH},
-        # `current_price` is the key data_fetcher emits (it normalizes the raw
-        # snapshot's `price` at load); the canonical holding calculation reads it.
-        "holdings": [{"symbol": "NVDA", "quantity": 6.078929, "current_price": 194.51,
-                      "equity": 101.988616, "average_buy_price": 180.0,
-                      "percent_change": -3.5}],
-        "watchlist": [],
-    })
+
+    def _owner_portfolio(*_args, **_kwargs):
+        owner_reads["portfolio"] += 1
+        return {
+            "as_of": "2026-07-05T13:00:00+00:00",
+            "offline": True,
+            "source": _OWNER_SOURCE,
+            "equity_summary": {
+                "portfolio_equity": _OWNER_TOTAL,
+                "cash": _OWNER_CASH,
+                "buying_power": _OWNER_CASH,
+            },
+            "holdings": [{
+                "symbol": "NVDA",
+                "quantity": 6.078929,
+                "current_price": 194.51,
+                "equity": 101.988616,
+                "average_buy_price": 180.0,
+                "percent_change": -3.5,
+            }],
+            "watchlist": [],
+        }
+
+    def _owner_trades(*_args, **_kwargs):
+        owner_reads["trades"] += 1
+        return [{
+            "symbol": "NVDA",
+            "realized_pnl": 1287.44,
+            "notes": _OWNER_PRIVATE_NOTE,
+        }]
+
+    def _owner_stats(*_args, **_kwargs):
+        owner_reads["stats"] += 1
+        return {
+            "total_realized_pnl": 1287.44,
+            "best_trade": {
+                "symbol": "NVDA",
+                "notes": _OWNER_PRIVATE_NOTE,
+            },
+        }
+
+    monkeypatch.setattr(server, "build_data_payload", _owner_portfolio)
+    monkeypatch.setattr(server, "get_trade_history", _owner_trades)
+    monkeypatch.setattr(server, "trade_summary_for_report", _owner_stats)
     monkeypatch.setattr("fetch_live_data.fetch_and_cache", lambda *a, **k: {}, raising=False)
 
     # https base URL so the production-realistic Secure session cookie is resent
     client = TestClient(server.app, base_url="https://testserver", raise_server_exceptions=False)
-    yield {"client": client, "sent": sent, "au": au}
+    yield {
+        "client": client,
+        "sent": sent,
+        "au": au,
+        "owner_reads": owner_reads,
+    }
 
 
 def _post_webhook(client, event: str, email: str, **kw) -> None:
@@ -103,10 +147,12 @@ def _post_webhook(client, event: str, email: str, **kw) -> None:
 
 def test_full_subscriber_lifecycle(flow):
     client, sent, au = flow["client"], flow["sent"], flow["au"]
+    owner_reads = flow["owner_reads"]
     email = "founder@example.com"
 
-    # 0) BEFORE sign-in: the dashboard API is walled off
-    assert client.get("/api/portfolio").status_code == 401
+    # 0) BEFORE sign-in: every owner-domain API is walled off
+    for path, _code in _DENIED_OWNER_READS:
+        assert client.get(path).status_code == 401
 
     # 1) PAY → webhook provisions an active subscriber + emails a magic link
     _post_webhook(client, "subscription_created", email, variant_name="Trader plan")
@@ -120,34 +166,29 @@ def test_full_subscriber_lifecycle(flow):
     assert r.status_code == 303
     assert au.COOKIE_NAME in r.cookies  # session cookie set on the client jar
 
-    # 3) DASHBOARD → the customer sees ONLY the PUBLISHED model portfolio, never
-    #    the owner brokerage payload. Since 2026-07-23 this is a distinct shape,
-    #    not the owner payload with rescaled numbers (audit A-01): no
-    #    `equity_summary`, no brokerage/session metadata, and a headline that is
-    #    the calculated total rather than the broker's reported one.
-    r = client.get("/api/portfolio")
-    assert r.status_code == 200
-    body = r.json()
-    assert body.get("view") == "model_book"
-    blob = json.dumps(body)
-    for sentinel in (f"{_OWNER_TOTAL}", f"{_OWNER_CASH}", "37,522.83", "509.70"):
-        assert sentinel not in blob, f"owner value {sentinel} leaked to a customer"
-    data = body["data"]
-    assert "equity_summary" not in data, "owner payload shape reached a customer"
-    assert data["source_label"] == model_portfolio.SOURCE_LABEL
-    assert data["model_portfolio_id"] == model_portfolio.MODEL_PORTFOLIO_ID
-    # The headline is CALCULATED from the published components, never the
-    # broker's reported total — assert the identity rather than a literal, so
-    # this cannot pass by coincidence on a different fixture.
-    assert data["positions_market_value"] + data["cash"] == pytest.approx(
-        data["calculated_total_equity"], abs=0.05)
-    assert sum(h["equity"] for h in data["holdings"]) == pytest.approx(
-        data["positions_market_value"], abs=0.05)
-    # Scaled exactly once, by the published response's own component basis —
-    # so the customer book lands on the model notional rather than on an
-    # arbitrary multiple of the owner's balance.
-    assert sum(h["equity"] for h in data["holdings"]) + data["cash"] == pytest.approx(
-        server_module._MODEL_BOOK_USD, abs=0.05)
+    # 3) OWNER DATA → exact 403, stable code, no sentinels, and no owner seam
+    #    invocation. Masking or relabelling is not an acceptable substitute.
+    for path, code in _DENIED_OWNER_READS:
+        r = client.get(path)
+        assert r.status_code == 403, f"{path}: {r.status_code} {r.text}"
+        body = r.json()
+        assert body == {
+            "detail": "Owner data is unavailable to customer accounts.",
+            "code": code,
+        }
+        assert "view" not in body
+        blob = json.dumps(body)
+        for sentinel in (
+                f"{_OWNER_TOTAL}",
+                f"{_OWNER_CASH}",
+                "37,522.83",
+                "509.70",
+                _OWNER_SOURCE,
+                _OWNER_PRIVATE_NOTE,
+                "NVDA"):
+            assert sentinel not in blob, (
+                f"owner sentinel {sentinel!r} leaked to a customer at {path}")
+    assert owner_reads == {"portfolio": 0, "trades": 0, "stats": 0}
 
     # 4) REPLAY the magic token → single-use, rejected
     r2 = client.get(f"/auth/magic?token={token}", follow_redirects=False)
@@ -156,4 +197,5 @@ def test_full_subscriber_lifecycle(flow):
     # 5) CANCEL → webhook revokes; the SAME session is locked out on the next request
     _post_webhook(client, "subscription_expired", email, status="expired")
     assert au.get_user(email)["is_active"] == 0
-    assert client.get("/api/portfolio").status_code == 401
+    for path, _code in _DENIED_OWNER_READS:
+        assert client.get(path).status_code == 401

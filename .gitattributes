@@ -1,0 +1,4 @@
+# Preserve intentional CommonMark hard breaks in the canonical control pack.
+docs/GESH_CONTROL_PACK_2026-07-25/*.md whitespace=-trailing-space
+# Resolve the final commit placeholder when the signed evidence file is archived.
+docs/GESH_CONTROL_PACK_2026-07-25/GESH_09_P0_CONTAINMENT_RESULT.md export-subst

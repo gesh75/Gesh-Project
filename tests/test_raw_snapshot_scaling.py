@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 import data_fetcher
+import model_portfolio
 import server
 
 # The exact negative control from the work order.
@@ -183,12 +184,13 @@ def test_F_zero_basis_is_unavailable_not_a_divide_by_zero():
 
 # ─── CASE G — the real fallback middleware path ──────────────────────────────
 
-def test_G_fallback_route_scales_by_positions_plus_cash(tmp_path, monkeypatch):
-    """A customer-reachable, non-exempt route whose response is NOT the published
-    portfolio shape, so the middleware must fall back to _customer_scale_factor().
 
-    The factor is NOT mocked: a real raw snapshot file backs it, exercising the
-    whole path from `holdings[].price` to the scaled JSON.
+def test_G_fallback_route_scales_by_positions_plus_cash(tmp_path, monkeypatch):
+    """Exercise fallback scaling through the real customer middleware.
+
+    The temporary route returns a synthetic money field and is removed in
+    ``finally``. It proves the still-live generic masking path is wired to the
+    raw positions-plus-cash basis without reopening any owner-data endpoint.
     """
     from starlette.testclient import TestClient
 
@@ -198,29 +200,31 @@ def test_G_fallback_route_scales_by_positions_plus_cash(tmp_path, monkeypatch):
     auth_users.init_auth_db()
     auth_users.create_user("cust@x.com", "pw")
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
-    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server.auth_users, "is_owner", lambda e: False, raising=False)
-    monkeypatch.setattr(server.auth_users, "authenticate_session",
-                        lambda tok: "cust@x.com", raising=True)
+    monkeypatch.setattr(
+        server.auth_users, "gate_decision", lambda _path, _cookie: "allow"
+    )
+    monkeypatch.setattr(server.auth_users, "is_owner", lambda _email: False)
+    monkeypatch.setattr(
+        server.auth_users,
+        "authenticate_session",
+        lambda _token: "cust@x.com",
+    )
 
-    # Back _customer_scale_factor with a REAL raw snapshot on disk.
     snap_path = tmp_path / "live_portfolio_snapshot.json"
     snap_path.write_text(json.dumps(_raw_mcp_shaped()))
     real_basis = server.model_basis_from_payload(_raw_mcp_shaped())
     assert real_basis == pytest.approx(108_000.0, abs=0.02)
     monkeypatch.setattr(
-        server, "_customer_scale_factor",
+        server,
+        "_customer_scale_factor",
         lambda: server._model_scale_factor(
-            server.model_basis_from_payload(json.loads(snap_path.read_text()))),
-        raising=True)
+            server.model_basis_from_payload(json.loads(snap_path.read_text()))
+        ),
+    )
 
     expected_factor = server._MODEL_BOOK_USD / 108_000.0
     wrong_factor = server._MODEL_BOOK_USD / CASH          # the cash-only bug: 5.0
 
-    # A customer-reachable, NON-EXEMPT /api/ route carrying a money field, whose
-    # body is NOT the published portfolio shape — so the middleware must fall
-    # back to _customer_scale_factor(). Registered for this test only and removed
-    # afterwards, so the leak sweep's route inventory is unaffected.
     probe_path = "/api/__raw_scaling_probe"
 
     @server.app.get(probe_path)
@@ -228,52 +232,40 @@ def test_G_fallback_route_scales_by_positions_plus_cash(tmp_path, monkeypatch):
         return {"status": "ok", "data": {"equity": 1_000.0}}
 
     try:
-        c = TestClient(server.app, raise_server_exceptions=False)
-        c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
-        body = c.get(probe_path).json()
-        assert body.get("view") == "model_book", "response did not pass through masking"
-        assert "model_portfolio_id" not in body.get("data", {}), (
-            "probe must not look like the published shape")
+        client = TestClient(server.app, raise_server_exceptions=False)
+        client.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+        response = client.get(probe_path)
+        assert response.status_code == 200
+        body = response.json()
+        assert body.get("view") == "model_book"
+        assert "model_portfolio_id" not in body.get("data", {})
         scaled = body["data"]["equity"]
-        # The mask rounds money to the cent, so compare at that resolution —
-        # tight enough to pin the factor, loose enough not to fight rounding.
         assert scaled == pytest.approx(1_000.0 * expected_factor, abs=0.01)
         assert scaled != pytest.approx(1_000.0 * wrong_factor, abs=1.0), (
             "scaled by the cash-only basis")
     finally:
         server.app.router.routes = [
-            r for r in server.app.router.routes
-            if getattr(r, "path", None) != probe_path]
+            route
+            for route in server.app.router.routes
+            if getattr(route, "path", None) != probe_path
+        ]
 
 
-# ─── CASE H — the published route's own factor is untouched ──────────────────
+# ─── CASE H — dormant publication + scaler composition ──────────────────────
 
-def test_H_published_portfolio_still_scales_to_exactly_the_notional(tmp_path, monkeypatch):
-    from starlette.testclient import TestClient
 
-    import auth_users
-
-    monkeypatch.setattr(auth_users, "AUTH_DB_PATH", tmp_path / "auth.db")
-    auth_users.init_auth_db()
-    auth_users.create_user("cust@x.com", "pw")
-    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
-    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server.auth_users, "is_owner", lambda e: False, raising=False)
-    monkeypatch.setattr(server.auth_users, "authenticate_session",
-                        lambda tok: "cust@x.com", raising=True)
-    monkeypatch.setattr(server, "_maybe_log_snapshot", lambda h: None, raising=True)
-
-    p = Path(tempfile.mkdtemp()) / "snap.json"
+def test_H_dormant_publication_scales_to_exactly_the_notional(tmp_path):
+    p = tmp_path / "snap.json"
     p.write_text(json.dumps(_raw_mcp_shaped()))
     payload = data_fetcher.load_snapshot_payload(p)
     payload["offline"] = False
-    monkeypatch.setattr(server, "build_data_payload",
-                        lambda wl: json.loads(json.dumps(payload)), raising=True)
-    monkeypatch.setattr(server, "_prior_close", lambda s: 80.0, raising=True)
+    published = model_portfolio.publish(payload, prior_close=lambda _symbol: 80.0)
+    assert published["calculated_total_equity"] == pytest.approx(ACCOUNT_EQUITY)
 
-    c = TestClient(server.app, raise_server_exceptions=False)
-    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
-    d = c.get("/api/portfolio").json()["data"]
-    total = sum(h["equity"] for h in d["holdings"]) + d["cash"]
+    factor = server._model_scale_factor(published["calculated_total_equity"])
+    scaled = server._scale_money(published, factor)
+
+    total = sum(h["equity"] for h in scaled["holdings"]) + scaled["cash"]
     assert total == pytest.approx(server._MODEL_BOOK_USD, abs=0.05)
-    assert d["calculated_total_equity"] == pytest.approx(server._MODEL_BOOK_USD, abs=0.05)
+    assert scaled["calculated_total_equity"] == pytest.approx(
+        server._MODEL_BOOK_USD, abs=0.05)

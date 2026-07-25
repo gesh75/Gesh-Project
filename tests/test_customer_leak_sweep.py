@@ -10,16 +10,18 @@ fixes all of that:
   * ROUTE INVENTORY derived from server.app.routes: a customer-reachable
     GET /api/* that nobody categorized FAILS test_all_customer_gets_categorized,
     so new endpoints can't silently bypass the sweep.
-  * PER ENDPOINT asserts: status == 200 (a 401/403/404/5xx FAILS — never a pass),
-    the masked `view == "model_book"` tell is present, and no EXACT owner sentinel
-    (unrounded total, cash, fractional quantity, per-lot equity, historical-series
-    value) appears in the body.
+  * PER ENDPOINT asserts one of two explicit contracts. Customer-readable routes
+    must return 200, carry the masked `view == "model_book"` tell, and contain no
+    exact owner sentinel. The three Phase 1 owner-domain reads must return their
+    exact 403 denial code, without invoking masking as a substitute for access
+    control.
   * EXACT structured sentinels — the synthetic raw leaks Codex injected
     (6.078929, 101.988616, 5843.32) are detected, not rounded away.
 
-The masking middleware (server.py) masks EVERY customer /api JSON dict and stamps
-view=model_book, failing CLOSED (500) if scaling throws — so `view` present +
-200 together prove the response actually routed through masking.
+The masking middleware still protects customer-readable JSON. The denied-route
+category is intentionally separate: a 403 is success only for an explicitly
+enumerated owner-domain read and can never make a readable-route masking test
+pass accidentally.
 """
 from __future__ import annotations
 
@@ -47,6 +49,10 @@ OWNER = {
     "trade_pnl": 1287.44,    # realized trade $ P&L (trade_log `realized_pnl`/`total_realized_pnl`)
 }
 SCALE = 2.5  # deterministic model/real factor (avoids identity so scaled != sentinel)
+OWNER_TEXT_SENTINELS = (
+    "robinhood_mcp",
+    "OWNER-PRIVATE-TRADE-NOTE",
+)
 
 
 def _sentinel_strings() -> list[str]:
@@ -75,7 +81,7 @@ def _find_leaks(blob: str) -> list[str]:
 def _owner_payload() -> dict:
     """Fresh copy each call (handlers may read/iterate it)."""
     return json.loads(json.dumps({
-        "as_of": "2026-07-04T13:35:00+00:00", "source": "test",
+        "as_of": "2026-07-04T13:35:00+00:00", "source": OWNER_TEXT_SENTINELS[0],
         "equity_summary": {"total": OWNER["total"], "portfolio_equity": OWNER["total"],
                            "cash": OWNER["cash"], "deployable": OWNER["cash"],
                            # real data_fetcher key — account-level owner equity
@@ -122,6 +128,7 @@ def client(monkeypatch, tmp_path):
     # broad server-module seams
     monkeypatch.setattr(server, "build_data_payload", lambda *a, **k: _owner_payload())
     monkeypatch.setattr(server, "_resolved_payload", lambda *a, **k: _owner_payload(), raising=False)
+    monkeypatch.setattr(server, "_maybe_log_snapshot", lambda *a, **k: None, raising=False)
     monkeypatch.setattr(server, "_cached_response", _cached)
     monkeypatch.setattr(server, "_load_engine_results",
                         lambda *a, **k: {"regime": {"NVDA": {"regime": "TRENDING"}},
@@ -133,11 +140,13 @@ def client(monkeypatch, tmp_path):
     # would leak the instant a real trade is logged — 8th-pass, Fable audit).
     monkeypatch.setattr(server, "get_trade_history",
                         lambda *a, **k: [{"symbol": "NVDA", "realized_pnl": OWNER["trade_pnl"],
-                                          "pnl_pct": -4.2, "outcome": "LOSS"}], raising=False)
+                                          "pnl_pct": -4.2, "outcome": "LOSS",
+                                          "notes": OWNER_TEXT_SENTINELS[1]}], raising=False)
     monkeypatch.setattr(server, "trade_summary_for_report",
                         lambda *a, **k: {"win_rate_pct": 50.0, "total_realized_pnl": OWNER["trade_pnl"],
                                          "best_trade": {"symbol": "NVDA", "realized_pnl": OWNER["trade_pnl"],
-                                                        "pnl_pct": 12.0},
+                                                        "pnl_pct": 12.0,
+                                                        "notes": OWNER_TEXT_SENTINELS[1]},
                                          "worst_trade": None}, raising=False)
     monkeypatch.setattr(server, "get_paper_summary", lambda *a, **k: {"trades": 0}, raising=False)
     monkeypatch.setattr(server, "detect_consolidation", lambda *a, **k: {"found": False}, raising=False)
@@ -209,11 +218,17 @@ def client(monkeypatch, tmp_path):
 def _as_customer(monkeypatch):
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "customer@example.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda path, cookie: "allow")
+    monkeypatch.setattr(server.auth_users, "is_owner", lambda email: False)
+
+
+def _as_owner(monkeypatch):
+    monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "owner@example.com")
+    monkeypatch.setattr(server.auth_users, "gate_decision", lambda path, cookie: "allow")
+    monkeypatch.setattr(server.auth_users, "is_owner", lambda email: email == "owner@example.com")
 
 
 # ── concrete request URL for every customer-reachable GET (path params filled) ──
 COVERED: dict[str, str] = {
-    "/api/portfolio": "/api/portfolio",
     "/api/ecg": "/api/ecg",
     "/api/regime": "/api/regime",
     "/api/history": "/api/history?limit=3",
@@ -243,8 +258,6 @@ COVERED: dict[str, str] = {
     "/api/gemini/status": "/api/gemini/status",
     "/api/scanner/consolidation/{symbol}": "/api/scanner/consolidation/NVDA",
     "/api/scanner/sector/{symbol}": "/api/scanner/sector/NVDA",
-    "/api/trades": "/api/trades",
-    "/api/trades/stats": "/api/trades/stats",
     "/api/paper/summary": "/api/paper/summary",
     "/api/tax/harvest": "/api/tax/harvest",
     "/api/benchmarks/{period}": "/api/benchmarks/1mo",
@@ -255,9 +268,24 @@ COVERED: dict[str, str] = {
     "/api/volatility/compare/{symbol}": "/api/volatility/compare/NVDA",
     "/api/signals/history/{symbol}": "/api/signals/history/NVDA",
 }
+# Phase 1 owner-domain reads: exact customer denial is the contract. Keeping
+# these separate from EXCLUDED ensures route-inventory drift is still caught and
+# proves that 403 is accepted nowhere else in the sweep.
+DENIED_OWNER_READS: dict[str, tuple[str, str]] = {
+    "/api/portfolio": ("/api/portfolio", "model_book_unavailable"),
+    "/api/trades": ("/api/trades", "customer_trade_ledger_unavailable"),
+    "/api/trades/stats": (
+        "/api/trades/stats",
+        "customer_trade_ledger_unavailable",
+    ),
+}
 # GET /api routes deliberately not swept, each with a reason.
 EXCLUDED: dict[str, str] = {
     "/api/ollama/status": "410 Gone — endpoint permanently removed; carries no data",
+    "/api/version": "principal-neutral immutable build identity only "
+                    "(service/commit_sha/built_at/dirty), with an exact allowlist and "
+                    "fail-closed validation locked by tests/test_build_identity.py; "
+                    "no owner or customer financial data",
     "/api/me": "returns only a session role string (owner|customer) — no owner financial data",
     "/api/preferences": "returns only the caller's own two email-preference booleans "
                         "(alerts_opt_out/digest_opt_out) — no owner financial data, no other "
@@ -329,15 +357,21 @@ def _registered_customer_gets() -> set[str]:
 
 def test_all_customer_gets_categorized():
     """Route coverage is derived from app.routes: a new customer GET that nobody
-    added to COVERED/EXCLUDED fails here, so it can't silently skip the sweep."""
+    added to COVERED/DENIED_OWNER_READS/EXCLUDED fails here, so it can't silently
+    skip the sweep."""
     registered = _registered_customer_gets()
-    uncategorized = registered - set(COVERED) - set(EXCLUDED)
+    uncategorized = (
+        registered - set(COVERED) - set(DENIED_OWNER_READS) - set(EXCLUDED)
+    )
     assert not uncategorized, (
-        "Customer GET route(s) not categorized in the leak sweep — add to COVERED "
-        f"(with a concrete request) or EXCLUDED (with a reason): {sorted(uncategorized)}"
+        "Customer GET route(s) not categorized in the leak sweep — add to COVERED, "
+        "DENIED_OWNER_READS, or EXCLUDED with a reason: "
+        f"{sorted(uncategorized)}"
     )
     # and the sweep list must not rot: no stale entries for removed routes
-    stale = (set(COVERED) | set(EXCLUDED)) - registered
+    stale = (
+        set(COVERED) | set(DENIED_OWNER_READS) | set(EXCLUDED)
+    ) - registered
     assert not stale, f"Sweep lists reference routes that no longer exist: {sorted(stale)}"
 
 
@@ -356,6 +390,46 @@ def test_customer_get_masks_and_gates(monkeypatch, client, url):
     blob = json.dumps(body)
     leaked = _find_leaks(blob)
     assert not leaked, f"OWNER VALUE LEAKED at {url}: {leaked}"
+
+
+@pytest.mark.parametrize(
+    ("url", "code"),
+    list(DENIED_OWNER_READS.values()),
+)
+def test_customer_owner_read_fails_closed(monkeypatch, client, url, code):
+    _as_customer(monkeypatch)
+    r = client.get(url)
+    assert r.status_code == 403, (
+        f"{url} returned {r.status_code}, expected exact customer denial")
+    assert "application/json" in r.headers.get("content-type", "")
+    body = r.json()
+    assert body == {
+        "detail": "Owner data is unavailable to customer accounts.",
+        "code": code,
+    }
+    assert "view" not in body, "a denied owner read was incorrectly masked as model data"
+    blob = json.dumps(body)
+    assert not _find_leaks(blob), f"OWNER VALUE LEAKED in denial at {url}"
+    for sentinel in OWNER_TEXT_SENTINELS:
+        assert sentinel not in blob, f"OWNER TEXT LEAKED in denial at {url}: {sentinel}"
+
+
+def test_owner_keeps_portfolio_trade_and_stats_reads(monkeypatch, client):
+    _as_owner(monkeypatch)
+
+    portfolio = client.get("/api/portfolio")
+    assert portfolio.status_code == 200, portfolio.text
+    portfolio_data = portfolio.json()["data"]
+    assert portfolio_data["source"] == OWNER_TEXT_SENTINELS[0]
+    assert portfolio_data["equity_summary"]["cash"] == OWNER["cash"]
+
+    trades = client.get("/api/trades")
+    assert trades.status_code == 200, trades.text
+    assert trades.json()["data"][0]["notes"] == OWNER_TEXT_SENTINELS[1]
+
+    stats = client.get("/api/trades/stats")
+    assert stats.status_code == 200, stats.text
+    assert stats.json()["data"]["best_trade"]["notes"] == OWNER_TEXT_SENTINELS[1]
 
 
 def test_wrong_auth_is_rejected_not_passed(monkeypatch, client):

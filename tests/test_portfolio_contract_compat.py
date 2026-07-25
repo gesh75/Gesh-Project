@@ -1,13 +1,13 @@
-"""Route-to-render contract for the changed customer /api/portfolio shape.
+"""Dormant publication schema and legitimate owner rendering contracts.
 
-The customer contract changed substantially: no `equity_summary`, no owner cost
-basis, nullable day-change fields. `loadPortfolio` was still calling
-`renderStats(d.equity_summary)` unconditionally — `undefined` for a customer,
-i.e. a TypeError swallowed by the enclosing catch, which silently flipped the
-connection badge to offline and skipped the macro load.
+The owner-domain `/api/portfolio` route is no longer a customer publication
+surface. Customers receive an exact 403 before the owner loader runs. The
+allowlisted `model_portfolio.publish()` schema remains tested directly so its
+valuation contract does not rot while the separate Model Book publication
+domain is intentionally deferred.
 
-These assert the SCHEMA the route emits and that the production rendering path
-consumes exactly that schema, including its null and degraded states.
+The production portfolio renderer remains an owner feature and is checked
+through the owner bundle.
 """
 
 from __future__ import annotations
@@ -57,10 +57,11 @@ def client(tmp_path: Path, monkeypatch):
     return c
 
 
-# ─── the emitted schema ──────────────────────────────────────────────────────
+# ─── the dormant publication schema ─────────────────────────────────────────
 
-def test_customer_payload_matches_the_published_schema(client):
-    d = client.get("/api/portfolio").json()["data"]
+
+def test_dormant_publication_matches_the_published_schema():
+    d = model_portfolio.publish(_PAYLOAD)
     assert set(d) <= set(model_portfolio.PUBLISHED_TOP_LEVEL_FIELDS), (
         f"unlisted field(s): {sorted(set(d) - set(model_portfolio.PUBLISHED_TOP_LEVEL_FIELDS))}")
     for required in ("model_portfolio_id", "version", "published_at", "holdings",
@@ -72,31 +73,50 @@ def test_customer_payload_matches_the_published_schema(client):
         assert "average_buy_price" not in h and "percent_change" not in h
 
 
-def test_nullable_fields_are_typed_as_documented(client):
-    d = client.get("/api/portfolio").json()["data"]
+def test_dormant_publication_nullable_fields_are_typed_as_documented():
+    d = model_portfolio.publish(_PAYLOAD)
     assert isinstance(d["calculated_total_equity"], (int, float))
     assert isinstance(d["day_change_available"], bool)
     for k in ("day_change", "day_change_pct", "data_as_of"):
         assert d[k] is None or isinstance(d[k], (int, float, str))
 
 
-# ─── the production rendering path consumes exactly that ─────────────────────
+def test_customer_route_rejects_the_legacy_publication_contract(client, monkeypatch):
+    monkeypatch.setattr(
+        server,
+        "build_data_payload",
+        lambda _watchlist: pytest.fail("customer request reached owner portfolio loader"),
+        raising=True,
+    )
 
-def _customer_bundle() -> str:
-    return server._render_dashboard("customer")
+    response = client.get("/api/portfolio")
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Owner data is unavailable to customer accounts.",
+        "code": "model_book_unavailable",
+    }
+    assert "data" not in response.json()
+    assert "robinhood_mcp" not in response.text
+
+
+# ─── the owner rendering path consumes compatible portfolio shapes ───────────
+
+
+def _owner_bundle() -> str:
+    return server._render_dashboard("owner")
 
 
 def test_rendering_path_does_not_dereference_equity_summary_blindly():
-    bundle = _customer_bundle()
+    bundle = _owner_bundle()
     assert "renderStats(d.equity_summary)" not in bundle, (
-        "customer bundle still dereferences a field the customer contract removed")
+        "portfolio renderer still dereferences an optional summary blindly")
     assert "normalizePortfolioEquity" in bundle
 
 
 def test_owner_only_panels_are_guarded_before_render():
-    """The panels' DOM lives in the owner partial; calling their renderers in a
-    customer document would throw on a null element."""
-    bundle = _customer_bundle()
+    """Owner renderers remain defensive if a panel is absent."""
+    bundle = _owner_bundle()
     m = re.search(r"function renderPortfolioPanels\(d\)\{(.*?)\n\}", bundle, re.S)
     assert m, "renderPortfolioPanels not found"
     body = m.group(1)
@@ -106,11 +126,10 @@ def test_owner_only_panels_are_guarded_before_render():
         assert f"getElementById('{dom_id}')" in body, f"{panel} unguarded"
 
 
-def test_normalizer_maps_the_published_shape(client):
-    """Static equivalent of running the JS: every field the normalizer reads must
-    exist in the real route payload."""
-    d = client.get("/api/portfolio").json()["data"]
-    bundle = _customer_bundle()
+def test_owner_normalizer_maps_the_dormant_published_shape():
+    """Every non-owner field read by the normalizer exists in the dormant schema."""
+    d = model_portfolio.publish(_PAYLOAD)
+    bundle = _owner_bundle()
     m = re.search(r"function normalizePortfolioEquity\(d\)\{(.*?)\n\}", bundle, re.S)
     assert m
     for field in re.findall(r"d\.(\w+)", m.group(1)):
@@ -120,7 +139,7 @@ def test_normalizer_maps_the_published_shape(client):
 
 
 def test_day_change_null_is_rendered_as_unavailable_not_zero():
-    bundle = _customer_bundle()
+    bundle = _owner_bundle()
     m = re.search(r"function renderStats\(eq\)\{(.*?)\n\}", bundle, re.S)
     assert m
     body = m.group(1)

@@ -15,6 +15,7 @@ trading/risk_gate.py) are imported read-only and never modified.
 from __future__ import annotations
 
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,6 +29,28 @@ if str(REPO_ROOT) not in sys.path:
 @pytest.fixture(scope="session")
 def repo_root() -> Path:
     return REPO_ROOT
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _record_release_test_provenance(record_testsuite_property) -> None:
+    """Bind JUnit evidence to the exact Git checkout and its clean/dirty state."""
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+    )
+    record_testsuite_property("git_commit", commit)
+    record_testsuite_property("git_dirty", str(dirty).lower())
 
 
 class _NetworkBlocked(RuntimeError):
