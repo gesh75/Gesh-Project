@@ -732,6 +732,60 @@ def _scale_money(obj, factor: float, parent_key: str = ""):
     return obj
 
 
+# ─── Unavailable scaling basis: refuse, never publish a fabricated $0.00 ───────
+# `_customer_scale_factor()` fails closed to 0.0, which is fail-closed against a
+# LEAK but fail-OPEN against a FABRICATION: the factor is a multiplier, so 0.0
+# does not withhold a number, it asserts one. A customer saw `"cash": 0.0` in an
+# HTTP 200 and could not tell "your model book is empty" from "we could not
+# determine the basis" — and $0.00 is the more alarming reading of the two.
+#
+# The distinction that matters is NOT "does this body contain money" but "does
+# this body's output DEPEND ON the factor". `_scale_money` does two independent
+# jobs: it SCALES numbers (needs a factor) and it REDACTS owner sizing prose
+# (does not). A response of per-share prices and percentages is fully correct
+# with no factor at all, so withholding it would be a self-inflicted outage;
+# conversely a body of pure prose must still be masked even when no factor
+# exists, or a correctness fix becomes a disclosure bug.
+
+def _requires_scaling_factor(obj) -> bool:
+    """True when any part of this response would change if the factor changed.
+
+    Defined by DIFFERENTIAL EVALUATION of `_scale_money` itself rather than by a
+    second list of money keys. A parallel list would silently rot the first time
+    someone added a key to `_MONEY_KEYS` and not here; this cannot, because it
+    asks the scaler what it actually does. An exact 0 is correctly reported as
+    factor-independent — 0 x anything is 0, so serving it fabricates nothing."""
+    return _scale_money(obj, 1.0) != _scale_money(obj, 2.0)
+
+
+def _usable_factor(factor: object) -> bool:
+    """A factor must be finite and strictly positive. Zero erases the book and a
+    negative inverts it; neither can be presented as a customer's holdings."""
+    return (isinstance(factor, (int, float)) and not isinstance(factor, bool)
+            and math.isfinite(factor) and factor > 0)
+
+
+def _model_unavailable_response() -> JSONResponse:
+    """Typed, retryable, uncacheable refusal carrying NO financial value.
+
+    `detail` is deliberately generic: the cause (missing snapshot, unpriced
+    holding, malformed source) is operator diagnostics and belongs in the log,
+    not in a customer response."""
+    return JSONResponse(
+        status_code=503,
+        headers={"Cache-Control": "no-store"},
+        content={
+            "status": "unavailable",
+            "reason_code": "model_scaling_unavailable",
+            "detail": "Model portfolio data is temporarily unavailable.",
+            "model_scaling_available": False,
+            "data_as_of": None,
+            "retryable": True,
+            "view": "model_book",
+        },
+    )
+
+
 # ─── Human-readable refusals for browser navigations ──────────────────────────
 # A customer who typed /invest saw the raw body `{"detail":"Owner-only view"}`,
 # and an unknown path rendered `{"detail":"Not Found","view":"model_book"}` —
@@ -1021,7 +1075,39 @@ async def _customer_view_middleware(request: Request, call_next):
             if (isinstance(data, dict)
                     and data.get("model_portfolio_id") == model_portfolio.MODEL_PORTFOLIO_ID):
                 factor = _model_scale_factor(data.get("calculated_total_equity"))
-        masked = _scale_money(decoded, _customer_scale_factor() if factor is None else factor)
+        if factor is None:
+            factor = _customer_scale_factor()
+
+        if not _usable_factor(factor):
+            if _requires_scaling_factor(decoded):
+                # Refuse rather than publish a book of fabricated zeros.
+                #
+                # THROTTLED. An unavailable basis is a standing condition, not an
+                # event: it persists until the snapshot returns, while the open
+                # dashboard re-polls every money route on a timer. Unthrottled,
+                # one cause would emit a line per route per poll per tab — the
+                # same runaway that once put 26k duplicate lines in one log.
+                # Keyed by FAILURE CLASS rather than by path, because there is
+                # one cause; the most recent path is carried in the message so an
+                # operator still gets a concrete example to reproduce with.
+                suppressed = _throttled_log_due("model_scaling_unavailable")
+                if suppressed is not None:
+                    logger.warning(
+                        "model scaling unavailable — refusing customer financial "
+                        "responses (most recent: %s %s)%s",
+                        request.method, path,
+                        f" [+{suppressed} suppressed in the last "
+                        f"{int(_THROTTLED_LOG_INTERVAL_S)}s]" if suppressed else "")
+                # The refusal itself is NOT conditional on the log: throttling is a
+                # logging concern and must never change what the customer receives.
+                return _model_unavailable_response()
+            # Nothing in this body depends on the factor, but prose redaction and
+            # every other factor-independent protection still must run — so mask
+            # with a NEUTRAL factor instead of short-circuiting to the raw body,
+            # and keep the handler's own status code.
+            factor = 1.0
+
+        masked = _scale_money(decoded, factor)
         if isinstance(masked, dict):
             masked["view"] = "model_book"   # UI/debug tell — customer-scaled response
         return JSONResponse(status_code=resp.status_code, content=masked)
