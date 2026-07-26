@@ -3414,18 +3414,35 @@ def regime_symbol(symbol: str):
 _FUNDAMENTAL_IDENTITY_KEYS = frozenset(
     ("symbol", "company_name", "name", "sector_source", "error", "source", "as_of"))
 
+_FUNDAMENTAL_ZERO_DEFAULT_KEYS = frozenset(
+    ("insider_buys", "insider_sells", "num_analysts"))
+
+
+def _fundamentals_value_is_empty(key: str, value: object) -> bool:
+    """True for absent values and the adapter's known no-coverage defaults."""
+    if value in (None, "", [], {}):
+        return True
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return ((key == "recommendation" and normalized == "hold")
+                or (key == "insider_signal" and normalized == "neutral"))
+    return (key in _FUNDAMENTAL_ZERO_DEFAULT_KEYS
+            and not isinstance(value, bool)
+            and value == 0)
+
 
 def _fundamentals_row_is_empty(row: dict) -> bool:
     """True when a vendor answered with a shape but no facts.
 
     Deliberately structural rather than an allow-list of metric names: vendors
     disagree on field names (`pe_ratio` vs `trailing_pe`) and add new ones, and
-    a name list that falls behind starts 404-ing real companies. Any field that
-    is not pure request-echo and carries a value counts as knowledge."""
+    a name list that falls behind starts 404-ing real companies. Any field with
+    a value that is neither request-echo nor a known adapter default counts as
+    knowledge."""
     if not isinstance(row, dict):
         return True
     return not any(
-        v not in (None, "", [], {})
+        not _fundamentals_value_is_empty(k, v)
         for k, v in row.items()
         if k not in _FUNDAMENTAL_IDENTITY_KEYS
     )
