@@ -1,75 +1,63 @@
-# GitHub Copilot Instructions
+# Gesh-Project
 
-These rules apply to all Copilot suggestions and agent actions in this repository.
+GESH Financial - AI portfolio intelligence dashboard. FastAPI + Claude, with an 11-node consensus engine, risk gates, Kelly sizing, Monte Carlo simulation, a diversification radar, and a live paper-trade track record.
 
----
+**Stack.** Python (FastAPI, SQLAlchemy, Postgres, Redis, Docker). Anthropic multi-model routing. React/Next.js dashboard.
 
-## Customer and financial-data safety
+**Layout.** `trading/` engine, `scripts/`, `security/`, `templates/`, `tests/`, `android/`, `docs/`
 
-- Preserve customer isolation and owner/customer boundaries.
-- Never expose owner portfolio values, account identifiers, positions, cash,
-  recommendations, or private operational data to customers.
-- Never fabricate financial values when required source data is unavailable.
-- Prefer an explicit typed failure response over invented defaults or silent fallback.
-- Preserve money masking, prose redaction, and financial leak-sweep behavior.
+## Build and test
 
----
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install pytest pytest-cov ruff
+python -m pytest -q
+```
 
-## Security boundaries
+Run the tests before proposing a change is done. If you cannot run them, say so explicitly
+rather than claiming the change is verified.
 
-- Preserve authentication, authorization, tenant ownership, CSRF, Origin,
-  Content-Type, cookie, session, and request-boundary checks.
-- Never weaken fail-closed security behavior merely to make a test pass.
-- Never bypass tenant or customer isolation.
-- Do not print, expose, commit, or summarize secrets.
+## Engineering conventions (non-negotiable)
 
----
+- **Type hints on every function signature.** No bare `def f(x):`.
+- **async/await for all I/O.** Never block the event loop with sync network or disk calls.
+- **Immutable data.** Return new objects; do not mutate arguments in place.
+- **Tests first.** Write the failing test, watch it fail, then implement. Target 80%+ coverage.
+- **Small files.** 200-400 lines typical, 800 hard max. Extract modules rather than growing a file.
+- **Small functions.** Under 50 lines. Nesting no deeper than 4 levels - use early returns.
+- **Handle every error explicitly.** Never swallow an exception silently. Log context server-side,
+  return a friendly message user-side.
+- **Validate at boundaries.** Never trust user input, API responses, or file contents.
+- **No hardcoded secrets, ever.** Environment variables or a secret manager only. No credentials
+  in code, comments, logs, tests, or fixtures.
+- **Conventional Commits**: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`, `perf:`, `ci:`.
+  Imperative mood, lower case, no trailing period. Do **not** add `Co-authored-by` trailers.
 
-## Protected runtime and production state
+## Before you propose a change
 
-**Never modify or operate:**
+1. Read the surrounding code and match its idiom, naming, and comment density.
+2. Prefer a battle-tested library over hand-rolled utility code.
+3. If you touch auth, user input, DB queries, file paths, or external calls, re-read the
+   security rules above before finishing.
 
-- production databases
-- `.env` files
-- credentials
-- billing or Lemon Squeezy state
-- brokerage integrations
-- customer records
-- production services
-- launchd jobs
-- deployment state
-- live portfolio snapshots
-- Decision Ledger production data
+## Financial-engine rules
 
-**Do not run:**
+- **This system moves money decisions.** Any change to sizing, gating, or consensus needs a test
+  that proves the new behaviour on a concrete numeric example.
+- **Never widen a risk gate to make a test pass.** If a gate blocks, that is the gate working.
+  Fix the input or the caller, not the threshold.
+- Position sizing and risk bands are canonical in `gesh-core`. Import them; do not re-implement.
+- **Robinhood quirk:** use `profile['withdrawable_amount']` for available cash, never
+  `account['cash']` - the latter includes unsettled funds and will over-size positions.
+- Price fetching must degrade gracefully. Yahoo/stooq/Alpaca can all fail (rate limits, SNI
+  blocking on VPN). Preserve the per-symbol fallback chain and the `price_source` tagging;
+  an all-NaN batch must not silently become "no candidates".
+- Never commit API keys, account numbers, or real position data. `.env.example` only.
+- Reports must carry the "NOT FINANCIAL ADVICE" disclaimer.
 
-- AI calls
-- the daily analysis chain
-- brokerage operations
-- billing actions
-- production deployment or restart commands
+## Pull requests
 
----
-
-## Engineering workflow
-
-- Add a regression test for every defect.
-- Reproduce the failure before implementing a correction.
-- Prefer the smallest behavior-preserving change.
-- Run focused tests before the complete suite.
-- Report exact test counts and failures.
-- Never push directly to `main`.
-- Use a feature branch and open a draft pull request.
-- Never merge, deploy, clean branches, or delete evidence unless explicitly authorized.
-- Do not infer production release state solely from the historical Git worktree HEAD.
-- Treat tracked-file manifests and release evidence as authoritative when explicitly documented.
-
----
-
-## Product and regulatory claims
-
-- Do not claim a proven investment edge.
-- Treat performance evidence as hypothetical or simulated unless explicitly proven otherwise.
-- Do not convert research language into individualized investment advice.
-- Preserve beta, educational, hypothetical-performance, and not-financial-advice framing.
-- Do not make legal conclusions.
+- Title in Conventional Commits form.
+- Body covers: what changed, why, blast radius, and a test plan as a checklist.
+- Summarise the whole commit range, not just the last commit.
