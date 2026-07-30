@@ -45,6 +45,22 @@ class _FakeMessage:
         self.content = content
 
 
+class _FakeStreamContext:
+    """Mimics the context manager anthropic.messages.stream() returns."""
+
+    def __init__(self, response: _FakeMessage) -> None:
+        self._response = response
+
+    def __enter__(self) -> "_FakeStreamContext":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        return None
+
+    def get_final_message(self) -> _FakeMessage:
+        return self._response
+
+
 class _FakeMessages:
     def __init__(self, response: _FakeMessage, sink: dict[str, Any]) -> None:
         self._response = response
@@ -55,6 +71,14 @@ class _FakeMessages:
         self._sink.clear()
         self._sink.update(kwargs)
         return self._response
+
+    def stream(self, **kwargs: Any) -> _FakeStreamContext:
+        # ai_analyzer._create_streaming() drives deep_analyze_portfolio through
+        # client.messages.stream(...).get_final_message() (2026-07-27, dodges a
+        # wall-clock timeout on long generations) — mirror create()'s capture.
+        self._sink.clear()
+        self._sink.update(kwargs)
+        return _FakeStreamContext(self._response)
 
 
 class _FakeClient:

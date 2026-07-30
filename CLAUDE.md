@@ -813,6 +813,57 @@ under the new cap — the report banner should show partial approvals (Kelly-siz
 adds ≤16.3% clear; >18% still reject) instead of blanket rejection. FINNHUB_API_KEY
 placeholder line also removed from `.env` (was shadow-defined twice).
 
+## Chain Repair — 2026-07-27 ★★★ (streamed AI call + portfolio-reconciled Kelly)
+
+Two fixes, both verified by a green chain (`fail=0 degraded=0`, 544s, report 88KB).
+Backups sit next to the originals as `*.bak_20260727_*`.
+
+**1. Step 3/5 `APITimeoutError` — `ai_analyzer.py` now STREAMS the deep call.**
+`_CLIENT_TIMEOUT_S = 240.0` is a WALL-CLOCK budget on a non-streaming POST.
+`deep_analyze_portfolio` generates ~11.5K output tokens (~200–240s), so it sat
+exactly on the cliff and a normal throughput dip tipped it over; `max_retries=2`
+then burned 3 × 240s ≈ 12 min before failing. New `_create_streaming(client,
+**kwargs)` wraps `client.messages.stream()` and returns `stream.get_final_message()`
+— the timeout becomes PER-CHUNK, so a long generation can't trip the wall clock.
+The returned object is Message-compatible, so `_record_usage`,
+`_extract_tool_input` and the max_tokens guard are unchanged. **Diagnostic tell:
+step 3 takes ~13 min AND `llm_usage.jsonl` has no row for the day** (usage is
+recorded only after a response returns). **Do NOT "fix" a recurrence by lowering
+`_max_tokens` (24000)** — a truncated tool payload raises by design.
+
+**2. Every Kelly ADD gate-rejected — the chain was bypassing `run_kelly_analysis`.**
+`run_engines2.py` called `kelly_size_holding()` in a per-name loop: the STANDALONE
+path, which sizes each name independently against a 25% per-position cap with no
+knowledge of the book. Seven names pinned at 25%, summing to ~225% of the
+portfolio, so `risk_gate.POSITION_CAP` (0.18, which caps the POST-TRADE TOTAL
+position) rejected all of them by construction — the daily gate lane had been a
+permanent rejection log. gesh-core already ships `run_kelly_analysis()` for
+exactly this ("summing independent per-name Kellys systematically OVERBETS once
+positions are correlated"): correlation haircut (1/√N inside a ≥0.70 cluster) +
+gross-exposure cap (`KELLY_MAX_GROSS_PCT`, default 100%). The chain now calls it.
+
+Gotchas baked into the patch — keep them: `run_kelly_analysis` returns
+`{holdings: [...]}` but every downstream reader (`run_paper_gate2`, `gen_report2`,
+`/api/kelly/cached`) expects a **per-symbol dict**, so the list is converted back;
+it reads `h["current_price"]` while the snapshot carries `price`, so holdings are
+normalized first or every name sizes on 0; book stats land in a new
+`kelly_portfolio` key; a failure degrades to the legacy per-name loop rather than
+losing Kelly. The fossil `kelly_overconviction` key (no live producer, frozen at
+"raw_sum_pct: 225%") is popped from the merge-write.
+
+Measured 2026-07-27: gross factor 0.52, max single target 25.0% → 13.0%, allocated
+225% → 100%, gate **0/6 → 4/4 APPROVED** (IONQ TRIM, HOOD/CAT/BAC BUY). IONQ
+flipped ADD→TRIM, now agreeing with consensus SELL −0.49.
+
+**No risk limit was loosened.** `MAX_POSITION_PCT` stays 0.18 and
+`KELLY_MAX_POSITION_PCT` stays 0.25 — the 2026-07-17 note above assumed a 16.3%
+half-Kelly ceiling, which was already wrong then (the ceiling is 25%). Raising the
+gate to 0.26 or lowering the Kelly cap to 0.17 were both considered and rejected:
+the first permits 25% single-name concentration, the second hides the overbet
+instead of reconciling it. Raw Kelly on this book reads 186–326% (90-day window
+over a momentum run) — per the literature that means the edge estimate is
+unreliable, not that the position should be enormous.
+
 ## Analyze-progress UX — 2026-07-19 ★★ (the async 202+poll contract, and how to not misread it)
 
 **Read this before ever filing `/api/mybook/analyze` as broken.** It returns **202
@@ -864,6 +915,49 @@ Guard tests: `tests/test_analyze_progress_ux.py` (17). Suite **1,367 passed**.
 `$100–120` / AMD `$500–600` were written against 7/16 closes and both fell 7/17, so
 correct app values ($95.04 / $495.76, penny-accurate vs the broker) read as failures.
 Derive expectations at runtime from the RH feed.
+
+## PR #117 Merge Reconciliation — 2026-07-30 ★★ (GitHub web-UI conflicts → local merge, test triage)
+
+**Never finish a GitHub web-UI "Resolve conflicts" editor on this branch without checking the
+local working tree first.** PR #117's editor was evaluating conflicts against `09f757c` (the
+last-pushed commit) — but the main worktree had ~74 uncommitted files overlapping the conflict
+list (server.py, model_portfolio.py, dashboard.html/owner_console.html, several tests), none of
+which the web UI could see. Finishing there would have created a merge commit on the remote
+branch with zero knowledge of that work, setting up a second, worse collision the next time this
+checkout tried to sync. Also found, unrelated: a commit (`91a5fdb`, the launchd 10:30-ET-not-Sofia
+schedule fix) landed on this exact branch from another writer mid-session, and the earlier merge
+commit turned up already pushed to origin without a `git push` ever being run here — this repo's
+main worktree has multiple live writers; `git status`/`git log` before trusting local state.
+
+**What actually happened:** committed the uncommitted work as a checkpoint (`a33dc3e`, tracked
+files only via `git add -u` — never `-A`; the untracked pile included `.rh_mcp_oauth.json` and
+several attorney-privileged docs that must never enter git history), then merged `main` locally
+(`0d7bf5a`). Zero textual conflicts — the checkpoint had already evolved past whatever GitHub's
+stale mergeability check had flagged.
+
+**Test triage (71 failed → 0 failed, 2195 passed, coverage 62.7%):** all three causes were
+local-environment artifacts or fixture gaps, not real regressions:
+1. **64 failures** — this machine's real `.env` (`APP_BASE_URL=https://pay.geshfinance.com`)
+   leaks into the CSRF trusted-origins check via transitive `load_dotenv()` at test-collection
+   time (auth.py, ai_analyzer.py, etc. all call it at import). conftest's `_browser_like_origin`
+   only defaults test requests to `http://testserver`, which then doesn't match. CI has no
+   `.env`, so this never surfaces there — confirmed by rerunning with `APP_BASE_URL=""`.
+2. **4 failures** — `/api/ecg`'s customer-isolation tests (`test_customer_endpoint_isolation.py`)
+   were reading THIS machine's real, populated `gesh_financial.db` (a genuine NVDA -47% drawdown
+   → SUSPENDED), because `get_equity_history` (gesh_core.db, reached via the `db.py` alias) had
+   no per-test DB isolation — unlike `auth_users`/`signal_history`, which conftest.py already
+   isolates. Added `_isolate_equity_snapshots_db` (same file, same pattern) — fixed all 4.
+3. **3 failures** — the fake Anthropic client in two test files only implemented `.create()`;
+   `ai_analyzer._create_streaming` (see "Chain Repair — 2026-07-27" above) calls `.stream()`.
+   Added a `_FakeStreamContext` to both.
+
+One narrow test (`test_agent_db.py`) hardcoded an assumption about the *unisolated* ambient
+`db.DB_PATH` default — updated it to assert the same fallback logic against an explicit path
+instead of weakening the new isolation fixture.
+
+**Result:** PR #117 flipped from `CONFLICTING` to `MERGEABLE`. Pushed as `a33dc3e` (checkpoint)
++ `0d7bf5a` (merge) + `555b3e3` (test fixes). Branch protection still gates the actual merge on
+`test` + `customer-isolation` passing green on the new head.
 
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.

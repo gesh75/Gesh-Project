@@ -36,6 +36,27 @@ def _client() -> anthropic.Anthropic:
     )
 
 
+def _create_streaming(client: anthropic.Anthropic, **kwargs: Any) -> Any:
+    """messages.create() over SSE, returning the same final Message object.
+
+    WHY (2026-07-27 outage): the daily chain died at step 3/5 with
+    `anthropic.APITimeoutError` three days running. Nothing was wrong with the
+    request — `_CLIENT_TIMEOUT_S` is a WALL-CLOCK budget on a non-streaming
+    POST, and deep_analyze_portfolio generates ~11-12K output tokens, which at
+    Sonnet's throughput lands at ~200-240s. It sat right on the 240s cliff, so a
+    normal throughput dip tipped it over; `max_retries=2` then burned 3 x 240s
+    (~12 min) before failing. Streaming makes the timeout PER-CHUNK instead of
+    per-request, so a long generation can no longer trip the wall clock — this
+    is also what the SDK requires for requests that may exceed 10 minutes.
+
+    Callers keep using the returned Message exactly as before (`.usage`,
+    `.stop_reason`, `.content`), so `_record_usage` / `_extract_tool_input` /
+    the max_tokens truncation guard are all unchanged.
+    """
+    with client.messages.stream(**kwargs) as stream:
+        return stream.get_final_message()
+
+
 # ─── Usage accounting + optional daily budget ────────────────────────────────
 # Every call appends one JSONL row (tokens + est. cost). LLM_DAILY_BUDGET_USD
 # (unset/0 = no cap) hard-stops new calls once today's estimated spend crosses
@@ -410,7 +431,11 @@ def deep_analyze_portfolio(
 
     prune_dict(sanitized)
 
-    message = client.messages.create(
+    # STREAMED (2026-07-27): this is the longest generation in the codebase
+    # (~11-12K output tokens) and was timing out against the 240s wall clock on
+    # the non-streaming path. See _create_streaming for the full writeup.
+    message = _create_streaming(
+        client,
         model=MODEL,
         max_tokens=_max_tokens,
         system=[{"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
