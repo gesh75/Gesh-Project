@@ -309,6 +309,11 @@ EXCLUDED: dict[str, str] = {
                           "tests/test_news_public_contract.py (payload keys are allow-listed, "
                           "so this route is NOT unguarded — it is guarded by shape instead of "
                           "by masking)",
+    "/api/congress": "PUBLIC congressional STOCK Act disclosures (ticker/member/action/amount/"
+                     "date) — identical for every viewer, no owner or customer dollars; "
+                     "source-agnostic + offline-safe, shape locked by tests/test_congress_agent.py",
+    "/api/congress/{symbol}": "per-ticker slice of the same PUBLIC congressional disclosures — "
+                              "no owner or customer data (see /api/congress)",
 }
 
 

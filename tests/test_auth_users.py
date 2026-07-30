@@ -200,6 +200,16 @@ class TestGate:
         assert au.is_public_path("/") is False
         assert au.is_public_path("/api/portfolio") is False
 
+    def test_public_prefix_respects_path_boundary(self):
+        # '/api/congress' must expose itself and sub-paths…
+        assert au.is_public_path("/api/congress") is True
+        assert au.is_public_path("/api/congress/NVDA") is True
+        assert au.is_public_path("/congress-watch") is True
+        # …but a future adjacent route must NOT silently inherit the bypass.
+        assert au.is_public_path("/api/congress-admin") is False
+        assert au.is_public_path("/congress-watchlist") is False
+        assert au.is_public_path("/track-record-evil") is False
+
     def test_gate_allows_public(self):
         assert au.gate_decision("/login", None) == "allow"
 

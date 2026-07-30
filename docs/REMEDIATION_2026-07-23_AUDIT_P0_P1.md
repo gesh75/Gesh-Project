@@ -541,3 +541,202 @@ rebuilt from the pin before merge.
 2. Extract operator JS into a slot-loaded bundle; then delete
    `test_known_residue_is_tracked_not_hidden` (H2).
 3. Rebuild the CI/dev venv from the `gesh-core` pin (H5).
+
+---
+
+# Consolidated hardening pass (reviewer work order)
+
+Run in a clean sibling worktree (`../gesh-project-audit-hardening`) from the
+committed remediation HEAD. The original dirty worktree was never touched.
+
+## Environment — `requirements.txt` is NOT installable from clean
+
+`python3 -m venv` + `pip install -r requirements.txt` on Python 3.14.6 fails:
+
+```
+error: resolution-too-deep     (pip, twice — also with --only-binary=:all:)
+```
+
+`uv` diagnoses it precisely:
+
+```
+you require yfinance==1.2.1 and openbb-yfinance>=1.6.0;
+openbb-yfinance>=1.6.3 depends on yfinance>=1.4.0  ->  unsatisfiable
+```
+
+`openbb-yfinance` is floor-pinned (`>=1.6.0`) and now resolves to 1.6.3, which
+requires a yfinance the file pins away. **A fresh CI install fails today.** The
+original venv predates the drift (it holds 1.6.2) and its own freeze is also
+internally inconsistent (`openbb-core==1.6.8` wants `uvicorn<0.41`, `uvicorn==0.44.0`
+installed).
+
+Clean alternative used, and named as such: the original venv's exact `pip freeze`
+installed with `--no-deps` into `.venv-review` — fully pinned, isolated, and
+reproducible, but **not** proof that `requirements.txt` installs. **RELEASE RISK.**
+
+Environment: Python 3.14.6 · gesh-core 0.5.2 (the committed pin is v0.5.3; the
+v0.6.0 bump lives only in the dirty worktree with the ledger work) · pytest 9.0.3.
+
+## Baseline and final counts (tracked files only, nothing excluded)
+
+| | command | collected | passed | failed | skipped |
+|---|---|---|---|---|---|
+| baseline `09f757c` | `pytest -q` | 1637 | 1637 | 0 | 0 |
+| final | `pytest -q` | 1937 | 1937 | 0 | 0 |
+
+The earlier 1551/1559/1629/1643 figures were provisional: they were measured in
+the dirty worktree where `tests/test_ledger_host.py` (untracked, +6) and its
+`gesh_core.ledger` dependency were sometimes present. **1637 is the true
+tracked-only baseline**, and no module is excluded from either run.
+
+## Reviewer findings
+
+| Finding | Verdict |
+|---|---|
+| Raw owner payload reaches customer ANALYSIS routes | **Rejected** — every analysis route (`/api/analyze`, `/api/deep-analysis`, `/api/kelly`, `/api/monte-carlo`, `/api/consensus`, `/api/screener`, trading) returns 403 to a customer. Route-level evidence in `test_customer_cannot_reach_the_analysis_engines_at_all`. |
+| Ten customer GETs consume the raw owner payload | **Confirmed, fixed** — but as defence in depth: a negative control (boundary reverted) showed none of the ten ECHOED a sentinel. Real second-order defect fixed: they computed on the broker's unreconciled total. |
+| CSRF: charset rejected | **Rejected** — the media type was already split on `;`. Now explicitly tested. |
+| CSRF: absent Origin allowed | **Confirmed, fixed** — cookie-auth now requires it; API-key callers exempt. |
+| CSRF: Host header self-authorising | **Confirmed, fixed** — trust now comes from `APP_BASE_URL`/`GESH_ALLOWED_ORIGINS`. |
+| CSRF: scheme/port not compared | **Confirmed, fixed** — canonical `scheme://host:port`. |
+| Owner JS in customer bundle | **Confirmed, fixed** — 26 functions + palette actions moved; residue zero. |
+| Duplicate analysis jobs possible | **Rejected** — `BEGIN IMMEDIATE` + partial unique index already guarantee one active job. No new machinery; proof added. |
+| `content_version` not canonical | **Confirmed, fixed**. |
+| `/api/portfolio` contract break in the frontend | **Confirmed, fixed** — `renderStats(d.equity_summary)` threw for every customer. |
+| `reconciles` hardcoded true in `publish()` | **Partially fixed** — true *by construction* there (the total IS positions + cash); the computed invariant lives in `portfolio_valuation` and `_reconcile_equity_summary`, which emits `valuation_source_state: degraded`. |
+| Unknown-symbol honesty across all engines | **Partially fixed** — analyst/fundamentals/earnings corrected earlier; consensus/FFT/momentum/levels not individually re-audited this pass. Remaining risk. |
+
+## Cookie configuration (verified in code, not from memory)
+
+`gesh_session` · HttpOnly always · SameSite=Lax · Secure per-request
+(`_cookie_secure`: forced on for a non-localhost Host when `APP_BASE_URL` is
+https, else derived from `X-Forwarded-Proto`; `GESH_COOKIE_SECURE` overrides) ·
+Path `/` · **no Domain** (host-only) · Max-Age `TOKEN_TTL_SECONDS`.
+No CSRF token: with SameSite=Lax + mandatory Origin + content-type allowlist one
+adds nothing. It becomes mandatory if the cookie ever moves to `SameSite=None`.
+
+## Remaining risks
+
+1. **`requirements.txt` does not install from clean** (above). Highest-priority
+   follow-up; blocks reproducible CI.
+2. Unknown-symbol honesty not re-audited for consensus / FFT / momentum / levels.
+3. Durable versioned publication pipeline for the model portfolio still absent;
+   `version` is a content fingerprint.
+4. `server.py` remains a ~4,900-line monolith; commits cannot be split by concern
+   without interactive staging.
+
+---
+
+# Final closure pass — three release gates (2026-07-24)
+
+Clean sibling worktree `../gesh-project-audit-hardening`, branch
+`fix/audit-p0-p1-final`. The original dirty worktree was never touched.
+
+## GATE 1 — reproducible dependency installation
+
+**Supported runtime:** Python **3.12** (CI `python-version: "3.12"`; ruff
+`target-version = "py311"` is the floor). pyproject is deliberately
+non-packaging, so the runtime is declared via a new `.python-version` (3.12)
+rather than a `[project] requires-python`.
+
+**Root cause (two parts):**
+1. `openbb-yfinance>=1.6.0` (unbounded floor) resolved to 1.6.3, which requires
+   `yfinance>=1.4.0`, against the pinned `yfinance==1.2.1`. Only
+   openbb-yfinance==1.6.0 is compatible with 1.2.1.
+2. `openbb>=4.3.0` (meta-package) is IRRECONCILABLE with the stack: every
+   openbb-core requires uvicorn <0.25 or <0.41, the app pins uvicorn==0.44.0
+   for fastapi 0.135.3. openbb was only ever installed `--no-deps`, its import
+   is guarded (yfinance fallback), and CI already stripped it.
+
+**Fix (smallest safe change — every server pin and gesh-core v0.5.3 untouched):**
+- `requirements.txt`: removed the two openbb lines. lxml (the only transitive
+  openbb provided, for the FINRA scrape) was already declared explicitly.
+- `requirements-openbb.txt` (new): the optional integration, `openbb-yfinance`
+  pinned to 1.6.0, documented as not co-installable with the pinned uvicorn.
+  openbb is relocated, not deleted — matching how the code and CI already treat it.
+- `requirements.lock` (new): fully-resolved `pip freeze` from the clean 3.12
+  install; gesh-core pinned to the v0.5.3 commit sha.
+- CI: install `requirements.txt` directly + `pip check` in both jobs.
+- `tests/test_dependency_sanity.py`: offline guards against regressing the graph.
+
+**Clean proof (NO `--no-deps`, NO PYTHONPATH, no sibling checkout):**
+```
+python3.12 -m venv .venv-clean && . .venv-clean/bin/activate
+pip install -r requirements.txt      # builds gesh-core 0.5.3 from the git tag
+pip check                            # → No broken requirements found.
+pytest --collect-only -q             # → 1982 tests collected
+pytest -q                            # → 1982 passed
+```
+Private-repo note: gesh-core is a private git dependency; CI needs `GESH_CORE_PAT`
+(already wired in the workflow). It resolved here via the workstation's git
+credentials — not a PYTHONPATH override.
+
+## GATE 2 — unified unknown / unavailable-symbol semantics
+
+Re-audited all 11 per-symbol engines against a valid-but-nonexistent ticker.
+**No engine fabricates** (no fake Hold/RSI/levels/Falling — verified). The defect
+was contract inconsistency: 7 compute-engines each returned a different
+unavailable shape wrapped in `status:"ok"` with a fabricated `as_of`.
+
+Unified to two explicit shapes: **404** (analyst, fundamentals, chart) and
+**`{"status":"unavailable", reason_code, symbol, data_as_of:null, source:null}`**
+(consensus, regime, momentum, fft-cycles, earnings, levels, news). `reason_code`
+distinguishes `symbol_not_found` (no market identity) from `data_unavailable`
+(real symbol, provider down). News is gated on price, not emptiness. A genuinely
+neutral result for a real symbol (CASE C) flows through untouched as `status:ok`.
+
+**Endpoint × case matrix** (`tests/test_unknown_symbol_matrix.py`, 24 cases):
+
+| engine | CASE A unknown | CASE B provider down | CASE C neutral |
+|---|---|---|---|
+| analyst / fundamentals / chart | 404 | (n/a) | real data |
+| consensus | unavailable · symbol_not_found | — | HOLD passes as ok |
+| regime | unavailable · symbol_not_found | — | RANGING+RSI passes as ok |
+| momentum / fft / levels | unavailable · symbol_not_found | data_unavailable | real data |
+| earnings | unavailable · symbol_not_found | data_unavailable | real data |
+| news | unavailable · symbol_not_found | — | empty list passes as ok |
+
+## GATE 3 — computed reconciliation contract
+
+`model_portfolio.publish()` hardcoded `reconciles: True`. MODEL A: it now runs
+the SAME holdings through the canonical valuation and copies a computed verdict.
+
+**Invariant matrix** (`tests/test_reconciliation_contract.py`):
+
+| source condition | reconciles | valuation_status | degraded_reason |
+|---|---|---|---|
+| exact | true | reconciled | null |
+| broker total ≠ components (valid) | true | reconciled | null (delta = source degradation, server-side) |
+| missing current price (None / 0) | false | degraded | missing_price |
+| non-finite price / cash / equity | false | unavailable | non_finite_value |
+| non-numeric composition (garbage) | false | unavailable | non_finite_value (no 500) |
+| cash-only | true | reconciled | null |
+
+Downstream is gated: the mybook analysis refuses a non-reconciling book via
+`_assert_valuation_sound` (reads the canonical `portfolio_valuation.reconciles`).
+Response carries `valuation_status` + a customer-safe `degraded_reason`;
+diagnostics stay in logs.
+
+## Final validation (clean 3.12 env)
+
+```
+pytest --collect-only -q  → 1982 collected
+pytest -q                 → 1982 passed, 0 failed
+pip check                 → No broken requirements found.
+git diff --check          → clean
+ruff check tests/         → All checks passed
+ruff check server.py      → 14 pre-existing (identical to c2f7866; 0 introduced)
+```
+
+Commits (three, focused): `20c1f3b` build (deps) · `f28dcce` fix(symbols) ·
+`b2793fe` fix(valuation).
+
+## Remaining risks
+
+1. gesh-core is a private git dependency — CI requires `GESH_CORE_PAT`.
+2. openbb integration (`requirements-openbb.txt`) remains not co-installable with
+   the pinned uvicorn; the OpenBB code path only runs in an isolated env. The app
+   falls back to yfinance (the default, tested).
+3. Durable versioned publication pipeline for the model portfolio still absent;
+   `version` is a content fingerprint (documented as such).
+4. `server.py` remains a ~5,000-line monolith.

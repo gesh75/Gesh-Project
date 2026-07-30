@@ -11,8 +11,14 @@ pyotp==2.9.0
 yfinance==1.2.1
 pandas==3.0.2
 numpy==2.4.4
-openbb>=4.3.0
-openbb-yfinance>=1.6.0
+# openbb (optional) is NOT installable alongside this server stack: every
+# openbb-core requires uvicorn <0.25 or <0.41, and this app pins uvicorn==0.44.0
+# for fastapi 0.135.3. It was only ever installed --no-deps, its import is
+# guarded (fundamentals_openbb.py falls back to yfinance), and CI has always
+# stripped it. It now lives in requirements-openbb.txt as an explicit,
+# separately-installed optional integration so THIS file resolves cleanly.
+# (lxml — the one thing openbb provided transitively, for the FINRA scrape — is
+# declared explicitly below, so removing openbb here degrades nothing.)
 
 # AI / LLM
 anthropic==0.93.0
@@ -40,9 +46,28 @@ APScheduler==3.11.2
 httpx==0.28.1
 tenacity==9.1.4
 
-# Shared core package (Phase 3 de-duplication). Pinned to a tagged release so a
-# fresh clone / CI installs reproducibly without needing gesh-core side-by-side.
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@v0.5.3
+# Shared core package (Phase 3 de-duplication), pinned to the peeled COMMIT SHA.
+#
+# v0.6.1 is an ANNOTATED Git tag. The identifier 7af8fad… is the annotated
+# tag-object SHA, while f11c460… is the peeled commit SHA. Both identify the
+# same release content — the tag has not moved, and no source-code difference
+# exists between the two references. (A tag object and its peeled commit are two
+# names for one release, not a discrepancy.)
+#
+# Gesh-Project pins the full peeled commit SHA to make the application
+# dependency explicit and reproducible: every install path names one object, so
+# the lock and the installed tree are trivially comparable and a dependency bump
+# is a reviewable edit here. Keep this in lockstep with requirements.lock
+# (tests/test_dependency_sanity.py fails if they diverge, and checks the
+# INSTALLED distribution too, not just these two files).
+#
+# v0.6.1 adds recommendation identity v2: normalized decision_at participates in
+# the recommendation ID, so two executions over an identical decision context no
+# longer collide. Exact retries stay idempotent and existing v1 rows remain
+# readable — no DDL and no migration.
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@f11c460f628fea484c739b6ab25ea0e12c0c8f85
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core
-alpaca-py
+# PR105-RUN-02: pinned to match requirements.lock — an unpinned direct dep lets a
+# fresh resolve drift away from the reviewed, tested tree.
+alpaca-py==0.43.5

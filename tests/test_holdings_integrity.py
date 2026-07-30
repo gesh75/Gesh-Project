@@ -193,6 +193,12 @@ def test_owner_book_masking_still_applies_to_owner_endpoints(client, monkeypatch
 
     body = c.get("/api/portfolio").json()
     assert body.get("view") == "model_book"
-    h = body["data"]["holdings"][0]
-    assert h["quantity"] == pytest.approx(10.0 * _TEST_SCALE_FACTOR)
-    assert h["equity"] == pytest.approx(raw_total * _TEST_SCALE_FACTOR)
+    d = body["data"]
+    # /api/portfolio is scaled by the PUBLISHED RESPONSE's own component basis
+    # (not by a separately-read snapshot), so the customer book lands on the
+    # model notional exactly and the per-share price is preserved.
+    h = d["holdings"][0]
+    assert sum(x["equity"] for x in d["holdings"]) + d["cash"] == pytest.approx(
+        server._MODEL_BOOK_USD, abs=0.05)
+    assert h["equity"] == pytest.approx(h["quantity"] * h["current_price"], rel=1e-6)
+    assert h["quantity"] != pytest.approx(10.0), "quantity was not scaled at all"

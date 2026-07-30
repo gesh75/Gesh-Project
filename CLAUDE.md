@@ -596,7 +596,9 @@ gitignored (`*.db`) so recovery never needs a commit.
 yfinance 401s in the **sandbox** are burst rate-limiting from the shared egress IP, not a
 hard block — single calls succeed; the consensus engine's many parallel calls trip the
 limiter. The **host venv** has clean Yahoo access. For daily analysis, run the engine suite
-on the host (`./venv/bin/python3.14`) for complete data rather than degraded sandbox results.
+on the host (`./venv/bin/python`) for complete data rather than degraded sandbox results.
+(PR105-RUN-01: always the venv's GENERIC interpreter — this repo declares Python 3.12 in
+`.python-version`, so a hardcoded `python3.14` path does not exist in a conformant env.)
 
 ---
 
@@ -810,6 +812,57 @@ as `*.bak_20260717_*` / `*.bak_20260718_*`.
 under the new cap — the report banner should show partial approvals (Kelly-sized
 adds ≤16.3% clear; >18% still reject) instead of blanket rejection. FINNHUB_API_KEY
 placeholder line also removed from `.env` (was shadow-defined twice).
+
+## Chain Repair — 2026-07-27 ★★★ (streamed AI call + portfolio-reconciled Kelly)
+
+Two fixes, both verified by a green chain (`fail=0 degraded=0`, 544s, report 88KB).
+Backups sit next to the originals as `*.bak_20260727_*`.
+
+**1. Step 3/5 `APITimeoutError` — `ai_analyzer.py` now STREAMS the deep call.**
+`_CLIENT_TIMEOUT_S = 240.0` is a WALL-CLOCK budget on a non-streaming POST.
+`deep_analyze_portfolio` generates ~11.5K output tokens (~200–240s), so it sat
+exactly on the cliff and a normal throughput dip tipped it over; `max_retries=2`
+then burned 3 × 240s ≈ 12 min before failing. New `_create_streaming(client,
+**kwargs)` wraps `client.messages.stream()` and returns `stream.get_final_message()`
+— the timeout becomes PER-CHUNK, so a long generation can't trip the wall clock.
+The returned object is Message-compatible, so `_record_usage`,
+`_extract_tool_input` and the max_tokens guard are unchanged. **Diagnostic tell:
+step 3 takes ~13 min AND `llm_usage.jsonl` has no row for the day** (usage is
+recorded only after a response returns). **Do NOT "fix" a recurrence by lowering
+`_max_tokens` (24000)** — a truncated tool payload raises by design.
+
+**2. Every Kelly ADD gate-rejected — the chain was bypassing `run_kelly_analysis`.**
+`run_engines2.py` called `kelly_size_holding()` in a per-name loop: the STANDALONE
+path, which sizes each name independently against a 25% per-position cap with no
+knowledge of the book. Seven names pinned at 25%, summing to ~225% of the
+portfolio, so `risk_gate.POSITION_CAP` (0.18, which caps the POST-TRADE TOTAL
+position) rejected all of them by construction — the daily gate lane had been a
+permanent rejection log. gesh-core already ships `run_kelly_analysis()` for
+exactly this ("summing independent per-name Kellys systematically OVERBETS once
+positions are correlated"): correlation haircut (1/√N inside a ≥0.70 cluster) +
+gross-exposure cap (`KELLY_MAX_GROSS_PCT`, default 100%). The chain now calls it.
+
+Gotchas baked into the patch — keep them: `run_kelly_analysis` returns
+`{holdings: [...]}` but every downstream reader (`run_paper_gate2`, `gen_report2`,
+`/api/kelly/cached`) expects a **per-symbol dict**, so the list is converted back;
+it reads `h["current_price"]` while the snapshot carries `price`, so holdings are
+normalized first or every name sizes on 0; book stats land in a new
+`kelly_portfolio` key; a failure degrades to the legacy per-name loop rather than
+losing Kelly. The fossil `kelly_overconviction` key (no live producer, frozen at
+"raw_sum_pct: 225%") is popped from the merge-write.
+
+Measured 2026-07-27: gross factor 0.52, max single target 25.0% → 13.0%, allocated
+225% → 100%, gate **0/6 → 4/4 APPROVED** (IONQ TRIM, HOOD/CAT/BAC BUY). IONQ
+flipped ADD→TRIM, now agreeing with consensus SELL −0.49.
+
+**No risk limit was loosened.** `MAX_POSITION_PCT` stays 0.18 and
+`KELLY_MAX_POSITION_PCT` stays 0.25 — the 2026-07-17 note above assumed a 16.3%
+half-Kelly ceiling, which was already wrong then (the ceiling is 25%). Raising the
+gate to 0.26 or lowering the Kelly cap to 0.17 were both considered and rejected:
+the first permits 25% single-name concentration, the second hides the overbet
+instead of reconciling it. Raw Kelly on this book reads 186–326% (90-day window
+over a momentum run) — per the literature that means the edge estimate is
+unreliable, not that the position should be enormous.
 
 ## Analyze-progress UX — 2026-07-19 ★★ (the async 202+poll contract, and how to not misread it)
 

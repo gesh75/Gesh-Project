@@ -106,7 +106,13 @@ def test_a_new_owner_field_cannot_leak():
 
 def test_published_total_is_calculated_not_the_broker_headline():
     out = model_portfolio.publish(_OWNER_PAYLOAD)
-    assert out["calculated_total_equity"] == pytest.approx(3372.01 + 8948.15, abs=0.02)
+    # CANONICAL equity (quantity × current_price), not the source `equity` field:
+    # 15.768482 × 213.85 = 3372.09, vs a source equity of 3372.01. The 0.08 gap is
+    # inside the price-display tolerance, so this still reconciles — but the number
+    # published is the one derived from the quantity and price actually shown.
+    canonical_position = round(15.768482 * 213.85, 2)
+    assert out["calculated_total_equity"] == pytest.approx(canonical_position + 8948.15,
+                                                           abs=0.02)
     assert out["calculated_total_equity"] != pytest.approx(35750.87)
     assert out["positions_market_value"] + out["cash"] == pytest.approx(
         out["calculated_total_equity"], abs=0.02)
@@ -181,12 +187,17 @@ def test_customer_route_returns_the_published_shape(client, monkeypatch):
 
 def test_dollars_are_scaled_exactly_once(client, monkeypatch):
     """publish() must NOT scale — the masking middleware is the single scaler.
-    Double-application would halve/square the model book silently."""
+    Double application would show as a book that misses the model notional."""
     server, c = client
     _as(server, monkeypatch, c, CUSTOMER)
     d = c.get("/api/portfolio").json()["data"]
-    assert d["cash"] == pytest.approx(8948.15 * 2.0, abs=0.05)
-    assert d["holdings"][0]["equity"] == pytest.approx(3372.011 * 2.0, abs=0.05)
+    basis_cash, basis_pos = 8948.15, round(15.768482 * 213.85, 2)
+    factor = server._MODEL_BOOK_USD / (basis_pos + basis_cash)
+    # exactly one application of exactly that factor
+    assert d["cash"] == pytest.approx(basis_cash * factor, abs=0.05)
+    assert d["holdings"][0]["equity"] == pytest.approx(basis_pos * factor, abs=0.05)
+    assert sum(h["equity"] for h in d["holdings"]) + d["cash"] == pytest.approx(
+        server._MODEL_BOOK_USD, abs=0.05)
 
 
 def test_owner_still_receives_the_full_brokerage_payload(client, monkeypatch):

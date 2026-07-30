@@ -54,6 +54,9 @@ PUBLIC_PREFIXES = (
     # /privacy is public by necessity: a policy behind a login wall is not a
     # published policy — people must be able to read it BEFORE creating an account.
     "/track-record", "/terms", "/disclaimer", "/privacy", "/healthz", "/favicon.ico",
+    # Congress-Watch: public informational page + its public-data API (STOCK Act
+    # disclosures — no owner/customer data, no execution). The shareable acquisition magnet.
+    "/congress-watch", "/api/congress",
     # Payment surface: pricing page + provider webhook + post-checkout landing must be
     # reachable WITHOUT a session (the webhook is signature-gated, not cookie-gated).
     "/pricing", "/api/billing/webhook", "/billing/success",
@@ -1404,7 +1407,17 @@ def customers_watching(symbol: str) -> list[str]:
 # ── gate decision (pure, testable) ──────────────────────────────────────────────
 
 def is_public_path(path: str) -> bool:
-    return any(path == p or path.startswith(p) for p in PUBLIC_PREFIXES)
+    """Prefix match on a path boundary: '/api/congress' exposes '/api/congress' and
+    '/api/congress/NVDA' but NOT '/api/congress-admin'. Prefixes ending in '/'
+    (e.g. '/static/') keep raw-prefix semantics. A future adjacent route must never
+    silently inherit a public/auth bypass."""
+    for p in PUBLIC_PREFIXES:
+        if p.endswith("/"):
+            if path.startswith(p):
+                return True
+        elif path == p or path.startswith(p + "/"):
+            return True
+    return False
 
 
 def is_owner(email: str | None) -> bool:

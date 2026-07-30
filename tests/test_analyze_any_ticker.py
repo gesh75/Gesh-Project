@@ -454,5 +454,11 @@ def test_news_envelope_claims_no_feed_when_nothing_served(monkeypatch):
     monkeypatch.setattr(news_agent, "_fetch_alpaca_news", lambda s: [], raising=False)
     monkeypatch.setattr(news_agent, "_fetch_all_news", lambda s: [], raising=False)
     monkeypatch.setattr(news_agent, "get_cached_articles", lambda s: [], raising=False)
+    # NVDA is a REAL symbol with a price, so empty news is a legitimate
+    # "no recent news" result (status ok, data []), NOT symbol_not_found. Give it
+    # market identity so the offline test reflects production (GATE 2 gates the
+    # unknown-symbol path on the absence of a price).
+    monkeypatch.setattr(server, "_cached_close", lambda s: 500.0, raising=True)
     body = _client(monkeypatch).get("/api/news/NVDA").json()
+    assert body["status"] == "ok"
     assert body["data"] == [] and "source" not in body

@@ -152,6 +152,9 @@ def client(monkeypatch):
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
     monkeypatch.setattr(server.auth_users, "is_owner", lambda e: False, raising=False)
+    # These tests use MSTR, a REAL symbol — give it market identity so empty news
+    # is a legitimate "no recent news" (status ok), not GATE-2 symbol_not_found.
+    monkeypatch.setattr(server, "_cached_close", lambda s: 100.0, raising=True)
     c = TestClient(server.app, raise_server_exceptions=False)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     return c

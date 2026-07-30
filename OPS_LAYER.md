@@ -12,7 +12,11 @@ This directory contains the durable, Claude-independent monitoring and verificat
 
 ## How They Run
 - Launched via macOS `launchd` plists (labels like `com.gesh.gatewatch`, `com.gesh.gs-gapwatch`).
-- Run from the gesh-project-trading venv (`python3.14`).
+- Run from the **gesh-project-trading** venv using that repository's own generic
+  interpreter (`<trading-repo>/venv/bin/python`). That is a SIBLING repository and
+  sits outside this repo's runtime contract — **this** repository declares Python
+  3.12 (`.python-version`) and its daily chain uses `venv/bin/python`
+  (PR105-RUN-01). Do not hardcode a minor-version binary in either repository.
 - Persistent location (`~/.gesh` not `/tmp`) so they survive restarts (a previous `/tmp` version was wiped).
 
 ## Portability (Improved 2026-07-09)

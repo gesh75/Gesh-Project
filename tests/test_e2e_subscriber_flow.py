@@ -22,6 +22,7 @@ import pytest
 from starlette.testclient import TestClient
 
 import model_portfolio
+import server as server_module
 
 # owner sentinels that must NEVER reach a customer body. This E2E asserts the
 # LIFECYCLE + masking integration on keys main already masks (portfolio_equity,
@@ -79,7 +80,9 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
         "as_of": "2026-07-05T13:00:00+00:00", "offline": True, "source": "test",
         "equity_summary": {"portfolio_equity": _OWNER_TOTAL, "cash": _OWNER_CASH,
                            "buying_power": _OWNER_CASH},
-        "holdings": [{"symbol": "NVDA", "quantity": 6.078929, "price": 194.51,
+        # `current_price` is the key data_fetcher emits (it normalizes the raw
+        # snapshot's `price` at load); the canonical holding calculation reads it.
+        "holdings": [{"symbol": "NVDA", "quantity": 6.078929, "current_price": 194.51,
                       "equity": 101.988616, "average_buy_price": 180.0,
                       "percent_change": -3.5}],
         "watchlist": [],
@@ -140,7 +143,11 @@ def test_full_subscriber_lifecycle(flow):
         data["calculated_total_equity"], abs=0.05)
     assert sum(h["equity"] for h in data["holdings"]) == pytest.approx(
         data["positions_market_value"], abs=0.05)
-    assert data["cash"] == pytest.approx(_OWNER_CASH * 2.5)   # scaled exactly once
+    # Scaled exactly once, by the published response's own component basis —
+    # so the customer book lands on the model notional rather than on an
+    # arbitrary multiple of the owner's balance.
+    assert sum(h["equity"] for h in data["holdings"]) + data["cash"] == pytest.approx(
+        server_module._MODEL_BOOK_USD, abs=0.05)
 
     # 4) REPLAY the magic token → single-use, rejected
     r2 = client.get(f"/auth/magic?token={token}", follow_redirects=False)

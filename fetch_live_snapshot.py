@@ -3,7 +3,8 @@
 fetch_live_snapshot.py
 Fetches live Robinhood portfolio + prices and writes to live_portfolio_snapshot.json.
 Called by the GESH scheduled task before analysis to ensure fresh data.
-Run with: /path/to/venv/bin/python3.14 fetch_live_snapshot.py
+Run with: /path/to/venv/bin/python fetch_live_snapshot.py   (PR105-RUN-01: the
+venv's generic interpreter; this repo declares Python 3.12 in .python-version)
 """
 import json
 import os

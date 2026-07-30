@@ -216,6 +216,19 @@ try:
         except Exception:
             _MODEL = 'claude-sonnet-4-6'
         _run_id = _gdb.log_analysis(f"{_MODEL} (chain)", payload, ai_result)
+
+        # ── Decision Ledger (Phase 4B, non-fatal) ─────────────────────────────
+        try:
+            from ledger_host import record_daily_analysis_ledger_nonfatal
+            record_daily_analysis_ledger_nonfatal(
+                engine_results=eng,
+                analysis_run_id=_run_id,
+                ai_model=_MODEL,
+                db_path=_gdb.DB_PATH,
+            )
+        except Exception as e:
+            print(f"[ai] Ledger helper failed to load (non-fatal): {e}")
+
         _snap_holdings = [
             {**h,
              'current_price': h.get('current_price', h.get('price', 0)),
