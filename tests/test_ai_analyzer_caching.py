@@ -45,6 +45,28 @@ class _FakeMessage:
         self.content = content
 
 
+class _FakeStream:
+    """Context manager mirroring `client.messages.stream(...)`.
+
+    deep_analyze_portfolio streams (see ai_analyzer._create_streaming) so the
+    240s wall-clock timeout becomes per-chunk. The double captures the same
+    kwargs and yields the same final Message, so request-shape assertions are
+    unaffected by the transport.
+    """
+
+    def __init__(self, response: _FakeMessage) -> None:
+        self._response = response
+
+    def __enter__(self) -> _FakeStream:
+        return self
+
+    def __exit__(self, *exc: Any) -> bool:
+        return False
+
+    def get_final_message(self) -> _FakeMessage:
+        return self._response
+
+
 class _FakeMessages:
     def __init__(self, response: _FakeMessage, sink: dict[str, Any]) -> None:
         self._response = response
@@ -55,6 +77,11 @@ class _FakeMessages:
         self._sink.clear()
         self._sink.update(kwargs)
         return self._response
+
+    def stream(self, **kwargs: Any) -> _FakeStream:
+        self._sink.clear()
+        self._sink.update(kwargs)
+        return _FakeStream(self._response)
 
 
 class _FakeClient:
