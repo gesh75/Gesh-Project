@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Persistent cadence, NO wall-clock claim.
+
+  Was StartCalendarInterval Hour=10 Minute=30, which launchd evaluates in
+  HOST-LOCAL time. This host is Europe/Sofia, so it fired 03:30 ET - against a
+  market closed for 10 hours. The intent is 10:30 ET.
+
+  Converting the number once would not fix it: the ET offset is 7h on 337 days
+  of 2026 and 6h on the 28 US/EU DST-mismatch days. scripts/daily_analysis_et.sh
+  makes the decision in America/New_York and is once-per-ET-day idempotent.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.gesh.daily-analysis</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/georgigaydarov/Projects/gesh-project/scripts/daily_analysis_et.sh</string>
+    </array>
+    <key>WorkingDirectory</key><string>/Users/georgigaydarov/Projects/gesh-project</string>
+    <key>StartInterval</key><integer>600</integer>
+    <key>RunAtLoad</key><false/>
+    <key>KeepAlive</key><false/>
+    <key>ProcessType</key><string>Background</string>
+    <key>SoftResourceLimits</key><dict><key>NumberOfFiles</key><integer>10240</integer></dict>
+    <key>EnvironmentVariables</key>
+    <dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+    <key>StandardOutPath</key><string>/tmp/gesh_daily_analysis_launchd.log</string>
+    <key>StandardErrorPath</key><string>/tmp/gesh_daily_analysis_launchd.log</string>
+</dict>
+</plist>

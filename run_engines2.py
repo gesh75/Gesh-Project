@@ -178,27 +178,81 @@ except Exception as e:
 # ── 3. Kelly ─────────────────────────────────────────────────────────────────
 print(f"\n{_t()} [3/8] Running Kelly criterion...")
 try:
-    from kelly import kelly_size_holding
+    # PORTFOLIO-RECONCILED Kelly (2026-07-27). This loop previously called
+    # kelly_size_holding() per name, which is the STANDALONE path: each name is
+    # sized independently against a 25% per-position hard cap, with no knowledge
+    # of the rest of the book. On a 10-name book of high-momentum names that
+    # pinned 7 names at the 25% ceiling and summed to ~225% of the portfolio —
+    # a textbook overbet, and the reason every Kelly ADD was rejected by the
+    # risk gate's POSITION_CAP (0.18) for weeks: Kelly proposed 24-25% targets
+    # that the gate could never approve, so the daily gate lane was a permanent
+    # rejection log.
+    #
+    # run_kelly_analysis() is the portfolio-level entry point that already
+    # exists in gesh-core for exactly this ("summing independent per-name
+    # Kellys systematically OVERBETS once positions are correlated"). It adds
+    # two overlays on top of the same per-name math:
+    #   1. a correlation haircut (1/sqrt(N) inside a >=0.70 correlated cluster);
+    #   2. a gross-exposure cap (KELLY_MAX_GROSS_PCT, default 100%) scaling the
+    #      whole book proportionally if it still sums above the cap.
+    # Measured on the 2026-07-27 book: gross factor 0.5187, max single target
+    # 25.0% -> 13.0%, all 9 sized names clear the 0.18 gate. It also improves
+    # cross-engine coherence (IONQ flips ADD->TRIM, agreeing with consensus SELL).
+    #
+    # NOTE this deliberately does NOT change any risk limit: the gate cap stays
+    # 0.18 and the per-name Kelly ceiling stays 0.25 for the standalone
+    # /api/kelly path. Only the daily chain's book-level sizing is reconciled.
+    from kelly import run_kelly_analysis, kelly_size_holding
     kelly_results = {}
-    for h in holdings:
-        sym = h['symbol']
-        try:
-            kr = kelly_size_holding(
-                symbol=sym,
-                current_equity=h['equity'],
-                total_portfolio=total_port,
-                avg_cost=h['average_buy_price'],
-                current_price=h['price'],
-            )
-            kelly_results[sym] = kr
-            action  = kr.get('action', '?')
-            opt_pct = kr.get('optimal_pct', kr.get('recommended_pct', 0)) or 0
-            print(f"  {sym}: {action}  optimal={opt_pct:.1f}%")
-        except Exception as e2:
-            print(f"  {sym} Kelly ERROR: {e2}")
-            kelly_results[sym] = {'action': 'HOLD', 'optimal_pct': 0, 'error': str(e2)}
+    kelly_portfolio = {}
+    try:
+        # run_kelly_analysis reads h["current_price"]; the snapshot uses "price".
+        _norm = [{**h, 'current_price': h.get('current_price', h.get('price', 0))}
+                 for h in holdings]
+        _res = run_kelly_analysis(_norm, total_port)
+        # Downstream (run_paper_gate2, gen_report2, /api/kelly/cached) reads a
+        # per-symbol dict — keep that shape, don't leak the list form.
+        for r in _res.get('holdings', []):
+            if r.get('symbol'):
+                kelly_results[r['symbol']] = r
+        kelly_portfolio = {k: v for k, v in _res.items() if k != 'holdings'}
+        print(f"  reconciled: gross_scale_factor={_res.get('gross_scale_factor')} "
+              f"rescaled={_res.get('rescaled')} "
+              f"allocated={_res.get('total_optimal_allocated_pct')}%")
+    except Exception as e_recon:
+        # Degrade to the legacy per-name path rather than losing Kelly entirely.
+        print(f"  reconciliation failed ({e_recon}) — falling back to per-name sizing")
+        traceback.print_exc()
+        kelly_results = {}
+        for h in holdings:
+            sym = h['symbol']
+            try:
+                kelly_results[sym] = kelly_size_holding(
+                    symbol=sym,
+                    current_equity=h['equity'],
+                    total_portfolio=total_port,
+                    avg_cost=h['average_buy_price'],
+                    current_price=h['price'],
+                )
+            except Exception as e2:
+                print(f"  {sym} Kelly ERROR: {e2}")
+                kelly_results[sym] = {'action': 'HOLD', 'optimal_pct': 0, 'error': str(e2)}
+        kelly_portfolio = {'reconciled': False, 'error': str(e_recon)}
+
+    for sym, kr in kelly_results.items():
+        action  = kr.get('action', '?')
+        opt_pct = kr.get('optimal_pct', kr.get('recommended_pct', 0)) or 0
+        opt_pct = opt_pct if isinstance(opt_pct, (int, float)) else 0
+        print(f"  {sym}: {action}  optimal={opt_pct:.1f}%")
+
     results['kelly'] = kelly_results
+    results['kelly_portfolio'] = kelly_portfolio
     results['kelly_ran_at'] = _utcnow()
+    # Fossil key from a pre-reconciliation version: nothing produces it any more,
+    # but the merge-write carried a stale "raw_sum_pct: 225%" over-conviction
+    # figure forward indefinitely. Reconciliation is what that flag was warning
+    # about, so drop it rather than leave a permanently-wrong number in the file.
+    results.pop('kelly_overconviction', None)
 except Exception as e:
     print(f"  FATAL: {e}")
     traceback.print_exc()

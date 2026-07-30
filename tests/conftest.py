@@ -89,6 +89,21 @@ def _isolate_signal_history_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.fixture(autouse=True)
+def _isolate_equity_snapshots_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point db (gesh_core.db via the transparent alias) at a per-test throwaway
+    DB. get_equity_history() otherwise reads the cwd-relative PRODUCTION
+    gesh_financial.db directly — on a dev machine with a real, populated file,
+    /api/ecg's computation silently reflects the operator's actual portfolio
+    history (e.g. a genuine SUSPENDED/-47% drawdown) instead of a test's
+    synthetic fixture, which reads as a customer-data leak when it is really an
+    unisolated data source. Same zero-real-DB-writes contract as the auth and
+    signal-history DBs above; db.py's own docstring documents this exact
+    monkeypatch as the supported override."""
+    import db
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "equity_snapshots_isolated.db", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_response_caches() -> None:
     """server.py keeps process-wide TTL caches (/api/chart + the per-ticker analyze
     GETs) and the per-IP rate-limit ledger. Every TestClient shares the constant
