@@ -245,6 +245,7 @@
       <a href="#architecture">Architecture</a>
       <a href="#dataflow">Data Flow</a>
       <a href="#dailychain">Daily Chain</a>
+      <a href="#program">Program Status</a>
       <a href="#stack">Tech Stack</a>
       <a href="#components">Components</a>
       <a href="#quickstart">Quickstart</a>
@@ -732,6 +733,62 @@ flowchart LR
           <li><span class="k" aria-hidden="true"></span><span>Login wall <b>live</b> (<code>GESH_AUTH_ENABLED</code>) with per-user isolation; monitored paid beta running ($49/$149/$399, 1 paying subscriber); new signups pausable via <code>GESH_SIGNUPS_PAUSED</code>; broad launch gated on counsel classification review.</span></li>
         </ul>
       </div>
+    </div>
+  </section>
+
+  <!-- PROGRAM STATUS (INTERNAL) -->
+  <section id="program" aria-labelledby="program-h">
+    <span class="eyebrow reveal">🎛 Internal · Program status</span>
+    <h2 class="title reveal" id="program-h">Program <span class="g">Status &amp; Roadmap</span></h2>
+    <p class="lead reveal">Engineering-facing state, not a product claim. Verified 2026-07-30 against live GitHub. The customer-facing sections above describe what the platform does; this section records where the engineering program actually stands.</p>
+    <div class="grid feat-grid">
+      <article class="card reveal">
+        <span class="ico" aria-hidden="true">📌</span><h3>Repository truth</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span><b>Gesh-Project main</b> — <code>f8156d21</code>. The running production instance on :9000 is deployed by tracked-file overlay and its worktree HEAD is intentionally historical; <b>main ≠ production checkout</b> by design.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span><b>gesh-core</b> — <code>d4e9f467</code>, the merged strict safety-boolean revision now pinned here.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span><b>gesh-project-trading main</b> — <code>a56e1333</code> after the cash-sizing and strict-boolean documentation merges.</span></li>
+        </ul>
+      </article>
+      <article class="card reveal">
+        <span class="ico" aria-hidden="true">🔒</span><h3>Strict safety-config contract</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span><code>PAPER_MODE</code>, <code>REQUIRE_APPROVAL</code> and <code>MARKET_REGIME_GATE</code> accept <b>only</b> trimmed, case-insensitive <code>true</code>/<code>false</code>.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Blank, aliases (<code>1/0</code>, <code>yes/no</code>, <code>y/n</code>, <code>on/off</code>) and malformed values raise <code>ConfigError</code> — never silently coerced to <code>false</code>.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Missing values still select the conservative default (all three <code>True</code>).</span></li>
+        </ul>
+      </article>
+      <article class="card reveal">
+        <span class="ico" aria-hidden="true">🚦</span><h3>Integration status</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span><b>P0-B integration — DRAFT, awaiting owner merge authorization.</b> <a href="https://github.com/gesh75/Gesh-Project/pull/116">PR #116</a> pins both dependency files to <code>d4e9f467</code> and adds strict-config integration coverage.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Verified in a disposable checkout with a disposable database: <b>2,297 tests pass</b>; the source <code>gesh_financial.db</code> and <code>gesh_auth.db</code> hashes are byte-identical before and after.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>No deployment, service restart, scheduler change or database mutation accompanies this integration.</span></li>
+        </ul>
+      </article>
+      <article class="card reveal">
+        <span class="ico" aria-hidden="true">⏱️</span><h3>Daily-chain safety gates</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span>Chain remains scheduled at 10:30 ET; <b>no schedule change</b> is part of this work.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Execution stays <code>PAPER_MODE</code> with the 8-gate risk gate; sizing is affordability-capped against validated deployable cash.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>A malformed safety boolean now aborts configuration rather than silently disabling a gate — fail-closed by construction.</span></li>
+        </ul>
+      </article>
+      <article class="card reveal">
+        <span class="ico" aria-hidden="true">🎯</span><h3>Next engineering milestone</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span><b>Atomic quota</b> — a separate, bounded task. Deliberately <b>not</b> bundled into the strict-config integration.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Only after atomic quota lands and verifies should moving the daily chain into market hours be reassessed.</span></li>
+        </ul>
+      </article>
+      <article class="card reveal">
+        <span class="ico" aria-hidden="true">⚖️</span><h3>What is not claimed</h3>
+        <ul class="ov-points">
+          <li><span class="k" aria-hidden="true"></span><span><b>The signal engine has no proven alpha.</b> GESH sells research and decision-integrity tooling, not demonstrated outperformance.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Paper-trade history is forward, out-of-sample evidence in progress — not a performance guarantee.</span></li>
+          <li><span class="k" aria-hidden="true"></span><span>Broad paid expansion remains gated on counsel classification review.</span></li>
+        </ul>
+      </article>
     </div>
   </section>
 
