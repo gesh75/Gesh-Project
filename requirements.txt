@@ -65,7 +65,14 @@ tenacity==9.1.4
 # the recommendation ID, so two executions over an identical decision context no
 # longer collide. Exact retries stay idempotent and existing v1 rows remain
 # readable — no DDL and no migration.
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@f11c460f628fea484c739b6ab25ea0e12c0c8f85
+# P0-B (2026-07-30): bumped to d4e9f46 — "fix(config): strictly validate safety
+# booleans" (gesh-core PR #8). PAPER_MODE / REQUIRE_APPROVAL / MARKET_REGIME_GATE
+# now accept ONLY trimmed case-insensitive true/false; blank, aliases (1/0,
+# yes/no, y/n, on/off) and malformed values raise ConfigError instead of silently
+# coercing to False. Missing still selects the conservative default.
+# NOTE: d4e9f46 is 2 commits PAST the v0.6.1 tag (f11c460) and still declares
+# __version__ "0.6.1" — the commit SHA is the only unambiguous identifier.
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@d4e9f467c8fcb1ec952245469f6ac15d16a52075
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core
 # PR105-RUN-02: pinned to match requirements.lock — an unpinned direct dep lets a
