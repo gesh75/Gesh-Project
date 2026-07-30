@@ -916,6 +916,49 @@ Guard tests: `tests/test_analyze_progress_ux.py` (17). Suite **1,367 passed**.
 correct app values ($95.04 / $495.76, penny-accurate vs the broker) read as failures.
 Derive expectations at runtime from the RH feed.
 
+## PR #117 Merge Reconciliation — 2026-07-30 ★★ (GitHub web-UI conflicts → local merge, test triage)
+
+**Never finish a GitHub web-UI "Resolve conflicts" editor on this branch without checking the
+local working tree first.** PR #117's editor was evaluating conflicts against `09f757c` (the
+last-pushed commit) — but the main worktree had ~74 uncommitted files overlapping the conflict
+list (server.py, model_portfolio.py, dashboard.html/owner_console.html, several tests), none of
+which the web UI could see. Finishing there would have created a merge commit on the remote
+branch with zero knowledge of that work, setting up a second, worse collision the next time this
+checkout tried to sync. Also found, unrelated: a commit (`91a5fdb`, the launchd 10:30-ET-not-Sofia
+schedule fix) landed on this exact branch from another writer mid-session, and the earlier merge
+commit turned up already pushed to origin without a `git push` ever being run here — this repo's
+main worktree has multiple live writers; `git status`/`git log` before trusting local state.
+
+**What actually happened:** committed the uncommitted work as a checkpoint (`a33dc3e`, tracked
+files only via `git add -u` — never `-A`; the untracked pile included `.rh_mcp_oauth.json` and
+several attorney-privileged docs that must never enter git history), then merged `main` locally
+(`0d7bf5a`). Zero textual conflicts — the checkpoint had already evolved past whatever GitHub's
+stale mergeability check had flagged.
+
+**Test triage (71 failed → 0 failed, 2195 passed, coverage 62.7%):** all three causes were
+local-environment artifacts or fixture gaps, not real regressions:
+1. **64 failures** — this machine's real `.env` (`APP_BASE_URL=https://pay.geshfinance.com`)
+   leaks into the CSRF trusted-origins check via transitive `load_dotenv()` at test-collection
+   time (auth.py, ai_analyzer.py, etc. all call it at import). conftest's `_browser_like_origin`
+   only defaults test requests to `http://testserver`, which then doesn't match. CI has no
+   `.env`, so this never surfaces there — confirmed by rerunning with `APP_BASE_URL=""`.
+2. **4 failures** — `/api/ecg`'s customer-isolation tests (`test_customer_endpoint_isolation.py`)
+   were reading THIS machine's real, populated `gesh_financial.db` (a genuine NVDA -47% drawdown
+   → SUSPENDED), because `get_equity_history` (gesh_core.db, reached via the `db.py` alias) had
+   no per-test DB isolation — unlike `auth_users`/`signal_history`, which conftest.py already
+   isolates. Added `_isolate_equity_snapshots_db` (same file, same pattern) — fixed all 4.
+3. **3 failures** — the fake Anthropic client in two test files only implemented `.create()`;
+   `ai_analyzer._create_streaming` (see "Chain Repair — 2026-07-27" above) calls `.stream()`.
+   Added a `_FakeStreamContext` to both.
+
+One narrow test (`test_agent_db.py`) hardcoded an assumption about the *unisolated* ambient
+`db.DB_PATH` default — updated it to assert the same fallback logic against an explicit path
+instead of weakening the new isolation fixture.
+
+**Result:** PR #117 flipped from `CONFLICTING` to `MERGEABLE`. Pushed as `a33dc3e` (checkpoint)
++ `0d7bf5a` (merge) + `555b3e3` (test fixes). Branch protection still gates the actual merge on
+`test` + `customer-isolation` passing green on the new head.
+
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.
 All trading decisions remain the user's responsibility.
