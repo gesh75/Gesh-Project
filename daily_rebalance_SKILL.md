@@ -10,11 +10,43 @@ Executes Georgi's daily portfolio rebalance workflow: screenshot analysis → si
 **Preferred: Robinhood screenshot**
 If Georgi provides a screenshot, extract from it:
 - Each symbol, share count, current price, unrealized P/L
-- Total portfolio value and buying power
+- Total portfolio value
 
 **Fallback: DB snapshot**
 If no screenshot: read latest from `gesh_financial.db` holdings_snapshot table.
-**Never** use `account["cash"]` — always `profile["withdrawable_amount"]`.
+
+### Deployable cash — required before any sizing
+
+Every sizing decision in this skill runs off **validated deployable cash**, defined as:
+
+`deployable_cash = equity_summary["deployable"]`
+
+This field is **settled and leverage-capped** (see `CLAUDE.md`). A screenshot does not
+carry it — if portfolio state came from a screenshot, still obtain
+`equity_summary["deployable"]` from the snapshot before sizing anything. Do not read a
+"buying power" figure off the screenshot and treat it as deployable cash.
+
+**Validate it.** The value is usable only if it is present, numeric, finite, and `>= 0`.
+
+**Failure rule — stop, do not improvise.** If any of the following holds:
+- `equity_summary` is unavailable, or
+- the `deployable` field is missing, or
+- its value is null, non-numeric, non-finite, or negative
+
+then **stop the workflow immediately**. Produce no action plan, no trims, no adds, no
+new-position screen. Return a typed-style failure instead:
+
+```
+DeployableCashUnavailable: cannot size trades — equity_summary["deployable"] is
+<missing | null | non-numeric | non-finite | negative>. No rebalance plan produced.
+```
+
+Do **not** invent a value and do **not** substitute `$500` (that is the cash *buffer*
+policy, never a stand-in for the cash *balance*). Do **not** fall back to
+`profile["withdrawable_amount"]` (reads $0 while a deposit clears, `None` on Gold
+accounts), `account["cash"]` (negative margin-accounting figure), or
+`account["buying_power"]` (Gold **leveraged** margin). None of these is a deployability
+proxy — a wrong number here mis-sizes every trade downstream.
 
 ## Step 2 — Run Signal Engines
 
@@ -36,11 +68,13 @@ Apply signal reconciliation rules in priority order:
 **Share count formulas:**
 - TRIM: `ceil((current_equity − kelly_pct/100 × total) / price)`
 - ADD: `floor((kelly_pct/100 × total − current_equity) / price)`
-- Always maintain $500 minimum cash buffer after trades
+- Always maintain the **$500 minimum cash buffer**, measured against deployable cash:
+  `projected_deployable = deployable_cash + Σ(trim proceeds) − Σ(add costs)` must stay `>= $500`
 
 ## Step 4 — Screen for New Positions
 
-If buying power > $500 after planned trims:
+Only if `projected_deployable` (validated deployable cash after **all** planned trades,
+trims and adds) exceeds the $500 minimum cash buffer:
 - Run sector_filter → consolidation_zone scan on candidate universe
 - Prioritize: RSI < 60, positive fundamentals, sector not overcrowded
 - Prefer symbols NOT already in portfolio (diversification)
@@ -56,11 +90,16 @@ P1 = execute today | P2 = on dip | P3 = watchlist
 
 After Georgi confirms trades:
 - Note price alerts requested (e.g., MU $740)
-- State final cash remaining and whether buffer is safe
+- State the **final validated deployable cash** (`projected_deployable`) and whether the
+  $500 minimum cash buffer is satisfied
 - Log trades via trade_log.py if accessible
 
 ## Output Standards
 - Always cite specific RSI values and Kelly% in recommendations
 - Never recommend >2% portfolio per trade (MAX_POSITION_PCT)
 - Flag VaR 95% > 15% as warning
-- End: "Cash after trades: $X — [SAFE / LOW DRY POWDER]"
+- Report cash as validated deployable cash — never a generic "buying power" figure
+- End: "Deployable cash after trades: $X — [SAFE / LOW DRY POWDER]"
+  (SAFE = `projected_deployable >= $500`, otherwise LOW DRY POWDER)
+- If deployable cash could not be validated, emit the `DeployableCashUnavailable` failure
+  from Step 1 instead of an action table — never a plan built on an assumed cash figure

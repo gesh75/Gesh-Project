@@ -33,13 +33,6 @@ on:
       - "_archive/**"
       - "career-ops/**"
   pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - ".claude/**"
-      - "memory-bank/**"
-      - "_archive/**"
-      - "career-ops/**"
 
 jobs:
   test:
