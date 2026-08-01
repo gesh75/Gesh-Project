@@ -229,7 +229,6 @@ COVERED: dict[str, str] = {
     "/api/kelly/cached": "/api/kelly/cached",
     "/api/monte-carlo/cached": "/api/monte-carlo/cached",
     "/api/screener/cached": "/api/screener/cached",
-    "/api/portfolio/history": "/api/portfolio/history?points=30",
     "/api/sections/status": "/api/sections/status",
     "/api/fft-cycles": "/api/fft-cycles",
     "/api/fft-cycles/{symbol}": "/api/fft-cycles/NVDA",
@@ -292,6 +291,15 @@ EXCLUDED: dict[str, str] = {
                    "read. Gate locked by tests/test_owner_surface_isolation.py",
     "/api/trading/gate-status": "OWNER-ONLY paper-trading order cap (require_api_key); "
                                 "reads owner trade_log counts — not a customer surface",
+    "/api/portfolio/history": "OWNER-ONLY (require_api_key): the operator's raw account "
+                              "equity time series straight from db.get_portfolio_equity_history. "
+                              "The route previously had no dependency at all, so the series was "
+                              "readable by any customer session and relied solely on the masking "
+                              "middleware to scale it. Normalization is retained as defense in "
+                              "depth (locked by tests/test_masking_consistency.py), but the "
+                              "200-with-masking contract cannot apply to a route customers "
+                              "cannot read. The customer KPI sparkline fails soft on a non-200. "
+                              "Gate + points bounds locked by tests/test_error_hygiene.py",
     "/api/long-term-macro": "public macro sentiment overlay (VIX / Fear-&-Greed / aggregate "
                             "US margin debt from FINRA) — no owner or customer dollars; "
                             "internally cached, identical for every viewer",

@@ -59,11 +59,13 @@ def test_reconstruction_yields_model_book_not_real_total():
 
 
 @pytest.mark.parametrize("route", ["/api/portfolio/history", "/api/ecg"])
-def test_routes_are_normalized_not_exempt_or_owner_only(route):
-    """If either route were mask-exempt or owner-only, the middleware would skip
-    _scale_money and serve raw owner dollars to customers."""
+def test_routes_are_normalized_not_exempt(route):
+    """Any customer-reachable equity route must pass through normalization.
+
+    Portfolio history is additionally owner-authenticated at the route itself;
+    retaining normalization here is defense in depth if that policy changes.
+    """
     assert not any(route == p or route.startswith(p + "/") for p in server._MASK_EXEMPT_PREFIXES)
-    assert not any(route == p or route.startswith(p + "/") for p in server._OWNER_ONLY_PATHS)
 
 
 def test_money_list_keys_cover_the_known_dollar_arrays():

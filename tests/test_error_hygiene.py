@@ -23,9 +23,13 @@ def test_portfolio_history_error_hides_exception_detail(monkeypatch):
     monkeypatch.setattr(db, "get_portfolio_equity_history", _boom, raising=False)
     # test the handler's error branch directly — auth wall is out of scope here
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: False)
+    monkeypatch.setenv("GESH_API_KEY", "test-owner-key")
     client = TestClient(server.app, raise_server_exceptions=False)
 
-    r = client.get("/api/portfolio/history?points=10")
+    r = client.get(
+        "/api/portfolio/history?points=10",
+        headers={"X-API-Key": "test-owner-key"},
+    )
     assert r.status_code == 200          # still graceful — sparkline draws nothing
     body = r.json()
     assert body["status"] == "error"
@@ -34,3 +38,15 @@ def test_portfolio_history_error_hides_exception_detail(monkeypatch):
     assert _SECRET not in r.text
     assert "malformed" not in r.text
     assert "gesh_financial.db" not in r.text
+
+
+def test_portfolio_history_requires_owner_auth_and_bounds_points(monkeypatch):
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: False)
+    monkeypatch.setenv("GESH_API_KEY", "test-owner-key")
+    client = TestClient(server.app, raise_server_exceptions=False)
+
+    assert client.get("/api/portfolio/history").status_code == 401
+
+    headers = {"X-API-Key": "test-owner-key"}
+    assert client.get("/api/portfolio/history?points=-1", headers=headers).status_code == 422
+    assert client.get("/api/portfolio/history?points=366", headers=headers).status_code == 422

@@ -3264,8 +3264,8 @@ def long_term_macro_cached():
         raise _server_error(e)
 
 
-@app.get("/api/portfolio/history")
-def portfolio_history(points: int = 60):
+@app.get("/api/portfolio/history", dependencies=[Depends(require_api_key)])
+def portfolio_history(points: int = Query(default=60, ge=1, le=365)):
     """Portfolio equity series for the KPI sparklines. Always returns a list."""
     try:
         from db import get_portfolio_equity_history
