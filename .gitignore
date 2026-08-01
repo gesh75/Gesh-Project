@@ -27,6 +27,7 @@ last_action_plan.json
 
 # Generated report artifacts + scratch/backups (triage 2026-05-30)
 engine_results.json
+docs/reports/gesh_report_*.html
 .scratch/
 *.bak-*
 *.bak
