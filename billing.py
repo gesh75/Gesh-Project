@@ -231,13 +231,14 @@ def _claim(key: str) -> tuple[str, str | None]:
         ("completed", None)    — already finished; a true permanent duplicate.
     Reclaim is OWNER-FENCED via a compare-and-swap on (owner, claimed_at): two concurrent
     reclaimers can't both win, and a resurrected old worker can't complete/delete a newer
-    claim (its token no longer matches). Prunes completed rows >30d (M3)."""
+    claim (its token no longer matches). Completed claims are retained permanently because
+    Lemon Squeezy signatures do not establish delivery freshness; deleting one would make
+    the corresponding signed webhook replayable again.
+    """
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     token = secrets.token_hex(16)
     with _conn() as con:
-        con.execute("DELETE FROM processed_webhook_events WHERE status='completed' AND seen_at < ?",
-                    ((now - timedelta(days=30)).isoformat(),))
         cur = con.execute(
             "INSERT OR IGNORE INTO processed_webhook_events "
             "(dedup_key, status, owner, claimed_at, seen_at) VALUES (?, 'pending', ?, ?, ?)",

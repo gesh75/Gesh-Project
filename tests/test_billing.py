@@ -137,6 +137,23 @@ def test_duplicate_delivery_is_idempotent():
     assert second["action"] == "duplicate"
 
 
+def test_completed_delivery_remains_duplicate_after_30_days():
+    """Completed activation claims must never expire: an old signed payload has no freshness
+    proof and could otherwise reactivate a churned account when replayed after pruning."""
+    payload = _payload("subscription_created", sub_id="sub_old")
+    raw = json.dumps(payload).encode()
+    assert billing.handle_webhook(raw, _sign(raw), payload)["action"] == "provision"
+
+    key = billing._dedup_key(raw)
+    with billing._conn() as con:
+        con.execute(
+            "UPDATE processed_webhook_events SET seen_at=? WHERE dedup_key=?",
+            ("2020-01-01T00:00:00+00:00", key),
+        )
+
+    assert billing.handle_webhook(raw, _sign(raw), payload)["action"] == "duplicate"
+
+
 def test_subscription_expired_revokes_user():
     _post("subscription_created")
     res = _post("subscription_expired", status="expired", sub_id="sub_1")
