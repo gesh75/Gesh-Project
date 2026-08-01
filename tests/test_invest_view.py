@@ -126,6 +126,22 @@ def test_load_what_if_cash_sizes_and_keeps_state_server_side(tmp_path):
     blob = json.dumps(d)
     assert "resize_state" not in blob          # server-side sizing state never leaks
     assert "sector_value" not in blob and "withdrawable_amount" not in blob
+    assert all("sector_weight_after" not in c for c in d["candidates"])
+
+
+def test_what_if_response_cannot_reveal_portfolio_total(tmp_path):
+    radar = _radar_with_resize_state()
+    radar["resize_state"]["total"] = 100_000.0
+    radar["resize_state"]["sector_value"] = {"Technology": 60_000.0}
+    path = _write(tmp_path, {"diversification_candidates": radar})
+
+    data = iv.load_invest_data(path, what_if_cash=6_000.0)
+
+    assert data["candidates"]
+    assert any(c.get("recommended_usd", 0) > 0 for c in data["candidates"])
+    # recommended_usd remains useful to the scenario UI, but the paired ratio that
+    # allowed total = recommended_usd / sector_weight_after is never disclosed.
+    assert all("sector_weight_after" not in c for c in data["candidates"])
 
 
 def test_load_without_what_if_is_live(tmp_path):
