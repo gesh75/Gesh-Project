@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -46,12 +47,23 @@ PRIOR_ACCOUNT_EQUITY = 100_000.0
 PRIOR_POSITIONS = 80_000.0
 
 
+def _fresh_ts() -> str:
+    """A recent `fetched_at`, derived at call time.
+
+    These cases assert equity SEMANTICS, not staleness. A hardcoded literal made them
+    time-bombs: `load_snapshot_payload` rejects a snapshot older than
+    `_SNAPSHOT_MAX_AGE_SECONDS` (7d), so a pinned date silently turned this whole file
+    red exactly one week after it was written. Staleness has its own dedicated tests.
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+
 def _raw_snapshot(*, account_equity=ACCOUNT_EQUITY, prior=PRIOR_ACCOUNT_EQUITY,
                   positions=POSITIONS, cash=CASH, price=88.0) -> dict:
     """A snapshot file in the shape the daily chain actually writes."""
     qty = positions / price
     return {
-        "fetched_at": "2026-07-25T12:00:00+00:00", "source": "robinhood_mcp",
+        "fetched_at": _fresh_ts(), "source": "robinhood_mcp",
         "equity_summary": {
             # raw-file convention: positions here, account headline in `total`
             "portfolio_equity": positions,
