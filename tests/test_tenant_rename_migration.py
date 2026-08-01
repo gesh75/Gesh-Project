@@ -190,7 +190,7 @@ def test_rename_rolls_back_when_profile_update_fails() -> None:
     assert au.get_watch(OLD) == ["SPY"]
 
 
-def test_billing_subscription_rename_updates_only_user_profile() -> None:
+def test_billing_subscription_email_change_keeps_auth_profile() -> None:
     original_id = _seed_full_tenant(OLD)
     au.set_billing(OLD, sub_id="sub_x", status="active")
     before = _owned_user_ids()
@@ -201,8 +201,8 @@ def test_billing_subscription_rename_updates_only_user_profile() -> None:
         {"email": NEW, "sub_id": "sub_x"}, user
     )
 
-    assert email == NEW
+    assert email == OLD
     assert renamed is not None and renamed["user_id"] == original_id
-    assert au.get_user(OLD) is None
-    assert au.resolve_user_id(NEW) == original_id
+    assert au.get_user(OLD) is not None
+    assert au.resolve_user_id(NEW) is None
     assert _owned_user_ids() == before
