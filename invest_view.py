@@ -83,8 +83,11 @@ def _age_days(iso: str | None) -> float | None:
         return None
 
 
-def _whitelist(cands: list) -> list:
-    return [{k: c.get(k) for k in _CARD_FIELDS if k in c} for c in (cands or [])]
+def _whitelist(cands: list, *, include_sector_weight: bool = True) -> list:
+    fields = _CARD_FIELDS if include_sector_weight else tuple(
+        field for field in _CARD_FIELDS if field != "sector_weight_after"
+    )
+    return [{k: c.get(k) for k in fields if k in c} for c in (cands or [])]
 
 
 def load_invest_data(results_path: str | None = None,
@@ -94,7 +97,8 @@ def load_invest_data(results_path: str | None = None,
 
     When `what_if_cash` is given, re-sizes the candidates for that HYPOTHETICAL deployable
     amount server-side (pure, no network) — the portfolio total / sector $ used for sizing
-    stay server-side; only the sized public candidates reach the client."""
+    stay server-side. What-if candidates omit the post-trade sector weight because exposing it
+    together with the allocation would allow the hidden portfolio total to be inferred."""
     path = results_path or DEFAULT_RESULTS
     try:
         with open(path) as f:
@@ -147,7 +151,12 @@ def load_invest_data(results_path: str | None = None,
             payload["deployable_cash"] = wi["deployable_cash"]
             payload["open_slots"] = wi["open_slots"]
             payload["new_names_to_add"] = wi["new_names_to_add"]
-            payload["candidates"] = _whitelist(wi["candidates"])
+            # Do not expose sector_weight_after for hypothetical sizing. Combined with
+            # recommended_usd, it is an arithmetic oracle for the private portfolio total
+            # when a candidate belongs to a previously empty sector.
+            payload["candidates"] = _whitelist(
+                wi["candidates"], include_sector_weight=False
+            )
             payload["swap_suggestions"] = []      # what-if focuses on the sized buys
             payload["what_if_cash"] = round(float(what_if_cash), 2)
             payload["note"] = (f"What-if: sized picks for ${float(what_if_cash):,.0f} deployable "
