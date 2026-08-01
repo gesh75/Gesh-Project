@@ -559,6 +559,32 @@ def test_payment_success_keeps_existing_tier_for_active_user():
     assert u["is_active"] == 1 and u["tier"] == "trader" and u["billing_status"] == "active"
 
 
+def test_unknown_variant_payment_success_does_not_keep_existing_tier(monkeypatch):
+    """An explicit, unallowlisted variant must not use the variant-less renewal fallback."""
+    monkeypatch.setenv("LS_VARIANT_TRADER", "555")
+    _post("subscription_created", variant_id="555", sub_id="sub_1")
+    payload = _payment_success_payload(sub_id="sub_1")
+    payload["data"]["attributes"]["variant_id"] = "999"
+
+    res = _post_raw(payload)
+
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1 and u["tier"] == "trader"
+
+
+def test_unknown_variant_activation_does_not_keep_existing_tier(monkeypatch):
+    """Stored-tier retention is exclusive to variant-less renewal invoices."""
+    monkeypatch.setenv("LS_VARIANT_TRADER", "555")
+    _post("subscription_created", variant_id="555", sub_id="sub_1")
+
+    res = _post("subscription_updated", variant_id="999", sub_id="sub_1", status="active")
+
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1 and u["tier"] == "trader"
+
+
 def test_foreign_renewal_does_not_replace_subscription():
     """Codex HIGH-1: two LEGIT LS subscriptions can share an email. A payment_success for a
     DIFFERENT sub_id (no variant) must NOT keep tier + overwrite billing_sub_id — otherwise the

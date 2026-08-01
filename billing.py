@@ -477,7 +477,8 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     # replace the authoritative one (the real sub's later expiry would be ignored as stale,
     # stranding the user active forever). A non-matching sub falls through to refusal.
     same_sub = bool(ev["sub_id"]) and ev["sub_id"] == (user or {}).get("billing_sub_id")
-    if (is_activation and tier is None and user
+    variant_absent = ev.get("variant_id") is None and not ev.get("variant_hint")
+    if (name == "subscription_payment_success" and variant_absent and user
             and user.get("tier") and user.get("is_active") and same_sub):
         tier = user["tier"]
         logger.info("billing: %s carried no variant — keeping account tier=%s for %s (sub=%s)",
