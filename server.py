@@ -3127,12 +3127,12 @@ def _cached_response(key: str) -> dict:
     return _sanitize(out)
 
 
-@app.get("/api/deep-analysis/cached")
+@app.get("/api/deep-analysis/cached", dependencies=[Depends(require_customer_or_owner)])
 def deep_analysis_cached():
     return _cached_response("ai_result")
 
 
-@app.get("/api/consensus/cached")
+@app.get("/api/consensus/cached", dependencies=[Depends(require_customer_or_owner)])
 def consensus_cached():
     return _cached_response("consensus")
 
@@ -3205,17 +3205,17 @@ def consensus_symbol(symbol: str):
         raise _server_error(e)
 
 
-@app.get("/api/kelly/cached")
+@app.get("/api/kelly/cached", dependencies=[Depends(require_customer_or_owner)])
 def kelly_cached():
     return _cached_response("kelly")
 
 
-@app.get("/api/monte-carlo/cached")
+@app.get("/api/monte-carlo/cached", dependencies=[Depends(require_customer_or_owner)])
 def monte_carlo_cached():
     return _cached_response("monte_carlo")
 
 
-@app.get("/api/screener/cached")
+@app.get("/api/screener/cached", dependencies=[Depends(require_customer_or_owner)])
 def screener_cached():
     return _cached_response("screener")
 
