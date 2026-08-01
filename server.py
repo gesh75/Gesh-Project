@@ -1297,32 +1297,26 @@ def _cookie_secure(request: Request | None = None) -> bool:
       1. Explicit ``GESH_COOKIE_SECURE`` env override, when set to a non-empty value
          (``0/false/no/off`` → insecure; anything else → secure). Reserve this for a
          deliberate override; it forces the same answer for every request.
-      2. Otherwise derive per-request: a request that reached us over HTTPS — directly, or
-         via the Cloudflare tunnel's ``X-Forwarded-Proto: https`` — gets a Secure cookie; a
-         plain-HTTP ``localhost`` request does not. This secures real TLS users WITHOUT
+      2. Otherwise fail closed for every non-loopback host.  A plain-HTTP request to
+         ``localhost``, ``127.0.0.1``, or ``::1`` may omit Secure; HTTPS (direct or via
+         ``X-Forwarded-Proto: https``) still gets it. This secures real TLS users WITHOUT
          locking the owner out of ``http://localhost`` — the exact tradeoff that previously
          forced a blanket ``GESH_COOKIE_SECURE=0`` and shipped session cookies in clear to
          paying users (M2).
       3. No request context and no override → default secure (fail safe on a TLS deploy).
 
-    Trusting ``X-Forwarded-Proto`` is safe here because :9000 is only reachable through the
-    tunnel, which sets the header; direct internet clients cannot hit the port to spoof it."""
+    A forwarded ``http`` value never overrides an HTTPS ASGI scheme, and forwarded headers
+    never permit a non-loopback host to downgrade its cookie."""
     override = os.getenv("GESH_COOKIE_SECURE", "").strip()
     if override:
         return override.lower() not in ("0", "false", "no", "off")
-    # [CLAUDE V4 2026-07-19] HTTPS-deploy FLOOR (host-aware): on an https:// customer
-    # deploy, a request to a NON-localhost host is floored to a Secure cookie even if
-    # the per-request X-Forwarded-Proto is missing/spoofed — a bypassed proxy can no
-    # longer downgrade a production cookie to cleartext. Localhost stays derivable so
-    # the owner's http://localhost session still works (the M2 tradeoff is preserved).
-    if request is not None and os.getenv("APP_BASE_URL", "").strip().lower().startswith("https://"):
-        _host = (request.headers.get("host", "") or "").split(":")[0].strip().lower()
-        if _host and _host not in ("localhost", "127.0.0.1", "::1"):
-            return True
     if request is not None:
+        host = (request.url.hostname or "").rstrip(".").lower()
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            return True
         proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
         if proto:
-            return proto == "https"
+            return request.url.scheme == "https" or proto != "http"
         return request.url.scheme == "https"
     return True
 
