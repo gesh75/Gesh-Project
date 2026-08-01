@@ -35,7 +35,27 @@ on:
   pull_request:
 
 jobs:
+  # Pull-request code is untrusted and must never share a runner with the PAT
+  # used to install the private gesh-core package. Keep a useful, secret-free
+  # syntax/lint gate for PRs; the full suite runs after code reaches a trusted
+  # push branch.
+  pr-lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install lint tooling
+        run: pip install ruff
+      - name: Ruff (new test suite only)
+        run: ruff check tests/
+
   test:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -47,21 +67,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      # gesh-core lives in a separate PRIVATE repo; CI's default GITHUB_TOKEN
-      # can't clone it. Rewrite the clone URL with a GESH_CORE_PAT secret (passed
-      # via env, never inlined). Warns instead of silently proceeding if unset.
-      - name: Configure private gesh-core access
+      - name: Install runtime + test deps
         env:
           GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
         run: |
+          # Keep the credential in a step-scoped temporary config. The trap
+          # removes it before any repository-controlled test code executes.
+          export GIT_CONFIG_GLOBAL="$(mktemp)"
+          trap 'rm -f "$GIT_CONFIG_GLOBAL"' EXIT
           if [ -n "$GESH_CORE_PAT" ]; then
             git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
           else
             echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
           fi
-
-      - name: Install runtime + test deps
-        run: |
           python -m pip install --upgrade pip
           # Install the RUNTIME FROM THE LOCK, not from requirements.txt. The
           # lock is the fully-resolved manifest, so the tree CI tests is exactly
@@ -99,6 +117,7 @@ jobs:
   # exact same files the unit job does; the value is an explicit, named gate that
   # branch protection can require on its own.
   customer-isolation:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -107,17 +126,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Configure private gesh-core access
+      - name: Install runtime + test deps
         env:
           GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
         run: |
+          export GIT_CONFIG_GLOBAL="$(mktemp)"
+          trap 'rm -f "$GIT_CONFIG_GLOBAL"' EXIT
           if [ -n "$GESH_CORE_PAT" ]; then
             git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
           else
             echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
           fi
-      - name: Install runtime + test deps
-        run: |
           python -m pip install --upgrade pip
           # Runtime from the lock (see the test job) so both gates run against
           # the identical, reviewed dependency tree.
