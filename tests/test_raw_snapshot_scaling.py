@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,7 @@ def _raw_mcp_shaped(*, price_key: str = "price", qty=QTY, price=PRICE,
     if price is not None:
         h[price_key] = price
     return {
-        "fetched_at": "2026-07-25T12:00:00+00:00", "source": "robinhood_mcp",
+        "fetched_at": datetime.now(timezone.utc).isoformat(), "source": "robinhood_mcp",
         "equity_summary": {"portfolio_equity": POSITIONS, "account_equity": ACCOUNT_EQUITY,
                            "total": ACCOUNT_EQUITY, "cash": cash,
                            "adjusted_equity_previous_close": 100_000.0},

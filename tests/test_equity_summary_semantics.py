@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -51,7 +52,7 @@ def _raw_snapshot(*, account_equity=ACCOUNT_EQUITY, prior=PRIOR_ACCOUNT_EQUITY,
     """A snapshot file in the shape the daily chain actually writes."""
     qty = positions / price
     return {
-        "fetched_at": "2026-07-25T12:00:00+00:00", "source": "robinhood_mcp",
+        "fetched_at": datetime.now(timezone.utc).isoformat(), "source": "robinhood_mcp",
         "equity_summary": {
             # raw-file convention: positions here, account headline in `total`
             "portfolio_equity": positions,
