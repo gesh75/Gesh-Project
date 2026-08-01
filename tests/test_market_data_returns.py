@@ -65,3 +65,39 @@ def test_get_performance_returns_fetches_history_once_per_symbol(monkeypatch):
     r = out["NVDA"]
     assert set(r) == {"7d", "1m", "3m", "1y", "ytd"}
     assert all(isinstance(v, float) for v in r.values())
+
+
+def test_get_all_market_data_uses_single_ticker_instance_per_symbol(monkeypatch):
+    created: list[str] = []
+
+    class _FakeTicker:
+        def __init__(self, sym):
+            created.append(sym)
+            self.sym = sym
+            self.info = {
+                "currentPrice": 100.0,
+                "targetMeanPrice": 110.0,
+                "targetHighPrice": 130.0,
+                "targetLowPrice": 90.0,
+                "targetMedianPrice": 108.0,
+                "numberOfAnalystOpinions": 5,
+                "recommendationKey": "buy",
+                "institutionsPercentHeld": 0.6,
+                "heldPercentInsiders": 0.1,
+            }
+            self.insider_transactions = pd.DataFrame(
+                [{"Transaction": "Purchase", "Shares": 10, "Value": 1000, "Date": "2026-07-01"}]
+            )
+            self.institutional_holders = pd.DataFrame(
+                [{"Holder": "Fund A", "% Out": 0.12}]
+            )
+
+        def history(self, **_kw):
+            return _hist()
+
+    monkeypatch.setattr(market_data.yf, "Ticker", _FakeTicker)
+    out = market_data.get_all_market_data(["NVDA", "AAPL"])
+    assert created.count("NVDA") == 1
+    assert created.count("AAPL") == 1
+    assert set(out.keys()) == {"analyst_targets", "performance", "insider_trades", "ownership", "as_of"}
+    assert out["analyst_targets"]["NVDA"]["recommendation"] == "Buy"
