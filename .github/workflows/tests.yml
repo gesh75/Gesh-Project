@@ -35,10 +35,11 @@ on:
   pull_request:
 
 jobs:
-  # Pull-request code is untrusted and must never share a runner with the PAT
-  # used to install the private gesh-core package. Keep a useful, secret-free
-  # syntax/lint gate for PRs; the full suite runs after code reaches a trusted
-  # push branch.
+  # A fast, secret-free syntax/lint gate. Runs on PRs alongside the full suite —
+  # it is an ADDITION, never a substitute: `test` and `customer-isolation` are
+  # required by branch protection, and a skipped required check never reports
+  # success, so gating them on `push` would deadlock every pull request and
+  # drop the customer-isolation gate from review entirely.
   pr-lint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -55,7 +56,6 @@ jobs:
         run: ruff check tests/
 
   test:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -117,7 +117,6 @@ jobs:
   # exact same files the unit job does; the value is an explicit, named gate that
   # branch protection can require on its own.
   customer-isolation:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
