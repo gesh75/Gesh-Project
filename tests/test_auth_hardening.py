@@ -161,9 +161,9 @@ def test_normal_login_body_still_works(client):
     assert r.status_code in (401, 429)
 
 
-# ── [CLAUDE V4 2026-07-19] HTTPS deploy floors the Secure cookie flag ───────────
-def test_https_base_url_floors_cookie_secure_for_real_host(monkeypatch):
-    # https deploy + a real customer host → Secure even if the proxy header is spoofed
+# ── HTTPS deploy floors the Secure cookie flag ────────────────────────────────
+def test_non_loopback_host_floors_cookie_secure(monkeypatch):
+    # a real customer host → Secure even if the proxy header is spoofed to http
     monkeypatch.setenv("APP_BASE_URL", "https://pay.geshfinance.com")
     monkeypatch.delenv("GESH_COOKIE_SECURE", raising=False)
 
@@ -171,6 +171,7 @@ def test_https_base_url_floors_cookie_secure_for_real_host(monkeypatch):
         headers = {"host": "pay.geshfinance.com", "x-forwarded-proto": "http"}
         class url:
             scheme = "http"
+            hostname = "pay.geshfinance.com"
     assert server._cookie_secure(_Req()) is True
 
 
@@ -183,4 +184,5 @@ def test_https_deploy_localhost_still_derivable(monkeypatch):
         headers = {"host": "localhost:9000"}
         class url:
             scheme = "http"
+            hostname = "localhost"
     assert server._cookie_secure(_Req()) is False

@@ -306,12 +306,12 @@ def test_cookie_secure_is_forced_on_an_https_deployment(client, monkeypatch):
 
     class _Req:
         headers = {"host": "pay.geshfinance.com"}          # no X-Forwarded-Proto
-        url = type("U", (), {"scheme": "http"})()
+        url = type("U", (), {"scheme": "http", "hostname": "pay.geshfinance.com"})()
     assert server._cookie_secure(_Req()) is True
 
     class _Local:
         headers = {"host": "localhost:9000"}
-        url = type("U", (), {"scheme": "http"})()
+        url = type("U", (), {"scheme": "http", "hostname": "localhost"})()
     assert server._cookie_secure(_Local()) is False        # owner's localhost preserved
 
 
