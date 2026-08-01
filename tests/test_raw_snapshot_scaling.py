@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,17 @@ QTY = 1_000.0
 PRICE = 88.0
 
 
+def _fresh_ts() -> str:
+    """A recent `fetched_at`, derived at call time.
+
+    These cases assert scaling SEMANTICS, not staleness. A hardcoded literal made them
+    time-bombs: `load_snapshot_payload` rejects a snapshot older than
+    `_SNAPSHOT_MAX_AGE_SECONDS` (7d), so a pinned date silently turned this whole file
+    red exactly one week after it was written. Staleness has its own dedicated tests.
+    """
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+
 def _raw_mcp_shaped(*, price_key: str = "price", qty=QTY, price=PRICE,
                     cash=CASH, extra_holdings: list | None = None) -> dict:
     """A snapshot in the shape build_snapshot_from_mcp.py / fetch_live_snapshot.py
@@ -48,7 +60,7 @@ def _raw_mcp_shaped(*, price_key: str = "price", qty=QTY, price=PRICE,
     if price is not None:
         h[price_key] = price
     return {
-        "fetched_at": "2026-07-25T12:00:00+00:00", "source": "robinhood_mcp",
+        "fetched_at": _fresh_ts(), "source": "robinhood_mcp",
         "equity_summary": {"portfolio_equity": POSITIONS, "account_equity": ACCOUNT_EQUITY,
                            "total": ACCOUNT_EQUITY, "cash": cash,
                            "adjusted_equity_previous_close": 100_000.0},
