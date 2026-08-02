@@ -525,10 +525,9 @@ def run_consensus_holding(
     # the 0.3 s stagger sleep in get_fundamentals_openbb per holding per run).
     try:
         from fundamentals_openbb import get_fundamentals_openbb as _get_obb
-        _obb_data = _get_obb(symbol)
+        _obb_data = _get_obb(symbol) or {}
     except Exception:
-        _obb_data = None
-
+        _obb_data = {}  # attempted prefetch but got no usable data; prevents per-node refetch
     nodes["Fundamentals"]   = node_fundamentals(symbol, obb_data=_obb_data)
     nodes["Analyst"]        = node_analyst(symbol, obb_data=_obb_data)
     nodes["News"]           = node_news(symbol)
