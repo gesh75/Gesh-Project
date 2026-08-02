@@ -35,11 +35,8 @@ on:
   pull_request:
 
 jobs:
-  # A fast, secret-free syntax/lint gate. Runs on PRs alongside the full suite —
-  # it is an ADDITION, never a substitute: `test` and `customer-isolation` are
-  # required by branch protection, and a skipped required check never reports
-  # success, so gating them on `push` would deadlock every pull request and
-  # drop the customer-isolation gate from review entirely.
+  # A fast, secret-free syntax/lint gate for pull requests. Secret-bearing jobs
+  # run only after reviewed code reaches a push event.
   pr-lint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -56,6 +53,10 @@ jobs:
         run: ruff check tests/
 
   test:
+    # This job installs a private dependency with GESH_CORE_PAT. Keep it off
+    # pull_request events, whose checkout and dependency manifest are controlled
+    # by the PR author.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -115,8 +116,11 @@ jobs:
   # fixture (no live server, no network — fully offline), so a masking or template
   # regression fails its OWN check instead of hiding among the unit tests. Runs the
   # exact same files the unit job does; the value is an explicit, named gate that
-  # branch protection can require on its own.
+  # branch protection can require on protected push workflows.
   customer-isolation:
+    # As above, never expose the private-repository credential to PR-controlled
+    # installation inputs. The secret-free pr-lint job remains the PR gate.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
