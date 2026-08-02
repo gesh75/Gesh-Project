@@ -56,7 +56,7 @@ jobs:
     # This job installs a private dependency with GESH_CORE_PAT. Keep it off
     # pull_request events, whose checkout and dependency manifest are controlled
     # by the PR author.
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/optimize/'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
