@@ -573,15 +573,13 @@ def test_foreign_renewal_does_not_replace_subscription():
     assert u["is_active"] == 1                        # legit sub still active
 
 
-def test_payment_success_without_account_is_retryable_not_granted():
-    """H3 refined (2026-07-03 launch finding): a renewal/invoice with no resolvable
-    account and no variant is the RACING-BURST shape — payment_success can arrive
-    before the subscription_created that binds billing_sub_id. It must not provision
-    (nothing is granted), but it 503s so the LS retry converges once the sub lands,
-    instead of acking a paying renewal into limbo."""
-    import billing as _b
-    with pytest.raises(_b.RetryableError):
-        _post_raw(_payment_success_payload(email="stranger@example.com", sub_id="sub_x"))
+def test_payment_success_without_account_is_ignored_and_deduped():
+    """A no-account invoice is a settled unknown product/orphan, not proof of a race.
+    Acknowledge and complete its dedup claim so signed invoices cannot cause 503 churn."""
+    payload = _payment_success_payload(email="stranger@example.com", sub_id="sub_x")
+    res = _post_raw(payload)
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    assert _post_raw(payload)["action"] == "duplicate"
     assert au.get_user("stranger@example.com") is None   # still nothing granted
 
 

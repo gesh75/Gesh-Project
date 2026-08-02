@@ -163,7 +163,8 @@ def parse_event(payload: dict) -> dict[str, Any]:
         "event_at":    (attrs.get("updated_at") or "").strip(),
         # Resolved variant (top-level OR first_order_item) — None means the payload
         # carried NO variant information at all (invoice, or a not-yet-materialized
-        # order item), which _dispatch treats as retryable rather than refusable.
+        # order item). Only the latter is retryable; invoices without an account are
+        # settled unknown-variant events and must be acknowledged to avoid retry churn.
         "variant_id":  _variant_id(attrs),
         # True when the payload names a product/variant even without an id — a
         # NAMED-but-unallowlisted product is a settled refusal (H3), not a race.
@@ -484,19 +485,14 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
                     name, tier, ev["email"], ev["sub_id"])
     if is_activation and tier is None:
         # Two very different "no tier" cases (2026-07-03 live-launch finding):
-        #  (a) The payload carries NO variant info at all — LS fires its initial
-        #      burst concurrently, so order_created can arrive before the order
-        #      item is materialized, and subscription_payment_success (an
-        #      invoice, variant-less by design) can race ahead of the
-        #      subscription_created that writes billing_sub_id (making the
-        #      same_sub tier-keep above miss). Both self-heal on retry → 503.
+        #  (a) An order_created payload carries NO variant info yet — LS can fire
+        #      it before the order item is materialized. It self-heals on retry.
         #  (b) A variant IS present but not allowlisted — genuinely unknown
         #      product; refusing permanently is the H3 security property.
-        # Retry ONLY the genuinely-racy shape: an inherently variant-less/racy
-        # event type AND no account exists yet. Every settled state — revoked
-        # account (H6), foreign-sub renewal (HIGH-1), variant-less
-        # subscription_created (H3) — still refuses permanently below.
-        racy_event = name == "order_created" or name.startswith("subscription_payment_")
+        # Retry ONLY the genuinely-racy order shape. Subscription invoices are
+        # variant-less by design, so a no-account invoice is not evidence of a
+        # transient race; retrying it would let orphan invoices cause endless 503s.
+        racy_event = name == "order_created"
         if (ev.get("variant_id") is None and not ev.get("variant_hint")
                 and racy_event and user is None):
             logger.warning("billing: %s for %s carries no variant info yet — 503 for LS retry",
