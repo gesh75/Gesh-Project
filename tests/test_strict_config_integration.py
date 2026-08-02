@@ -29,12 +29,27 @@ gesh_core_config = pytest.importorskip(
     reason="gesh-core not installed in this environment",
 )
 
+PINNED_SHA = "d4e9f467c8fcb1ec952245469f6ac15d16a52075"
+
+# Guard against gesh-core installs that predate the strict-config PR (#8).
+# pytest.importorskip only catches ImportError; if the module is importable
+# but lacks ConfigError, the module-level assignment below would raise
+# AttributeError at collection time — crashing the entire suite (76 errors),
+# not just this file.  A defensive hasattr check converts that into a clean
+# SKIP with a descriptive message. (Issue #140)
+if not hasattr(gesh_core_config, "ConfigError"):
+    pytest.skip(
+        f"gesh-core.trading.config lacks ConfigError — install the pinned commit "
+        f"{PINNED_SHA} (PR #8) to run these tests; "
+        f"current install predates the strict-boolean parser",
+        allow_module_level=True,
+    )
+
 ConfigError = gesh_core_config.ConfigError
 load_risk_config = gesh_core_config.load_risk_config
 
 SAFETY_KEYS = ("PAPER_MODE", "REQUIRE_APPROVAL", "MARKET_REGIME_GATE")
 ROOT = Path(__file__).resolve().parents[1]
-PINNED_SHA = "d4e9f467c8fcb1ec952245469f6ac15d16a52075"
 
 
 @pytest.fixture(autouse=True)
