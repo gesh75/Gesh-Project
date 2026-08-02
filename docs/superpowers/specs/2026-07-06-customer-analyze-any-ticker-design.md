@@ -5,7 +5,7 @@ _2026-07-06 · branch `feat/customer-analyze-any-ticker`_
 ## Problem
 
 The paid customer view is the owner's single-tenant book: every tab shows the
-owner's fixed 10 positions (NVDA/QQQ/MU/AMD/IONQ/EEM/RKLB/SPCX/HOOD/CAT), masked
+owner's fixed 10 positions, masked
 to a $100K model book, served from the 10:30 daily run (7h+ stale). A paying
 stranger can't analyze a stock they care about, can't chart anything outside the
 10, and the 1D/5D charts are blank. This is not sellable — confirmed by the owner
