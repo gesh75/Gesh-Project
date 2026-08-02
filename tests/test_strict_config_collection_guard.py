@@ -64,13 +64,12 @@ def _stub_old_gesh_core(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_collection_guard_skips_on_pre_pr8_gesh_core(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     """With an old gesh-core stub (no ConfigError), importing the integration
     module must skip cleanly rather than raising AttributeError at module level.
 
-    We exercise the guard by importing the integration module in a subprocess
-    environment that has our stub in sys.modules instead of real gesh-core.
+    We exercise the guard by exec-loading the integration module in-process
+    with a sys.modules stub in place of real gesh-core.
     """
     _stub_old_gesh_core(monkeypatch)
 
