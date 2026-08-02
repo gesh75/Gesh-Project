@@ -73,9 +73,12 @@ tg_alert() {
         echo "[tg_alert] no TELEGRAM_BOT_TOKEN/CHAT_ID found — alert NOT sent: $msg"
         return 0
     fi
-    curl -sS -m 10 "https://api.telegram.org/bot${tok}/sendMessage" \
-        --data-urlencode "chat_id=${chat}" \
-        --data-urlencode "text=🚨 GESH daily chain — ${msg} [$(date '+%Y-%m-%d %H:%M %Z')]" \
+    # Feed sensitive request values through curl's stdin config so the bot token,
+    # chat ID, and alert text never appear in the process argument list.
+    printf 'url = "%s"\ndata-urlencode = "chat_id=%s"\ndata-urlencode = "text=%s"\n' \
+        "https://api.telegram.org/bot${tok}/sendMessage" \
+        "$chat" "🚨 GESH daily chain — ${msg} [$(date '+%Y-%m-%d %H:%M %Z')]" |
+        curl -sS -m 10 --config - \
         >/dev/null 2>&1 && echo "[tg_alert] sent: $msg" || echo "[tg_alert] curl send failed: $msg"
     return 0
 }
