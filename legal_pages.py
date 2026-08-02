@@ -16,8 +16,11 @@ from pathlib import Path
 TERMS_PATH = Path(__file__).parent / "TERMS_OF_SERVICE.md"
 PRIVACY_PATH = Path(__file__).parent / "docs" / "GESH_PRIVACY_POLICY_DRAFT.md"
 
-# Everything from this internal marker onward is stripped before rendering.
-_INTERNAL_MARKER = "### Compliance notes (internal"
+# Everything from these internal-only sections onward is stripped before rendering.
+_INTERNAL_MARKERS = (
+    "### Compliance notes (internal",
+    "### Engineering to-do",
+)
 
 # Unresolved annotations in the draft. The source is an ANNOTATED document, so the
 # only safe rule is: nothing in square brackets is ever served except a genuine
@@ -93,8 +96,9 @@ _CYAN, _DIM, _TEXT = "#00d4ff", "#5b7290", "#dfe8f2"
 
 
 def _strip_internal(md: str) -> str:
-    idx = md.find(_INTERNAL_MARKER)
-    return md if idx == -1 else md[:idx].rstrip() + "\n"
+    indexes = (md.find(marker) for marker in _INTERNAL_MARKERS)
+    present = [idx for idx in indexes if idx != -1]
+    return md if not present else md[:min(present)].rstrip() + "\n"
 
 
 def _inline(text: str) -> str:

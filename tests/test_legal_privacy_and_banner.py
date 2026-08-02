@@ -102,6 +102,14 @@ def test_privacy_never_leaks_an_internal_compliance_section():
     assert "Secret strategy" not in body
 
 
+def test_privacy_route_never_leaks_engineering_todos(client):
+    """Implementation notes in the source draft are not public policy content."""
+    body = client.get("/privacy").text
+
+    assert "Engineering to-do" not in body
+    assert "export_portfolio.py" not in body
+
+
 # ─── L1: unfilled-placeholder detection ───────────────────────────────────────
 
 def test_placeholder_detector_finds_unfilled_brackets():
