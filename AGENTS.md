@@ -1,23 +1,132 @@
-# GESH Financial — Agent Harness Rules
+# AGENTS.md
 
-## Model routing (required)
+Repository guide for coding agents working in `gesh75/Gesh-Project`.
 
-Use **Grok 4.5** for every analysis and implementation task in this repo.
+## 1. Scope
 
-| Harness | Model to select | Notes |
-|---------|-----------------|-------|
-| Cursor / Grok agent | **grok-build** or **grok-4.5** | Do **not** use `grok-composer-2.5-fast` here — it is the fast harness, not the deep 4.5 model |
-| Grok CLI | `grok -m grok-build` or `grok --agent gesh` | Project agent pins `grok-build` |
-| Subagents | `grok-build` | explore/plan subagents route to 4.5 via global config |
+- **Port 9000 (`server.py`) is the customer product.**
+- `gesh-project-trading` / port 9003 is the internal proof and execution sidecar.
+- Read `CLAUDE.md` before substantive work.
+- For portfolio, screener, risk, regime, Kelly, news, SEC, or paper-trading analysis, read the matching skill under `.claude/skills/` first.
 
-Product inference (Claude Sonnet/Haiku, Gemini) is unchanged — this rule applies to **the coding agent** working in `gesh-project`.
+## 2. Model routing
 
-## Scope
+- Use **Grok 4.5** for coding-agent analysis and implementation in this repo.
+- Preferred model ids: `grok-build` or `grok-4.5`.
+- Do **not** use `grok-composer-2.5-fast` for substantive work here.
 
-- Port **9000** (`server.py`) is the customer product
-- Deterministic chains: `run_daily_analysis.sh`, `run_engines2.py` — run on host, not sandbox REPL
-- Read `CLAUDE.md` before substantive work
+## 3. Safety and product boundaries
 
-## Analysis workflows
+- Preserve customer/owner isolation at all times.
+- Never expose owner holdings, cash, account identifiers, recommendations, or private operational data to customers.
+- Never fabricate financial values when source data is missing.
+- Prefer explicit typed failures over silent fallback or invented defaults.
+- Never weaken authentication, authorization, CSRF, Origin, cookie, session, tenant, or request-boundary checks.
+- Never weaken fail-closed risk gates just to make tests pass.
+- Never print, log, summarize, or commit secrets.
 
-For portfolio analysis, daily report, screener, risk, regime, Kelly, paper trading — invoke the matching skill under `.claude/skills/` (each pins `model: grok-build`).
+## 4. Protected systems: do not modify or operate
+
+- Production databases
+- `.env` files or credentials
+- Billing or Lemon Squeezy state
+- Brokerage integrations or live orders
+- Customer records
+- LaunchAgents / deployment state / production services
+- Live portfolio snapshots used as production state
+- Daily analysis chain side effects in production
+
+Also do **not** run AI calls, brokerage actions, billing actions, or production restart/deploy commands from the sandbox.
+
+## 5. Architecture quick map
+
+- `server.py` — FastAPI app and customer-facing routes
+- `data_fetcher.py` — live portfolio, holdings, quotes, snapshot loading
+- `ai_analyzer.py` — Claude prompt orchestration and structured outputs
+- `regime.py`, `kelly.py`, `monte_carlo.py`, `consensus.py`, `ecg.py` — core portfolio engines
+- `news_agent.py`, `sec_agent.py`, `fundamental_agent.py`, `gemini_agent.py`, `ollama_agent.py` — supporting intelligence agents
+- `trade_log.py`, `paper_trading.py`, `trading/` — paper/live execution pipeline and gates
+- `templates/dashboard.html` — main UI
+- `tests/` — pytest suite
+
+## 6. Implementation rules
+
+- Prefer the smallest behavior-preserving change.
+- Add a regression test for every real defect.
+- Run focused tests before broader suites.
+- Do not edit unrelated code or relax security behavior to satisfy a test.
+- Keep generated report artifacts and privileged/legal docs out of commits.
+- In tracked code, avoid hardcoded `/Users/...` paths; use repo-relative or configured paths.
+
+## 7. Financial-engine rules
+
+- Position sizing and risk bands are canonical in `gesh-core`; import them instead of re-implementing.
+- Size from settled/deployable cash: `account["portfolio_cash"]` or `equity_summary["deployable"]`.
+- Do **not** size from `withdrawable_amount`.
+- Treat `account["buying_power"]` on Gold accounts as leveraged margin, not deployable cash.
+- Preserve provider fallback behavior and per-symbol `price_source` tagging.
+- Do not widen a risk gate to make a test pass.
+- Do not set `auto_trade=True` or `PAPER_MODE=false` without explicit authorization and extensive paper validation.
+
+## 8. Analysis-specific workflow
+
+Before analysis work:
+
+1. Read the relevant skill in `.claude/skills/`.
+2. Inject regime context into deep portfolio analysis.
+3. Check news sentiment against the technical regime.
+4. Cross-check Kelly sizing with the fundamental verdict.
+5. For scanner flows, run `sector_filter` → `consolidation_zone` → full engines.
+
+Output expectations:
+
+- Use specific dollar amounts, percentages, and dates.
+- Tie predictions to fundamentals, not only technicals.
+- Prefer tables over long prose.
+- Never fabricate sentiment when `article_count == 0`.
+- Never call a portfolio “safe” without honoring Monte Carlo / risk evidence.
+
+## 9. Daily analysis chain
+
+- The chain is deterministic: `run_daily_analysis.sh` orchestrates snapshot → engines → AI narrative → paper gate → report.
+- Do **not** hand-run engines to fabricate output, hand-edit `gesh_report.html`, or hand-write chain SQL.
+- The chain is intended to run on the host environment, not improvised from a sandbox REPL.
+- `run_engines2.py` / `run_ai2.py` intentionally shadow some imports from the trading repo; verify which copy you are editing before changing engine behavior.
+
+## 10. Build and test
+
+Runtime and CI:
+
+- Python version is declared in `.python-version` (CI runs 3.12).
+- Canonical install:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.lock
+python -m pip install pytest pytest-cov ruff
+```
+
+Validation expectations:
+
+- Run `ruff check --fix` and `ruff format` on touched Python files.
+- Run focused `pytest` coverage for the area you changed; expand only as needed.
+- Never hit the live network in tests; mock at the client boundary.
+
+Dependency notes:
+
+- `requirements.txt` references private `gesh-core`; CI rewrites access with `GESH_CORE_PAT`.
+- `openbb` is intentionally excluded from CI and lives in `requirements-openbb.txt`.
+
+## 11. Testing conventions
+
+- Use `pytest`, not `unittest.TestCase`, for new tests.
+- Name tests `test_<unit>_<scenario>_<expected>`.
+- Prefer fixtures and parametrization over shared mutable setup.
+- Cover unhappy paths and boundary cases.
+- Use obviously fake secrets in fixtures.
+
+## 12. When in doubt
+
+- Check `CLAUDE.md` for the full project operating manual.
+- Check `.github/copilot-instructions.md` for repository-wide safety and workflow rules.
+- If a task risks changing financial correctness, customer isolation, or production behavior, stop and ask for clarification before proceeding.
