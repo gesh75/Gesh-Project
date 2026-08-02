@@ -38,6 +38,18 @@ GPT="${GESH_TRADING_HOME:-$(dirname "$GP")/gesh-project-trading}"
 # cwd=product root, so point it at the engine repo's gesh_financial.db (the tracker
 # DB) to preserve the pre-extraction sibling-path default.
 export GESH_TRACKER_DB="${GESH_TRACKER_DB:-$GPT/gesh_financial.db}"
+# Step 1/5 tiers 1 and 2 both need the Robinhood account number. It is NOT in
+# tracked code (a real account number was a hardcoded fallback until 2026-08-02)
+# and NOT in any launchd plist, so export it here from the gitignored .env —
+# same grep idiom as tg_alert(), since .env is not shell-sourceable.
+if [ -z "${GESH_RH_ACCOUNT:-}" ]; then
+    for _envf in "$GP/.env" "$GPT/.env"; do
+        [ -z "${GESH_RH_ACCOUNT:-}" ] && [ -f "$_envf" ] && \
+            GESH_RH_ACCOUNT=$(grep -m1 '^GESH_RH_ACCOUNT=' "$_envf" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+    done
+    unset _envf
+    export GESH_RH_ACCOUNT
+fi
 # PR105-RUN-01: the repository declares Python 3.12 (.python-version) but this
 # chain hardcoded `python3.14`, which does not exist in a conformant environment —
 # the deterministic daily chain would fail at launch. Use the venv's GENERIC

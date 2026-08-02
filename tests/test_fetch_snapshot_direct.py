@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import importlib
 import os
+import re
 import time
 from pathlib import Path
 
@@ -293,12 +294,43 @@ def test_tool_without_any_json_payload_raises(monkeypatch):
         fsd.Mcp("tok").tool("t", {})
 
 
-# ── 7. account-number hygiene ────────────────────────────────────────────────
-def test_no_hardcoded_account_number_default():
+# ── 7. account-number resolution & hygiene ───────────────────────────────────
+REPO_ROOT = MODULE_PATH.parent
+
+
+def test_account_number_prefers_environment(monkeypatch):
+    monkeypatch.setenv("GESH_RH_ACCOUNT", "ENV_WINS")
+    assert fsd._account_number() == "ENV_WINS"
+
+
+def test_account_number_falls_back_to_dotenv(monkeypatch, tmp_path):
     """
-    The pre-merge branch shipped getenv("GESH_RH_ACCOUNT", "557370533") — a real
-    account number as a committed fallback. It must stay a required env var.
+    Removing the hardcoded default was necessary but NOT sufficient: the var is
+    set nowhere on the host, so the module exited on every run. Reading the
+    gitignored .env is what actually makes the LLM-free tier work.
     """
-    src = MODULE_PATH.read_text()
-    assert '"557370533"' not in src
-    assert 'getenv("GESH_RH_ACCOUNT")' in src
+    monkeypatch.delenv("GESH_RH_ACCOUNT", raising=False)
+    (tmp_path / ".env").write_text('OTHER=1\nGESH_RH_ACCOUNT="FROM_DOTENV"\n')
+    monkeypatch.setattr(fsd, "BASE_DIR", tmp_path)
+    assert fsd._account_number() == "FROM_DOTENV"
+
+
+def test_account_number_missing_everywhere_exits_with_actionable_message(monkeypatch, tmp_path):
+    monkeypatch.delenv("GESH_RH_ACCOUNT", raising=False)
+    monkeypatch.setattr(fsd, "BASE_DIR", tmp_path)  # no .env here
+    with pytest.raises(SystemExit, match="GESH_RH_ACCOUNT not set"):
+        fsd._account_number()
+
+
+def test_account_number_is_never_hardcoded_in_tracked_code():
+    """
+    A real Robinhood account number shipped as a getenv()/shell fallback default
+    in both snapshot fetchers. Neither may carry a literal account again — the
+    value belongs in .env, which is gitignored.
+    """
+    for name in ("fetch_snapshot_direct.py", "fetch_snapshot_mcp.sh"):
+        src = (REPO_ROOT / name).read_text()
+        # No 9-digit literal sitting in a default-value position.
+        assert not re.search(r"GESH_RH_ACCOUNT[:=][-]?\s*[\"']?\d{6,}", src), (
+            f"{name} appears to hardcode an account number as a fallback default"
+        )

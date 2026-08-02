@@ -744,9 +744,17 @@ tries, in order:
 | 3 | `fetch_live_snapshot.py` (robin_stocks) | MFA-prone, repopulates leveraged BP | `robinhood_live` |
 
 Tier 1 owns `.rh_mcp_oauth.json` (chmod 600, gitignored) and refreshes itself, so it
-survives the Claude subscription dying. It **requires `GESH_RH_ACCOUNT`** and exits loudly
-without it — there is deliberately no default (a real account number was committed as one
-pre-merge; `tests/test_fetch_snapshot_direct.py` guards against its return).
+survives the Claude subscription dying.
+
+**`GESH_RH_ACCOUNT` — where the account number lives (2026-08-02).** It is **not** in
+tracked code. Both fetchers resolve it as env-var → `.env` (gitignored) → loud failure, and
+`run_daily_analysis.sh` exports it from `.env` for the whole chain. A real account number
+used to be a hardcoded fallback in `fetch_snapshot_direct.py` *and* `fetch_snapshot_mcp.sh`;
+`tests/test_fetch_snapshot_direct.py` now fails on any 6+-digit literal in a default-value
+position in either file. **Removing the default alone silently broke tier 1** — the variable
+was set nowhere on this host (no `.env` entry, no launchd plist), so the module exited at
+import on every run. If you ever move to a new machine, `GESH_RH_ACCOUNT=` in `.env` is the
+one piece of setup that is not in git.
 
 **The failure mode is SILENT-BY-DESIGN and costs money.** Every tier falls through on any
 non-zero exit, so a broken tier 1 still produces a good snapshot — you just quietly pay the
