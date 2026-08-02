@@ -158,10 +158,9 @@ def _auth_flow() -> None:
     print(f"[direct] opening browser for Robinhood login…\n  {url}\n"
           f"  (waiting up to 5 min on {redirect_uri})")
     webbrowser.open(url)
-    while "code" not in got:
+    deadline = time.time() + 300
+    while "code" not in got and time.time() < deadline:
         srv.handle_request()
-        if time.time() % 300 < 1:  # crude guard; handle_request has its own timeout
-            break
     if "code" not in got:
         raise SystemExit("[direct] no auth code received within 5 minutes — aborting")
 
