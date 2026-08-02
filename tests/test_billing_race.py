@@ -1,11 +1,9 @@
 """Delivery-burst race handling (2026-07-03 live-launch finding).
 
-LS fires the initial event burst concurrently: order_created can arrive before
-the order item is materialized (no first_order_item), and the variant-less
-subscription_payment_success invoice can race ahead of the subscription_created
-that writes billing_sub_id. Both used to be REFUSED (200 "unknown_variant") —
-now they 503 (RetryableError) so LS redelivers against settled state. A variant
-that IS present but un-allowlisted still refuses permanently (H3).
+LS can send order_created before the order item is materialized (no
+first_order_item), so that transient shape gets a 503 for redelivery. Invoices
+are variant-less by design, however, so an invoice with no local account is a
+settled unknown-variant event and must not create unbounded retry churn.
 """
 from __future__ import annotations
 
@@ -39,14 +37,15 @@ def test_order_created_without_order_item_is_retryable(sandbox):
         billing._dispatch(ev)                       # → 503, LS retries
 
 
-def test_payment_success_racing_ahead_of_subscription_is_retryable(sandbox):
+def test_payment_success_without_account_is_refused_permanently(sandbox):
     ev = billing.parse_event({
         "meta": {"event_name": "subscription_payment_success"},
         "data": {"type": "subscription-invoices", "id": "9", "attributes": {
             "user_email": "buyer@example.com", "status": "paid",
             "subscription_id": 555, "updated_at": "2026-07-03T14:17:05Z"}}})
-    with pytest.raises(billing.RetryableError):
-        billing._dispatch(ev)                       # no account bound to sub yet
+    out = billing._dispatch(ev)
+    assert out == {"action": "ignored", "email": "buyer@example.com",
+                   "reason": "unknown_variant"}
 
 
 def test_present_but_unknown_variant_still_refused_permanently(sandbox):
