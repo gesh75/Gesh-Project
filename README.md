@@ -178,7 +178,7 @@ written), lock-protected against double runs, and logs per-step timing to
 
 ### Prerequisites
 
-- Python 3.14+
+- Python 3.12 (declared in `.python-version`)
 - Robinhood account
 - Anthropic API key
 
@@ -187,9 +187,9 @@ written), lock-protected against double runs, and logs per-step timing to
 ```bash
 git clone https://github.com/gesh75/gesh-project.git
 cd gesh-project
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt   # or install manually — see Dependencies
+pip install -r requirements.lock  # canonical runtime install (same tree CI and production use)
 ```
 
 ### Environment variables

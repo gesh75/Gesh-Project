@@ -554,62 +554,20 @@ body:not(.customer) .customer-only { display: none !important; }
     </button>
     <button class="nav-item" onclick="switchTab('analyze'); showBookRisk()" title="Risk, Monte Carlo &amp; Kelly on your book">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
-      <span class="nav-label">Risk</span>
+      <span class="nav-label">Model Risk</span>
     </button>
-    <button class="nav-item owner-only" data-tab="scanner" onclick="switchTab('scanner')" title="Market scanner">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-      <span class="nav-label">Scanner</span>
-    </button>
+    <!--GESH_SLOT:owner_block_01-->
   </div>
 
-  <div class="sb-group owner-only">
-    <div class="sb-group-title">Monitor</div>
-    <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')" title="Overview">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
-      <span class="nav-label">Overview</span><span class="nav-badge" id="navb-overview"></span></button>
-    <button class="nav-item" data-tab="risk" onclick="switchTab('risk')" title="Risk">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
-      <span class="nav-label">Risk</span><span class="nav-badge" id="navb-risk"></span></button>
-    <button class="nav-item" data-tab="scanner" onclick="switchTab('scanner')" title="Scanner">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-      <span class="nav-label">Scanner</span><span class="nav-badge" id="navb-scanner"></span></button>
-  </div>
+  <!--GESH_SLOT:owner_block_02-->
 
   <!-- Scanner has no customer-reachable pane (customers only see Analyze/My Book),
        so this group is owner-only — customers must not get a dead nav link. -->
-  <div class="sb-group owner-only" id="customer-tools" style="display:none">
-    <div class="sb-group-title">Tools</div>
-    <button class="nav-item" data-tab="scanner" onclick="switchTab('scanner')" title="Market Scanner (public research)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
-      <span class="nav-label">Scanner</span>
-    </button>
-  </div>
+  <!--GESH_SLOT:owner_block_03-->
 
-  <div class="sb-group owner-only">
-    <div class="sb-group-title">Intelligence</div>
-    <button class="nav-item" data-tab="analysis" onclick="switchTab('analysis')" title="AI Analysis">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3A3.5 3.5 0 0 0 9 19a3 3 0 0 0 3 0 3 3 0 0 0 3 0 3.5 3.5 0 0 0 3-5.7A3.5 3.5 0 0 0 16 7a4 4 0 0 0-4-4z"/><line x1="12" y1="3" x2="12" y2="19"/></svg>
-      <span class="nav-label">AI Analysis</span><span class="nav-badge" id="navb-analysis"></span></button>
-    <button class="nav-item" data-tab="intelligence" onclick="switchTab('intelligence')" title="Intelligence">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M9 4h6"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg>
-      <span class="nav-label">Intelligence</span><span class="nav-badge" id="navb-intelligence"></span></button>
-    <button class="nav-item" data-tab="radar" onclick="switchTab('radar')" title="Radar">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M19.07 4.93A10 10 0 1 0 22 12"/><path d="M12 12 17 7"/><circle cx="12" cy="12" r="4"/></svg>
-      <span class="nav-label">Radar</span><span class="nav-badge" id="navb-radar"></span></button>
-    <button class="nav-item" data-tab="daily" onclick="switchTab('daily')" title="Daily Analysis">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>
-      <span class="nav-label">Daily Analysis</span><span class="nav-badge" id="navb-daily"></span></button>
-  </div>
+  <!--GESH_SLOT:owner_block_04-->
 
-  <div class="sb-group owner-only">
-    <div class="sb-group-title">Execution</div>
-    <button class="nav-item" data-tab="signals" onclick="switchTab('signals')" title="Signals">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
-      <span class="nav-label">Signals</span><span class="nav-badge" id="navb-signals"></span></button>
-    <button class="nav-item" data-tab="trading" onclick="switchTab('trading')" title="Paper Trades">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
-      <span class="nav-label">Paper Trades</span><span class="nav-badge" id="navb-trading"></span></button>
-  </div>
+  <!--GESH_SLOT:owner_block_05-->
 
   <div class="sb-foot">⌘K to search · <span id="sb-model">{{ model }}</span></div>
 </aside>
@@ -620,23 +578,14 @@ body:not(.customer) .customer-only { display: none !important; }
   <span class="badge b-cyan" id="model-badge" title="Deep analysis runs on {{ model }}">✨ Powered by Claude</span>
   <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
   <span class="ts" id="ts">—</span>
-  <a href="/watch" id="watch-link" class="badge b-cyan owner-only" style="text-decoration:none" title="Live paper-trading cockpit (paper mode)">📡 Watch</a>
-  <a href="/invest" class="badge b-cyan owner-only" style="text-decoration:none" title="Diversification radar — where new cash should go (advisory)">💎 Invest</a>
-  <a href="/usage" class="badge b-cyan owner-only" style="text-decoration:none" title="Per-customer usage counters (LLM spend, reports)">📊 Usage</a>
+  <!--GESH_SLOT:owner_block_06-->
+  <!--GESH_SLOT:owner_block_07-->
+  <!--GESH_SLOT:owner_block_08-->
   <button class="btn-ref" onclick="loadPortfolio()" title="Reloads the latest portfolio snapshot. Live Robinhood prices appear only when the brokerage session is online; otherwise the most recent cached snapshot is shown (the daily chain refreshes it each morning).">↻ Refresh</button>
 </header>
 
 <!-- Persistent stats bar -->
-<div class="owner-only" style="background:var(--card);border-bottom:1px solid var(--border);padding:14px 24px">
-  <div style="max-width:1700px;margin:0 auto">
-    <div class="stats">
-      <div class="scard" id="kpi-equity"><span class="kpi-bar"></span><div class="slabel">Portfolio Value</div><div class="sval" id="s-equity">—</div><div class="ssub" id="s-equity-sub">—</div><canvas class="kpi-spark" id="spark-equity"></canvas></div>
-      <div class="scard" id="kpi-day"><span class="kpi-bar"></span><div class="slabel">Day Change</div><div class="sval" id="s-day">—</div><div class="ssub">vs. previous close</div><canvas class="kpi-spark" id="spark-day"></canvas></div>
-      <div class="scard"><span class="kpi-bar"></span><div class="slabel">Cash</div><div class="sval" id="s-cash">—</div><div class="ssub">available balance</div></div>
-      <div class="scard"><span class="kpi-bar"></span><div class="slabel">Buying Power</div><div class="sval" id="s-bp">—</div><div class="ssub">available to trade</div></div>
-    </div>
-  </div>
-</div>
+<!--GESH_SLOT:owner_block_09-->
 
 <!-- Alert banners — ECG suspended + cash warning (hidden by default) -->
 <div id="alert-bar" style="display:none;background:var(--card);border-bottom:1px solid var(--border);padding:0 24px">
@@ -723,13 +672,14 @@ body:not(.customer) .customer-only { display: none !important; }
                style="width:110px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
         <input id="mybook-cost" placeholder="Avg cost (opt.)" type="number" min="0" step="any"
                style="width:140px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
-        <button class="btn-analyze" onclick="mybookAdd()">＋ Add</button>
+        <button class="btn-analyze" id="mybook-add-btn" onclick="mybookAdd()">＋ Add</button>
         <button class="btn-analyze" onclick="mybookToggleBulk()" title="Paste your whole list at once — one ticker per line. Sizes optional & private.">📋 Bulk import</button>
         <button class="btn-analyze" onclick="mybookImportWatchlist()" title="Add every saved watchlist ticker (1 share each — edit after)">⬇ Import watchlist</button>
         <button class="btn-analyze" onclick="mybookClear()" title="Remove EVERY position from your book. Use this to wipe a symbols-only bulk import before adding real share counts.">🗑 Clear</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
-        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()">🧠 Analyze My Portfolio</button>
+        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()" title="Run educational model research on this book (illustrative outputs only — not personalized advice)">🧠 Analyze My Portfolio</button>
       </div>
+      <div id="mybook-form-error" role="alert" style="display:none;margin:0 0 10px;color:var(--red);font-size:13px"></div>
       <!-- L1: the AI data-flow disclosure, shown at the point of use. A privacy
            page alone does not put it in front of someone at the moment they act. -->
       <div id="gesh-ai-disclosure" style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.6">
@@ -767,553 +717,31 @@ body:not(.customer) .customer-only { display: none !important; }
   </div>
 
   <!-- ═══ TAB: OVERVIEW ═══ -->
-  <div class="tab-pane active" id="tab-overview">
-    <!-- Price Chart Panel -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:14px">
-          <span class="ct">Price Chart</span>
-          <select id="chart-sym" onchange="loadChart()" style="background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:5px 10px;font-family:var(--font);font-size:15px;cursor:pointer"></select>
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="period-btn" onclick="setPeriod('1d',this)">1D</button>
-          <button class="period-btn" onclick="setPeriod('5d',this)">5D</button>
-          <button class="period-btn active" onclick="setPeriod('1mo',this)">1M</button>
-          <button class="period-btn" onclick="setPeriod('3mo',this)">3M</button>
-          <button class="period-btn" onclick="setPeriod('6mo',this)">6M</button>
-          <button class="period-btn" onclick="setPeriod('1y',this)">1Y</button>
-        </div>
-      </div>
-      <div style="padding:6px 16px 4px;display:flex;gap:16px;align-items:center;border-bottom:1px solid var(--border)">
-        <span id="chart-price" style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums">—</span>
-        <span id="chart-chg" style="font-size:18px;font-weight:700">—</span>
-        <span id="chart-period-label" style="font-size:14px;color:var(--muted)"></span>
-      </div>
-      <div style="padding:8px 16px 16px;height:300px;position:relative">
-        <canvas id="price-chart"></canvas>
-      </div>
-    </div>
-
-    <!-- LONG-TERM MACRO OVERLAY — visible surface for VIX / F&G / Margin Debt + LT bias -->
-    <div class="card" style="margin-bottom:18px" id="lt-macro-card">
-      <div class="ch">
-        <span class="ct">LONG-TERM MACRO (1-3Y BIAS)</span>
-        <span class="ts" id="lt-ts"></span>
-      </div>
-      <div id="lt-macro-body" style="padding:16px 18px">
-        <div class="deep-placeholder" style="padding:12px 0">
-          <div class="deep-ph-text" style="font-size:15px">Loading macro sentiment overlay…</div>
-        </div>
-      </div>
-      <div style="padding:0 18px 14px;font-size:12px;color:var(--muted);line-height:1.5">
-        VIX high = opportunity tilt; Extreme Fear (low F&G) = long-term bullish; Rising margin debt = caution. Combined into a long-term macro signal the consensus engine weighs.
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="card">
-        <div class="ch"><span class="ct">Open Positions</span><span class="badge b-cyan" id="pos-count" style="display:none"></span></div>
-        <div class="tw"><table>
-          <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Last Price</th><th>Equity</th><th>Alloc %</th><th>Chng %</th><th>ECG</th></tr></thead>
-          <tbody id="holdings-body"><tr><td colspan="8" class="empty"><span class="spin"></span> Loading positions...</td></tr></tbody>
-        </table></div>
-      </div>
-      <div class="rcol">
-        <div class="card"><div class="ch"><span class="ct">Allocation</span></div><div class="chart-wrap"><canvas id="alloc-chart"></canvas></div></div>
-        <div class="card">
-          <div class="ch"><span class="ct">Watchlist</span></div>
-          <div class="tw"><table style="font-size:15px">
-            <thead><tr><th style="padding:8px 10px">Symbol</th><th style="padding:8px 10px">Last</th><th style="padding:8px 10px">Bid</th><th style="padding:8px 10px">Ask</th><th style="padding:8px 10px">Δ%</th></tr></thead>
-            <tbody id="watchlist-body"><tr><td colspan="5" class="empty"><span class="spin"></span> Loading...</td></tr></tbody>
-          </table></div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_10-->
 
   <!-- ═══ TAB: AI ANALYSIS ═══ -->
-  <div class="tab-pane" id="tab-analysis">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">AI Deep Analysis</span>
-          <span class="badge b-purple" style="font-size:10px">◈ Snowflake · Fair Value · Predictions · Regime-Aware</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="deep-ts" class="ts"></span>
-          <button class="btn-analyze" id="btn-deep" onclick="runDeepAnalysis()">▶ Run Deep Analysis</button>
-        </div>
-      </div>
-      <div id="deep-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">◈</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">AI Portfolio Intelligence</strong><br>
-            Snowflake scores · Fair value estimates · Risk/reward analysis · 3M &amp; 12M AI predictions<br>
-            <span style="font-size:15px">Now regime-aware — ADX/Bollinger/RSI context is injected into every analysis.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_11-->
 
   <!-- ═══ TAB: SIGNALS ═══ -->
-  <div class="tab-pane" id="tab-signals">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Consensus Engine</span>
-          <span class="badge b-purple" style="font-size:10px">11 NODES · INDEPENDENT SIGNALS · VOTE</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ts" id="cons-ts"></span>
-          <button class="btn-analyze" id="btn-cons" onclick="runConsensus()">▶ Run Consensus</button>
-        </div>
-      </div>
-      <div id="cons-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">🗳️</div>
-          <div class="deep-ph-text"><strong style="color:var(--text)">11-Node Signal Consensus</strong><br>
-          Momentum · Trend · Rel.Strength · Fundamentals · Analyst · News★ · Kelly · ECG · Volume · FFT Cycle · Macro★<br>
-          Each node votes independently. Final signal requires ≥5 of 11 nodes to agree.<br>
-          <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run Consensus</strong> (~25 sec).</span></div>
-        </div>
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Kelly Position Sizer</span>
-          <span class="badge b-green" style="font-size:10px">½-KELLY · WIN-RATE · VOLATILITY-ADJUSTED</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ts" id="kelly-ts"></span>
-          <button class="btn-analyze" id="btn-kelly" onclick="runKelly()">▶ Size Positions</button>
-        </div>
-      </div>
-      <div id="kelly-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">⚖️</div>
-          <div class="deep-ph-text"><strong style="color:var(--text)">Optimal Position Sizing</strong><br>
-          Half-Kelly Criterion · historical win rate · payoff ratio · volatility · Sharpe · analyst upside<br>
-          <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Size Positions</strong> to run (~15 sec).</span></div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_12-->
 
   <!-- ═══ TAB: RISK ═══ -->
-  <div class="tab-pane" id="tab-risk">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Monte Carlo Stress Test</span>
-          <span class="badge b-purple" style="font-size:10px">N=1 000 · 21-Day Horizon · GBM</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="mc-ts" class="ts"></span>
-          <button class="btn-analyze" id="btn-mc" onclick="runMonteCarlo()">▶ Run Stress Test</button>
-        </div>
-      </div>
-      <div id="mc-container"><div class="deep-placeholder"><div class="deep-ph-icon">🎲</div><div class="deep-ph-text"><strong style="color:var(--text)">Portfolio Stress Testing</strong><br>Simulates 1 000 GBM paths using historic volatility per holding.<br><span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run Stress Test</strong> to see VaR, CVaR and probability distribution.</span></div></div></div>
-    </div>
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Equity Curve Gate</span>
-          <span class="badge b-green" style="font-size:10px">⬤ VRE26-Style Health Monitor</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="ecg-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadECG()">↻ Refresh</button>
-        </div>
-      </div>
-      <div id="ecg-gate-banner" class="gate-banner gate-healthy" style="display:none">
-        <span class="gate-dot"></span><span id="ecg-gate-msg">—</span>
-      </div>
-      <div id="ecg-panel"><div class="deep-placeholder"><span class="spin"></span> loading ECG…</div></div>
-    </div>
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Market Regime</span>
-          <span class="badge b-yellow" style="font-size:10px">ADX · Bollinger · RSI</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="regime-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadRegime()">↻ Refresh</button>
-        </div>
-      </div>
-      <div id="regime-panel"><div class="deep-placeholder"><span class="spin"></span> detecting regimes…</div></div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_13-->
 
   <!-- ═══ TAB: INTELLIGENCE ═══ -->
-  <div class="tab-pane" id="tab-intelligence">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Company Intelligence</span>
-          <span class="badge b-purple" style="font-size:10px">🤖 SEC · NEWS · FUNDAMENTALS</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span id="intel-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadIntelHistory()">↻ Load Cached</button>
-          <button class="btn-analyze" id="btn-intel" onclick="runAllAgents()">▶ Run All Agents</button>
-        </div>
-      </div>
-      <div id="intel-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">🤖</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Autonomous Research Agents</strong><br>
-            <span style="color:var(--accent)">SEC Watcher</span> · monitors 10-K/10-Q/8-K filings · Claude extracts red flags &amp; signals<br>
-            <span style="color:var(--accent)">News Sentiment</span> · Yahoo Finance + Finnhub · rolling 7-day mood score per company<br>
-            <span style="color:var(--accent)">Fundamental Momentum</span> · scans 80+ stocks · finds improving fundamentals before price moves<br>
-            <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run All Agents</strong> (~2-4 min) or <strong style="color:var(--text)">↻ Load Cached</strong> for instant results.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_14-->
 
   <!-- ═══ TAB: SCANNER ═══ -->
-  <div class="tab-pane" id="tab-scanner">
-
-    <!-- Config card -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Scanner Config</span>
-          <span class="badge b-cyan" id="scanner-mode-badge" style="font-size:10px">DAILY</span>
-          <span class="badge b-muted" style="font-size:10px">Sector → CZ → Engines</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span id="scanner-cfg-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadScannerConfig()">↻ Reload</button>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:16px">
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">TIMEFRAME</div>
-          <select id="scanner-tf" onchange="saveScannerTf(this.value)"
-            style="width:100%;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-            <option value="daily">Daily (60d/1d)</option>
-            <option value="1HR">1-Hour (5d/1h)</option>
-            <option value="5MIN">5-Minute (1d/5m)</option>
-            <option value="premarket">Pre-Market (1d/5m)</option>
-            <option value="stock">Penny Stocks</option>
-          </select>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">MIN R/R</div>
-          <input id="scanner-rr" type="number" value="2.0" step="0.1" min="1.5" max="5"
-            style="width:100%;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">SYMBOLS (comma-sep)</div>
-          <input id="scanner-syms" type="text" placeholder="auto = holdings + watchlist"
-            style="width:100%;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div style="display:flex;align-items:flex-end">
-          <button class="btn-analyze" id="btn-scanner" onclick="runScanner()" style="width:100%">▶ Run Scanner</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Sector Filter Results -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <span class="ct">🔥 Sector Pre-Filter</span>
-        <span class="badge b-muted" style="font-size:10px">1.2× 20d avg volume threshold</span>
-      </div>
-      <div id="sector-container">
-        <div class="deep-placeholder" style="padding:24px">
-          <div class="deep-ph-icon">📊</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">GICS Sector Volume Filter</strong><br>
-            Checks if each symbol's sector ETF is showing above-average volume.<br>
-            <span style="color:var(--muted);font-size:14px">Hot sectors produce stronger setups — cold sectors are skipped.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Consolidation Zone Results -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <span class="ct">📐 Consolidation Zones</span>
-        <span class="badge b-muted" style="font-size:10px">Black Bot TA · 10+ candle tight range · R/R ≥ 2×</span>
-      </div>
-      <div id="cz-container">
-        <div class="deep-placeholder" style="padding:24px">
-          <div class="deep-ph-icon">📐</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Consolidation Zone Detector</strong><br>
-            Finds 10+ candle tight consolidation ranges ready for breakout.<br>
-            <span style="color:var(--muted);font-size:14px">Entry = zone midpoint · Stop = zone_low − 0.5% · Target = prev zone top or 2:1 R/R</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-  </div>
+  <!--GESH_SLOT:owner_block_15-->
 
   <!-- ═══ TAB: PAPER TRADES ═══ -->
-  <div class="tab-pane" id="tab-trading">
-
-    <!-- Book disclosure: two separate paper books exist by design -->
-    <div style="background:var(--hover);border:1px solid var(--border);border-radius:8px;
-      padding:8px 14px;margin-bottom:14px;font-size:12px;color:var(--muted)">
-      📒 This book: <b style="color:var(--text)">daily-analysis chain + manual simulations</b>
-      (trade_log paper book). The autopilot's consensus-signal book is separate — it powers
-      <a href="/watch">/watch</a> and the public <a href="/track-record">/track-record</a>
-      and is the only book counted toward the 30-trade autonomy gate.
-    </div>
-
-    <!-- Performance Summary -->
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px">
-      <div class="scard">
-        <div class="slabel">Paper Win Rate</div>
-        <div class="sval" id="pt-winrate" style="color:var(--muted)">—</div>
-        <div class="ssub" id="pt-wl">Loading…</div>
-      </div>
-      <div class="scard">
-        <div class="slabel">Paper P&amp;L</div>
-        <div class="sval" id="pt-pnl">—</div>
-        <div class="ssub">7-day simulated</div>
-      </div>
-      <div class="scard">
-        <div class="slabel">Paper Edge</div>
-        <div class="sval" id="pt-edge">—</div>
-        <div class="ssub" id="pt-edge-sub">vs live performance</div>
-      </div>
-      <div class="scard">
-        <div class="slabel">Open Positions</div>
-        <div class="sval" id="pt-open">—</div>
-        <div class="ssub" id="pt-open-sub">paper trades active</div>
-      </div>
-    </div>
-
-    <!-- Trade Log -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">📄 Paper Trade Log</span>
-          <span class="badge b-purple" id="pt-scanner-best" style="font-size:10px">PAPER MODE</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <span id="pt-ts" class="ts"></span>
-          <button class="btn-ref" onclick="loadTradeStats()">↻ Refresh</button>
-          <button class="btn-ref" onclick="checkPaperCloses()">⏱ Check Closes</button>
-          <button class="btn-analyze" id="btn-pt-run" onclick="runPaperSession()">▶ Simulate Today</button>
-        </div>
-      </div>
-      <div id="pt-container">
-        <div class="deep-placeholder" style="padding:24px">
-          <div class="deep-ph-icon">📄</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Paper Trading Simulation</strong><br>
-            Simulates the current action plan through the full risk gate pipeline.<br>
-            <span style="color:var(--muted);font-size:14px">8-gate safety check · Kelly position sizing · automatic stop/target tracking</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Gate Check -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">🔐 Risk Gate Dry-Run</span>
-          <span class="badge b-yellow" style="font-size:10px">8-GATE SAFETY CHECK</span>
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 0 14px">
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">SYMBOL</div>
-          <input id="gate-sym" type="text" value="NVDA"
-            style="width:100px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">ACTION</div>
-          <select id="gate-action"
-            style="background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-            <option>BUY</option><option>SELL</option><option>HOLD</option>
-          </select>
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">CONFIDENCE</div>
-          <input id="gate-conf" type="number" value="0.85" step="0.01" min="0" max="1"
-            style="width:90px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">TARGET % OF PORTFOLIO</div>
-          <input id="gate-pct" type="number" value="2.0" step="0.5" min="0.5" max="10"
-            style="width:100px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <button class="btn-analyze" id="btn-gate" onclick="runDryRun()">▶ Gate Check</button>
-      </div>
-      <div id="gate-container" style="display:none;padding-bottom:14px"></div>
-    </div>
-
-    <!-- Bull / Bear Debate Engine -->
-    <div class="card" style="margin-bottom:18px" id="mainDebateCard">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">🧠 Bull / Bear Debate</span>
-          <span class="badge b-purple" style="font-size:10px">haiku x2 · sonnet x1 · ~15s</span>
-        </div>
-        <span id="main-debate-meta" class="ts">enter ticker → run debate</span>
-      </div>
-      <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 0 14px">
-        <div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:4px">SYMBOL</div>
-          <input id="main-debate-sym" type="text" value="NVDA" maxlength="8"
-            style="width:110px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:var(--font);font-size:14px">
-        </div>
-        <button class="btn-analyze" id="btn-main-debate" onclick="runMainDebate()">▶ Run Debate</button>
-      </div>
-      <div id="main-debate-loading" style="display:none;padding:16px;text-align:center;color:var(--muted)">
-        Calling Claude (bull → bear → portfolio manager)…
-      </div>
-      <div id="main-debate-result" style="display:none;padding:0 0 16px">
-        <div id="main-debate-decision" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:12px;background:var(--hover)"></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
-          <div id="main-debate-bull" style="border:1px solid #00e87a33;border-radius:8px;padding:12px;background:#00e87a08"></div>
-          <div id="main-debate-bear" style="border:1px solid #ff3c5a33;border-radius:8px;padding:12px;background:#ff3c5a08"></div>
-        </div>
-        <div id="main-debate-catalysts" style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--hover)"></div>
-      </div>
-    </div>
-
-    <!-- Trade History Table -->
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <span class="ct">Trade History</span>
-        <span class="badge b-muted" style="font-size:10px">PAPER TRADES</span>
-      </div>
-      <div id="pt-history-container">
-        <div class="empty">Loading trade history…</div>
-      </div>
-    </div>
-
-  </div>
+  <!--GESH_SLOT:owner_block_16-->
 
   <!-- ═══ TAB: RADAR ═══ -->
-  <div class="tab-pane" id="tab-radar">
-    <div class="card" style="margin-bottom:18px">
-      <div class="ch">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Investment Radar</span>
-          <span class="badge b-green" style="font-size:10px">AI-Screened Weekly Picks</span>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span id="radar-ts" class="ts"></span>
-          <button class="btn-analyze" id="btn-radar" onclick="runScreener()">▶ Scan Market</button>
-        </div>
-      </div>
-      <div id="radar-container">
-        <div class="deep-placeholder">
-          <div class="deep-ph-icon">📡</div>
-          <div class="deep-ph-text">
-            <strong style="color:var(--text)">Weekly Investment Radar</strong><br>
-            Screens the market on momentum · value · growth · analyst consensus<br>
-            <span style="font-size:15px">Claude surfaces this week's best opportunities with a scored thesis for each.</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!--GESH_SLOT:owner_block_17-->
 
   <!-- ═══ TAB: DAILY ANALYSIS ═══ -->
-  <div class="tab-pane" id="tab-daily">
-    <div class="card" style="margin-bottom:18px">
-
-      <!-- Header -->
-      <div class="ch" style="flex-wrap:wrap;gap:10px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct" style="display:flex;align-items:center;gap:8px"><span style="font-size:20px">🔬</span> GESH Daily Portfolio Analysis</span>
-          <span class="badge b-purple" style="font-size:11px">All 6 Engines · Regime-Aware · AI Deep-Dive</span>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn-analyze" id="da-btn-run" onclick="daRunAnalysis()">▶ Run Daily Analysis</button>
-          <select class="da-hist-sel" id="da-hist-sel"><option value="">— Load past run —</option></select>
-          <button class="da-btn-load" id="da-btn-load" onclick="daLoadRun()">Load</button>
-          <span class="ts" id="da-ts"></span>
-        </div>
-      </div>
-
-      <!-- Loading -->
-      <div id="da-loading" style="display:none;padding:32px 20px;text-align:center">
-        <div style="font-size:16px;font-weight:600;color:var(--accent);margin-bottom:8px">
-          <span class="spin" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:8px"></span>
-          Running all engines — <span id="da-elapsed">0s</span><span id="da-eta"></span>
-        </div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:12px" id="da-loading-msg">Fetching portfolio · building payload…</div>
-        <div class="da-load-bar"><div class="da-load-fill" id="da-load-fill"></div></div>
-        <button class="da-btn-load" id="da-btn-cancel" onclick="daCancelAnalysis()"
-                style="margin-top:14px">Cancel</button>
-      </div>
-
-      <!-- Placeholder (before first run) -->
-      <div id="da-placeholder" class="deep-placeholder">
-        <div class="deep-ph-icon">🔬</div>
-        <div class="deep-ph-text">
-          <strong style="color:var(--text)">Full Daily Portfolio Deep-Dive</strong><br>
-          Snowflake scores · Fair value · Regime overlay · Kelly sizing · Monte Carlo risk · 12M predictions<br>
-          <span style="font-size:15px">Click <strong style="color:var(--text)">▶ Run Daily Analysis</strong> or load a past run from the dropdown.</span>
-        </div>
-      </div>
-
-      <!-- Results -->
-      <div id="da-results" style="display:none;padding:18px">
-
-        <!-- 5 stat cards -->
-        <div class="da-stats">
-          <div class="da-stat"><div class="lbl">Portfolio Score</div><div class="val" id="da-port-score">—</div><div class="sub" id="da-port-type">—</div></div>
-          <div class="da-stat"><div class="lbl">AI Risk Opinion</div><div class="val" id="da-risk-score">—</div><div class="sub">model-generated · 0 safe · 100 extreme</div></div>
-          <div class="da-stat"><div class="lbl">Diversification</div><div class="val" id="da-div-score">—</div><div class="sub">0 concentrated · 100 spread</div></div>
-          <div class="da-stat" style="grid-column:span 2">
-            <div class="lbl">AI Verdict</div>
-            <div class="val" id="da-verdict" style="font-size:16px;line-height:1.4;margin-top:4px;font-weight:600">—</div>
-          </div>
-        </div>
-
-        <!-- Market context -->
-        <div class="da-ctx" id="da-context">—</div>
-
-        <!-- Prioritised action plan -->
-        <div style="margin-bottom:18px">
-          <div class="da-sec-lbl" style="margin-bottom:10px">Prioritised Action Plan</div>
-          <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:4px 16px 0" id="da-recs"></div>
-        </div>
-
-        <!-- Holdings analysis -->
-        <div style="margin-bottom:18px">
-          <div class="da-sec-lbl" style="margin-bottom:10px">Holdings Analysis</div>
-          <div class="da-holdings-grid" id="da-holdings"></div>
-        </div>
-
-        <!-- Risks + Sectors side by side -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px">
-          <div>
-            <div class="da-sec-lbl" style="margin-bottom:10px">Portfolio Risks</div>
-            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:4px 16px 0" id="da-risks"></div>
-          </div>
-          <div>
-            <div class="da-sec-lbl" style="margin-bottom:10px">Sector Breakdown</div>
-            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;overflow:hidden" id="da-sectors"></div>
-          </div>
-        </div>
-
-        <div style="font-size:12px;color:var(--muted);padding-top:8px;border-top:1px solid var(--border)">
-          <span id="da-run-meta">—</span> &nbsp;·&nbsp; NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY
-        </div>
-
-      </div><!-- /da-results -->
-    </div>
-  </div><!-- /tab-daily -->
+  <!--GESH_SLOT:owner_block_18--><!-- /tab-daily -->
 
   <!-- L3: data-subject rights. The published Privacy Policy §8 promises access,
        export and deletion and points users at in-app controls — so they have to
@@ -1552,16 +980,44 @@ async function loadPortfolio(){
     const body=await r.json();
     const d=body.data;
     applyViewDisclosure(body);
-    renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
+    renderPortfolioPanels(d);
     initChartSymbols(d.holdings);
     applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
     // Long-term macro visible UI (always load on portfolio refresh)
     loadLongTermMacro(true);
   }catch(e){console.error(e);setConn(false);}
 }
+// Owner and customer receive DIFFERENT portfolio shapes: the owner gets the
+// brokerage payload (equity_summary, cost basis), the customer gets the PUBLISHED
+// model portfolio (calculated_total_equity, no equity_summary). `renderStats`
+// used to be handed `d.equity_summary` unconditionally, which is `undefined` for a
+// customer — a TypeError swallowed by loadPortfolio's catch, so the connection
+// badge silently flipped to offline and loadLongTermMacro never ran. Normalise the
+// shape once, and skip owner-only panels whose DOM is not in a customer document.
+function normalizePortfolioEquity(d){
+  if(d && d.equity_summary) return d.equity_summary;
+  d = d || {};
+  return {
+    portfolio_equity: d.calculated_total_equity,
+    cash: d.cash,
+    day_change: d.day_change,
+    day_change_pct: d.day_change_pct,
+    day_change_available: d.day_change_available,
+  };
+}
+function renderPortfolioPanels(d){
+  d = d || {};
+  if(document.getElementById('s-equity')) renderStats(normalizePortfolioEquity(d));
+  if(document.getElementById('holdings-body')) renderHoldings(d.holdings||[]);
+  if(document.getElementById('watchlist-body')) renderWatchlist(d.watchlist||[]);
+  if(document.getElementById('alloc-chart')) renderAllocChart(d.holdings||[]);
+}
 function renderStats(eq){
   $('s-equity').textContent=fmt(eq.portfolio_equity);
-  const dc=eq.day_change||0,dcp=eq.day_change_pct||0;
+  eq = eq || {};
+  // null day change means UNEVIDENCED, not flat — say so rather than print 0.
+  const dcAvail = eq.day_change_available !== false && eq.day_change != null;
+  const dc=dcAvail?eq.day_change:0, dcp=dcAvail?(eq.day_change_pct||0):0;
   $('s-equity-sub').innerHTML='<span class="'+cls(dcp)+'">'+fmtp(dcp)+'</span> today';
   const arrow=dc>=0?'▲':'▼';
   $('s-day').className='sval '+cls(dc);$('s-day').innerHTML='<span class="arrow">'+arrow+'</span>'+fmt(dc);
@@ -1849,92 +1305,7 @@ function cancelDeepAnalysis(){
   if(_deepCtl) _deepCtl.abort(new DOMException('cancelled by user','AbortError'));
 }
 
-async function runDeepAnalysis(){
-  _cachedAnalysisLoaded=false; // allow re-cache after fresh run
-  const btn=$('btn-deep'),cont=$('deep-container');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analyzing...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running AI deep analysis…<br><span style="font-size:13px">Generating snowflake scores, fair values, predictions</span><br><button class="da-btn-load" style="margin-top:12px" onclick="cancelDeepAnalysis()">Cancel</button></div></div>`;
-  // GESH-5: bound the wait. Without a deadline a hung Claude call spins forever.
-  _deepCtl=new AbortController();
-  const killer=setTimeout(()=>_deepCtl&&_deepCtl.abort(new DOMException('deadline','TimeoutError')),DA_DEADLINE_MS);
-  try{
-    const r=await fetch('/api/deep-analysis',{method:'POST',signal:_deepCtl.signal});
-    if(r.status===401){
-      const err=new Error('auth'); err.authRequired=true; throw err;
-    }
-    if(!r.ok) throw new Error(await r.text());
-    const j=await r.json();
-    const a=j.analysis;
-    const mkt=j.market||null;
-    // Warn-and-proceed: label a degraded/cached run rather than hiding or refusing it.
-    const degraded = !!(j && (j.degraded===true || j.status==='degraded'));
-    renderDeepAnalysis(a, mkt, j.cached===true, j.ran_at||null);
-    _cachedAnalysisLoaded=true;
-    $('deep-ts').textContent=(degraded?'⚠ degraded · ':'')+j.model+' · '+new Date().toLocaleTimeString();
-    toast(degraded?'Deep analysis ran on degraded inputs':'Deep analysis complete',
-          degraded?'error':'success', degraded?7000:undefined);
-    refreshSectionBadges();
-  }catch(e){
-    if(e&&e.authRequired){
-      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
-      toast('Sign in to run a live Claude analysis','error',6000);
-    }else if(e&&e.name==='AbortError'){
-      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--muted)">Run cancelled — nothing was saved.</div></div>`;
-    }else if(e&&e.name==='TimeoutError'){
-      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Gave up after ${Math.round(DA_DEADLINE_MS/1000)}s.</strong><br>The deep-analysis engine did not return in time. Nothing was saved.</div></div>`;
-      toast('Deep analysis timed out','error');
-    }else{
-      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">Analysis failed: ${daEsc(friendlyErr(e))}</div></div>`;
-      toast('Deep analysis failed','error');
-    }
-    console.error(e);
-  }finally{clearTimeout(killer);_deepCtl=null;btn.disabled=false;btn.innerHTML='↻ Re-analyze';}
-}
-
 /* ── ECG ── */
-async function loadECG(){
-  const panel=$('ecg-panel');
-  try{
-    const r=await fetch('/api/ecg');
-    if(!r.ok) throw new Error(r.status);
-    const d=(await r.json()).data;
-    _ecgStates={};
-    (d.states||[]).forEach(s=>{_ecgStates[s.symbol]=s;});
-    updateAlertBar();
-
-    // Update banner
-    const banner=$('ecg-gate-banner');
-    const gateClass='gate-'+String(d.portfolio_gate||'unknown').toLowerCase();
-    banner.className='gate-banner '+gateClass;
-    banner.style.display='flex';
-    $('ecg-gate-msg').textContent=d.portfolio_message||'';
-
-    // Render items — degraded/empty resolves the spinner with an honest message.
-    if(!d.states||!d.states.length){
-      panel.innerHTML=`<div class="empty" style="padding:20px">${daEsc(d.portfolio_message||'No equity-curve data available right now.')}</div>`;
-      return;
-    }
-    panel.innerHTML=`<div class="ecg-panel">${d.states.map(s=>{
-      const ic=s.state==='HEALTHY'?'🟢':s.state==='COOLING'?'🟡':'🔴';
-      const cls2=`ecg-item`;
-      return `<div class="${cls2}">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <span class="ecg-sym">${daEsc(s.symbol)}</span>
-          <span class="ecg-badge ecg-${daEsc(s.state.toLowerCase())}">${ic} ${daEsc(s.state)}</span>
-        </div>
-        <div class="ecg-msg">${daEsc(s.message)}</div>
-        <div class="ecg-meta">Drawdown: ${s.drawdown_pct.toFixed(1)}%  ·  Streak: ${daEsc(s.loss_streak)}  ·  ${daEsc(s.snapshots_available)} snapshots</div>
-      </div>`;
-    }).join('')}</div>`;
-    $('ecg-ts').textContent='Updated '+new Date().toLocaleTimeString();
-    // re-render table ECG badges
-    renderHoldings(_lastHoldings||[]);
-  }catch(e){
-    console.error('ECG',e);
-    if(panel) panel.innerHTML='<div class="empty" style="padding:20px">Equity-curve gate temporarily unavailable — retry with ↻ Refresh.</div>';
-  }
-}
-
 /* ── Regime ── */
 async function loadRegime(){
   try{
@@ -1965,29 +1336,6 @@ async function loadRegime(){
 
 /* ── Monte Carlo ── */
 let mcBarChart=null;
-async function runConsensus(){
-  const btn=$('btn-cons'),cont=$('cons-container');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Voting...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running 9 independent signal nodes per holding…<br><span style="font-size:13px">Momentum · Trend · Rel.Strength · Fundamentals · Analyst · News · Kelly · ECG · Volume</span></div></div>`;
-  try{
-    const r=await fetch('/api/consensus',{method:'POST'});
-    check401(r);
-    if(!r.ok) throw new Error(await r.text());
-    const j=await r.json();
-    renderConsensus(j.data);
-    cont.dataset.loaded='1';
-    $('cons-ts').textContent='Updated '+new Date().toLocaleTimeString();
-    toast('Consensus vote complete','success'); refreshSectionBadges();
-  }catch(e){
-    runErr(e, 'cons-container', 'Consensus');
-  }finally{btn.disabled=false;btn.innerHTML='↻ Re-Vote';}
-}
-async function loadCachedConsensus(){
-  const cont=$('cons-container'); if(!cont||cont.dataset.loaded) return;
-  try{ const r=await fetch('/api/consensus/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderConsensus(j.data); prependStaleBadge('cons-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('cons-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){console.error('cachedConsensus',e);}
-}
-
 /* ── Long-Term Macro (VIX, Fear&Greed, Margin Debt) visible panel ──────────── */
 function renderLongTermMacro(d) {
   const body = $('lt-macro-body');
@@ -2153,29 +1501,6 @@ function renderConsensus(d){
   cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}</style>`+html;
 }
 
-async function runKelly(){
-  const btn=$('btn-kelly'),cont=$('kelly-container');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analyzing...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Fetching 90-day price history · computing Kelly fractions…</div></div>`;
-  try{
-    const r=await fetch('/api/kelly',{method:'POST'});
-    check401(r);
-    if(!r.ok) throw new Error(await r.text());
-    const j=await r.json();
-    renderKelly(j.data, j.total_equity);
-    cont.dataset.loaded='1';
-    $('kelly-ts').textContent='Updated '+new Date().toLocaleTimeString();
-    toast('Kelly position sizing complete','success'); refreshSectionBadges();
-  }catch(e){
-    runErr(e, 'kelly-container', 'Kelly sizing');
-  }finally{btn.disabled=false;btn.innerHTML='↻ Re-Size';}
-}
-async function loadCachedKelly(){
-  const cont=$('kelly-container'); if(!cont||cont.dataset.loaded) return;
-  try{ const r=await fetch('/api/kelly/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data&&Array.isArray(j.data.holdings)){ renderKelly(j.data, j.total_equity); prependStaleBadge('kelly-container', j.ran_at); cont.dataset.loaded='1'; const ts=$('kelly-ts'); if(ts) ts.textContent='Cached '+relTime(j.ran_at); } }catch(e){console.error('cachedKelly',e);}
-}
-
 function kellyBar(currentPct, optimalPct){
   const MAX=30; // display max %
   const cW=Math.min((currentPct/MAX)*100,100);
@@ -2283,22 +1608,6 @@ function renderKelly(d, totalEq){
   cont.innerHTML=`<style>@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}</style>`+html;
 }
 
-async function runMonteCarlo(){
-  const btn=$('btn-mc'),cont=$('mc-container');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Simulating...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running 1 000 Monte Carlo simulations…</div></div>`;
-  try{
-    const r=await fetch('/api/monte-carlo',{method:'POST'});
-    check401(r);
-    if(!r.ok) throw new Error(await r.text());
-    const mc=(await r.json()).data;
-    renderMonteCarlo(mc);
-    toast('Monte Carlo stress test complete','success'); refreshSectionBadges();
-  }catch(e){
-    runErr(e, 'mc-container', 'Stress test');
-  }finally{btn.disabled=false;btn.innerHTML='↻ Re-run';}
-}
-
 function renderMonteCarlo(mc, cachedMeta){
     const cont=$('mc-container'); if(!cont) return;
     if(!mc||mc.error){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc((mc&&mc.error)||'No data')}</div></div>`;return;}
@@ -2335,14 +1644,6 @@ function renderMonteCarlo(mc, cachedMeta){
     },60);
     $('mc-ts').textContent=(cachedMeta?('Cached '+relTime(cachedMeta)):'Updated '+new Date().toLocaleTimeString());
 }
-async function loadCachedMonteCarlo(){
-  const cont=$('mc-container'); if(!cont||cont.dataset.loaded) return;
-  try{
-    const r=await fetch('/api/monte-carlo/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data){ renderMonteCarlo(j.data, j.ran_at); prependStaleBadge('mc-container', j.ran_at); cont.dataset.loaded='1'; }
-  }catch(e){/* keep placeholder */}
-}
-
 /* ── Company Intelligence Agents ── */
 const sigCls=s=>({'BULLISH':'sp-bullish','VERY_POSITIVE':'sp-bullish','POSITIVE':'sp-bullish','BEARISH':'sp-bearish','VERY_NEGATIVE':'sp-bearish','NEGATIVE':'sp-bearish','NEUTRAL':'sp-neutral','MIXED':'sp-neutral'}[s]||'sp-neutral');
 const urgCls=u=>({'HIGH':'sp-high','MEDIUM':'sp-medium','LOW':'sp-low'}[u]||'sp-low');
@@ -2475,19 +1776,6 @@ function renderIntelligence(sec, news, fund){
   $('intel-ts').textContent='Updated '+new Date().toLocaleTimeString();
 }
 
-async function loadIntelHistory(){
-  const cont=$('intel-container');
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:18px;height:18px;border-width:2px;margin:0 auto 10px"></div><div class="deep-ph-text">Loading cached intelligence…</div></div>`;
-  try{
-    const [secR,newsR,fundR]=await Promise.all([
-      fetch('/api/agents/sec/history').then(r=>r.json()),
-      fetch('/api/agents/news/history').then(r=>r.json()),
-      fetch('/api/agents/fundamentals/latest').then(r=>r.json()),
-    ]);
-    renderIntelligence(secR.data, newsR.data, fundR.data);
-  }catch(e){cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div></div>`;}
-}
-
 function intelSetProgress(step, detailHtml){
   const cont=$('intel-container');
   const extra=detailHtml?('<br>'+detailHtml):'';
@@ -2503,39 +1791,6 @@ async function agentPost(path, label){
   if(!r.ok) throw new Error(`${label}: ${await r.text()}`);
   const j=await r.json();
   return (j&&j.data!==undefined)?j.data:j;
-}
-
-async function runAllAgents(){
-  const btn=$('btn-intel');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Running agents...';
-  const t0=Date.now();
-  let secR=null, newsR=null, fundR=null;
-  try{
-    intelSetProgress('Step 1/3 — SEC EDGAR filing watcher',
-      'Checking recent 10-K / 10-Q / 8-K filings · skips already-analyzed · max 6 new Claude reads');
-    secR=await agentPost('/api/agents/sec','SEC agent');
-
-    intelSetProgress('Step 2/3 — News sentiment scanner',
-      '✓ SEC done ('+daEsc(String(secR.new_filings||0))+' new, '+daEsc(String(secR.skipped_cached||0))+' cached skipped)<br>Scanning holdings + watchlist news…');
-    newsR=await agentPost('/api/agents/news','News agent');
-
-    intelSetProgress('Step 3/3 — Fundamental momentum detector',
-      '✓ SEC + News done ('+daEsc(String(newsR.skipped_cached||0))+' news rows from cache)<br>Running 80-stock universe pre-score → Claude deep scan (~2-4 min)…');
-    fundR=await agentPost('/api/agents/fundamentals','Fundamentals agent');
-
-    const elapsed=Math.round((Date.now()-t0)/1000);
-    renderIntelligence(secR.results||[], newsR, fundR);
-    $('intel-ts').textContent=`Updated ${new Date().toLocaleTimeString()} · ${elapsed}s`;
-  }catch(e){
-    if(e&&e.authRequired){
-      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required</strong> to run live agents.</div></div>`;
-    }else{
-      $('intel-container').innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>
-        <div style="margin-top:12px;font-size:14px;color:var(--muted)">Partial results may exist — try <button class="btn-ref" onclick="loadIntelHistory()">↻ Load Cached</button></div></div>`;
-    }
-    if(secR||newsR) try{ renderIntelligence((secR&&secR.results)||[], newsR||{}, fundR||null); }catch(_){}
-    console.error(e);
-  }finally{btn.disabled=false;btn.innerHTML='↻ Re-run Agents';}
 }
 
 /* ── Investment Radar / Screener ── */
@@ -2576,22 +1831,6 @@ function radarCard(p,i){
   </div>`;
 }
 
-async function runScreener(){
-  const btn=$('btn-radar'),cont=$('radar-container');
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Scanning...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Screening the market · fetching fundamentals · running AI scoring…<br><span style="font-size:15px">This takes ~30-45 seconds — batch downloading price data + analyst targets</span></div></div>`;
-  try{
-    const r=await fetch('/api/screener',{method:'POST'});
-    check401(r);
-    if(!r.ok) throw new Error(await r.text());
-    const j=await r.json();
-    renderScreener(j);
-    toast('Market scan complete · '+((j.data&&j.data.picks||[]).length)+' picks','success'); refreshSectionBadges();
-  }catch(e){
-    runErr(e, 'radar-container', 'Screener');
-  }finally{btn.disabled=false;btn.innerHTML='↻ Re-scan';}
-}
-
 function renderScreener(j, cachedMeta){
   const cont=$('radar-container'); if(!cont||!j||!j.data) return;
   const d=j.data;
@@ -2613,12 +1852,6 @@ function renderScreener(j, cachedMeta){
     <div class="radar-grid">${picks.map((p,i)=>radarCard(p,i)).join('')}</div>`;
   $('radar-ts').textContent=(cachedMeta?('Cached '+relTime(cachedMeta)):'Updated '+new Date().toLocaleTimeString());
 }
-async function loadCachedScreener(){
-  const cont=$('radar-container'); if(!cont||cont.dataset.loaded) return;
-  try{ const r=await fetch('/api/screener/cached'); const j=await r.json();
-    if(j&&j.cached&&j.data){ renderScreener(j, j.ran_at); prependStaleBadge('radar-container', j.ran_at); cont.dataset.loaded='1'; } }catch(e){}
-}
-
 // ── Ollama removed — stubs kept to avoid JS errors if any old bookmark triggers them ──
 function checkOllamaStatus(){}
 function runOllamaAnalysis(){}
@@ -2712,7 +1945,7 @@ async function loadPortfolioWithECG(){
     const d=body.data;
     applyViewDisclosure(body);   // Codex P1: this loader used to DISCARD body.view
     _lastHoldings=d.holdings;
-    renderStats(d.equity_summary);renderHoldings(d.holdings);renderWatchlist(d.watchlist);renderAllocChart(d.holdings);
+    renderPortfolioPanels(d);
     initChartSymbols(d.holdings);
     applyPortfolioConn(d);          // offline-aware Live/Cached badge (Codex MEDIUM-1)
     loadLongTermMacro(true);        // ensure long-term macro panel is populated on auto-refresh too
@@ -2734,8 +1967,8 @@ function switchTab(name, btn){
   // lazy-load data per tab (cached results render by default → never empty)
   if(name==='overview'&&!priceChart&&typeof chartSymbols!=='undefined'&&chartSymbols.length){ loadChart(); }
   if(name==='home'){ if(typeof loadHomeHero==='function') loadHomeHero(); if(typeof loadPreferences==='function') loadPreferences(); }
-  if(name==='risk'){ loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
-  if(name==='analysis'){ tryLoadCachedAnalysis(); }
+  if(name==='risk'){ if(typeof loadECG==='function') loadECG(); loadRegime(); if(typeof loadCachedMonteCarlo==='function') loadCachedMonteCarlo(); }
+  if(name==='analysis'){ if(typeof tryLoadCachedAnalysis==='function') tryLoadCachedAnalysis(); }
   if(name==='signals'){ if(typeof loadCachedConsensus==='function') loadCachedConsensus(); if(typeof loadCachedKelly==='function') loadCachedKelly(); }
   if(name==='radar'){ if(typeof loadCachedScreener==='function') loadCachedScreener(); }
   if(name==='intelligence'){ if(typeof loadIntelHistory==='function') loadIntelHistory(); }
@@ -2748,56 +1981,8 @@ function switchTab(name, btn){
 // first time the Daily Analysis tab opens — never force a duplicate paid run
 // just to see today's numbers. The Run button still triggers a fresh analysis.
 let _daAutoLoaded=false;
-async function daAutoLoadLatest(){
-  if(typeof daLoadHistory!=='function') return;
-  await daLoadHistory();
-  if(_daAutoLoaded) return;
-  const sel=$('da-hist-sel');
-  if(sel&&sel.options.length>1&&!sel.value){
-    sel.value=sel.options[1].value;   // newest run (options[0] is the placeholder)
-    _daAutoLoaded=true;
-    if(typeof daLoadRun==='function') daLoadRun();
-  }
-}
-
-// Try to load the most recent cached deep analysis from /api/history
+// Try to load the most recent cached deep analysis (owner history route).
 let _cachedAnalysisLoaded=false;
-async function tryLoadCachedAnalysis(){
-  if(_cachedAnalysisLoaded) return; // already loaded or user ran fresh
-  const cont=$('deep-container');
-  if(!cont||cont.querySelector('.pi-card')) return; // already has real data
-  try{
-    const r=await fetch('/api/history?limit=1');
-    if(!r.ok) return;
-    const j=await r.json();
-    // /api/history returns {status, data: [rows]} — data is the list itself
-    const runs=Array.isArray(j.data)?j.data:((j.data&&j.data.runs)||[]);
-    const run=runs[0];
-    let rj=run&&run.result_json;
-    if(typeof rj==='string'){ try{ rj=JSON.parse(rj); }catch(_e){ rj=null; } }
-    if(rj){
-      // result_json stores the full analysis response — render it
-      const a=rj.analysis||rj;
-      const mkt=rj.market||null;
-      renderDeepAnalysis(a, mkt, true, run.created_at||null);
-      _cachedAnalysisLoaded=true;
-      $('deep-ts').textContent='Cached '+(run.created_at?new Date(run.created_at).toLocaleTimeString():'');
-      return;
-    }
-    // Fallback: no DB run today → use the engine_results.json ai_result cache
-    const cr=await fetch('/api/deep-analysis/cached'); const cj=await cr.json();
-    const a=cj&&cj.cached?(cj.analysis||cj.data):null;
-    if(a&&a.holdings_analysis){
-      renderDeepAnalysis(a, (cj.market||null), true, cj.ran_at||null);
-      _cachedAnalysisLoaded=true;
-      $('deep-ts').textContent='Cached '+relTime(cj.ran_at);
-    }else{
-      const ph=cont.querySelector('.deep-ph-text');
-      if(ph) ph.innerHTML='<strong style="color:var(--text)">No analysis run yet.</strong><br>Click ▶ Run Deep Analysis to generate AI scores, fair value estimates, and 12M predictions.';
-    }
-  }catch(e){/* silent — user can run manually */}
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // CUSTOMER "ANALYZE ANY TICKER" — role gate + live per-ticker research
 // ══════════════════════════════════════════════════════════════════════
@@ -3140,6 +2325,29 @@ async function analyzeTicker(raw){
 // Rich Claude research card — the money-free per-ticker subset of the internal
 // deep analysis. POSTed separately (LLM ~15s) so the fast mechanical cards render
 // first; fills #analyze-ai on arrival, degrades silently if the model is unavailable.
+// Combined-stance panel (audit BUG-03). The mechanical signal and this card's
+// valuation opinion answer DIFFERENT questions, and shown as two equal verdicts
+// they read as the product contradicting itself ("STRONG BUY" beside "HOLD —
+// overvalued −18.1%"). The server reconciles them (verdict_reconciliation.py);
+// this renders the single stance plus the evidence, agreement stated either way.
+function buildStancePanel(rec){
+  if(!rec||!rec.stance||rec.stance==='NO_STANCE') return '';
+  const tone=rec.stance==='ACCUMULATE'?'var(--green)':rec.stance==='REDUCE'?'var(--red)'
+            :rec.stance==='WATCH'?'var(--yellow)':'var(--muted2)';
+  const conf=(rec.confidence!=null)
+    ? `<span style="margin-left:auto;color:var(--muted);font-size:12px" title="${daEsc(rec.confidence_basis||'')}">confidence ${daEsc(Math.round(rec.confidence*100))}%</span>`
+    : '';
+  return `<div style="border:1px solid var(--border);border-left:3px solid ${tone};border-radius:6px;padding:10px 12px;margin-bottom:12px">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <span style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;font-size:12px;color:var(--muted)">Combined stance</span>
+      <span style="font-weight:800;color:${tone}">${daEsc(rec.stance)}</span>
+      <span style="color:var(--muted2)">${daEsc(rec.headline||'')}</span>${conf}
+    </div>
+    <div style="margin-top:6px;color:var(--muted2);font-size:13px;line-height:1.5">${daEsc(rec.reason||'')}</div>
+    ${rec.components_agree===false?`<div style="margin-top:6px;font-size:12px;color:var(--yellow)">⚠ These layers disagree — both readings are shown below so you can see why.</div>`:''}
+    <table style="margin-top:8px;font-size:13px;border-collapse:collapse">${(rec.components||[]).map(c=>`<tr><td style="padding:3px 10px 3px 0;color:var(--muted);white-space:nowrap">${daEsc(c.layer)}</td><td style="padding:3px 10px 3px 0;font-weight:700">${daEsc(c.reading)}</td><td style="padding:3px 0;color:var(--muted2);font-size:12px">${daEsc(c.means)}</td></tr>`).join('')}</table>
+  </div>`;
+}
 function buildAICard(h,opts){
   const withSpark=!!(opts&&opts.spark);   // sparkline slot: single-ticker Analyze flow only
   const sc=h.scores||{}, fv=h.fair_value||{};
@@ -3153,6 +2361,7 @@ function buildAICard(h,opts){
     <div style="${T}">🧠 AI Research — ${daEsc(h.symbol||'')}</div>
     ${h.generated_at?`<div style="display:inline-block;border:1px solid var(--border);border-radius:5px;padding:2px 8px;margin-bottom:8px;font-size:11px;color:var(--muted)" title="This card is generated by an AI model from a point-in-time quote — NOT live market data, and it does not auto-update.">🤖 AI-GENERATED${genTime?' · '+daEsc(genTime):''}${h._cached?' · cached':''}</div>`:''}
     ${h.price_suspect?buildSuspectBadge((h.price_suspect_reason||'')+' — this analysis was built on that quote, treat it with caution'):''}
+    ${buildStancePanel(h.reconciliation)}
     <div class="da-holding" style="border:none;padding:0;margin:0">
       <div class="hdr">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -3324,13 +2533,26 @@ async function loadMyBook(){
     // Customer book stats (parity with owner overview)
     let bookStats = '';
     if (pos.length) {
+      // Day change comes from the SERVER's canonical valuation (portfolio_valuation.py).
+      // It used to be computed here as Σ equity × (lifetime return vs cost) with the
+      // unweighted mean of those returns as the percentage — two unrelated numbers
+      // shown as one reading, which rendered "+$271,629 (5920.4%)" on a real book
+      // (audit Q-02). When the server cannot evidence a day change (no prior close,
+      // or an equal-weight book whose dollars are illustrative) we say so instead of
+      // printing a zero that looks like a flat market.
+      const v = d.valuation || {};
       const totalEq = d.total_equity || pos.reduce((s,p)=>s+(p.equity||0),0);
-      const avgPctChg = pos.length ? (pos.reduce((s,p)=>s+(p.percent_change||0),0)/pos.length) : 0;
-      const dayChg = pos.reduce((s,p)=>s + (p.equity||0)*( (p.percent_change||0)/100 ), 0);
       const conc = pos.length ? Math.max(...pos.map(p=>p.portfolio_percentage||0)) : 0;
+      const dayCell = (v.day_change_available && v.day_change_amount!=null)
+        ? `<span class="${cls(v.day_change_amount)}">${v.day_change_amount>=0?'+':'−'}$${daFmt(Math.abs(v.day_change_amount),2)}${v.day_change_percent!=null?` (${v.day_change_percent>=0?'+':'−'}${Math.abs(v.day_change_percent).toFixed(2)}%)`:''}</span>`
+        : `<span style="color:var(--muted)" title="Day change needs the previous session's close for every holding; it is not available for this book right now.">not available</span>`;
+      const pnlChip = (v.cost_basis_available && v.unrealized_pnl!=null)
+        ? `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Unrealized: <span class="${cls(v.unrealized_pnl)}">${v.unrealized_pnl>=0?'+':'−'}$${daFmt(Math.abs(v.unrealized_pnl),2)}${v.unrealized_pnl_percent!=null?` (${v.unrealized_pnl_percent>=0?'+':'−'}${Math.abs(v.unrealized_pnl_percent).toFixed(1)}%)`:''}</span></span>`
+        : `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Add an average cost per position to see unrealized P&L.">Unrealized: <span style="color:var(--muted)">add cost basis</span></span>`;
       bookStats = `<div style="display:flex;gap:12px;margin:0 0 10px;flex-wrap:wrap;font-size:13px">
-        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(totalEq,0)}</b></span>
-        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Day: <span class="${cls(dayChg)}">${dayChg>=0?'+':''}$${daFmt(Math.abs(dayChg),0)} (${avgPctChg.toFixed(1)}%)</span></span>
+        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(totalEq,2)}</b></span>
+        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Today's move vs the previous session's close">Day: ${dayCell}</span>
+        ${pnlChip}
         <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Holdings: <b>${pos.length}</b></span>
         <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Top: ${conc.toFixed(0)}%</span>
       </div>`;
@@ -3342,7 +2564,7 @@ async function loadMyBook(){
       <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SHARES','PRICE','VALUE','WEIGHT','CONSENSUS','KELLY Δ','RISK',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
       <tbody>${pos.map(p=>`<tr style="border-bottom:1px dashed var(--border)">
         <td style="padding:8px 10px;font-weight:700;color:var(--accent)"><span onclick="analyzeTicker('${daEsc(p.symbol)}')" style="cursor:pointer" title="Deep research on ${daEsc(p.symbol)}">${daEsc(p.symbol)}</span></td>
-        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${eqw?'—':daEsc(p.quantity)}</td>
+        <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">${eqw?'—':daEsc(fmtQty(p.quantity))}</td>
         <td style="padding:8px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
         <td style="padding:8px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${eqw?'—':'$'+daFmt(p.equity,2)}</td>
         <td style="padding:8px 10px;text-align:right;color:var(--muted2)">${daFmt(p.portfolio_percentage,1)}%</td>
@@ -3356,17 +2578,62 @@ async function loadMyBook(){
         <span>${eqw?('<span style="color:var(--muted)">'+daEsc(pos.length)+' names · equal-weight</span>'):('Total: <b style="color:var(--accent)">$'+daFmt(d.total_equity,2)+'</b>')}</span></div>`;
   }catch(e){ el.innerHTML=''; }
 }
+// Strict numeric parse for quantity/cost inputs. `Number()` alone accepts ''
+// (→0), whitespace, and scientific notation; a share count is a decimal figure a
+// human typed, so anything else is rejected here AND by the server rather than
+// silently coerced. Returns null when the text is not an acceptable quantity.
+function parseQty(text){
+  const t=String(text==null?'':text).trim();
+  if(!t||!/^\d*\.?\d+$/.test(t)) return null;   // no sign, no exponent, no spaces
+  const n=Number(t);
+  return (Number.isFinite(n)&&n>0&&n<1e9)?n:null;
+}
+// Deliberate decimal rendering: a 0.00000001 position rendered as the raw
+// JS string "1e-8" in the SHARES column (audit F-04). Scientific notation is
+// not part of this UI's contract in either direction.
+function fmtQty(n){
+  const v=Number(n);
+  if(!Number.isFinite(v)) return '—';
+  return v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:8});
+}
+function mybookClearForm(){
+  ['mybook-sym','mybook-shares','mybook-cost'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+}
+function mybookFormError(msg){
+  const el=document.getElementById('mybook-form-error');
+  if(el){ el.textContent=msg||''; el.style.display=msg?'block':'none'; }
+}
 async function mybookAdd(){
-  const sym=(document.getElementById('mybook-sym').value||'').trim();
-  const shares=document.getElementById('mybook-shares').value;
-  const cost=document.getElementById('mybook-cost').value;
-  if(!sym||!shares) return;
+  const btn=document.getElementById('mybook-add-btn');
+  if(btn&&btn.disabled) return;                 // in-flight guard: no double submit
+  const sym=(document.getElementById('mybook-sym').value||'').trim().toUpperCase();
+  const shares=parseQty(document.getElementById('mybook-shares').value);
+  const costRaw=(document.getElementById('mybook-cost').value||'').trim();
+  const cost=costRaw?parseQty(costRaw):null;
+  mybookFormError('');
+  if(!sym){ mybookFormError('Enter a ticker symbol.'); return; }
+  if(shares===null){ mybookFormError('Shares must be a positive number (e.g. 12 or 2.5).'); return; }
+  if(costRaw&&cost===null){ mybookFormError('Average cost must be a positive number.'); return; }
+  if(btn) btn.disabled=true;
   try{
     const r=await fetch('/api/mybook',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({symbol:sym,shares:Number(shares),avg_cost:cost?Number(cost):null})});
-    if(r.ok){ ['mybook-sym','mybook-shares','mybook-cost'].forEach(id=>document.getElementById(id).value=''); }
+      body:JSON.stringify({symbol:sym,shares:shares,avg_cost:cost})});
+    if(!r.ok){
+      const d=await r.json().catch(()=>({}));
+      mybookFormError(String((d&&d.detail)||'That position could not be added.'));
+    }
     loadMyBook();
-  }catch(e){}
+  }catch(e){ mybookFormError('Could not reach the server — try again.'); }
+  finally{
+    // ALWAYS reset the inputs, success or failure. Clearing only on success left
+    // a rejected entry sitting in the fields, and the next entry was typed onto
+    // the end of it — a rejected "NVDA / -100" followed by "MSFT / 3" submitted
+    // as {"symbol":"NVDAMSFT","shares":-1003} (audit F-01).
+    mybookClearForm();
+    if(btn) btn.disabled=false;
+  }
 }
 async function mybookRemove(sym){
   try{ await fetch('/api/mybook/'+encodeURIComponent(sym),{method:'DELETE'}); loadMyBook(); }catch(e){}
@@ -3492,8 +2759,18 @@ async function accountDelete(){
   }catch(e){ if(st) st.textContent='Network error — nothing was deleted.'; }
 }
 
+// One user action = one poll loop. Every nav entry point ("Model Research",
+// "Model Risk", "Signals", the Run button) calls this, and a second click while
+// a run is in flight started a SECOND 3-second poll loop against the same job —
+// doubling the request rate for no benefit and making the traffic read as a
+// duplicate-submission storm (audit REL-dup / H). The server already refuses to
+// create a second job (unique index on one active job per user), so this guard
+// is about request volume, not job integrity.
+let _mybookAnalyzeInFlight=false;
 async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
+  if(_mybookAnalyzeInFlight) return;
+  _mybookAnalyzeInFlight=true;
   const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
   const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
   // Live elapsed counter, not static text: a large book runs ~3 min, and with a
@@ -3572,7 +2849,7 @@ async function mybookAnalyze(){
       </div>
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
-  finally{ clearInterval(tick); }
+  finally{ clearInterval(tick); _mybookAnalyzeInFlight=false; }
 }
 
 // "Where does new cash go?" — LLM-free Kelly-gap proportional cash deployment,
@@ -3664,7 +2941,7 @@ async function analyzeChart(sym,period){
 loadPortfolioWithECG();
 setInterval(loadPortfolioWithECG,REFRESH);
 // Load ECG + regime on init so alert bar and macro bar populate immediately
-loadECG();
+if(typeof loadECG==='function') loadECG();   // owner-only bundle
 loadRegime();
 loadLongTermMacro(true);  // make long-term features (VIX/F&G/MD + bias) visible immediately
 applyRoleNav();
@@ -3692,209 +2969,6 @@ function daPriStyle(p=''){
   return 'background:rgba(0,212,255,.1);color:#00d4ff';
 }
 const DA_SCORE_COLORS={valuation:'#a78bfa',growth:'#00e676',health:'#00d4ff',momentum:'#ffd700',dividend:'#ff8c42'};
-
-function daRender(data, meta, kellyData, portData){
-  const a=data.analysis;
-  if(!a){$('da-placeholder').style.display='flex';$('da-results').style.display='none';return;}
-
-  // ── Stat cards ──────────────────────────────────────────────────────
-  const ps=a.portfolio_score||0, rs=a.risk_score||0, ds=a.diversification_score||0;
-  $('da-port-score').textContent=ps; $('da-port-score').style.color=daScoreColor(ps);
-  $('da-port-type').textContent=a.portfolio_type||'';
-  $('da-risk-score').textContent=rs;
-  $('da-risk-score').style.color=rs>=65?'var(--red)':rs>=40?'var(--yellow)':'var(--green)';
-  $('da-div-score').textContent=ds; $('da-div-score').style.color=daScoreColor(ds);
-  $('da-verdict').textContent=a.portfolio_verdict||'—';
-
-  // ── Market context ───────────────────────────────────────────────────
-  $('da-context').textContent=a.market_context||'—';
-
-  // ── Trade Plan (Kelly-powered) ───────────────────────────────────────
-  // Build price map from portfolio data
-  const priceMap={}, qtyMap={};
-  const portHoldings=(portData&&portData.data&&portData.data.holdings)||[];
-  portHoldings.forEach(h=>{
-    priceMap[h.symbol]=parseFloat(h.current_price||0);
-    qtyMap[h.symbol]=parseFloat(h.quantity||0);
-  });
-
-  const kellyHoldings=(kellyData&&kellyData.data&&kellyData.data.holdings)||[];
-  const totalEq=parseFloat((kellyData&&kellyData.total_equity)||0);
-
-  // Build AI verdict map for colour coding
-  const aiMap={};
-  (a.holdings_analysis||[]).forEach(h=>{ aiMap[h.symbol]={verdict:h.verdict||'',fv:h.fair_value||{}}; });
-
-  // Sort: TRIM first (P1), ADD second (P2), HOLD last (P3)
-  const actionOrder={TRIM:0,AVOID:1,ADD:2,HOLD:3};
-  const sorted=[...kellyHoldings].sort((x,y)=>(actionOrder[x.action]??4)-(actionOrder[y.action]??4));
-
-  const actColor={ADD:'var(--green)',TRIM:'var(--red)',AVOID:'#ff8c42',HOLD:'var(--muted2)'};
-  const actPri  ={ADD:'P2',TRIM:'P1',AVOID:'P1',HOLD:'P3'};
-
-  if(sorted.length){
-    $('da-recs').innerHTML=`
-      <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead><tr style="border-bottom:1px solid var(--border)">
-          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">PRI</th>
-          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">SYMBOL</th>
-          <th style="padding:8px 10px;text-align:center;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ACTION</th>
-          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">CURR SH</th>
-          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">Δ SHARES</th>
-          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">$ IMPACT</th>
-          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">NOW %</th>
-          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">KELLY %</th>
-          <th style="padding:8px 10px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">PRICE</th>
-          <th style="padding:8px 10px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;min-width:200px;max-width:320px">AI VERDICT</th>
-        </tr></thead>
-        <tbody>
-        ${sorted.map(k=>{
-          const sym=k.symbol;
-          const price=priceMap[sym]||0;
-          const currQty=qtyMap[sym]||0;
-          const delta=parseFloat(k.delta_usd||0);
-          // share count: BUY=floor, TRIM=ceil
-          let deltaShares=0;
-          if(price>0){
-            if(k.action==='ADD')  deltaShares=Math.floor(Math.abs(delta)/price);
-            if(k.action==='TRIM') deltaShares=-Math.ceil(Math.abs(delta)/price);
-          }
-          const targetQty=Math.max(0,currQty+deltaShares);
-          const dollarImpact=deltaShares*price;
-          const pri=actPri[k.action]||'P3';
-          const ac=actColor[k.action]||'var(--muted2)';
-          const aiV=aiMap[sym]||{};
-          const fvPct=(daFairValue(aiV.fv)||{}).str||'';
-          const rowBg=k.action==='TRIM'?'rgba(255,68,68,.04)':k.action==='ADD'?'rgba(0,230,118,.04)':'';
-          return `<tr style="border-bottom:1px dashed var(--border);background:${rowBg}">
-            <td style="padding:9px 10px"><span class="da-pri" style="${daPriStyle(pri)}">${pri}</span></td>
-            <td style="padding:9px 10px;font-weight:700;color:var(--accent);font-size:15px">${daEsc(sym)}</td>
-            <td style="padding:9px 10px;text-align:center">
-              <span style="font-size:12px;font-weight:700;color:${daEsc(ac)};background:${daEsc(ac)}18;padding:3px 10px;border-radius:4px;border:1px solid ${daEsc(ac)}44">${daEsc(k.action)}</span>
-            </td>
-            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums">${currQty>0?currQty.toFixed(2):'—'}</td>
-            <td style="padding:9px 10px;text-align:right;font-weight:700;color:${daEsc(ac)};font-variant-numeric:tabular-nums">
-              ${deltaShares===0?'—':(deltaShares>0?'+':'')+deltaShares+' sh'}
-              ${deltaShares!==0&&targetQty>=0?`<span style="font-size:11px;opacity:.5;display:block">→ ${targetQty.toFixed(2)} sh</span>`:''}
-            </td>
-            <td style="padding:9px 10px;text-align:right;font-weight:700;color:${dollarImpact>0?'var(--green)':dollarImpact<0?'var(--red)':'var(--muted)'};font-variant-numeric:tabular-nums">
-              ${dollarImpact===0?'—':(dollarImpact>0?'+':'')+daFmt(dollarImpact,0)}
-              <span style="font-size:11px;opacity:.5;display:block">${delta>=0?'+':''}${daFmt(delta,0)} target</span>
-            </td>
-            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums">${daFmt(k.current_pct,1)}%</td>
-            <td style="padding:9px 10px;text-align:right;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums">${daFmt(k.optimal_pct,1)}%</td>
-            <td style="padding:9px 10px;text-align:right;font-variant-numeric:tabular-nums;color:var(--muted2)">
-              ${price>0?'$'+daFmt(price,2):'—'}
-            </td>
-            <td style="padding:9px 10px;max-width:320px;word-break:break-word">
-              <span style="${daVerdictStyle(aiV.verdict)};white-space:normal" class="da-holding vrd">${daEsc(aiV.verdict||'—')}</span>
-              ${fvPct?`<span style="font-size:11px;opacity:.6;display:block;margin-top:2px">FV ${fvPct}</span>`:''}
-            </td>
-          </tr>`;
-        }).join('')}
-        </tbody>
-      </table>
-      </div>
-      ${totalEq?`<div style="font-size:12px;color:var(--muted);padding:8px 10px;border-top:1px dashed var(--border)">
-        Kelly allocated: <b style="color:var(--accent)">${daFmt(kellyData.data.total_optimal_allocated_pct,1)}%</b> of $${daFmt(totalEq,0)} portfolio ·
-        Cash recommended: <b style="color:var(--yellow)">${daFmt(kellyData.data.cash_recommended_pct,1)}%</b>
-      </div>`:''}
-    `;
-  } else {
-    // Fallback to AI text recommendations if no Kelly data
-    const recs=a.portfolio_recommendations||[];
-    $('da-recs').innerHTML=recs.length?recs.map(r=>{
-      const p=((r.priority||'P3').replace(/priority/i,'').trim().toUpperCase());
-      const lbl=p.match(/^P[123]$/)?p:'P3';
-      return `<div class="da-rec">
-        <span class="da-pri" style="${daPriStyle(lbl)}">${daEsc(lbl)}</span>
-        <span style="color:var(--accent);font-weight:600;min-width:90px;flex-shrink:0">${daEsc(r.action||'')}</span>
-        <span style="color:var(--muted2)">${daEsc(r.rationale||'')}</span>
-      </div>`;
-    }).join(''):'<div class="da-rec" style="color:var(--muted)">No recommendations</div>';
-  }
-
-  // ── Holdings ─────────────────────────────────────────────────────────
-  const holdings=a.holdings_analysis||[];
-  const regimes=data.regimes||[];
-  const rmap={}; regimes.forEach(r=>{if(r.symbol)rmap[r.symbol]=r.regime||'';});
-  const skeys=['valuation','growth','health','momentum','dividend'];
-
-  $('da-holdings').innerHTML=holdings.length?holdings.map(h=>{
-    const sc=h.scores||{}, fv=h.fair_value||{};
-    const fvv=daFairValue(fv);
-    const fvPct=fvv?fvv.str:'';
-    const fvColor=fvv&&fvv.pct>5?'var(--green)':fvv&&fvv.pct<-5?'var(--red)':'var(--yellow)';
-    const regime=rmap[h.symbol]||'';
-    return `<div class="da-holding">
-      <div class="hdr">
-        <div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span class="sym">${daEsc(h.symbol)}</span>
-            <span class="da-holding vrd" style="${daVerdictStyle(h.verdict)}">${daEsc(h.verdict||'—')}</span>
-          </div>
-          <div style="font-size:12px;color:var(--muted);margin-top:3px">${daEsc(h.company_type||'')}${regime?' · '+daEsc(regime):''}</div>
-        </div>
-        <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
-          FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>
-        </div>
-      </div>
-      <div class="da-sbars">
-        ${skeys.map(k=>{const v=sc[k]||0;return `<div class="da-sbar">
-          <span class="nm">${daEsc(k.slice(0,3).toUpperCase())}</span>
-          <span class="nv" style="color:${DA_SCORE_COLORS[k]||'#fff'}">${daEsc(v)}</span>
-          <div class="tr"><div class="fl" style="width:${daEsc(v)}%;background:${DA_SCORE_COLORS[k]||'#00d4ff'}"></div></div>
-        </div>`;}).join('')}
-      </div>
-      <div style="font-size:13px;color:var(--muted2);margin-bottom:8px;font-style:italic">${daEsc(h.snowflake_summary||'')}</div>
-      ${h.prediction?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">3M: <b style="color:var(--accent)">${daEsc(h.prediction['3m']||'')}</b></span>
-        <span style="font-size:13px;background:var(--hover);padding:3px 9px;border-radius:4px">12M: <b style="color:var(--accent)">${daEsc(h.prediction['12m']||'')}</b></span>
-      </div>`:''}
-      ${(h.risks||[]).slice(0,3).map(r=>{
-        const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
-        return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:3px;font-size:13px">
-          <span class="da-dot" style="background:${dot}"></span>
-          <span style="color:var(--muted2)">${daEsc(r.text||'')}</span>
-        </div>`;
-      }).join('')}
-      ${h.analyst_note?`<div style="font-size:13px;color:var(--accent);margin-top:6px;padding-top:6px;border-top:1px dashed var(--border)">💡 ${daEsc(h.analyst_note)}</div>`:''}
-    </div>`;
-  }).join(''):'<div style="color:var(--muted);padding:10px;font-size:14px">No holdings in analysis</div>';
-
-  // ── Portfolio risks ──────────────────────────────────────────────────
-  const portRisks=a.portfolio_risks||[];
-  $('da-risks').innerHTML=portRisks.length?portRisks.map(r=>{
-    const sev=(r.severity||'LOW').toUpperCase();
-    const dot=sev==='HIGH'?'var(--red)':sev==='MEDIUM'?'var(--yellow)':'var(--green)';
-    return `<div class="da-risk">
-      <span class="da-dot" style="background:${dot}"></span>
-      <span style="font-size:11px;font-weight:700;min-width:52px;flex-shrink:0;color:${dot}">${daEsc(sev)}</span>
-      <span style="color:var(--muted2)">${daEsc(r.text||'')}</span>
-    </div>`;
-  }).join(''):'<div class="da-risk" style="color:var(--muted)">No risks identified</div>';
-
-  // ── Sector breakdown ─────────────────────────────────────────────────
-  const sectors=a.sector_breakdown||[];
-  $('da-sectors').innerHTML=sectors.length?`<table style="width:100%;border-collapse:collapse;font-size:14px">
-    <thead><tr style="border-bottom:1px solid var(--border)">
-      <th style="padding:9px 14px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">SECTOR</th>
-      <th style="padding:9px 14px;text-align:right;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ALLOC</th>
-      <th style="padding:9px 14px;text-align:left;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">ASSESSMENT</th>
-    </tr></thead>
-    <tbody>${sectors.map(s=>`<tr style="border-bottom:1px dashed var(--border)">
-      <td style="padding:9px 14px;color:var(--accent);font-weight:600">${daEsc(s.sector||'')}</td>
-      <td style="padding:9px 14px;text-align:right;font-variant-numeric:tabular-nums">${daFmt(s.allocation_pct,1)}%</td>
-      <td style="padding:9px 14px;color:var(--muted2)">${daEsc(s.assessment||'')}</td>
-    </tr>`).join('')}</tbody>
-  </table>`:'<div style="color:var(--muted);font-size:13px;padding:12px">No sector data</div>';
-
-  // ── Meta + show ──────────────────────────────────────────────────────
-  $('da-run-meta').textContent=meta||'';
-  $('da-placeholder').style.display='none';
-  $('da-results').style.display='block';
-}
 
 // ── GESH-5: run telemetry that only claims what it observed ──────────────────
 // The old loader asserted "~20–40 seconds" (a number nobody measured) and rotated a
@@ -3932,140 +3006,7 @@ function daCancelAnalysis(){
   if(_daCtl) _daCtl.abort(new DOMException('cancelled by user','AbortError'));
 }
 
-async function daRunAnalysis(){
-  const btn=$('da-btn-run');
-  btn.disabled=true; btn.innerHTML='<span class="spin" style="width:12px;height:12px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></span> Analysing…';
-  $('da-loading').style.display='block';
-  $('da-placeholder').style.display='none';
-  $('da-results').style.display='none';
-  $('da-ts').textContent='';
-
-  const fill=$('da-load-fill');
-  fill.style.animation='none'; fill.getBoundingClientRect(); fill.style.animation='';
-
-  // Name only what is genuinely outstanding; drop each as its fetch really settles.
-  const outstanding=new Set(['portfolio snapshot','Kelly sizing','Claude deep-analysis']);
-  const paint=()=>{
-    const el=$('da-loading-msg'); if(!el) return;
-    el.textContent = outstanding.size ? 'Waiting on: '+[...outstanding].join(' · ') : 'Rendering…';
-  };
-  const settled=(name)=>(r)=>{ outstanding.delete(name); paint(); return r; };
-  paint();
-
-  const t0=Date.now();
-  const typical=daTypicalMs();
-  const etaEl=$('da-eta');
-  if(etaEl) etaEl.textContent = typical
-    ? ` · typically ~${Math.round(typical/1000)}s on this machine`
-    : ' · timing this run (no estimate yet)';
-  const tick=setInterval(()=>{
-    const el=$('da-elapsed'); if(el) el.textContent=Math.round((Date.now()-t0)/1000)+'s';
-  },1000);
-
-  _daCtl = new AbortController();
-  const killer=setTimeout(()=>_daCtl&&_daCtl.abort(new DOMException('deadline','TimeoutError')),DA_DEADLINE_MS);
-  const sig={signal:_daCtl.signal};
-
-  try{
-    // Run deep analysis + Kelly + portfolio in parallel
-    const [deepRes, kellyRes, portRes] = await Promise.all([
-      fetch('/api/deep-analysis',{method:'POST',...sig}).then(settled('Claude deep-analysis')),
-      fetch('/api/kelly',{method:'POST',...sig}).then(settled('Kelly sizing')),
-      fetch('/api/portfolio',sig).then(settled('portfolio snapshot')),
-    ]);
-    if(deepRes.status===401){ const err=new Error('auth'); err.authRequired=true; throw err; }
-    if(!deepRes.ok) throw new Error(await deepRes.text());
-    const deep   = await deepRes.json();
-    const kelly  = kellyRes.ok  ? await kellyRes.json()  : null;
-    const port   = portRes.ok   ? await portRes.json()   : null;
-    daRecordTiming(Date.now()-t0);   // only a run that actually completed counts
-    const ts=new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    $('da-ts').textContent=ts;
-    // Warn-and-proceed: a degraded run is still worth showing, but it must SAY so.
-    // Blocking here would break the offline/snapshot fallback path on purpose built
-    // into /api/deep-analysis — the honest move is to label it, not refuse it.
-    const degraded = !!(deep && (deep.degraded===true || deep.status==='degraded' || deep.cached===true));
-    const meta = (degraded?'⚠ DEGRADED INPUTS — ':'')+
-                 `run #${deep.run_id||'—'} · ${deep.model||'—'} · ${ts}`;
-    daRender(deep, meta, kelly, port);
-    if(degraded && typeof toast==='function')
-      toast('Analysis ran on degraded/cached inputs — see the run label','error',7000);
-    daLoadHistory();
-  }catch(e){
-    $('da-placeholder').style.display='flex';
-    if(e&&e.authRequired){
-      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">🔒</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Daily Analysis again.</div>`;
-      if(typeof toast==='function') toast('Sign in to run a live Claude analysis','error',6000);
-    }else if(e&&e.name==='AbortError'){
-      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">✋</div><div class="deep-ph-text" style="color:var(--muted)">Run cancelled. Nothing was saved — click ▶ Run Daily Analysis to start again.</div>`;
-    }else if(e&&e.name==='TimeoutError'){
-      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⏱</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Gave up after ${Math.round(DA_DEADLINE_MS/1000)}s.</strong><br>The engines did not return in time. Nothing was saved — try again, or load a past run from the dropdown.</div>`;
-    }else{
-      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">⚠️</div><div class="deep-ph-text" style="color:var(--red)">${daEsc(friendlyErr(e))}</div>`;
-    }
-  }finally{
-    clearInterval(tick); clearTimeout(killer); _daCtl=null;
-    $('da-loading').style.display='none';
-    btn.disabled=false; btn.innerHTML='↻ Re-analyse';
-  }
-}
-
-async function daLoadHistory(){
-  try{
-    const r=await fetch('/api/history?limit=30');
-    if(!r.ok) return;
-    const j=await r.json();
-    const rows=(j.data&&j.data.runs)||j.data||[];
-    const sel=$('da-hist-sel');
-    sel.innerHTML='<option value="">— Load past run —</option>'+
-      rows.map(row=>{
-        const d=new Date(row.run_at||'');
-        const label=`#${row.id} · ${isNaN(d)?row.run_at:d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})} · score=${row.portfolio_score||'?'}`;
-        return `<option value="${daEsc(row.id)}">${daEsc(label)}</option>`;
-      }).join('');
-  }catch(e){/* silent */}
-}
-
-async function daLoadRun(){
-  const sel=$('da-hist-sel'), id=sel.value;
-  if(!id) return;
-  const btn=$('da-btn-load');
-  btn.disabled=true; btn.innerHTML='<span class="spin" style="width:11px;height:11px;border-width:2px;display:inline-block;vertical-align:middle"></span>';
-  try{
-    const r=await fetch(`/api/history/${encodeURIComponent(id)}`);
-    if(!r.ok) throw new Error('not found');
-    const j=await r.json();
-    const row=j.data;
-    const analysis=row.result||null;
-    const ts=row.run_at?new Date(row.run_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
-    $('da-ts').textContent=ts+' (cached)';
-    daRender({analysis,regimes:[],market:{}}, `run #${row.id} · ${row.model||'—'} · ${ts} (historical)`);
-  }catch(e){ alert('Failed to load: '+e.message); }
-  finally{ btn.disabled=false; btn.textContent='Load'; }
-}
-
 // ── Scanner Tab ───────────────────────────────────────────────────────────
-
-async function loadScannerConfig(){
-  try{
-    const r=await fetch('/api/config');
-    if(!r.ok) return;
-    const d=await r.json();
-    // /api/config returns {status, data: cfg}
-    const cfg=(d&&d.data)||d||{};
-    const tf=cfg.scanner_timeframe||'daily';
-    $('scanner-tf').value=tf;
-    $('scanner-mode-badge').textContent=tf.toUpperCase();
-    $('scanner-cfg-ts').textContent='Config loaded '+new Date().toLocaleTimeString();
-  }catch(e){console.error('scanner config',e);}
-}
-
-async function saveScannerTf(val){
-  try{
-    await fetch('/api/config',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({scanner_timeframe:val})});
-    $('scanner-mode-badge').textContent=val.toUpperCase();
-  }catch(e){console.error('save tf',e);}
-}
 
 async function runScanner(){
   const btn=$('btn-scanner');
@@ -4196,57 +3137,6 @@ function renderCZResults(d, total, scannedAll){
 
 // ── Paper Trading Tab ─────────────────────────────────────────────────────
 
-async function loadTradeStats(){
-  try{
-    $('pt-ts').textContent='Loading…';
-    const [stats, summary, trades] = await Promise.all([
-      fetch('/api/trades/stats').then(r=>r.json()),
-      fetch('/api/paper/summary').then(r=>r.json()),
-      fetch('/api/trades?paper=true&limit=20').then(r=>r.json())
-    ]);
-
-    // Stats row — endpoints return {status, data} envelopes; this tab shows the
-    // PAPER book, so stats come from data.paper (data.real lives beside it).
-    const statsD=(stats&&stats.data)||{};
-    const s=statsD.paper||{};
-    const wr=(s.win_rate_pct||0).toFixed(0);
-    const totalTrades=s.total_trades||0;
-    // Only color-code win rate if there are actual trades
-    const wrColor=totalTrades===0?'var(--muted)':parseFloat(wr)>=60?'var(--green)':parseFloat(wr)>=40?'var(--yellow)':'var(--red)';
-    $('pt-winrate').textContent=totalTrades===0?'—':wr+'%';
-    $('pt-winrate').style.color=wrColor;
-    $('pt-wl').textContent=`${s.wins||0}W / ${s.losses||0}L`;
-
-    const pnl=s.total_realized_pnl||0;
-    $('pt-pnl').textContent=fmt(pnl);
-    $('pt-pnl').className='sval '+(pnl>=0?'pos':'neg');
-
-    const summaryD=(summary&&summary.data)||{};
-    const edge=(summaryD.paper_edge||0).toFixed(1);
-    $('pt-edge').textContent=(edge>0?'+':'')+edge+'%';
-    $('pt-edge').className='sval '+(parseFloat(edge)>=0?'pos':'neg');
-    $('pt-edge-sub').textContent=summaryD.verdict||'vs live performance';
-
-    $('pt-open').textContent=String(s.open_trades||0);
-    $('pt-open-sub').textContent=`${totalTrades} closed paper trades`;
-
-    // Best scanner badge
-    const scanPerf=statsD.scanner_performance||[];
-    if(scanPerf.length){
-      const best=scanPerf[0];
-      $('pt-scanner-best').textContent=`🏆 Best: ${best.scanner_source} (${(best.win_rate||0).toFixed(0)}%)`;
-      $('pt-scanner-best').className='badge b-green';
-    }
-
-    // Trade history — unwrap the {status, data} envelope
-    renderTradeHistory((trades&&trades.data)||[]);
-    $('pt-ts').textContent='Updated '+new Date().toLocaleTimeString();
-  }catch(e){
-    console.error('trade stats',e);
-    $('pt-ts').textContent='Error: '+e.message;
-  }
-}
-
 function renderTradeHistory(trades){
   if(!trades||!trades.length){
     $('pt-history-container').innerHTML='<div class="empty">No paper trades yet — run a simulation to populate the log.</div>';
@@ -4281,70 +3171,6 @@ function renderTradeHistory(trades){
   });
   html+=`</tbody></table></div>`;
   $('pt-history-container').innerHTML=html;
-}
-
-async function checkPaperCloses(){
-  try{
-    const r=await fetch('/api/paper/check-closes',{method:'POST'});
-    const d=await r.json();
-    const closed=d.closed||[];
-    if(closed.length){
-      alert(`Closed ${closed.length} paper position(s):\n${closed.map(c=>`${c.symbol}: ${c.outcome} ${c.pnl_usd?'$'+c.pnl_usd.toFixed(2):''}`).join('\n')}`);
-    } else {
-      alert('No positions hit stop/target — all still open.');
-    }
-    loadTradeStats();
-  }catch(e){alert('Error: '+e.message);}
-}
-
-async function runPaperSession(){
-  const btn=$('btn-pt-run');
-  btn.disabled=true; btn.textContent='⏳ Simulating…';
-  const setProgress=(msg)=>{$('pt-container').innerHTML=`<div class="empty"><span class="spin"></span> ${daEsc(msg)}</div>`;};
-  setProgress('Running paper simulation through risk gate…');
-  try{
-    const pj=await fetch('/api/portfolio').then(r=>r.json());
-    const holdings=pj.data.holdings||[];
-    if(!holdings.length){
-      $('pt-container').innerHTML='<div class="empty" style="color:var(--yellow)">No holdings found — load portfolio first.</div>';
-      btn.disabled=false; btn.textContent='▶ Simulate Today';
-      return;
-    }
-
-    const gate=await fetch('/api/trading/gate-status').then(r=>r.json()).catch(()=>({}));
-    if(gate.cap_reached){
-      setProgress(`Daily order cap already reached (${gate.orders_today}/${gate.max_orders_per_day}) — running HOLD checks only…`);
-    } else {
-      setProgress(`Simulating ${holdings.length} holdings (cached consensus)…`);
-    }
-
-    const r=await fetch('/api/trading/simulate-session',{
-      method:'POST',
-      headers:authHeaders({'Content-Type':'application/json'}),
-      body:JSON.stringify({use_cached:true})
-    });
-    const d=await r.json();
-    if(!r.ok){
-      throw new Error(d.detail||d.error||`HTTP ${r.status}`);
-    }
-    const results=(d.results||[]).map(row=>({
-      symbol:row.symbol,
-      verdict:row.verdict,
-      order:row.order,
-      consensus_verdict:row.consensus_verdict,
-      skipped:row.skipped,
-      reason:row.reason||row.error,
-      error:row.error
-    }));
-    if(d.cap_reached){
-      results._capNote=d.cap_reason;
-    }
-    renderPaperSessionResults(results);
-    await loadTradeStats();
-  }catch(e){
-    $('pt-container').innerHTML=`<div class="empty" style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
-  }
-  btn.disabled=false; btn.textContent='▶ Simulate Today';
 }
 
 function renderPaperSessionResults(results){
@@ -4395,125 +3221,12 @@ function renderPaperSessionResults(results){
   $('pt-container').innerHTML=html;
 }
 
-async function runDryRun(){
-  const btn=$('btn-gate');
-  btn.disabled=true; btn.textContent='⏳ Checking…';
-  $('gate-container').style.display='block';
-  $('gate-container').innerHTML='<span class="spin"></span> Running gate check…';
-  try{
-    const sym=$('gate-sym').value.trim().toUpperCase();
-    const action=$('gate-action').value;
-    const conf=parseFloat($('gate-conf').value)||0.85;
-    const pct=parseFloat($('gate-pct').value)/100||0.02;
-    const body={symbol:sym,action,confidence:conf,target_position_pct:pct};
-    const r=await fetch('/api/trading/dry-run',{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body)});
-    const d=await r.json();
-    renderGateVerdict(d, sym, action);
-  }catch(e){
-    $('gate-container').innerHTML=`<div style="color:var(--red)">Error: ${daEsc(e.message)}</div>`;
-  }
-  btn.disabled=false; btn.textContent='▶ Gate Check';
-}
-
-function renderGateVerdict(resp, sym, action){
-  // /api/trading/dry-run returns {status, data: {approved, reason, gates, ...}}
-  const d=(resp&&resp.data)||resp||{};
-  const verdict=d.verdict||d.approved;
-  const approved=verdict==='APPROVED'||verdict===true;
-  const gates=d.gates||{};
-  const gateNames=['KILL_SWITCH','MARKET_HOURS','CONFIDENCE_FLOOR','POSITION_CAP','ORDER_RATE','CASH_FLOOR','DAILY_LOSS','DATA_FRESH'];
-  const color=approved?'var(--green)':'var(--red)';
-  let failedAt=-1;
-  if(!approved){
-    for(let i=0;i<gateNames.length;i++){
-      const g=gateNames[i];
-      if(g in gates&&gates[g]===false){ failedAt=i; break; }
-    }
-  }
-
-  let html=`<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-    <span style="font-size:28px;font-weight:700;color:${color}">${approved?'✅ APPROVED':'❌ REJECTED'}</span>
-    <span style="color:var(--accent)">${daEsc(sym)} ${daEsc(action)}</span>
-  </div>`;
-  if(!approved&&d.reason){
-    html+=`<div style="background:var(--rdim);border:1px solid var(--red);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:14px;color:var(--red)">${daEsc(d.reason)}</div>`;
-  }
-  html+=`<div style="display:flex;flex-wrap:wrap;gap:8px">`;
-  gateNames.forEach((g,i)=>{
-    const pass=gates[g];
-    const known=g in gates;
-    const skipped=!approved&&failedAt>=0&&i>failedAt&&known&&pass===false;
-    const bg=!known?'var(--border)':skipped?'var(--border)':pass?'var(--gdim)':'var(--rdim)';
-    const col=!known?'var(--muted)':skipped?'var(--muted)':pass?'var(--green)':'var(--red)';
-    const icon=!known?'⊘':skipped?'–':pass?'✓':'✗';
-    const gateLbl=g.replace(/_/g,' ')+(skipped?' (skipped)':'');
-    html+=`<div style="background:${bg};border:1px solid ${col};border-radius:4px;padding:4px 10px;font-size:12px;color:${col}">${icon} ${daEsc(gateLbl)}</div>`;
-  });
-  html+=`</div>`;
-  $('gate-container').innerHTML=html;
-}
-
 // ── Bull/Bear debate panel (Trading tab) ─────────────────────────────────
 // All API data is escaped via _esc() before innerHTML injection
 const _esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const _fmt = (n,d=2) => (n===null||n===undefined)?'—':Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
 const _debArgs = args => (!args||!args.length) ? '' :
   args.map(a=>`<li><b>${_esc(a.point)}</b> — <span style="opacity:.75">${_esc(a.evidence)}</span></li>`).join('');
-
-async function runMainDebate(){
-  const sym = _esc((document.getElementById('main-debate-sym').value||'SPY').trim().toUpperCase());
-  if(!sym) return;
-  const btn = document.getElementById('btn-main-debate');
-  const aColors = {'STRONG BUY':'#00e87a','BUY':'#4caf87','HOLD':'#f0b429','SELL':'#ff6b35','STRONG SELL':'#ff3c5a'};
-  btn.disabled=true; btn.textContent='⏳ Debating…';
-  document.getElementById('main-debate-loading').style.display='block';
-  document.getElementById('main-debate-result').style.display='none';
-  document.getElementById('main-debate-meta').textContent='calling Claude (cached consensus) — ~15s…';
-  try {
-    const resp=await fetch(`/api/trading/deep-debate/${encodeURIComponent(sym)}`,{
-      method:'POST',
-      headers:authHeaders({'Content-Type':'application/json'}),
-      body:JSON.stringify({use_cached:true})
-    });
-    const r=await resp.json();
-    if(!resp.ok||!r||r.status!=='ok') throw new Error(r.detail||JSON.stringify(r));
-    const dec=r.debate.decision, bull=r.debate.bull, bear=r.debate.bear;
-    const aCol=aColors[dec.action]||'#e8eaf0';
-    document.getElementById('main-debate-decision').innerHTML=
-      `<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">` +
-      `<div style="font-size:22px;font-weight:700;color:${aCol}">${_esc(dec.action)}</div>` +
-      `<div style="flex:1"><div style="font-size:12px;opacity:.6;margin-bottom:4px">${daEsc(sym)} · Conv ${_esc(dec.conviction)}% · Bull ${_esc(dec.bull_weight)}%</div>` +
-      `<div style="font-size:13px">${_esc(dec.rationale)}</div></div>` +
-      `<div style="text-align:right;min-width:120px">` +
-      `<div style="font-size:18px;font-weight:600;color:${aCol}">$${_fmt(dec.price_target,2)}</div>` +
-      `<div style="font-size:11px;opacity:.6">${dec.upside_pct>=0?'+':''}${_fmt(dec.upside_pct,1)}% target</div>` +
-      `<div style="font-size:11px;opacity:.5">Stop −${_fmt(dec.stop_loss_pct,1)}%</div></div></div>` +
-      (()=>{const bw=Math.max(0,Math.min(100,Number(dec.bull_weight)||50));return `<div class="verdict-balance"><div class="vb-bull" style="width:${bw}%"></div><div class="vb-bear" style="width:${100-bw}%"></div></div><div class="vb-legend"><span style="color:var(--green)">🐂 Bull ${bw}%</span><span style="color:var(--red)">Bear ${100-bw}% 🐻</span></div>`;})();
-    const bullConf=Math.max(0,Math.min(100,Number(bull.confidence)||0));
-    const bearConf=Math.max(0,Math.min(100,Number(bear.confidence)||0));
-    document.getElementById('main-debate-bull').innerHTML=
-      `<div class="deb-head" style="color:var(--green)"><span>🐂 BULL</span><span>${_esc(bull.confidence)}%</span></div>` +
-      `<div class="conv-meter"><i style="width:${bullConf}%;background:var(--green)"></i></div>` +
-      `<div class="prose" style="font-size:13px;margin-bottom:4px;font-style:italic;color:var(--text-dim)">${_esc(bull.thesis)}</div>` +
-      `<ul class="deb-arg">${_debArgs(bull.arguments)}</ul>` +
-      `<div style="font-size:11.5px;color:var(--muted);margin-top:10px">Target $${_fmt(bull.price_target,2)} · Risk: ${_esc(bull.key_risk)}</div>`;
-    document.getElementById('main-debate-bear').innerHTML=
-      `<div class="deb-head" style="color:var(--red)"><span>🐻 BEAR</span><span>${_esc(bear.confidence)}%</span></div>` +
-      `<div class="conv-meter"><i style="width:${bearConf}%;background:var(--red)"></i></div>` +
-      `<div class="prose" style="font-size:13px;margin-bottom:4px;font-style:italic;color:var(--text-dim)">${_esc(bear.thesis)}</div>` +
-      `<ul class="deb-arg">${_debArgs(bear.arguments)}</ul>` +
-      `<div style="font-size:11.5px;color:var(--muted);margin-top:10px">Target $${_fmt(bear.price_target,2)} · Risk: ${_esc(bear.key_risk)}</div>`;
-    const cats=(dec.catalysts||[]).map(c=>`<span style="display:inline-block;background:var(--hover);border-radius:4px;padding:3px 8px;margin:3px;font-size:12px">${_esc(c)}</span>`).join('');
-    document.getElementById('main-debate-catalysts').innerHTML=`<div style="font-size:12px;opacity:.6;margin-bottom:6px">CATALYSTS TO WATCH</div>${cats||'—'}`;
-    document.getElementById('main-debate-meta').textContent=`${sym} · ${new Date().toLocaleTimeString()}`;
-    document.getElementById('main-debate-loading').style.display='none';
-    document.getElementById('main-debate-result').style.display='block';
-  } catch(e){
-    document.getElementById('main-debate-loading').style.display='none';
-    document.getElementById('main-debate-meta').textContent='Error: '+(e.message||e);
-  }
-  btn.disabled=false; btn.textContent='▶ Run Debate';
-}
 
 // ══════════════════════════════════════════════════════════════════════
 // REDESIGN — shared UI helpers: toast · command palette · sparkline · badges
@@ -4600,7 +3313,13 @@ function drawSparkline(canvasId, series, color){
 
 // ── Command palette (Cmd/Ctrl+K) ──
 const CMDK_TABS=[['overview','Overview'],['risk','Risk'],['scanner','Scanner'],['analysis','AI Analysis'],['intelligence','Intelligence'],['radar','Radar'],['daily','Daily Analysis'],['signals','Signals'],['trading','Paper Trades']];
-const CMDK_ACTIONS=[['Run Deep Analysis',()=>{switchTab('analysis');runDeepAnalysis&&runDeepAnalysis();}],['Run Consensus',()=>{switchTab('signals');runConsensus&&runConsensus();}],['Size Positions (Kelly)',()=>{switchTab('signals');runKelly&&runKelly();}],['Run Monte Carlo',()=>{switchTab('risk');runMonteCarlo&&runMonteCarlo();}],['Run Daily Analysis',()=>{switchTab('daily');daRunAnalysis&&daRunAnalysis();}],['Scan Market (Radar)',()=>{switchTab('radar');runScreener&&runScreener();}]];
+// Command-palette actions. Every entry here runs an OPERATOR action, so the
+// shared bundle ships an EMPTY list and the owner-only script appends its
+// entries (see templates/owner_console.html). A customer's palette therefore
+// contains navigation and symbols only — it cannot name, let alone invoke,
+// an operator command (audit: owner command-palette actions in the customer
+// bundle).
+const CMDK_ACTIONS=[];
 let _cmdkSel=0, _cmdkItems=[];
 function openCmdk(){const o=document.getElementById('cmdk');o.classList.add('open');const inp=document.getElementById('cmdk-input');inp.value='';renderCmdk('');inp.focus();}
 function closeCmdk(){document.getElementById('cmdk').classList.remove('open');}
@@ -4642,5 +3361,6 @@ refreshSectionBadges();
 setInterval(refreshSectionBadges, 60000);
 
 </script>
+<!--GESH_SLOT:owner_console_js-->
 </body>
 </html>

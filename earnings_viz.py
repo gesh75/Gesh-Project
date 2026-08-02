@@ -78,8 +78,15 @@ def get_earnings(symbol: str) -> dict:
         return {"available": False, "reason": "no symbol"}
     quarters = _from_finnhub(sym) or _from_yfinance(sym)
     if not quarters:
+        # `reason` is CUSTOMER-FACING copy and is rendered verbatim in the UI —
+        # it previously read "no earnings source (set FINNHUB_API_KEY for
+        # VPN-safe data)", instructing a paying customer to configure the
+        # operator's provider key (audit BUG-05). Operational detail moves to
+        # `diagnostic`, which stays owner/log-side.
         return {"available": False, "symbol": sym,
-                "reason": "no earnings source (set FINNHUB_API_KEY for VPN-safe data)"}
+                "reason": "Earnings history isn't available for this symbol right now.",
+                "diagnostic": ("no earnings provider returned data "
+                               "(FINNHUB_API_KEY unset or upstream empty)")}
     beats = sum(1 for q in quarters if q.get("surprise_pct") not in (None,) and q["surprise_pct"] > 0)
     scored = [q for q in quarters if q.get("surprise_pct") is not None]
     return {

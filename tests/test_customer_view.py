@@ -106,6 +106,35 @@ def test_owner_sees_raw_dollars(monkeypatch, client):
     assert "view" not in r.json()
 
 
+@pytest.mark.parametrize("path", [
+    "/api/deep-analysis/cached",
+    "/api/consensus/cached",
+    "/api/kelly/cached",
+    "/api/monte-carlo/cached",
+    "/api/screener/cached",
+])
+def test_cached_results_reject_anonymous_callers_when_auth_is_disabled(monkeypatch, path):
+    monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
+    monkeypatch.setenv("GESH_API_KEY", "cache-secret")
+    anonymous = TestClient(server.app, raise_server_exceptions=False)
+
+    assert anonymous.get(path).status_code == 401
+
+
+def test_cached_results_accept_owner_api_key_when_auth_is_disabled(monkeypatch):
+    monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
+    monkeypatch.setenv("GESH_API_KEY", "cache-secret")
+    monkeypatch.setattr(server, "_cached_response", lambda key: {"cached": False})
+    api_client = TestClient(server.app, raise_server_exceptions=False)
+
+    response = api_client.get(
+        "/api/kelly/cached", headers={"X-API-Key": "cache-secret"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"cached": False}
+
+
 @pytest.mark.parametrize("path", ["/report", "/invest", "/invest/data", "/progress", "/watch"])
 def test_owner_only_views_refused_for_customers(monkeypatch, client, path):
     _as(monkeypatch, "customer@example.com")

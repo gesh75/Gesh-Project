@@ -1,0 +1,15 @@
+# OPTIONAL — OpenBB market-data integration (fundamentals_openbb.py).
+#
+# NOT co-installable with the pinned server stack in requirements.txt: every
+# openbb-core version requires an old uvicorn (>=0.24,<0.25 through <0.41), while
+# the server pins uvicorn==0.44.0 for fastapi 0.135.3. Installing this on top of
+# requirements.txt will either fail to resolve or downgrade uvicorn and break the
+# server. Use it only in an isolated environment for the OpenBB code path; the
+# application falls back to yfinance when openbb is absent (the default, and what
+# CI runs).
+#
+# openbb-yfinance is PINNED to 1.6.0 — the only release compatible with the
+# yfinance==1.2.1 the app pins (1.6.1+ require yfinance>=1.2.2; 1.6.3+ require
+# >=1.4.0). Left unbounded it resolved to 1.6.3 and conflicted (audit GATE 1).
+openbb>=4.3.0
+openbb-yfinance==1.6.0

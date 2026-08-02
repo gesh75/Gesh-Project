@@ -19,12 +19,33 @@ PRIVACY_PATH = Path(__file__).parent / "docs" / "GESH_PRIVACY_POLICY_DRAFT.md"
 # Everything from this internal marker onward is stripped before rendering.
 _INTERNAL_MARKER = "### Compliance notes (internal"
 
-# Placeholders the owner must still fill: SHOUTING tokens in square brackets
-# ([DOMAIN], [LEGAL ENTITY / SOLE PROPRIETOR NAME]). Deliberately narrow so
-# ordinary markdown — links `[the terms](/terms)`, footnote markers `[1]` —
-# never trips it. Serving "[PRIVACY@YOURDOMAIN]" verbatim would be worse than
-# serving nothing, so the page names what is outstanding instead of pretending.
-_PLACEHOLDER_RE = re.compile(r"\[[A-Z][A-Z0-9@][A-Z0-9 @/._-]*\]")
+# Unresolved annotations in the draft. The source is an ANNOTATED document, so the
+# only safe rule is: nothing in square brackets is ever served except a genuine
+# markdown link. Anything else is an author-facing note.
+#
+# HOTFIX 2026-07-23 — this pattern previously required SHOUTING CASE
+# (`\[[A-Z][A-Z0-9@]...`) and therefore matched 3 of the 10 bracket tokens in the
+# draft. The other 7 were rendered verbatim on the PUBLIC page, including an
+# author decision note reading "Geo-blocking the EU is the simplest path for a
+# solo operator…" — internal legal strategy, published on a legal document.
+# Enumerating placeholder shapes is the wrong approach; redacting the whole class
+# is the right one, because a shape you did not anticipate defaults to LEAKING.
+_PLACEHOLDER_RE = re.compile(r"\[[^\]\n]+\]")
+
+
+def _is_content_bracket(md: str, match: re.Match[str]) -> bool:
+    """True for brackets that are legitimate CONTENT, not author annotations.
+
+    Exactly two narrow exceptions, both incapable of carrying an instruction:
+      * a markdown link — the bracket is followed immediately by "(";
+      * a footnote/citation marker — digits only, e.g. "[1]".
+    Everything else is treated as an annotation and redacted. The default must
+    be "redact", because an unanticipated shape defaulting to "render" is what
+    published internal legal strategy on 2026-07-23.
+    """
+    if md[match.end():match.end() + 1] == "(":
+        return True
+    return match.group(0)[1:-1].strip().isdigit()
 
 
 def _strip_author_note(md: str) -> str:
@@ -41,11 +62,31 @@ def _strip_author_note(md: str) -> str:
 
 
 def unfilled_placeholders(md: str) -> list[str]:
-    """Unique [PLACEHOLDER] tokens still present, in first-seen order."""
+    """Unique unresolved [annotation] tokens, in first-seen order.
+
+    Every bracketed span EXCEPT a markdown link counts, in any casing — see the
+    _PLACEHOLDER_RE comment for why enumerating shapes was unsafe.
+    """
     seen: dict[str, None] = {}
-    for m in _PLACEHOLDER_RE.findall(md):
-        seen.setdefault(m, None)
+    for m in _PLACEHOLDER_RE.finditer(md):
+        if _is_content_bracket(md, m):
+            continue
+        seen.setdefault(m.group(0), None)
     return list(seen)
+
+
+def redact_placeholders(md: str) -> str:
+    """Remove unresolved annotations from text destined for a reader.
+
+    Detection alone is not enough: the banner naming what is pending does not
+    help if the note itself is still rendered in the body. Markdown links are
+    preserved. A redacted span leaves a neutral marker so the reader can see the
+    document is incomplete rather than silently reading around a hole.
+    """
+    def _sub(m: re.Match[str]) -> str:
+        return m.group(0) if _is_content_bracket(md, m) else "[…]"
+
+    return _PLACEHOLDER_RE.sub(_sub, md)
 
 _BG, _SURFACE, _BORDER = "#080d14", "#0d1520", "#1a2840"
 _CYAN, _DIM, _TEXT = "#00d4ff", "#5b7290", "#dfe8f2"
@@ -180,7 +221,9 @@ def render_privacy_html(use_cache: bool = True) -> str:
     try:
         md = _strip_author_note(PRIVACY_PATH.read_text(encoding="utf-8"))
         pending = unfilled_placeholders(md)
-        body = _md_to_html(_strip_internal(md))
+        # Redact BEFORE rendering — detecting an annotation but still printing it
+        # is what leaked internal legal strategy onto the public page (2026-07-23).
+        body = _md_to_html(redact_placeholders(_strip_internal(md)))
     except FileNotFoundError:
         pending = []
         body = ("<h1>Privacy Policy</h1><p>Our privacy policy is being finalized. "
@@ -190,10 +233,15 @@ def render_privacy_html(use_cache: bool = True) -> str:
 
     note = ""
     if pending:
-        items = ", ".join(_html.escape(p) for p in pending)
-        note = (f'<p style="color:{_DIM};font-size:13px">Details still pending final '
-                f'confirmation: <code>{items}</code>. These placeholders will be '
-                f'replaced when counsel finalises this document.</p>')
+        # COUNT ONLY — never the annotation text. Printing the raw tokens is how
+        # the geo-blocking decision note reached the public page even after the
+        # body was redacted (2026-07-23): the banner re-leaked what the body hid.
+        n = len(pending)
+        note = (f'<p style="color:{_DIM};font-size:13px">'
+                f'{n} detail{"" if n == 1 else "s"} in this document '
+                f'{"is" if n == 1 else "are"} still pending final confirmation '
+                f'(shown as […]) and will be completed when counsel finalises it. '
+                f'Ask us if any of them matter to you.</p>')
     banner = (
         f'<div style="background:{_SURFACE};border:1px solid {_BORDER};border-left:3px solid '
         f'{_CYAN};border-radius:6px;padding:12px 16px;margin:0 0 20px">'

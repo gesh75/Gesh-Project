@@ -137,6 +137,23 @@ def test_duplicate_delivery_is_idempotent():
     assert second["action"] == "duplicate"
 
 
+def test_completed_delivery_remains_duplicate_after_30_days():
+    """Completed activation claims must never expire: an old signed payload has no freshness
+    proof and could otherwise reactivate a churned account when replayed after pruning."""
+    payload = _payload("subscription_created", sub_id="sub_old")
+    raw = json.dumps(payload).encode()
+    assert billing.handle_webhook(raw, _sign(raw), payload)["action"] == "provision"
+
+    key = billing._dedup_key(raw)
+    with billing._conn() as con:
+        con.execute(
+            "UPDATE processed_webhook_events SET seen_at=? WHERE dedup_key=?",
+            ("2020-01-01T00:00:00+00:00", key),
+        )
+
+    assert billing.handle_webhook(raw, _sign(raw), payload)["action"] == "duplicate"
+
+
 def test_subscription_expired_revokes_user():
     _post("subscription_created")
     res = _post("subscription_expired", status="expired", sub_id="sub_1")
@@ -364,32 +381,45 @@ def test_reclaim_is_owner_fenced(monkeypatch):
     assert billing._claim(key)[0] == "completed"
 
 
-# ── #5 (round-3): an email change keeps ONE account (sub_id authoritative) ─────
+# ── subscription email changes cannot rename the auth principal ───────────────
 
-def test_email_change_keeps_single_account():
+def test_email_change_does_not_rename_auth_account():
     _post("subscription_created", email="old@example.com", sub_id="sub_x",
           updated_at="2026-04-01T00:00:00.000000Z")
     res = _post("subscription_updated", email="new@example.com", sub_id="sub_x",
                 status="active", updated_at="2026-04-05T00:00:00.000000Z")
-    assert res["email"] == "new@example.com"
-    assert au.get_user("old@example.com") is None                 # moved, not duplicated
-    u = au.get_user("new@example.com")
+    assert res["email"] == "old@example.com"
+    assert au.get_user("new@example.com") is None
+    u = au.get_user("old@example.com")
     assert u and u["is_active"] == 1 and u["billing_sub_id"] == "sub_x"
 
 
-def test_stale_event_does_not_rename_before_rejection():
-    """A delayed stale event must be rejected WITHOUT first mutating the email (R4-2):
-    the account stays on the newer email, not silently renamed back."""
+def test_subscription_email_change_cannot_enable_magic_link_takeover():
+    """Regression: a payer cannot move a subscription-bound victim auth row to their email."""
+    au.create_magic_link_user("victim@example.com", tier="observer")
+    _post("subscription_created", email="victim@example.com", sub_id="sub_attacker",
+          updated_at="2026-04-01T00:00:00.000000Z")
+
+    _post("subscription_updated", email="attacker@example.com", sub_id="sub_attacker",
+          status="active", updated_at="2026-04-05T00:00:00.000000Z")
+
+    assert au.get_user("victim@example.com")["billing_sub_id"] == "sub_attacker"
+    assert au.get_user("attacker@example.com") is None
+    assert au.issue_magic_token("attacker@example.com") is None
+
+
+def test_stale_event_does_not_mutate_email_before_rejection():
+    """A delayed stale event is rejected without changing the subscription-bound email."""
     _post("subscription_created", email="old@example.com", sub_id="sub_x",
           updated_at="2026-05-01T00:00:00.000000Z")
     _post("subscription_updated", email="new@example.com", sub_id="sub_x",
-          status="active", updated_at="2026-05-10T00:00:00.000000Z")     # moved to new@
+          status="active", updated_at="2026-05-10T00:00:00.000000Z")
     # a delayed (older) event for the same sub under the OLD email arrives now
     res = _post("subscription_updated", email="old@example.com", sub_id="sub_x",
                 status="active", updated_at="2026-05-05T00:00:00.000000Z")
     assert res["action"] == "ignored" and res["reason"] == "stale_event"
-    assert au.get_user("new@example.com") is not None                    # not renamed back
-    assert au.get_user("old@example.com") is None
+    assert au.get_user("old@example.com") is not None
+    assert au.get_user("new@example.com") is None
 
 
 # ── #6 (round-3): the /auth/request-link endpoint + its rate limit ────────────
@@ -557,6 +587,32 @@ def test_payment_success_keeps_existing_tier_for_active_user():
     assert res["action"] == "provision" and res["tier"] == "trader"             # kept, not refused
     u = au.get_user("buyer@example.com")
     assert u["is_active"] == 1 and u["tier"] == "trader" and u["billing_status"] == "active"
+
+
+def test_unknown_variant_payment_success_does_not_keep_existing_tier(monkeypatch):
+    """An explicit, unallowlisted variant must not use the variant-less renewal fallback."""
+    monkeypatch.setenv("LS_VARIANT_TRADER", "555")
+    _post("subscription_created", variant_id="555", sub_id="sub_1")
+    payload = _payment_success_payload(sub_id="sub_1")
+    payload["data"]["attributes"]["variant_id"] = "999"
+
+    res = _post_raw(payload)
+
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1 and u["tier"] == "trader"
+
+
+def test_unknown_variant_activation_does_not_keep_existing_tier(monkeypatch):
+    """Stored-tier retention is exclusive to variant-less renewal invoices."""
+    monkeypatch.setenv("LS_VARIANT_TRADER", "555")
+    _post("subscription_created", variant_id="555", sub_id="sub_1")
+
+    res = _post("subscription_updated", variant_id="999", sub_id="sub_1", status="active")
+
+    assert res["action"] == "ignored" and res["reason"] == "unknown_variant"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1 and u["tier"] == "trader"
 
 
 def test_foreign_renewal_does_not_replace_subscription():

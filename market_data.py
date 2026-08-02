@@ -257,12 +257,98 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
     insider_trades = {}
     ownership = {}
 
-    def fetch_for_symbol(sym):
+    def fetch_for_symbol(sym: str) -> tuple[str, dict[str, Any], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         try:
-            an = get_analyst_targets([sym]).get(sym, {})
-            pe = get_performance_returns([sym]).get(sym, {})
-            ins = get_insider_transactions([sym]).get(sym, [])
-            own = get_institutional_ownership([sym]).get(sym, {})
+            ticker = yf.Ticker(sym)
+
+            info = ticker.info
+            current = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
+            mean = _safe(info.get("targetMeanPrice"))
+            high = _safe(info.get("targetHighPrice"))
+            low = _safe(info.get("targetLowPrice"))
+            median = _safe(info.get("targetMedianPrice"))
+            n = _safe(info.get("numberOfAnalystOpinions"), 0)
+            reco = info.get("recommendationKey", "hold")
+            reco_meta = _RECO_LABEL.get(reco, {"label": reco.title(), "cls": "reco-hold"})
+            upside = round((mean - current) / current * 100, 1) if current and mean else None
+            an = {
+                "current": current,
+                "target_mean": mean,
+                "target_high": high,
+                "target_low": low,
+                "target_median": median,
+                "num_analysts": int(n) if n else 0,
+                "recommendation": reco_meta["label"],
+                "reco_cls": reco_meta["cls"],
+                "upside_pct": upside,
+            }
+
+            hist = ticker.history(period="1y", auto_adjust=True)
+            pe = {
+                "7d": _ret_from_hist(hist, 7),
+                "1m": _ret_from_hist(hist, 30),
+                "3m": _ret_from_hist(hist, 90),
+                "1y": _ret_from_hist(hist, 365),
+                "ytd": _ytd_from_hist(hist),
+            }
+
+            df = ticker.insider_transactions
+            ins: list[dict[str, Any]] = []
+            if df is not None and not df.empty:
+                for _, row in df.head(8).iterrows():
+                    txn_text = str(row.get("Transaction", row.get("Shares", ""))).strip()
+                    shares = _safe(row.get("Shares", row.get("Value", 0)), 0)
+                    value = _safe(row.get("Value", 0), 0)
+                    is_buy = (
+                        "purchase" in txn_text.lower()
+                        or "buy" in txn_text.lower()
+                        or (
+                            isinstance(shares, (int, float))
+                            and shares > 0
+                            and "sale" not in txn_text.lower()
+                            and "sell" not in txn_text.lower()
+                        )
+                    )
+                    raw_date = row.get("Date", row.get("Start Date", ""))
+                    try:
+                        dt = str(raw_date)[:10]
+                    except Exception:
+                        dt = ""
+                    ins.append({
+                        "name": str(row.get("Insider", row.get("Name", "Unknown"))).strip(),
+                        "title": str(row.get("Position", row.get("Relation", ""))).strip(),
+                        "transaction": txn_text,
+                        "shares": abs(int(shares)) if shares else 0,
+                        "value": abs(int(value)) if value else 0,
+                        "date": dt,
+                        "is_buy": is_buy,
+                    })
+
+            inst_pct = _safe(info.get("institutionsPercentHeld"), 0) or 0
+            insider_pct = _safe(info.get("heldPercentInsiders"), 0) or 0
+            inst_pct = round(inst_pct * 100, 1)
+            insider_pct = round(insider_pct * 100, 1)
+            retail_pct = round(max(0, 100 - inst_pct - insider_pct), 1)
+            top: list[dict[str, Any]] = []
+            try:
+                holders_df = ticker.institutional_holders
+                if holders_df is not None and not holders_df.empty:
+                    for _, row in holders_df.head(3).iterrows():
+                        pct = _safe(row.get("% Out", row.get("pctHeld", 0)), 0)
+                        top.append({
+                            "name": str(row.get("Holder", "")).strip(),
+                            "pct": round(float(pct) * 100, 2)
+                            if pct and pct < 1
+                            else round(float(pct or 0), 2),
+                        })
+            except Exception:
+                top = []
+            own = {
+                "institution_pct": inst_pct,
+                "insider_pct": insider_pct,
+                "retail_pct": retail_pct,
+                "top_holders": top,
+            }
             return sym, an, pe, ins, own
         except Exception:
             return sym, {}, {}, [], {}

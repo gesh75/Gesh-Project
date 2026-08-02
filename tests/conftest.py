@@ -89,6 +89,21 @@ def _isolate_signal_history_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.fixture(autouse=True)
+def _isolate_equity_snapshots_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point db (gesh_core.db via the transparent alias) at a per-test throwaway
+    DB. get_equity_history() otherwise reads the cwd-relative PRODUCTION
+    gesh_financial.db directly — on a dev machine with a real, populated file,
+    /api/ecg's computation silently reflects the operator's actual portfolio
+    history (e.g. a genuine SUSPENDED/-47% drawdown) instead of a test's
+    synthetic fixture, which reads as a customer-data leak when it is really an
+    unisolated data source. Same zero-real-DB-writes contract as the auth and
+    signal-history DBs above; db.py's own docstring documents this exact
+    monkeypatch as the supported override."""
+    import db
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "equity_snapshots_isolated.db", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_response_caches() -> None:
     """server.py keeps process-wide TTL caches (/api/chart + the per-ticker analyze
     GETs) and the per-IP rate-limit ledger. Every TestClient shares the constant
@@ -115,3 +130,42 @@ def _clear_server_response_caches() -> None:
     _clear()
     yield
     _clear()
+
+
+# ── TestClient is not a browser (CSRF hardening, 2026-07-23) ─────────────────
+# Cookie-authenticated mutations now require an Origin (or Referer) that matches
+# a configured deployment origin. A real browser ALWAYS sends Origin on a
+# same-origin POST/PUT/PATCH/DELETE; Starlette's TestClient sends none, so every
+# pre-existing customer-flow test suddenly looked like a forged request.
+#
+# This makes the harness behave like the browser it stands in for. It does NOT
+# weaken the guard: the header is only defaulted when the test did not set one,
+# and tests/test_csrf_hardening.py opts out to exercise absent / null /
+# mismatched / wrong-scheme / wrong-port origins directly.
+_DEFAULT_TEST_ORIGIN = {"enabled": True}
+
+
+@pytest.fixture
+def no_default_origin():
+    """Opt out of the browser-like Origin default for one test module."""
+    _DEFAULT_TEST_ORIGIN["enabled"] = False
+    yield
+    _DEFAULT_TEST_ORIGIN["enabled"] = True
+
+
+@pytest.fixture(autouse=True)
+def _browser_like_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from starlette.testclient import TestClient
+
+    original = TestClient.request
+
+    def _with_origin(self, method, url, *args, **kwargs):
+        if (_DEFAULT_TEST_ORIGIN["enabled"]
+                and str(method).upper() in ("POST", "PUT", "PATCH", "DELETE")):
+            headers = dict(kwargs.get("headers") or {})
+            if not any(k.lower() == "origin" for k in headers):
+                headers["Origin"] = str(self.base_url).rstrip("/")
+                kwargs["headers"] = headers
+        return original(self, method, url, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "request", _with_origin)

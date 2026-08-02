@@ -231,13 +231,14 @@ def _claim(key: str) -> tuple[str, str | None]:
         ("completed", None)    — already finished; a true permanent duplicate.
     Reclaim is OWNER-FENCED via a compare-and-swap on (owner, claimed_at): two concurrent
     reclaimers can't both win, and a resurrected old worker can't complete/delete a newer
-    claim (its token no longer matches). Prunes completed rows >30d (M3)."""
+    claim (its token no longer matches). Completed claims are retained permanently because
+    Lemon Squeezy signatures do not establish delivery freshness; deleting one would make
+    the corresponding signed webhook replayable again.
+    """
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
     token = secrets.token_hex(16)
     with _conn() as con:
-        con.execute("DELETE FROM processed_webhook_events WHERE status='completed' AND seen_at < ?",
-                    ((now - timedelta(days=30)).isoformat(),))
         cur = con.execute(
             "INSERT OR IGNORE INTO processed_webhook_events "
             "(dedup_key, status, owner, claimed_at, seen_at) VALUES (?, 'pending', ?, ?, ?)",
@@ -424,24 +425,19 @@ _STATE_CHANGING = (_ACTIVATE_EVENTS | _REVOKE_EVENTS
 
 
 def _apply_email_change(ev: dict[str, Any], user: dict | None) -> tuple[str, dict | None]:
-    """AFTER validation, update the UUID-owned account's profile email.
+    """Resolve the local email without trusting a mutable billing-profile email.
 
-    The subscription ID remains authoritative. Child ownership is keyed by immutable
-    ``user_id``, so the rename changes only ``users.email``. Keeping this after ordering and
-    variant validation ensures a stale/invalid event never mutates the profile first (#2-r4).
+    A subscription ID remains authoritative for billing lifecycle updates, but a signed
+    provider webhook is not proof that the payer controls either local auth address.  Once a
+    subscription is bound, keep the account's existing email; email changes must go through
+    a separate flow that verifies ownership of the local account and the new address.
     """
-    email, sub_id = ev["email"], ev["sub_id"]
-    if not (user and sub_id and email and user.get("billing_sub_id") == sub_id
-            and user["email"] != email):
-        return (user["email"] if user else email), user
-    # Child rows retain the same immutable user_id; only the users profile is updated.
-    # A target users row still causes a conflict, so separate accounts are never merged.
-    if auth_users.rename_user_email(user["email"], email):
-        logger.info("billing: moved sub=%s %s -> %s (email change)", sub_id, user["email"], email)
-        return email, auth_users.get_user(email)
-    logger.warning("billing: email-change conflict sub=%s (%s -> %s already taken)",
-                   sub_id, user["email"], email)
-    return user["email"], user                 # can't merge; keep operating on the sub's row
+    if user:
+        if ev["email"] and user["email"] != ev["email"]:
+            logger.warning("billing: ignored unverified email change for sub=%s (%s -> %s)",
+                           ev["sub_id"], user["email"], ev["email"])
+        return user["email"], user
+    return ev["email"], None
 
 
 def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
@@ -477,7 +473,8 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     # replace the authoritative one (the real sub's later expiry would be ignored as stale,
     # stranding the user active forever). A non-matching sub falls through to refusal.
     same_sub = bool(ev["sub_id"]) and ev["sub_id"] == (user or {}).get("billing_sub_id")
-    if (is_activation and tier is None and user
+    variant_absent = ev.get("variant_id") is None and not ev.get("variant_hint")
+    if (name == "subscription_payment_success" and variant_absent and user
             and user.get("tier") and user.get("is_active") and same_sub):
         tier = user["tier"]
         logger.info("billing: %s carried no variant — keeping account tier=%s for %s (sub=%s)",
@@ -506,7 +503,8 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
                        ev["email"], name)
         return {"action": "ignored", "email": ev["email"], "reason": "unknown_variant"}
 
-    # Only now (ordering + variant validated) may we move the account to a changed email.
+    # Resolve against the subscription-bound account without allowing the provider's mutable
+    # billing email to rename the local authentication principal.
     email, user = _apply_email_change(ev, user)
     ev = {**ev, "email": email, "tier": tier}    # carry the resolved tier (renewal fallback)
     eat = ev.get("event_at", "")
