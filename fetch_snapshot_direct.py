@@ -24,6 +24,7 @@ import base64
 import hashlib
 import http.server
 import json
+import os
 import secrets
 import subprocess
 import sys
@@ -44,9 +45,33 @@ AUTH_URL = "https://robinhood.com/oauth"
 TOKEN_URL = "https://api.robinhood.com/oauth2/token/"
 SCOPE = "internal"
 
-ACCT = __import__("os").getenv("GESH_RH_ACCOUNT")
-if not ACCT:
-    raise SystemExit("[direct] missing GESH_RH_ACCOUNT env var (Robinhood account number)")
+def _account_number() -> str:
+    """
+    Robinhood account number: env first, then the gitignored .env.
+
+    Never hardcoded — a real account number used to ship as a getenv() default.
+    Removing that default alone was not enough, though: GESH_RH_ACCOUNT is set
+    nowhere (not .env, not any launchd plist), so this module exited on every
+    run. Reading .env here is what actually makes the LLM-free tier work, and
+    keeps it working when invoked standalone (`--auth`) rather than only from
+    run_daily_analysis.sh. Parsed by hand to keep this module stdlib-only.
+    """
+    acct = (os.getenv("GESH_RH_ACCOUNT") or "").strip()
+    if not acct:
+        env_file = BASE_DIR / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("GESH_RH_ACCOUNT="):
+                    acct = line.split("=", 1)[1].strip().strip("\"'")
+                    break
+    if not acct:
+        raise SystemExit(
+            "[direct] GESH_RH_ACCOUNT not set — export it, or add "
+            f"GESH_RH_ACCOUNT=... to {BASE_DIR / '.env'} (gitignored)")
+    return acct
+
+
+ACCT = _account_number()
 PROTOCOL_VERSION = "2025-03-26"
 UA = {"User-Agent": "gesh-snapshot-direct/1.0"}
 
@@ -208,7 +233,7 @@ class Mcp:
         self.session = None
         self._id = 0
 
-def call(self, method: str, params: dict | None = None) -> dict:
+    def call(self, method: str, params: dict | None = None) -> dict:
         self._id += 1
         hdrs = {
             "Accept": "application/json, text/event-stream",
@@ -216,6 +241,7 @@ def call(self, method: str, params: dict | None = None) -> dict:
         }
         if self.session:
             hdrs["Mcp-Session-Id"] = self.session
+        status, resp_headers, body = _req(
             MCP_URL, headers=hdrs,
             data={"jsonrpc": "2.0", "id": self._id, "method": method,
                   **({"params": params} if params is not None else {})})

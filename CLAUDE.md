@@ -734,6 +734,46 @@ the canonical tell for which path ran** — a `robinhood_live` source in a brief
 fired; verify `deployable` before trusting any sizing. Kept non-fatal because the legacy fallback is a
 legitimate degraded path, not a failure.
 
+**Step-1 fallback chain (3 tiers, added 2026-08-02).** `run_daily_analysis.sh::fetch_snapshot_once()`
+tries, in order:
+
+| Tier | Script | Cost | `source` stamped |
+|---|---|---|---|
+| 1 (primary) | `fetch_snapshot_direct.py` | **free** — own OAuth tokens, no LLM | `robinhood_mcp` |
+| 2 | `fetch_snapshot_mcp.sh` (`claude -p` courier) | burns Claude subscription | `robinhood_mcp` |
+| 3 | `fetch_live_snapshot.py` (robin_stocks) | MFA-prone, repopulates leveraged BP | `robinhood_live` |
+
+Tier 1 owns `.rh_mcp_oauth.json` (chmod 600, gitignored) and refreshes itself, so it
+survives the Claude subscription dying.
+
+**`GESH_RH_ACCOUNT` — where the account number lives (2026-08-02).** It is **not** in
+tracked code. Both fetchers resolve it as env-var → `.env` (gitignored) → loud failure, and
+`run_daily_analysis.sh` exports it from `.env` for the whole chain. A real account number
+used to be a hardcoded fallback in `fetch_snapshot_direct.py` *and* `fetch_snapshot_mcp.sh`;
+`tests/test_fetch_snapshot_direct.py` now fails on any 6+-digit literal in a default-value
+position in either file. **Removing the default alone silently broke tier 1** — the variable
+was set nowhere on this host (no `.env` entry, no launchd plist), so the module exited at
+import on every run. If you ever move to a new machine, `GESH_RH_ACCOUNT=` in `.env` is the
+one piece of setup that is not in git.
+
+**The failure mode is SILENT-BY-DESIGN and costs money.** Every tier falls through on any
+non-zero exit, so a broken tier 1 still produces a good snapshot — you just quietly pay the
+tier-2 LLM path forever. **The only tell is `direct MCP fetch failed` in
+`/tmp/gesh_fullchain.log`.** Grep for it before assuming the LLM-free path is live.
+`REGISTER_URL` (`agent.robinhood.com/oauth/trading/register`) is beta-tier dynamic client
+registration — if Robinhood rotates it, `--auth` breaks and you land in exactly this state.
+
+**Precedent (2026-08-02):** PR #133's *merge commit* — not any of its reviewed commits —
+dedented `Mcp.call` out of its class and deleted an assignment, leaving `fetch_snapshot_direct.py`
+unable to parse. It merged under fully green CI because (a) both REQUIRED checks were
+`if: github.event_name == 'push'`, and a job skipped by a conditional reports **success**, so
+no PR ever ran them; and (b) ruff was scoped to `tests/` by `pyproject.toml`'s
+`include = ["tests/**/*.py"]`, so no app file was ever compiled or linted. Both are fixed:
+required checks now run on same-repo PRs (with a two-step install that keeps `GESH_CORE_PAT`
+out of scope while PR-controlled code builds), and a `ruff check --isolated --select
+E9,F63,F7,F82 .` gate covers the whole repo. **`--isolated` is load-bearing** — without it
+that gate silently scans nothing and prints "All checks passed".
+
 **sys.path shadowing (critical):** run_engines2/run_ai2 put gesh-project-trading at
 `sys.path[0]` — ALL engine modules + ai_analyzer + db resolve to the TRADING copies.
 Edit those copies for engine behavior; pin to this repo's files via importlib when needed.

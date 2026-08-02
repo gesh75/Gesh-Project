@@ -95,9 +95,11 @@ INFORMATIONAL PURPOSES ONLY".
 - Cash = `equity_summary.deployable` (settled, leverage-capped). NEVER
   `account["cash"]` or leveraged `buying_power`.
 - ECG node ABSTAIN (import error) and QQQ/EEM analyst ABSTAIN (ETFs) — expected.
-- Snapshot is **MCP-sourced** (canonical since 2026-06-25): step 1/5 runs
-  `fetch_snapshot_mcp.sh` (a `claude -p` that fetches RH acct 557370533 via the
-  `robinhood-trading` MCP → `/tmp/gesh_mcp_raw.json`) then `build_snapshot_from_mcp.py`
+- Snapshot is **MCP-sourced** (canonical since 2026-06-25): step 1/5 prefers the
+  LLM-free `fetch_snapshot_direct.py`, falling back to `fetch_snapshot_mcp.sh` (a
+  `claude -p` courier). Both fetch the RH account named by `GESH_RH_ACCOUNT`
+  (env → `.env`; never hardcoded) via the
+  `robinhood-trading` MCP → `/tmp/gesh_mcp_raw.json`, then `build_snapshot_from_mcp.py`
   (deterministic money-math). The old `fetch_live_snapshot.py` (robin_stocks pickle login)
   is **fallback only** — it dies on every RH password change. If step 1 fails, check
   `/tmp/gesh_mcp_fetch.log` first; the MCP is OAuth, so a recent password change means the

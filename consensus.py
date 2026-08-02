@@ -24,7 +24,23 @@ from __future__ import annotations
 import os
 import sqlite3, json, numpy as np
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 import yfinance as yf
+
+if TYPE_CHECKING:
+    # Type-only: node_fundamentals/node_analyst annotate `obb_data` with this
+    # TypedDict, but importing it at runtime would pull in fundamentals_openbb,
+    # whose openbb import is deliberately guarded (openbb is not installed in
+    # CI or on every host). Under `from __future__ import annotations` the
+    # annotations stay strings, so this costs nothing at runtime and resolves
+    # the name for type checkers / ruff F821.
+    #
+    # Trade-off, deliberately accepted: because the import is absent at runtime,
+    # typing.get_type_hints() on these two nodes still raises NameError. That is
+    # fine here — they are plain internal functions, not FastAPI handlers or
+    # pydantic models, so nothing introspects their annotations at runtime. If
+    # one ever becomes a route handler, promote this to a real import.
+    from fundamentals_openbb import FundamentalsData
 import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 from agent_db import agent_db_path
 

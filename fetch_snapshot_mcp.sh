@@ -22,7 +22,16 @@ export USER="${USER:-$(id -un)}"
 
 DIR="$HOME/Projects/gesh-project"
 CLAUDE="/opt/homebrew/bin/claude"
-ACCT="${GESH_RH_ACCOUNT:-557370533}"   # main portfolio account
+# Account number: env first, else the gitignored .env. NEVER hardcoded here —
+# a real account number lived in this line as a fallback default until 2026-08-02.
+ACCT="${GESH_RH_ACCOUNT:-}"
+if [ -z "$ACCT" ] && [ -f "$DIR/.env" ]; then
+    ACCT=$(grep -m1 '^GESH_RH_ACCOUNT=' "$DIR/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+fi
+if [ -z "$ACCT" ]; then
+    echo "[mcp] GESH_RH_ACCOUNT not set and not found in $DIR/.env" >&2
+    exit 1
+fi
 RAW="/tmp/gesh_mcp_raw.json"
 PY="${GESH_PY:-/usr/bin/python3}"
 

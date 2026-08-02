@@ -32,11 +32,20 @@ on:
       - "memory-bank/**"
       - "_archive/**"
       - "career-ops/**"
+  # Intentionally UNFILTERED — do not add paths-ignore here. `test` and
+  # `customer-isolation` are REQUIRED checks, and when an entire workflow is
+  # skipped by path filtering GitHub never creates their check runs, so they sit
+  # at "Expected — waiting for status to be reported" forever and a docs-only PR
+  # can never go green. (That is the OPPOSITE of a job skipped by an `if:`
+  # condition, which reports success — the asymmetry behind the incident noted
+  # on the test job below.) Push keeps its filter above; nothing gates on push.
   pull_request:
 
 jobs:
-  # A fast, secret-free syntax/lint gate for pull requests. Secret-bearing jobs
-  # run only after reviewed code reaches a push event.
+  # Fast, secret-free first signal on every PR: lints the test suite and proves
+  # the whole repo still parses, without waiting on a dependency install.
+  # The heavier `test` / `customer-isolation` gates also run on same-repo PRs —
+  # see the note on the test job for why they must not be push-only.
   pr-lint:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -51,12 +60,32 @@ jobs:
         run: pip install ruff
       - name: Ruff (new test suite only)
         run: ruff check tests/
+      - name: Syntax + undefined-name gate (whole repo)
+        # --isolated is REQUIRED, not incidental: pyproject.toml sets
+        # `include = ["tests/**/*.py"]`, so without it ruff silently scans
+        # nothing outside tests/ and reports "All checks passed" — a green gate
+        # that checks zero app files. --isolated ignores that config while still
+        # applying ruff's built-in excludes (venv, build, node_modules, ...).
+        run: ruff check --isolated --select E9,F63,F7,F82 .
 
   test:
-    # This job installs a private dependency with GESH_CORE_PAT. Keep it off
-    # pull_request events, whose checkout and dependency manifest are controlled
-    # by the PR author.
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/optimize/'))
+    # Runs on pushes to main/optimize/**, and on pull requests raised FROM THIS
+    # REPOSITORY. Fork PRs are excluded because the credential-scoped install
+    # below needs GESH_CORE_PAT, which GitHub withholds from fork workflows
+    # anyway (this repo is private with no forks, so that path is theoretical).
+    #
+    # 2026-08-02 — why this is no longer `push`-only: PR #132 narrowed both this
+    # job and customer-isolation to `if: github.event_name == 'push'` to keep the
+    # PAT away from PR-controlled dependency manifests. Both are REQUIRED checks,
+    # and a job skipped by a CONDITIONAL reports its check as *successful* — so
+    # the guard silently turned branch protection on main into a no-op: no pull
+    # request ran either gate. PR #133 then merged a file with a SyntaxError
+    # under fully green CI. The credential concern was real but is addressed
+    # properly by the two-step install below (the PAT is never live while
+    # repository-controlled code builds), rather than by disabling the gate.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -68,33 +97,52 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install runtime + test deps
+      # ── Two-step install: the credential is live for exactly one package ──
+      # The PAT is in scope ONLY while the single pinned gesh-core package is
+      # fetched, and nothing repository-controlled builds during that step. Every
+      # other dependency — where a PR-authored sdist's setup.py could execute
+      # arbitrary code — installs in the next step with no credential present.
+      # That ordering, not disabling the job, is what makes running on pull
+      # requests safe.
+      - name: Install private gesh-core (credential-scoped)
         env:
           GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
         run: |
-          # Keep the credential in a step-scoped temporary config. The trap
-          # removes it before any repository-controlled test code executes.
+          set -euo pipefail
+          # Step-scoped git config; the trap removes it even on failure.
           export GIT_CONFIG_GLOBAL="$(mktemp)"
           trap 'rm -f "$GIT_CONFIG_GLOBAL"' EXIT
-          if [ -n "$GESH_CORE_PAT" ]; then
-            git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
-          else
-            echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
+          if [ -z "${GESH_CORE_PAT:-}" ]; then
+            echo "::error::GESH_CORE_PAT not set — the private gesh-core dependency cannot install."
+            exit 1
           fi
+          git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
+          # Pin the SOURCE, not just the SHA: a pull request must not be able to
+          # redirect the credential-bearing install at another repository.
+          CORE_SPEC="$(grep '^gesh-core @' requirements.lock)"
+          case "$CORE_SPEC" in
+            "gesh-core @ git+https://github.com/gesh75/gesh-core.git@"*) ;;
+            *) echo "::error::unexpected gesh-core source: ${CORE_SPEC}"; exit 1 ;;
+          esac
+          pip install "$CORE_SPEC"
+
+      - name: Install remaining runtime + test deps (no credential in scope)
+        run: |
+          set -euo pipefail
           # Install the RUNTIME FROM THE LOCK, not from requirements.txt. The
           # lock is the fully-resolved manifest, so the tree CI tests is exactly
-          # the tree that was reviewed — including gesh-core at its pinned,
-          # peeled commit SHA. Installing from a fully-resolved lock also keeps
-          # the CI log unambiguous: it names one object, so there is nothing to
-          # reconcile against an annotated tag's own object SHA.
+          # the tree that was reviewed. gesh-core is already satisfied above and
+          # is filtered out here so pip never re-fetches it (which would need the
+          # credential we deliberately dropped).
           # (openbb stays out entirely: the uvicorn-incompatible meta-package
           # lives in requirements-openbb.txt and fundamentals_openbb.py guards
           # its import.)
           # No dependency cache is configured: every run installs freshly from
           # the lock, which is deterministic. If caching is added later, the key
           # must include the Python version and the requirements.lock hash.
-          pip install -r requirements.lock
+          grep -v '^gesh-core @' requirements.lock > ci-rest.lock
+          pip install -r ci-rest.lock
           # Fail fast on a broken dependency graph rather than at import time.
           pip check
           # Test + lint tooling, intentionally separate from the runtime lock:
@@ -102,6 +150,14 @@ jobs:
 
       - name: Ruff (new test suite only)
         run: ruff check tests/
+
+      - name: Syntax + undefined-name gate (whole repo)
+        # E9 = syntax/IO errors, F63/F7 = always-wrong constructs, F82 = undefined
+        # names. Deliberately NOT a full lint — this repo is not ruff-clean — but
+        # a file that cannot parse must never merge. PR #133's merge commit
+        # shipped a SyntaxError in fetch_snapshot_direct.py under green CI
+        # precisely because nothing checked anything outside tests/.
+        run: ruff check --select E9,F63,F7,F82 .
 
       - name: Run offline money-logic unit tests
         run: |
@@ -118,9 +174,11 @@ jobs:
   # exact same files the unit job does; the value is an explicit, named gate that
   # branch protection can require on protected push workflows.
   customer-isolation:
-    # As above, never expose the private-repository credential to PR-controlled
-    # installation inputs. The secret-free pr-lint job remains the PR gate.
-    if: github.event_name == 'push'
+    # Same trigger scope and same credential handling as the test job above —
+    # see the long note there for why this is not `push`-only any more.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -129,21 +187,32 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install runtime + test deps
+      - name: Install private gesh-core (credential-scoped)
         env:
           GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
         run: |
+          set -euo pipefail
           export GIT_CONFIG_GLOBAL="$(mktemp)"
           trap 'rm -f "$GIT_CONFIG_GLOBAL"' EXIT
-          if [ -n "$GESH_CORE_PAT" ]; then
-            git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
-          else
-            echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
+          if [ -z "${GESH_CORE_PAT:-}" ]; then
+            echo "::error::GESH_CORE_PAT not set — the private gesh-core dependency cannot install."
+            exit 1
           fi
+          git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
+          CORE_SPEC="$(grep '^gesh-core @' requirements.lock)"
+          case "$CORE_SPEC" in
+            "gesh-core @ git+https://github.com/gesh75/gesh-core.git@"*) ;;
+            *) echo "::error::unexpected gesh-core source: ${CORE_SPEC}"; exit 1 ;;
+          esac
+          pip install "$CORE_SPEC"
+      - name: Install remaining runtime + test deps (no credential in scope)
+        run: |
+          set -euo pipefail
           # Runtime from the lock (see the test job) so both gates run against
           # the identical, reviewed dependency tree.
-          pip install -r requirements.lock
+          grep -v '^gesh-core @' requirements.lock > ci-rest.lock
+          pip install -r ci-rest.lock
           pip check
           pip install pytest ruff
       - name: Customer-isolation leak sweep + XSS wiring (deterministic, in-process)
