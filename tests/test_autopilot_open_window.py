@@ -18,6 +18,7 @@ Run from the repo root:
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from pathlib import Path
@@ -109,8 +110,9 @@ def snapshot() -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _reset_candidates():
+def _reset_candidates(monkeypatch):
     autopilot._CANDIDATES.clear()
+    monkeypatch.setattr(autopilot, "set_marker", lambda *args: None)
     yield
     autopilot._CANDIDATES.clear()
 
@@ -241,3 +243,47 @@ def test_open_window_swallows_consensus_error_and_rejects(monkeypatch, snapshot)
     autopilot.open_window()  # must not raise
 
     assert placed == [], "a failing re-consensus must not reach execution"
+
+
+def test_open_window_consumes_marker_before_execution(monkeypatch, snapshot):
+    """A completed handoff cannot be restored and executed again after restart."""
+    marker = {
+        "value": json.dumps({
+            "date": autopilot._et_today(),
+            "symbols": ["MSTR"],
+        })
+    }
+    placed: list[TradeIntent] = []
+
+    def fake_consensus(symbol, **kwargs):
+        return {
+            "symbol": symbol,
+            "verdict": "STRONG BUY",
+            "raw_score": 0.7,
+            "confidence": 90.0,
+            "active_nodes": 8,
+            "total_nodes": 9,
+        }
+
+    monkeypatch.setattr(autopilot, "get_marker", lambda _name: marker["value"])
+    monkeypatch.setattr(
+        autopilot, "set_marker", lambda _name, value: marker.__setitem__("value", value),
+    )
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: fake_consensus)
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
+    monkeypatch.setattr(autopilot, "evaluate", lambda *args: _Verdict(True))
+    monkeypatch.setattr(
+        autopilot,
+        "place",
+        lambda intent, *args: placed.append(intent) or _Result(),
+    )
+
+    autopilot.open_window()
+    assert len(placed) == 1
+    assert json.loads(marker["value"])["symbols"] == []
+
+    # Simulate a same-day process restart and a second scheduler invocation.
+    autopilot._CANDIDATES.clear()
+    autopilot.open_window()
+    assert len(placed) == 1

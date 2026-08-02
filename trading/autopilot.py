@@ -182,6 +182,16 @@ def _restore_candidates() -> None:
         logger.warning("open_window: candidate restore failed: %s", e)
 
 
+def _consume_candidates() -> bool:
+    """Acknowledge today's durable handoff before placing any orders."""
+    try:
+        set_marker(CANDIDATE_MARKER, candidates_marker_json({}, _et_today()))
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error("open_window: could not consume candidate marker — aborting: %s", e)
+        return False
+
+
 # ─── Job implementations ──────────────────────────────────────────────────────
 
 def pre_market_scan() -> None:
@@ -281,6 +291,12 @@ def open_window() -> None:
         snapshot = build_data_payload([])
     except Exception as e:
         logger.error("open_window: could not build snapshot — %s", e)
+        return
+
+    # Claim the durable handoff before execution.  A later same-day restart must
+    # not restore these symbols and create fresh, differently-idempotent orders.
+    # Fail closed if the acknowledgement cannot be persisted.
+    if not _consume_candidates():
         return
 
     approved = rejected = 0
