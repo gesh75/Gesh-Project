@@ -138,6 +138,10 @@ step "1/5 fetch snapshot (MCP-first)"
 # FRESH / SERVICEABLE(degraded) / FATAL. Retry first, degrade second, die last.
 # Override the schedule for a manual run: GESH_SNAPSHOT_RETRY_WAITS="0" ./run_daily_analysis.sh
 fetch_snapshot_once() {
+    if "$PY" "$GP/fetch_snapshot_direct.py"; then
+        return 0  # LLM-free direct MCP path — no claude CLI / subscription needed
+    fi
+    echo "direct MCP fetch failed — falling back to claude -p MCP path"
     if GESH_PY="$PY" /bin/bash "$GP/fetch_snapshot_mcp.sh"; then
         return 0  # source is asserted from the gate below, not assumed from this exit code
     fi

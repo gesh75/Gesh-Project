@@ -239,11 +239,20 @@ def node_relative_strength(symbol: str, benchmark: str = "SPY",
         return ABSTAIN, str(e)
 
 
-def node_fundamentals(symbol: str) -> tuple[int | None, str]:
-    """Revenue growth + profit margins + PE ratio. OpenBB primary, yfinance fallback."""
+def node_fundamentals(
+    symbol: str,
+    obb_data: "FundamentalsData | None" = None,
+) -> tuple[int | None, str]:
+    """Revenue growth + profit margins + PE ratio. OpenBB primary, yfinance fallback.
+
+    Args:
+        obb_data: Pre-fetched OpenBB data from the caller; if None the function
+                  fetches it itself (preserves backward compatibility).
+    """
     try:
-        from fundamentals_openbb import get_fundamentals_openbb
-        obb_data = get_fundamentals_openbb(symbol)
+        if obb_data is None:
+            from fundamentals_openbb import get_fundamentals_openbb
+            obb_data = get_fundamentals_openbb(symbol)
         if obb_data is not None:
             rev_growth = obb_data.get("rev_growth")
             pe         = obb_data.get("pe")
@@ -290,11 +299,20 @@ def node_fundamentals(symbol: str) -> tuple[int | None, str]:
         return ABSTAIN, str(e)
 
 
-def node_analyst(symbol: str) -> tuple[int | None, str]:
-    """Analyst recommendation + price target upside. OpenBB primary, yfinance fallback."""
+def node_analyst(
+    symbol: str,
+    obb_data: "FundamentalsData | None" = None,
+) -> tuple[int | None, str]:
+    """Analyst recommendation + price target upside. OpenBB primary, yfinance fallback.
+
+    Args:
+        obb_data: Pre-fetched OpenBB data from the caller; if None the function
+                  fetches it itself (preserves backward compatibility).
+    """
     try:
-        from fundamentals_openbb import get_fundamentals_openbb
-        obb_data = get_fundamentals_openbb(symbol)
+        if obb_data is None:
+            from fundamentals_openbb import get_fundamentals_openbb
+            obb_data = get_fundamentals_openbb(symbol)
         if obb_data is not None and obb_data.get("rec_key") is not None:
             rec         = (obb_data.get("rec_key") or "").lower()
             mean_target = obb_data.get("target_mean_price")
@@ -502,8 +520,16 @@ def run_consensus_holding(
         sym_close=c if c is not None and len(c) > 0 else None,
         spy_close=_spy_close,
     )
-    nodes["Fundamentals"]   = node_fundamentals(symbol)
-    nodes["Analyst"]        = node_analyst(symbol)
+    # Prefetch OpenBB fundamentals once — shared by node_fundamentals and node_analyst
+    # so neither function needs to make its own HTTP request (saves one round-trip +
+    # the 0.3 s stagger sleep in get_fundamentals_openbb per holding per run).
+    try:
+        from fundamentals_openbb import get_fundamentals_openbb as _get_obb
+        _obb_data = _get_obb(symbol) or {}
+    except Exception:
+        _obb_data = {}  # attempted prefetch but got no usable data; prevents per-node refetch
+    nodes["Fundamentals"]   = node_fundamentals(symbol, obb_data=_obb_data)
+    nodes["Analyst"]        = node_analyst(symbol, obb_data=_obb_data)
     nodes["News"]           = node_news(symbol)
     nodes["Kelly"]          = node_kelly(symbol, equity, total_portfolio, avg_cost, current_price, returns=returns)
     nodes["ECG"]            = node_ecg(symbol)
