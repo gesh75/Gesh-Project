@@ -26,9 +26,11 @@ tg_alert() {
         [ -z "$chat" ] && chat=$(grep -m1 '^TELEGRAM_CHAT_ID='  "$envf" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
     done
     { [ -z "$tok" ] || [ -z "$chat" ]; } && { echo "[preflight] no telegram creds — alert NOT sent: $msg"; return 0; }
-    curl -sS -m 10 "https://api.telegram.org/bot${tok}/sendMessage" \
-        --data-urlencode "chat_id=${chat}" \
-        --data-urlencode "text=⚠️ GESH pre-flight — ${msg} [$(date '+%Y-%m-%d %H:%M %Z')]" \
+    # Keep credentials and message content out of curl's process arguments.
+    printf 'url = "%s"\ndata-urlencode = "chat_id=%s"\ndata-urlencode = "text=%s"\n' \
+        "https://api.telegram.org/bot${tok}/sendMessage" \
+        "$chat" "⚠️ GESH pre-flight — ${msg} [$(date '+%Y-%m-%d %H:%M %Z')]" |
+        curl -sS -m 10 --config - \
         >/dev/null 2>&1 && echo "[preflight] alert sent" || echo "[preflight] alert send failed"
     return 0
 }
