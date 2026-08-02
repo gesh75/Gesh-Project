@@ -208,7 +208,7 @@ class Mcp:
         self.session = None
         self._id = 0
 
-def call(self, method: str, params: dict | None = None) -> dict:
+    def call(self, method: str, params: dict | None = None) -> dict:
         self._id += 1
         hdrs = {
             "Accept": "application/json, text/event-stream",
@@ -216,6 +216,7 @@ def call(self, method: str, params: dict | None = None) -> dict:
         }
         if self.session:
             hdrs["Mcp-Session-Id"] = self.session
+        status, resp_headers, body = _req(
             MCP_URL, headers=hdrs,
             data={"jsonrpc": "2.0", "id": self._id, "method": method,
                   **({"params": params} if params is not None else {})})
