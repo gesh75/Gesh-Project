@@ -83,3 +83,20 @@ gesh_auth.secret
 *.jpeg
 .rh_mcp_oauth.json
 .venv-clean/
+
+# ── Attorney / legal correspondence — privileged, never commit ───────────────
+# Broader than *.md on purpose: privileged material also arrives as .pdf/.docx.
+# These files sit untracked in docs/ and this repo has several concurrent agent
+# writers, any of which could sweep them in with a careless `git add -A`.
+docs/ATTORNEY_*
+#
+# NOT ignored here, deliberately: docs/GESH_ATTORNEY_ENGAGEMENT_BRIEF.md is
+# ALREADY TRACKED (committed before this rule, and the `ATTORNEY_*` prefix does
+# not match it). Adding a tracked file to .gitignore does not remove it from
+# history and only creates a confusing tracked-but-ignored state — so if that
+# brief should be private it needs an explicit `git rm --cached` plus a
+# decision about the existing history. Flagged rather than silently changed.
+
+# Runtime manifests and degraded reports (ephemeral, per-run)
+run_manifest.json
+gesh_report.degraded.*.html
