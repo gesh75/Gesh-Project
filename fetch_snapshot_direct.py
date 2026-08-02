@@ -44,7 +44,9 @@ AUTH_URL = "https://robinhood.com/oauth"
 TOKEN_URL = "https://api.robinhood.com/oauth2/token/"
 SCOPE = "internal"
 
-ACCT = __import__("os").getenv("GESH_RH_ACCOUNT", "557370533")
+ACCT = __import__("os").getenv("GESH_RH_ACCOUNT")
+if not ACCT:
+    raise SystemExit("[direct] missing GESH_RH_ACCOUNT env var (Robinhood account number)")
 PROTOCOL_VERSION = "2025-03-26"
 UA = {"User-Agent": "gesh-snapshot-direct/1.0"}
 
