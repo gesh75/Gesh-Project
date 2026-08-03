@@ -52,9 +52,36 @@ def _create_streaming(client: anthropic.Anthropic, **kwargs: Any) -> Any:
     Callers keep using the returned Message exactly as before (`.usage`,
     `.stop_reason`, `.content`), so `_record_usage` / `_extract_tool_input` /
     the max_tokens truncation guard are all unchanged.
+
+    MID-STREAM RETRY (2026-08-03 outage): the SDK's `max_retries` only covers
+    the INITIAL request (connect errors, 429/5xx before the stream opens). Once
+    the SSE body is streaming, a transport stall — e.g. `httpx.ReadTimeout`
+    after a 240s chunk gap — propagates immediately and, in the daily chain,
+    turned one transient network blip into a FATAL step-3 abort (no report, no
+    DB row, steps 4-5 skipped). Each retry below is a fresh POST with a short
+    backoff; non-transport API errors (4xx, invalid request) are NOT retried.
+    Trade-off accepted: a failed partial stream still bills its generated
+    tokens server-side, so attempts are capped at 3 total.
     """
-    with client.messages.stream(**kwargs) as stream:
-        return stream.get_final_message()
+    import time as _time
+
+    import httpx as _httpx
+
+    _RETRYABLE = (_httpx.TimeoutException, _httpx.TransportError,
+                  anthropic.APIConnectionError)
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            with client.messages.stream(**kwargs) as stream:
+                return stream.get_final_message()
+        except _RETRYABLE as e:
+            if attempt == attempts:
+                raise
+            backoff = 5 * (3 ** (attempt - 1))  # 5s, 15s
+            print(f"[stream] attempt {attempt}/{attempts} died mid-stream "
+                  f"({type(e).__name__}: {e}) — retrying in {backoff}s",
+                  flush=True)
+            _time.sleep(backoff)
 
 
 # ─── Usage accounting + optional daily budget ────────────────────────────────
