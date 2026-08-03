@@ -284,14 +284,19 @@ holdings_html = '\n'.join(holding_card(h) for h in holdings)
 # ─── Action table ─────────────────────────────────────────────────────────────
 recs = ai.get('portfolio_recommendations', [])
 action_rows = ''
-pri_col = {'URGENT':'#ff3c5a','High':'#f0b429','Medium':'#00d4ff','Low':'#888'}
+# Keys uppercased at lookup — the AI emits CRITICAL/HIGH/MEDIUM/LOW, and the old
+# mixed-case map ('High'/'Medium'/'Low') silently grayed every chip.
+pri_col = {'CRITICAL':'#ff3c5a','URGENT':'#ff3c5a','HIGH':'#f0b429',
+           'MEDIUM':'#00d4ff','LOW':'#888'}
 for rec in recs:
     act_text = rec.get('action','') if isinstance(rec,dict) else str(rec)
     pri      = rec.get('priority','') if isinstance(rec,dict) else ''
     rat      = rec.get('rationale','') if isinstance(rec,dict) else ''
-    col      = pri_col.get(pri, '#888')
+    sym      = rec.get('symbol','') if isinstance(rec,dict) else ''
+    col      = pri_col.get(str(pri).upper(), '#888')
     action_rows += f'''<tr>
       <td><span style="color:{col};font-weight:700;font-size:11px">{pri}</span></td>
+      <td><span style="color:#00d4ff;font-weight:700;font-family:'JetBrains Mono','Courier New',monospace">{sym}</span></td>
       <td style="color:#e0e0e0">{act_text}</td>
       <td style="color:#888;font-size:11px">{rat}</td>
     </tr>'''
@@ -807,7 +812,7 @@ html = f'''<!DOCTYPE html>
   <div class="section-title">⚡ Prioritised Action Plan</div>
   <div class="table-card" style="margin-bottom:16px">
     <table class="action-table">
-      <thead><tr><th>Priority</th><th>Action</th><th>Rationale</th></tr></thead>
+      <thead><tr><th>Priority</th><th>Symbol</th><th>Action</th><th>Rationale</th></tr></thead>
       <tbody>{action_rows}</tbody>
     </table>
   </div>
