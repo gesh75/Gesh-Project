@@ -27,7 +27,7 @@
 No P0/P1 defects in any task. Constant-time PBKDF2, magic-link 409-no-consume, fail-closed data-freshness gate, strictly causal paper recording, degraded-run non-publishing, DB-backed quota atomicity, and the immutable-ID migration all verify with matching failure-path tests.
 
 ## Migration / deployment verdict
-**Safe.** The gesh_auth.db v2 migration runs under `BEGIN IMMEDIATE` with a verified backup, creates new tables only when absent, uses `IF NOT EXISTS` indexes, FKs to `users(user_id)`, and ends with `PRAGMA foreign_key_check`. Idempotent/re-entrant across processes. Crypto book already restated ($9,702.13, 22 POL rows quarantined). Backups run nightly (com.gesh.backup).
+**Safe.** The gesh_auth.db v2 migration runs under `BEGIN IMMEDIATE` with a verified backup, creates new tables only when absent, uses `IF NOT EXISTS` indexes, FKs to `users(user_id)`, and ends with `PRAGMA foreign_key_check`. Idempotent/re-entrant across processes. Crypto book restatement completed. Backups run nightly (com.gesh.backup).
 
 ## Merge recommendation
 **APPROVE WITH FOLLOW-UPS.** PR #98 is already merged and the suite is green with no safety-critical defect. The three P2s (V1 unauth body DoS, V2 malformed-timestamp chain crash, V3 crash-lockout window) are availability/hardening, not correctness or data-safety — none warrant a revert. Land them as fast-follow fixes. The paid-expansion blocker remains legal/privacy/data-licensing, unchanged by this review.
