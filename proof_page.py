@@ -26,6 +26,7 @@ import html
 import math
 import os
 import sqlite3
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,8 @@ _CYAN, _GREEN, _YELLOW, _RED, _DIM = "#00d4ff", "#00e87a", "#f0b429", "#ff3c5a",
 
 _SPY_CACHE: dict[str, Any] = {}
 _SPY_CACHE_TTL_S = 3600
+_SPY_REQUEST_TIMEOUT_S = 10
+_SPY_CACHE_LOCK = threading.Lock()
 
 
 def _spy_return_since(start_date: str) -> float | None:
@@ -73,15 +76,23 @@ def _spy_return_since(start_date: str) -> float | None:
     hit = _SPY_CACHE.get(start_date)
     if hit is not None and (_time.time() - hit[0]) <= _SPY_CACHE_TTL_S:
         return hit[1]
-    try:
-        import yfinance as yf
-        closes = yf.Ticker("SPY").history(period="1y", auto_adjust=True)["Close"]
-        closes = closes[closes.index >= start_date]
-        ret = float(closes.iloc[-1] / closes.iloc[0] - 1.0) if len(closes) >= 2 else None
-    except Exception:
-        ret = None
-    _SPY_CACHE[start_date] = (_time.time(), ret)
-    return ret
+    # Only one request may refresh the public-page benchmark at a time. Recheck
+    # after taking the lock so concurrent cold-cache requests reuse its result.
+    with _SPY_CACHE_LOCK:
+        hit = _SPY_CACHE.get(start_date)
+        if hit is not None and (_time.time() - hit[0]) <= _SPY_CACHE_TTL_S:
+            return hit[1]
+        try:
+            import yfinance as yf
+            closes = yf.Ticker("SPY").history(
+                period="1y", auto_adjust=True, timeout=_SPY_REQUEST_TIMEOUT_S,
+            )["Close"]
+            closes = closes[closes.index >= start_date]
+            ret = float(closes.iloc[-1] / closes.iloc[0] - 1.0) if len(closes) >= 2 else None
+        except Exception:
+            ret = None
+        _SPY_CACHE[start_date] = (_time.time(), ret)
+        return ret
 
 
 def _days_between(start: str, end: str) -> int:
