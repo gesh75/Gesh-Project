@@ -120,6 +120,15 @@ def _quote_age_seconds(portfolio: dict[str, Any]) -> float | None:
         return None
     try:
         ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            # A naive ISO timestamp (legacy / hand-written snapshot) parses fine
+            # but `now(utc) - naive` raises TypeError → previously swallowed to
+            # None → DATA_FRESH rejected EVERY intent on an otherwise-fresh
+            # snapshot. The rest of the codebase (server._is_fresh,
+            # data_fetcher snapshot age) treats naive as UTC; do the same so the
+            # freshness gate actually measures age instead of failing closed on a
+            # format quirk. The staleness threshold itself is unchanged.
+            ts = ts.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - ts).total_seconds()
     except Exception:
         return None
