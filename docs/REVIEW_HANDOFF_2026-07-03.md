@@ -97,7 +97,7 @@ Everything below is the detail + what I want you to try to break.
 
 ### P0 — `/api/portfolio/history` sparkline leaked raw owner equity → FIXED (`61ea22a`)
 
-- The dashboard sparkline endpoint returned `{"series":[37080.88, 39121.44, …]}`
+- The dashboard sparkline endpoint returned `{"series":[<redacted>, <redacted>, …]}`
   — a **bare number array under an un-listed key**, so the key-name masker skipped
   it and a customer saw the owner's real equity curve. This is the **4th instance
   of one class** (Codex found `ecg.equity_history`; this is the same bug shape).
@@ -108,12 +108,12 @@ Everything below is the detail + what I want you to try to break.
 
 Rather than keep chasing keys, `tests/test_customer_leak_sweep.py` proves the
 invariant on **every customer-reachable GET**: mint a real customer session,
-fetch the endpoint, and assert **no known owner value** (portfolio total
-`$37,522.83`, cash `$509.70`, share counts, each equity-series number) appears
+fetch the endpoint, and assert **no known owner value** (portfolio total, cash,
+share counts, or any equity-series number) appears
 anywhere in the raw body. 24 endpoints + history-detail. **This sweep would have
 caught both the ECG and the sparkline leaks.**
 
-Proof it has teeth (not passing vacuously): the same owner total `$37,522.83`
+Proof it has teeth (not passing vacuously): the owner total
 masks to **exactly `$100,000.00`** in the customer's `/api/portfolio`, and zero
 raw sentinels appear. Skips cleanly when the server is down so the unit suite
 stays hermetic.
@@ -161,8 +161,8 @@ stays hermetic.
 
 ## How to reproduce
 
-- **Test account (customer/observer):** `codex-review@geshfinance.com`
-  (revoke after review: `python3 scripts/comp_user.py revoke codex-review@geshfinance.com`).
+- **Test account (customer/observer):** use a temporary review customer account
+  and revoke it after review with `python3 scripts/comp_user.py revoke <email>`.
 - **Run the sweep:** `pytest tests/test_customer_leak_sweep.py -v` (needs the live
   server on :9000 with the owner snapshot loaded; skips otherwise).
 - **Full suite:** `./venv/bin/python -m pytest tests/ -q` → 431 passing.
