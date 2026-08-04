@@ -470,7 +470,13 @@ def build_customer_model_context(payload: dict) -> dict:
         "as_of": payload.get("as_of"),
         "holdings": holdings,
         "equity_summary": equity_summary,
-        "watchlist": list(payload.get("watchlist") or []),
+        # The owner's Robinhood watchlist is NOT a published fact — symbols the
+        # operator merely watches (but does not hold) are private. It used to be
+        # copied verbatim here, so a customer hitting an engine that unions
+        # watchlist symbols (e.g. /api/agents/news/history) received owner-only
+        # tickers that dollar-masking does not redact. Customers have their own
+        # per-user watchlist in gesh_auth.db; this model context exposes none.
+        "watchlist": [],
         "offline": bool(payload.get("offline")),
         "model_context": True,          # tell for tests and logs
         "source_label": SOURCE_LABEL,

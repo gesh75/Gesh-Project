@@ -548,9 +548,15 @@ def yf_download(
         auto_adjust=auto_adjust, progress=progress, **kwargs,
     )
     if cacheable and key is not None and _usable_rows(raw) > 0:
+        now = time.time()
         with _YF_CACHE_LOCK:
-            _YF_CACHE[key] = (time.time(), raw.copy())
+            _YF_CACHE[key] = (now, raw.copy())
             _YF_CACHE.move_to_end(key)
+            # Evict expired frames (DataFrames are heavy) + hard-cap entry count.
+            expired = [k for k, (ts, _) in _YF_CACHE.items()
+                       if (now - ts) > _YF_CACHE_TTL_S]
+            for stale_key in expired:
+                _YF_CACHE.pop(stale_key, None)
             while len(_YF_CACHE) > _YF_CACHE_MAX_ENTRIES:
                 _YF_CACHE.popitem(last=False)
     return raw

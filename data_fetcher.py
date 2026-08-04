@@ -199,7 +199,11 @@ def get_portfolio_holdings() -> pd.DataFrame:
             equity = qty * current_price
             prev_price = float(quote.get("open_price") or current_price or 0)
             pct_chg = ((current_price - prev_price) / prev_price * 100) if prev_price else 0.0
-            rows.append({
+            # A failed crypto quote leaves price=0/equity=0 while quantity>0. Tag it
+            # so the position is visibly "price unavailable" rather than silently a
+            # $0 holding that drops out of totals/weights with no explanation. The
+            # engine boundary (server._engine_holdings) also excludes price<=0 rows.
+            row = {
                 "symbol": symbol,
                 "quantity": qty,
                 "average_buy_price": avg_cost,
@@ -210,7 +214,10 @@ def get_portfolio_holdings() -> pd.DataFrame:
                 "type": "cryptocurrency",
                 "pe_ratio": None,
                 "portfolio_percentage": 0.0,  # recalculated below
-            })
+            }
+            if current_price <= 0:
+                row["price_source"] = "unavailable"
+            rows.append(row)
     except Exception:
         pass  # crypto fetch failed gracefully — stocks still shown
 

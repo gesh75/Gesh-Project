@@ -573,6 +573,13 @@ async def lifespan(app):
     except Exception as e:
         print(f"⚠  Auth failed: {e} — serving cached snapshot data")
     yield
+    # Drain the mybook analysis pool so in-flight Claude jobs finish (or are
+    # cancelled) on shutdown instead of being killed mid-call and leaving threads
+    # that block a clean interpreter exit. Best-effort — never block teardown.
+    try:
+        _mybook_executor.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
     try:
         logout()
     except Exception:
@@ -1199,9 +1206,14 @@ async def _csrf_guard_middleware(request: Request, call_next):
     Applies to POST/PUT/PATCH/DELETE regardless of whether a body is present:
     a bodyless DELETE is exactly as forgeable as a POST."""
     path = request.url.path
+    # Enforce on cookie-authenticated mutation surfaces: the /api/* app routes AND
+    # the /auth/* session routes (login / logout / request-link). Leaving /auth
+    # unprotected let a cross-site page drive a session mutation (e.g. forced
+    # logout / login-CSRF); the magic-link consume is a GET and is unaffected.
+    protected = path.startswith("/api/") or path.startswith("/auth/")
     if (
         request.method not in _MUTATING_METHODS
-        or not path.startswith("/api/")
+        or not protected
         or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)
     ):
         return await call_next(request)
@@ -1717,10 +1729,17 @@ def pricing_page():
     per-tier entitlement gating exists (Phase 2). Checkout URL + price from env; no card
     data ever touches this server."""
     import os as _os
+    import html as _h
 
-    name = _os.getenv("LS_PLAN_NAME", "GESH Access")
-    price = _os.getenv("LS_PLAN_PRICE", "49")
-    url = _os.getenv("LS_CHECKOUT_PRIMARY", _os.getenv("LS_CHECKOUT_OBSERVER", "#"))
+    # These come from operator-set env vars and are interpolated into HTML below;
+    # escape them (defense-in-depth) so a stray quote in a checkout URL / plan name
+    # can't break out of an attribute or inject markup under the page CSP.
+    name = _h.escape(_os.getenv("LS_PLAN_NAME", "GESH Access"))
+    price = _h.escape(_os.getenv("LS_PLAN_PRICE", "49"))
+    url = _h.escape(
+        _os.getenv("LS_CHECKOUT_PRIMARY", _os.getenv("LS_CHECKOUT_OBSERVER", "#")),
+        quote=True,
+    )
     feats = [
         "Signal-accuracy proof (live track record)",
         "Daily AI portfolio report",
@@ -1850,7 +1869,10 @@ async def billing_webhook(request: Request):
     except Exception:
         payload = {}
     try:
-        result = billing.handle_webhook(raw, sig, payload)
+        # handle_webhook does synchronous SQLite provisioning + a Resend HTTP call;
+        # offload it so a slow webhook can't freeze the event loop (which would raise
+        # Lemon Squeezy retry pressure and duplicate-delivery risk).
+        result = await asyncio.to_thread(billing.handle_webhook, raw, sig, payload)
         return JSONResponse(content=result)
     except PermissionError:
         return JSONResponse(status_code=401, content={"ok": False, "detail": "bad signature"})
@@ -2127,11 +2149,29 @@ async def digest_unsubscribe_do(request: Request, token: str = ""):
     return await _unsub_perform("digest", request, token)
 
 
+def _require_owner_view(request: Request) -> None:
+    """Defense-in-depth owner gate for the operator cockpit pages + their polls.
+
+    The customer-view middleware already refuses these for a customer session, but
+    only when auth is enabled AND a session cookie is present (it calls through on
+    `not email`). This handler check also fails closed for an UNAUTHENTICATED
+    request and cannot be bypassed by a future middleware-ordering change — the
+    same belt-and-suspenders pattern usage_page already uses. In auth-disabled dev
+    `_session_email` returns the owner and `is_owner` is True, so local use is
+    unaffected."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not auth_users.is_owner(email):
+        raise HTTPException(status_code=403, detail="Owner-only view")
+
+
 @app.get("/progress", response_class=HTMLResponse)
-def progress_page():
+def progress_page(request: Request):
     """Internal founder cockpit — weekly autonomy-gate burndown to the Sep alpha.
     Reads the weekly_snapshots row written by the Friday tracker job. NOT public:
     no /progress in the auth public-prefix list, so the login wall gates it."""
+    _require_owner_view(request)
     try:
         import progress_view
 
@@ -2141,10 +2181,11 @@ def progress_page():
 
 
 @app.get("/watch", response_class=HTMLResponse)
-def watch_page():
+def watch_page(request: Request):
     """Internal live paper-trading cockpit — open positions, recent closes, the
     gate→fill→exit activity feed, and N/30 autonomy progress. Read-only, paper-only.
     NOT public: not in the auth public-prefix list, so the login wall gates it."""
+    _require_owner_view(request)
     try:
         import watch_view
 
@@ -2154,11 +2195,12 @@ def watch_page():
 
 
 @app.get("/report", response_class=HTMLResponse)
-def daily_report_page():
+def daily_report_page(request: Request):
     """The daily-chain HTML report (gesh_report.html) — ticker tape, holdings
     cards, Monte Carlo/Kelly charts, action plan, and the Paper & Risk-Gate
     Audit section. Regenerated by run_daily_analysis.sh (launchd, 10:30 ET).
     NOT public: not in the auth public-prefix list, so the login wall gates it."""
+    _require_owner_view(request)
     report_path = Path(__file__).parent / "gesh_report.html"
     if not report_path.exists():
         raise HTTPException(
@@ -2171,8 +2213,9 @@ def daily_report_page():
 
 
 @app.get("/watch/data")
-def watch_data(lookback_days: int = 7, activity_limit: int = 50):
+def watch_data(request: Request, lookback_days: int = 7, activity_limit: int = 50):
     """Read-only JSON snapshot powering the /watch 12s poll. Same auth gate as /watch."""
+    _require_owner_view(request)
     try:
         import watch_view
 
@@ -2184,12 +2227,13 @@ def watch_data(lookback_days: int = 7, activity_limit: int = 50):
 
 
 @app.get("/invest", response_class=HTMLResponse)
-def invest_page():
+def invest_page(request: Request):
     """Internal Diversification Radar — book sector concentration, ranked NEW
     (non-held) candidates with multi-factor scores + suggested sizing, and swap
     ideas when slots/cash are full. Read-only, advisory-only (never auto-trades).
     NOT public: not in the auth public-prefix list, so the login wall gates it
     (the dollar figures are account-identifying)."""
+    _require_owner_view(request)
     try:
         import invest_view
 
@@ -2199,10 +2243,11 @@ def invest_page():
 
 
 @app.get("/invest/data")
-def invest_data(what_if_cash: float | None = None):
+def invest_data(request: Request, what_if_cash: float | None = None):
     """Read-only JSON snapshot powering the /invest 12s poll. Reads the radar the daily
     10:30 pipeline persisted into engine_results.json. `what_if_cash` (the slider) re-sizes
     the picks for a hypothetical deployable amount server-side. Same auth gate as /invest."""
+    _require_owner_view(request)
     try:
         import invest_view
 
@@ -2398,6 +2443,26 @@ def _is_real_observation(h: dict) -> bool:
     )
 
 
+def _engine_holdings(payload: dict) -> tuple[list[dict], list[str]]:
+    """Split payload holdings into engine-usable observations and degraded ones.
+
+    A degraded-snapshot 'zombie' (stale non-zero equity + current_price=0 — the
+    documented 2026-07 RH-session failure) poisons Kelly share sizing and the
+    consensus Kelly node, which read `current_price` directly. The ECG path
+    already filters these via `_is_real_observation`; this applies the SAME
+    predicate at the price-dependent engine boundary (Kelly, consensus) so a
+    corrupt row is excluded from the math and reported in `degraded_holdings`
+    instead of silently skewing results. Monte Carlo is intentionally NOT filtered
+    here — it weights by `equity` and fetches its own price history, never reading
+    `current_price`."""
+    holdings = payload.get("holdings") or []
+    valid = [h for h in holdings if _is_real_observation(h)]
+    degraded = [
+        str(h.get("symbol", "")) for h in holdings if not _is_real_observation(h)
+    ]
+    return valid, degraded
+
+
 def _maybe_log_snapshot(holdings: list[dict]) -> None:
     """Rate-limited equity snapshot + live cache write. Skips if last write < interval ago."""
     global _last_snapshot_at
@@ -2432,6 +2497,17 @@ _chart_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 _chart_cache_lock = threading.Lock()
 CHART_TTL_SEC = 30
 
+
+def _chart_cache_put(key: tuple[str, str], now: float, result: dict) -> None:
+    """Store a chart result and evict expired entries so the cache stays bounded
+    by the (symbol, period) pairs queried within the last CHART_TTL_SEC window —
+    without this it grows for every distinct symbol/range for the process's life."""
+    with _chart_cache_lock:
+        _chart_cache[key] = (now, result)
+        for k in [k for k, (ts, _) in _chart_cache.items()
+                  if (now - ts) >= CHART_TTL_SEC]:
+            del _chart_cache[k]
+
 # Per-ticker analyze GETs (regime/fundamentals/analyst/news) cache. Watchlist
 # chips make repeat clicks on the same symbol the common pattern, and every miss
 # is a live upstream fetch. Successful responses only — a transient upstream 404
@@ -2442,9 +2518,17 @@ TICKER_GET_TTL_SEC = 300
 
 
 def _ticker_get_cached(bucket: str, sym: str) -> dict | None:
+    import copy
+
     with _ticker_get_lock:
         hit = _ticker_get_cache.get((bucket, sym))
-    return hit[1] if hit and (time.monotonic() - hit[0]) < TICKER_GET_TTL_SEC else None
+    if hit and (time.monotonic() - hit[0]) < TICKER_GET_TTL_SEC:
+        # Return a deep copy: a cache HIT previously handed callers the SAME dict
+        # that stays in the cache, so any handler/middleware that mutated the
+        # response would poison every subsequent serve of that (bucket, symbol)
+        # for the whole TTL. The copy keeps the stored entry immutable.
+        return copy.deepcopy(hit[1])
+    return None
 
 
 def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
@@ -2461,8 +2545,16 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
     # unverified (GESH-8).
     if isinstance(resp, dict) and "price" not in resp:  # skip tiny price-only blobs
         resp.setdefault("as_of", _dt.now(_tz.utc).isoformat())
+    now = time.monotonic()
     with _ticker_get_lock:
-        _ticker_get_cache[(bucket, sym)] = (time.monotonic(), resp)
+        _ticker_get_cache[(bucket, sym)] = (now, resp)
+        # Evict expired entries on write so this cache can't grow past the set of
+        # (bucket, symbol) pairs queried within the last TTL window — otherwise a
+        # user cycling Analyze tabs across many tickers leaks entries for the life
+        # of the always-on process.
+        for k in [k for k, (ts, _) in _ticker_get_cache.items()
+                  if (now - ts) >= TICKER_GET_TTL_SEC]:
+            del _ticker_get_cache[k]
     return resp
 
 
@@ -2989,10 +3081,20 @@ def run_deep_analysis():
         payload = _resolved_payload()
         offline = bool(payload.get("offline"))
         eq = payload["equity_summary"]
-        prev = eq.get("adjusted_equity_previous_close", 0)
-        curr = eq.get("portfolio_equity", 0)
-        eq["day_change"] = round(curr - prev, 2)
-        eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0, 2)
+        # Honest degrade: when the prior close is missing/non-positive, report the
+        # day change as unavailable rather than writing 0/0% (which renders as a
+        # flat market). Mirrors _attach_account_day_change and /api/portfolio.
+        prev = _positive_finite(eq.get("adjusted_equity_previous_close"))
+        curr = eq.get("portfolio_equity")
+        if prev is None or curr is None:
+            eq["day_change"] = None
+            eq["day_change_pct"] = None
+            eq["day_change_available"] = False
+        else:
+            _amount = float(curr) - prev
+            eq["day_change"] = round(_amount, 2)
+            eq["day_change_pct"] = round(_amount / prev * 100, 2)
+            eq["day_change_available"] = True
 
         symbols = [h["symbol"] for h in payload["holdings"]]
 
@@ -3045,6 +3147,9 @@ def run_deep_analysis():
 def monte_carlo():
     try:
         payload = _resolved_payload()
+        # Monte Carlo weights positions by `equity` and fetches its OWN price
+        # history per symbol — it never reads `current_price`, so the price<=0
+        # 'zombie' filter used by Kelly/consensus does not apply here.
         holdings = payload["holdings"]
         eq_sum = payload["equity_summary"]
         result = run_monte_carlo(holdings, eq_sum)
@@ -3321,7 +3426,7 @@ def run_screener():
 def kelly_endpoint():
     try:
         payload = _resolved_payload()
-        holdings = payload["holdings"]
+        holdings, degraded = _engine_holdings(payload)
         total_equity = payload["equity_summary"].get("portfolio_equity", 0)
         symbols = [h["symbol"] for h in holdings]
         analyst_data = get_analyst_targets(symbols)
@@ -3356,6 +3461,8 @@ def kelly_endpoint():
         resp = {"status": "ok", "data": _jsonable(result), "total_equity": total_equity}
         if payload.get("offline"):
             resp["offline"] = True
+        if degraded:
+            resp["degraded_holdings"] = degraded
         _save_engine_result("kelly", resp)
         return resp
     except Exception as e:
@@ -3447,8 +3554,7 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
                     "last_timestamp": None,
                     "source": None,
                 }
-                with _chart_cache_lock:
-                    _chart_cache[key] = (now, result)
+                _chart_cache_put(key, now, result)
                 return {**result, "requested_range": str(requested)}
         else:
             raw = price_source.yf_download(
@@ -3486,8 +3592,7 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
             "source": source,
             "data_as_of": _dt.now(_tz.utc).isoformat(),
         }
-        with _chart_cache_lock:
-            _chart_cache[key] = (now, result)
+        _chart_cache_put(key, now, result)
         return {**result, "requested_range": str(requested)}
     except HTTPException:
         raise
@@ -3502,10 +3607,12 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
 def consensus_endpoint():
     try:
         payload = _resolved_payload()
-        holdings = payload["holdings"]
+        holdings, degraded = _engine_holdings(payload)
         total_equity = payload["equity_summary"].get("portfolio_equity", 0)
         result = run_consensus_portfolio(holdings, total_equity)
         resp = {"status": "ok", "data": result}
+        if degraded:
+            resp["degraded_holdings"] = degraded
         _save_engine_result("consensus", resp)
         return resp
     except Exception as e:
@@ -4584,6 +4691,16 @@ async def analyze_ticker_endpoint(request: Request):
     except Exception as e:
         _release_customer_quota(reservation)
         raise _server_error(e)
+    finally:
+        # Release the per-symbol flight lock when no build is holding it and no
+        # card was cached. The 404 (unknown ticker) / 422 (suspect price) / error
+        # paths never call _ticker_card_store, so without this a probed invalid or
+        # cold symbol leaks an asyncio.Lock forever — an unbounded dict on the
+        # always-on server. Guarded by _ticker_card_lock, same as the store hook.
+        with _ticker_card_lock:
+            lk = _ticker_card_flight.get(sym)
+            if lk is not None and not lk.locked() and sym not in _ticker_card_cache:
+                del _ticker_card_flight[sym]
 
 
 # ─── Customer book — "Analyze MY portfolio" (v2 of the customer surface) ─────
@@ -5281,6 +5398,9 @@ async def mybook_bulk(request: Request):
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
+    # Bulk import is the one authenticated route that accepts a large pasted blob;
+    # cap it (256 KiB — comfortably fits hundreds of "SYMBOL shares" lines) so an
+    # authenticated client cannot stream an unbounded body and exhaust a worker.
     body = await _read_json_capped(request, _BULK_BODY_MAX_BYTES)
     text = (body or {}).get("text") or ""
     syms = (body or {}).get("symbols")
@@ -5907,7 +6027,8 @@ async def gemini_second_opinion_endpoint(symbol: str, request: Request):
             if c.isprintable() or c in "\n\t"
         )[:2000]
         verdict = "".join(c for c in str(body.get("verdict", "")) if c.isprintable())[:64]
-        result = gemini_second_opinion(symbol.upper(), analysis, verdict)
+        # Gemini call is a blocking HTTP request — offload so it can't stall the loop.
+        result = await asyncio.to_thread(gemini_second_opinion, symbol.upper(), analysis, verdict)
         return {"status": "ok", "data": _sanitize(result)}
     except Exception as e:
         raise _server_error(e)
@@ -6012,7 +6133,9 @@ async def consolidation_zone_batch(request: Request):
         _interval = body.get("interval", "5m")
         _period = body.get("period", "1d")
         _validate_timeframe(_interval, _period)
-        result = scan_consolidations(
+        # Downloads OHLCV for every symbol — offload off the event loop.
+        result = await asyncio.to_thread(
+            scan_consolidations,
             symbols,
             interval=_interval,
             period=_period,
@@ -6192,8 +6315,13 @@ async def trading_dry_run(request: Request):
             take_profit=body.get("take_profit"),
             rationale=body.get("rationale"),
         )
-        payload = _resolved_payload()
-        verdict = risk_gate_evaluate(intent, payload)
+
+        def _work():
+            # RH payload build + SQLite-backed gate — offload off the event loop.
+            payload = _resolved_payload()
+            return risk_gate_evaluate(intent, payload)
+
+        verdict = await asyncio.to_thread(_work)
         return {"status": "ok", "data": verdict.to_dict()}
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
@@ -6310,64 +6438,72 @@ async def trading_simulate_session(request: Request):
             body = {}
         use_cached = bool((body or {}).get("use_cached", True))
         only = {(s or "").upper() for s in (body or {}).get("symbols") or []}
-        payload = _resolved_payload()
-        holdings = payload.get("holdings", [])
-        if only:
-            holdings = [h for h in holdings if (h.get("symbol") or "").upper() in only]
 
-        from trading.config import load_risk_config
+        def _run() -> dict:
+            # The full consensus→gate→execute loop over every holding is blocking
+            # (RH payload build, per-symbol engines + yfinance, SQLite gate +
+            # execution). Offload it so this owner batch endpoint cannot freeze the
+            # single event loop and stall concurrent dashboard polls / mybook 202s.
+            payload = _resolved_payload()
+            holdings = payload.get("holdings", [])
+            if only:
+                holdings = [h for h in holdings if (h.get("symbol") or "").upper() in only]
 
-        cfg = load_risk_config()
-        results: list[dict] = []
-        cap_hit = False
-        cap_reason = ""
+            from trading.config import load_risk_config
 
-        for h in holdings:
-            sym = (h.get("symbol") or "").upper()
-            if not sym:
-                continue
-            if cap_hit:
-                results.append(
-                    {
-                        "symbol": sym,
-                        "skipped": True,
-                        "reason": cap_reason or "Daily order cap already reached",
-                    }
-                )
-                continue
-            try:
-                consensus_row = _resolve_consensus_row(sym, payload, use_cached=use_cached)
-                intent = from_consensus(consensus_row, max_position_pct=cfg.max_position_pct)
-                verdict = risk_gate_evaluate(intent, payload)
-                result = execution_place(intent, verdict, payload)
-                vd = verdict.to_dict()
-                results.append(
-                    {
-                        "symbol": sym,
-                        "cached": use_cached and _cached_consensus_row(sym) is not None,
-                        "consensus_verdict": consensus_row.get("verdict"),
-                        "intent": intent.to_dict(),
-                        "verdict": vd,
-                        "order": result.to_dict(),
-                    }
-                )
-                reason = vd.get("reason") or ""
-                if not vd.get("approved") and "Daily order cap" in reason:
-                    cap_hit = True
-                    cap_reason = reason
-            except Exception as exc:
-                results.append({"symbol": sym, "error": str(exc)})
+            cfg = load_risk_config()
+            results: list[dict] = []
+            cap_hit = False
+            cap_reason = ""
 
-        return _sanitize(
-            {
-                "status": "ok",
-                "count": len(results),
-                "cap_reached": cap_hit,
-                "cap_reason": cap_reason or None,
-                "use_cached": use_cached,
-                "results": results,
-            }
-        )
+            for h in holdings:
+                sym = (h.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                if cap_hit:
+                    results.append(
+                        {
+                            "symbol": sym,
+                            "skipped": True,
+                            "reason": cap_reason or "Daily order cap already reached",
+                        }
+                    )
+                    continue
+                try:
+                    consensus_row = _resolve_consensus_row(sym, payload, use_cached=use_cached)
+                    intent = from_consensus(consensus_row, max_position_pct=cfg.max_position_pct)
+                    verdict = risk_gate_evaluate(intent, payload)
+                    result = execution_place(intent, verdict, payload)
+                    vd = verdict.to_dict()
+                    results.append(
+                        {
+                            "symbol": sym,
+                            "cached": use_cached and _cached_consensus_row(sym) is not None,
+                            "consensus_verdict": consensus_row.get("verdict"),
+                            "intent": intent.to_dict(),
+                            "verdict": vd,
+                            "order": result.to_dict(),
+                        }
+                    )
+                    reason = vd.get("reason") or ""
+                    if not vd.get("approved") and "Daily order cap" in reason:
+                        cap_hit = True
+                        cap_reason = reason
+                except Exception as exc:
+                    results.append({"symbol": sym, "error": str(exc)})
+
+            return _sanitize(
+                {
+                    "status": "ok",
+                    "count": len(results),
+                    "cap_reached": cap_hit,
+                    "cap_reason": cap_reason or None,
+                    "use_cached": use_cached,
+                    "results": results,
+                }
+            )
+
+        return await asyncio.to_thread(_run)
     except Exception as e:
         raise _server_error(e)
 
