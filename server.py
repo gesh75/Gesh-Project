@@ -389,9 +389,10 @@ _HEAVY_PREFIXES = (
     "/api/levels/",
     "/api/earnings/",
     "/api/explainability/",
-    # Customer-book analysis = regime + Monte Carlo + Kelly + one Claude call.
-    # Book CRUD (/api/mybook without /analyze) stays in the normal bucket.
-    "/api/mybook/analyze",
+    # Customer-book reads also value as many as 40 customer-controlled tickers.
+    # Keep the entire surface in the heavy bucket; negative quote caching below
+    # prevents repeated misses, while this bounds cold/concurrent amplification.
+    "/api/mybook",
 )
 
 

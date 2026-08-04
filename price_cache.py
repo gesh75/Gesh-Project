@@ -10,6 +10,7 @@ server.py re-exports these names and keeps thin wrappers so its historical
 monkeypatch seams (server._latest_close, server._latest_close_meta,
 server._cached_close) still steer behavior exactly as before the extraction.
 """
+
 from __future__ import annotations
 
 import threading
@@ -19,18 +20,26 @@ from collections.abc import Callable
 # Valuing a book re-reads every symbol, so repeat views must not re-fetch
 # upstream. Same 5-minute TTL the slice had inside server's per-ticker cache.
 CLOSE_TTL_SEC = 300
-_close_cache: dict[str, tuple[float, float]] = {}   # sym -> (monotonic_ts, price)
+# Failed lookups need a short cache too.  Without it, a book filled with
+# syntactically-valid nonexistent tickers turns every dashboard refresh into N
+# fresh provider calls.  Keep failures much shorter-lived than real prices so a
+# transient provider outage recovers promptly.
+NEGATIVE_CLOSE_TTL_SEC = 60
+_close_cache: dict[str, tuple[float, float | None]] = {}  # sym -> (monotonic_ts, price)
 # Previous-session close, same TTL/lock. Kept in its OWN map rather than widening
 # the tuple so every existing _close_cache reader keeps working unchanged.
-_prior_cache: dict[str, tuple[float, float]] = {}   # sym -> (monotonic_ts, prior_close)
+_prior_cache: dict[str, tuple[float, float]] = {}  # sym -> (monotonic_ts, prior_close)
 _close_lock = threading.Lock()
 
 
 def has_cached_close(sym: str) -> bool:
-    """True when `sym` has an unexpired close in the cache (no fetch)."""
+    """True when `sym` has an unexpired positive or negative cache entry."""
     with _close_lock:
         hit = _close_cache.get(sym)
-    return bool(hit and (time.monotonic() - hit[0]) < CLOSE_TTL_SEC)
+    if not hit:
+        return False
+    ttl = CLOSE_TTL_SEC if hit[1] is not None else NEGATIVE_CLOSE_TTL_SEC
+    return (time.monotonic() - hit[0]) < ttl
 
 
 def clear() -> None:
@@ -55,8 +64,10 @@ def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
     meta: dict = {"source": None, "substituted": False}
     try:
         import price_source
-        raw = price_source.yf_download(sym, period="1mo", interval="1d",
-                                       auto_adjust=True, progress=False)
+
+        raw = price_source.yf_download(
+            sym, period="1mo", interval="1d", auto_adjust=True, progress=False
+        )
         if raw is None or getattr(raw, "empty", True):
             return None, meta
         # Read the source BEFORE the frame is discarded by the .squeeze() below.
@@ -70,11 +81,12 @@ def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
             cols = list(getattr(close_obj, "columns", []))
             if sym in cols:
                 close_obj = close_obj[sym]
-            elif len(cols) == 1 and (not isinstance(cols[0], str)
-                                     or cols[0].upper() in (sym.upper(), "CLOSE")):
-                close_obj = close_obj[cols[0]]   # unlabeled/neutral single column
+            elif len(cols) == 1 and (
+                not isinstance(cols[0], str) or cols[0].upper() in (sym.upper(), "CLOSE")
+            ):
+                close_obj = close_obj[cols[0]]  # unlabeled/neutral single column
             else:
-                return None, meta               # labeled with a DIFFERENT ticker
+                return None, meta  # labeled with a DIFFERENT ticker
         price, substituted = _close_price_guarded(close_obj.squeeze())
         meta["substituted"] = substituted
         return price, meta
@@ -96,6 +108,7 @@ def _close_price_guarded(closes) -> tuple[float | None, bool]:
     if len(closes) == 0:
         return None, False
     import numpy as np
+
     arr = np.array(closes).flatten().astype(float)
     last = round(float(arr[-1]), 2)
     if len(arr) >= 5:
@@ -121,8 +134,10 @@ def warm_close_cache_batch(symbols: list[str]) -> None:
     cold — the caller's valuation loop fetches them per-symbol."""
     try:
         import price_source
-        raw = price_source.yf_download(list(symbols), period="1mo", interval="1d",
-                                       auto_adjust=True, progress=False)
+
+        raw = price_source.yf_download(
+            list(symbols), period="1mo", interval="1d", auto_adjust=True, progress=False
+        )
         if raw is None or getattr(raw, "empty", True):
             return
         close = raw["Close"]
@@ -137,9 +152,9 @@ def warm_close_cache_batch(symbols: list[str]) -> None:
             elif len(symbols) == 1:
                 series = close
             else:
-                continue                     # flat frame for a multi-symbol ask
+                continue  # flat frame for a multi-symbol ask
             price, _substituted = _close_price_guarded(series)
-            prev = _prior_close_from_series(series)      # same frame, no extra fetch
+            prev = _prior_close_from_series(series)  # same frame, no extra fetch
         except Exception:
             continue
         if price is not None and price > 0:
@@ -160,6 +175,7 @@ def _prior_close_from_series(closes) -> float | None:
     would report a flat day we cannot evidence."""
     try:
         import numpy as np
+
         arr = np.array(closes.dropna()).flatten().astype(float)
     except Exception:
         return None
@@ -168,7 +184,7 @@ def _prior_close_from_series(closes) -> float | None:
     prev = round(float(arr[-2]), 2)
     if prev <= 0:
         return None
-    if len(arr) >= 5:                       # same bad-tick guard as the latest close
+    if len(arr) >= 5:  # same bad-tick guard as the latest close
         med = float(np.median(arr[-20:]))
         if med > 0 and not (med * 0.5 <= prev <= med * 2.0):
             return None
@@ -184,8 +200,10 @@ def prior_close(sym: str) -> float | None:
             return hit[1]
     try:
         import price_source
-        raw = price_source.yf_download(sym, period="1mo", interval="1d",
-                                       auto_adjust=True, progress=False)
+
+        raw = price_source.yf_download(
+            sym, period="1mo", interval="1d", auto_adjust=True, progress=False
+        )
         if raw is None or getattr(raw, "empty", True):
             return None
         close_obj = raw["Close"]
@@ -221,14 +239,16 @@ def _cached_close(sym: str, fetch: Callable[[str], float | None] | None = None) 
     `fetch` is the patchable-seam hook: server passes its own module-global
     _latest_close so tests monkeypatching server._latest_close keep steering
     book valuation. None (the cron/default path) resolves this module's
-    _latest_close at call time. A None price is never cached — a transient
-    data outage must not stick for the TTL."""
+    _latest_close at call time. Missing prices are negatively cached for a
+    shorter interval so invalid book symbols cannot cause an upstream request
+    on every view while transient data outages still recover quickly."""
     with _close_lock:
         hit = _close_cache.get(sym)
-    if hit and (time.monotonic() - hit[0]) < CLOSE_TTL_SEC:
-        return hit[1]
+    if hit:
+        ttl = CLOSE_TTL_SEC if hit[1] is not None else NEGATIVE_CLOSE_TTL_SEC
+        if (time.monotonic() - hit[0]) < ttl:
+            return hit[1]
     price = (fetch or _latest_close)(sym)
-    if price is not None:
-        with _close_lock:
-            _close_cache[sym] = (time.monotonic(), price)
+    with _close_lock:
+        _close_cache[sym] = (time.monotonic(), price)
     return price
