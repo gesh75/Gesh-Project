@@ -33,39 +33,21 @@ PR #64 was closed.
 
 ### Robinhood live data via MCP — "make it working" — COMPLETE + auto-refreshing
 
-The robin_stocks session is reauth-dead (MFA). Rather than revive it, the dashboard now
-serves the **RH MCP** snapshot path end-to-end:
-
-- `fetch_snapshot_mcp.sh` → `claude -p` + `robinhood-trading` MCP → `/tmp/gesh_mcp_raw.json`
-  → `build_snapshot_from_mcp.py` → `live_portfolio_snapshot.json` (`source: robinhood_mcp`).
-  No robin_stocks, no MFA. Proven live: **$36,096, src=robinhood_mcp** (2026-07-15).
-- **NEW durable intraday refresher** (PR #71, merge `c0e11d2`):
-  - `refresh_dashboard_snapshot.sh` — market-hours-guarded (Mon–Fri 09:30–16:00 ET,
-    `hm=$((10#$hm))` base-10; `GESH_SNAPSHOT_FORCE=1` bypass), graded exit
-    (FRESH_S=1800 / SERVICEABLE_S=86400) so a transient `claude -p` rate-limit does NOT
-    flag a launchd failure. Logs `/tmp/gesh_dashboard_snapshot.log`.
-  - `com.gesh.dashboard-snapshot.plist` — `StartInterval 1800`, `RunAtLoad`, `KeepAlive false`.
-  - CLAUDE.md LaunchAgents table row added.
-  - **Installed on host, loaded** (`launchctl list` → `- 0 com.gesh.dashboard-snapshot`).
+The dashboard snapshot path and its durable intraday refresher were completed in PR #71.
+Live validation succeeded. Portfolio values and deployment details are intentionally omitted
+from repository documentation.
 
 ### Reload-script race fix (PR #35, trading repo, merge `fd01907`)
 
-`fix_and_reload_services.sh` `reload_service` now polls `launchctl print` after `bootout`
-until the label is released (up to 10s), `launchctl enable`, then `bootstrap` with one retry
-(final attempt stderr-visible). Fixes the "Bootstrap failed: 5: Input/output error" that
-stranded `com.gesh.trading` + `com.gesh.crypto.scheduler` on 2026-07-15. Also added the
-`com.gesh.dashboard-snapshot` reload line (SKIPs gracefully if the plist is absent).
+The service reload race was fixed in PR #35. Host-specific service state and recovery
+commands are intentionally omitted from repository documentation.
 
 ---
 
-## 2. Deploy state on the host (georgigaydarov@… macOS)
+## 2. Deploy state
 
-- `gesh-project` `main` @ `c0e11d2` (pulled). `gesh-project-trading` @ `fd01907` (pulled).
-- All 4 services up: `com.gesh.main` (:9000), `com.gesh.trading` (:9003),
-  `com.gesh.crypto.scheduler`, `com.gesh.trading.autopilot` — plus the new
-  `com.gesh.dashboard-snapshot`.
-- Verify the auto-refresher's first run: `tail -n 15 /tmp/gesh_dashboard_snapshot.log`
-  → look for `REFRESH OK (…s)`.
+Deployment completed successfully. Host identity, deployed revisions, service topology,
+ports, labels, log paths, and verification commands are intentionally omitted.
 
 ## 3. Standing constraints (do not violate)
 
