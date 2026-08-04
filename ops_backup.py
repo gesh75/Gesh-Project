@@ -34,10 +34,14 @@ def backup_one(src: Path, dest_dir: Path, stamp: str) -> bool:
     dest = dest_dir / f"{src.stem}_{stamp}.db"
     try:
         s = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+        # Create and restrict the destination before SQLite writes sensitive data.
+        dest.touch(mode=0o600, exist_ok=True)
+        dest.chmod(0o600)
         d = sqlite3.connect(dest)
         s.backup(d)
         ok = d.execute("PRAGMA integrity_check").fetchone()[0]
         d.close(); s.close()
+        dest.chmod(0o600)
         if ok != "ok":
             print(f"[backup] FAIL integrity: {src} -> {dest}: {ok}")
             return False
@@ -64,7 +68,8 @@ def main() -> int:
             print(f"[backup] skip missing {src}")
             continue
         dest_dir = src.parent / "backups" / "nightly"
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        dest_dir.chmod(0o700)
         if not backup_one(src, dest_dir, stamp):
             failures += 1
         prune(dest_dir)
