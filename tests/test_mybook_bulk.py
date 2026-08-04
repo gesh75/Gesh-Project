@@ -19,6 +19,7 @@ from starlette.testclient import TestClient
 @pytest.fixture
 def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
+
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
     for email in ("a@x.com", "b@x.com", "cust@x.com"):
@@ -26,40 +27,43 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return _au
 
 
-_PRICES = {"AAA": 10.0, "BBB": 100.0, "CCC": 250.0, "DDD": 40.0,
-           "NVDA": 100.0, "AAPL": 200.0}
+_PRICES = {"AAA": 10.0, "BBB": 100.0, "CCC": 250.0, "DDD": 40.0, "NVDA": 100.0, "AAPL": 200.0}
 
 
 @pytest.fixture
 def client(au, monkeypatch):
     import server
+
     monkeypatch.setattr(server.auth_users, "AUTH_DB_PATH", au.AUTH_DB_PATH)
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     # default everything to a priced $50 so cap/import tests don't drop symbols
-    monkeypatch.setattr(server, "_latest_close",
-                        lambda sym: _PRICES.get(sym, 50.0), raising=True)
+    monkeypatch.setattr(server, "_latest_close", lambda sym: _PRICES.get(sym, 50.0), raising=True)
     return server, TestClient(server.app, raise_server_exceptions=False)
 
 
 def _as(server, monkeypatch, email):
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: email)
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server.auth_users, "is_owner",
-                        lambda e: e == "georgy75@gmail.com", raising=False)
+    monkeypatch.setattr(
+        server.auth_users, "is_owner", lambda e: e == "georgy75@gmail.com", raising=False
+    )
 
 
 # ─── parser (pure) ────────────────────────────────────────────────────────────
 
+
 def test_parse_symbols_only_yields_no_shares():
     import server
+
     items, invalid = server._parse_bulk_book("AAPL\nnvda\nMSFT")
-    assert [i["symbol"] for i in items] == ["AAPL", "NVDA", "MSFT"]   # uppercased
+    assert [i["symbol"] for i in items] == ["AAPL", "NVDA", "MSFT"]  # uppercased
     assert all(i["shares"] is None and i["avg_cost"] is None for i in items)
     assert invalid == []
 
 
 def test_parse_with_sizes_and_mixed_delimiters():
     import server
+
     items, _ = server._parse_bulk_book("AAPL,100,150.25\nNVDA 50 800\nTSLA\t3")
     by = {i["symbol"]: i for i in items}
     assert by["AAPL"]["shares"] == 100.0 and by["AAPL"]["avg_cost"] == 150.25
@@ -69,35 +73,47 @@ def test_parse_with_sizes_and_mixed_delimiters():
 
 def test_parse_skips_header_and_junk():
     import server
-    items, invalid = server._parse_bulk_book(
-        "Symbol,Shares,Cost\nAAPL\n???,,,\n   \nNVDA")
+
+    items, invalid = server._parse_bulk_book("Symbol,Shares,Cost\nAAPL\n???,,,\n   \nNVDA")
     assert [i["symbol"] for i in items] == ["AAPL", "NVDA"]
     assert any("Symbol" in x or "???" in x for x in invalid)
 
 
 def test_parse_dedupes_first_wins():
     import server
+
     items, _ = server._parse_bulk_book("AAPL 10\naapl 99\nNVDA")
     assert [i["symbol"] for i in items] == ["AAPL", "NVDA"]
-    assert items[0]["shares"] == 10.0                                # first wins
+    assert items[0]["shares"] == 10.0  # first wins
+
+
+def test_parse_rejects_excessive_line_count():
+    import server
+
+    text = "\n".join(f"SYM{i}" for i in range(server._BULK_MAX_LINES + 1))
+    with pytest.raises(server.HTTPException) as exc_info:
+        server._parse_bulk_book(text)
+    assert exc_info.value.status_code == 413
 
 
 # ─── storage layer ────────────────────────────────────────────────────────────
+
 
 def test_max_positions_raised_to_100(au):
     assert au._MAX_POSITIONS == 100
 
 
 def test_equal_weight_flag_roundtrip(au):
-    assert au.get_equal_weight("a@x.com") is False                   # default off
+    assert au.get_equal_weight("a@x.com") is False  # default off
     au.set_equal_weight("a@x.com", True)
     assert au.get_equal_weight("a@x.com") is True
     au.set_equal_weight("a@x.com", False)
     assert au.get_equal_weight("a@x.com") is False
-    assert au.get_equal_weight("b@x.com") is False                   # per-user
+    assert au.get_equal_weight("b@x.com") is False  # per-user
 
 
 # ─── /api/mybook/bulk endpoint ────────────────────────────────────────────────
+
 
 def test_bulk_symbols_only_imports_and_sets_equal_weight(client, monkeypatch):
     server, c = client
@@ -133,7 +149,7 @@ def test_bulk_with_sizes_disables_equal_weight(client, monkeypatch):
     # real weights: NVDA 10×$100=1000, AAPL 5×$200=1000 → 50/50 here, but sized
     assert d["equal_weight"] is False
     nvda = [p for p in d["positions"] if p["symbol"] == "NVDA"][0]
-    assert nvda["quantity"] == 10                                    # real shares kept
+    assert nvda["quantity"] == 10  # real shares kept
 
 
 def test_bulk_respects_position_cap(client, monkeypatch):
@@ -170,7 +186,28 @@ def test_bulk_reports_invalid_lines(client, monkeypatch):
     assert any("bad" in x for x in body["invalid"])
 
 
+def test_bulk_rejects_oversized_body_before_import(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    payload = b'{"text":"' + (b"A" * server._BULK_BODY_MAX_BYTES) + b'"}'
+    r = c.post("/api/mybook/bulk", content=payload, headers={"content-type": "application/json"})
+    assert r.status_code == 413
+    assert server.auth_users.get_positions("cust@x.com") == []
+
+
+def test_bulk_rejects_excessive_lines_before_database_work(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    text = "\n".join(f"SYM{i}" for i in range(server._BULK_MAX_LINES + 1))
+    r = c.post("/api/mybook/bulk", json={"text": text})
+    assert r.status_code == 413
+    assert server.auth_users.get_positions("cust@x.com") == []
+
+
 # ─── large-book analysis: cap detailed holdings so the LLM can't truncate ──────
+
 
 def _fake_engines(server, monkeypatch):
     captured = {}
@@ -179,9 +216,9 @@ def _fake_engines(server, monkeypatch):
         captured["holdings_seen"] = len(payload["holdings"])
         captured["concise"] = kwargs.get("concise")
         return {"holdings_analysis": [], "portfolio_score": 50}
+
     monkeypatch.setattr(server, "deep_analyze_portfolio", _deep, raising=True)
-    monkeypatch.setattr(server, "detect_regimes",
-                        lambda s: {"regime_summary": "x"}, raising=True)
+    monkeypatch.setattr(server, "detect_regimes", lambda s: {"regime_summary": "x"}, raising=True)
     monkeypatch.setattr(server, "run_monte_carlo", lambda h, e, **k: {"ok": 1}, raising=True)
     monkeypatch.setattr(server, "run_kelly_analysis", lambda *a, **k: {"ok": 1}, raising=True)
     monkeypatch.setattr(server, "get_analyst_targets", lambda s: {}, raising=True)
@@ -189,25 +226,40 @@ def _fake_engines(server, monkeypatch):
 
 
 def _book_payload(n):
-    holdings = [{"symbol": f"S{i}", "equity": 100.0 + i, "quantity": 1.0,
-                 "average_buy_price": 0.0, "current_price": 1.0,
-                 "portfolio_percentage": 1.0} for i in range(n)]
-    return {"holdings": holdings, "unpriced": [],
-            "equity_summary": {"portfolio_equity": sum(h["equity"] for h in holdings)}}
+    holdings = [
+        {
+            "symbol": f"S{i}",
+            "equity": 100.0 + i,
+            "quantity": 1.0,
+            "average_buy_price": 0.0,
+            "current_price": 1.0,
+            "portfolio_percentage": 1.0,
+        }
+        for i in range(n)
+    ]
+    return {
+        "holdings": holdings,
+        "unpriced": [],
+        "equity_summary": {"portfolio_equity": sum(h["equity"] for h in holdings)},
+    }
 
 
 def test_deep_analysis_holdings_are_capped_for_large_book(monkeypatch):
     import server
+
     captured = _fake_engines(server, monkeypatch)
     result = server._run_book_engines(_book_payload(60))
-    assert captured["holdings_seen"] == server._BOOK_ANALYSIS_MAX_HOLDINGS   # capped
+    assert captured["holdings_seen"] == server._BOOK_ANALYSIS_MAX_HOLDINGS  # capped
     assert result["analysis"]["holdings_truncated"] == {
-        "analyzed": server._BOOK_ANALYSIS_MAX_HOLDINGS, "total": 60}
-    assert len(result["book"]["positions"]) == 60                            # MC/Kelly saw ALL
+        "analyzed": server._BOOK_ANALYSIS_MAX_HOLDINGS,
+        "total": 60,
+    }
+    assert len(result["book"]["positions"]) == 60  # MC/Kelly saw ALL
 
 
 def test_small_book_is_not_capped(monkeypatch):
     import server
+
     captured = _fake_engines(server, monkeypatch)
     result = server._run_book_engines(_book_payload(6))
     assert captured["holdings_seen"] == 6
@@ -217,6 +269,7 @@ def test_small_book_is_not_capped(monkeypatch):
 
 def test_large_book_uses_concise_deep_analysis(monkeypatch):
     import server
+
     captured = _fake_engines(server, monkeypatch)
     server._run_book_engines(_book_payload(33))
     assert captured["holdings_seen"] == server._BOOK_ANALYSIS_MAX_HOLDINGS
@@ -225,11 +278,13 @@ def test_large_book_uses_concise_deep_analysis(monkeypatch):
 
 # ─── error classifier must not crash on a cause-less exception ─────────────────
 
+
 def test_upstream_classifier_handles_exception_without_cause():
     """Regression: a RuntimeError with no __cause__/__context__ must classify to
     None, not crash on None.__cause__ (which turned every analysis error into a
     confusing AttributeError 500)."""
     import server
+
     assert server._upstream_unavailable_error(RuntimeError("truncated")) is None
     he = server._server_error(RuntimeError("truncated"))
-    assert he.status_code == 500                                             # clean 500
+    assert he.status_code == 500  # clean 500
