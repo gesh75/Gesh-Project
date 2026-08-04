@@ -17,8 +17,8 @@
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/gesh_live_data.log</string>
+    <string>/dev/null</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/gesh_live_data.log</string>
+    <string>/dev/null</string>
 </dict>
 </plist>

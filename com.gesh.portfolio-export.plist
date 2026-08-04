@@ -40,10 +40,10 @@
     </array>
 
     <key>StandardOutPath</key>
-    <string>/tmp/gesh_portfolio_export.log</string>
+    <string>/dev/null</string>
 
     <key>StandardErrorPath</key>
-    <string>/tmp/gesh_portfolio_export.log</string>
+    <string>/dev/null</string>
 
     <key>EnvironmentVariables</key>
     <dict>
