@@ -9,6 +9,7 @@ Runs a structured 3-call Claude debate for any symbol:
 Uses Claude tool-use for structured JSON output (same pattern as ai_analyzer.py).
 Cheap path: Bull + Bear calls use claude-haiku, PM synthesis uses claude-sonnet.
 """
+
 from __future__ import annotations
 
 import json
@@ -16,32 +17,29 @@ import logging
 import os
 from typing import Any
 
-import anthropic
 from dotenv import load_dotenv
+
+import llm_gateway
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-MODELS = {
-    "sonnet": "claude-sonnet-4-6",
-    "haiku":  "claude-haiku-4-5-20251001",
-}
-_HAIKU  = MODELS["haiku"]
-_SONNET = MODELS.get(os.getenv("CLAUDE_MODEL", "sonnet").lower(), MODELS["sonnet"])
+_HAIKU = llm_gateway.resolve_model("haiku", default="haiku")
+_SONNET = llm_gateway.resolve_model(os.getenv("CLAUDE_MODEL"), default="sonnet")
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 _CASE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "thesis":      {"type": "string", "description": "One-sentence core thesis"},
+        "thesis": {"type": "string", "description": "One-sentence core thesis"},
         "arguments": {
             "type": "array",
             "description": "3-5 supporting arguments, most important first",
             "items": {
                 "type": "object",
                 "properties": {
-                    "point":    {"type": "string"},
+                    "point": {"type": "string"},
                     "evidence": {"type": "string"},
                 },
                 "required": ["point", "evidence"],
@@ -51,8 +49,8 @@ _CASE_SCHEMA: dict[str, Any] = {
             "type": "number",
             "description": "12-month price target implied by this case",
         },
-        "key_risk":    {"type": "string", "description": "Biggest risk to this case"},
-        "confidence":  {"type": "integer", "description": "Confidence 0-100"},
+        "key_risk": {"type": "string", "description": "Biggest risk to this case"},
+        "confidence": {"type": "integer", "description": "Confidence 0-100"},
     },
     "required": ["thesis", "arguments", "price_target", "key_risk", "confidence"],
 }
@@ -69,13 +67,13 @@ _DECISION_SCHEMA: dict[str, Any] = {
             "type": "number",
             "description": "Blended 12-month price target",
         },
-        "upside_pct":  {"type": "number"},
+        "upside_pct": {"type": "number"},
         "bull_weight": {
             "type": "integer",
             "description": "Weight given to bull case 0-100 (100 = fully bullish)",
         },
-        "rationale":   {"type": "string", "description": "2-3 sentence synthesis"},
-        "catalysts":   {
+        "rationale": {"type": "string", "description": "2-3 sentence synthesis"},
+        "catalysts": {
             "type": "array",
             "items": {"type": "string"},
             "description": "Top 2-3 catalysts to watch",
@@ -86,16 +84,23 @@ _DECISION_SCHEMA: dict[str, Any] = {
         },
     },
     "required": [
-        "action", "conviction", "price_target", "upside_pct",
-        "bull_weight", "rationale", "catalysts", "stop_loss_pct",
+        "action",
+        "conviction",
+        "price_target",
+        "upside_pct",
+        "bull_weight",
+        "rationale",
+        "catalysts",
+        "stop_loss_pct",
     ],
 }
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
+
 def _tool_call(
-    client: anthropic.Anthropic,
+    client: Any,
     model: str,
     system: str,
     user: str,
@@ -138,6 +143,7 @@ def _context_prompt(symbol: str, consensus: dict[str, Any], fundamentals: dict[s
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
+
 def run_debate(
     symbol: str,
     consensus: dict[str, Any],
@@ -160,16 +166,14 @@ def run_debate(
             "debate_summary": str,  # human-readable one-liner
         }
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise EnvironmentError("ANTHROPIC_API_KEY must be set in .env")
-    client = anthropic.Anthropic(api_key=api_key)
+    client = llm_gateway.create_client()
 
     ctx = _context_prompt(symbol, consensus, fundamentals)
 
     # ── Call 1: Bull case (haiku — cheap) ────────────────────────────────────
     bull = _tool_call(
-        client, _HAIKU,
+        client,
+        _HAIKU,
         system="You are an aggressive buy-side analyst. Build the strongest possible BULL case.",
         user=(
             f"Build the strongest bull case for {symbol}.\n\n"
@@ -179,11 +183,17 @@ def run_debate(
         tool_name="bull_case",
         schema=_CASE_SCHEMA,
     )
-    logger.info("Debate [%s] bull: %s (conf=%s%%)", symbol, bull.get("thesis", "")[:60], bull.get("confidence"))
+    logger.info(
+        "Debate [%s] bull: %s (conf=%s%%)",
+        symbol,
+        bull.get("thesis", "")[:60],
+        bull.get("confidence"),
+    )
 
     # ── Call 2: Bear case (haiku — cheap) ────────────────────────────────────
     bear = _tool_call(
-        client, _HAIKU,
+        client,
+        _HAIKU,
         system="You are a short-seller. Build the strongest possible BEAR case.",
         user=(
             f"Build the strongest bear case for {symbol}.\n\n"
@@ -194,11 +204,17 @@ def run_debate(
         tool_name="bear_case",
         schema=_CASE_SCHEMA,
     )
-    logger.info("Debate [%s] bear: %s (conf=%s%%)", symbol, bear.get("thesis", "")[:60], bear.get("confidence"))
+    logger.info(
+        "Debate [%s] bear: %s (conf=%s%%)",
+        symbol,
+        bear.get("thesis", "")[:60],
+        bear.get("confidence"),
+    )
 
     # ── Call 3: PM synthesis (sonnet — full reasoning) ────────────────────────
     decision = _tool_call(
-        client, _SONNET,
+        client,
+        _SONNET,
         system=(
             "You are a disciplined portfolio manager. You have heard both sides of the debate. "
             "Your job is to weigh the evidence and make a clear, executable decision. "
@@ -225,7 +241,9 @@ def run_debate(
     )
     logger.info(
         "Debate [%s] PM decision: %s conv=%s%%",
-        symbol, decision.get("action"), decision.get("conviction"),
+        symbol,
+        decision.get("action"),
+        decision.get("conviction"),
     )
 
     summary = (
@@ -237,9 +255,9 @@ def run_debate(
     )
 
     return {
-        "symbol":         symbol,
-        "bull":           bull,
-        "bear":           bear,
-        "decision":       decision,
+        "symbol": symbol,
+        "bull": bull,
+        "bear": bear,
+        "decision": decision,
         "debate_summary": summary,
     }

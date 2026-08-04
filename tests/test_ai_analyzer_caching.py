@@ -25,6 +25,7 @@ import ai_analyzer
 
 # ─── Fakes ───────────────────────────────────────────────────────────────────
 
+
 class _TextBlock:
     """Mimics a plain-text content block from a Messages response."""
 
@@ -91,10 +92,12 @@ def _install_fake_client(
     response: _FakeMessage,
 ) -> dict[str, Any]:
     """Patch the Anthropic constructor; return the dict that records kwargs."""
+    import llm_gateway
+
     sink: dict[str, Any] = {}
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
     monkeypatch.setattr(
-        ai_analyzer.anthropic,
+        llm_gateway.anthropic,
         "Anthropic",
         lambda *a, **k: _FakeClient(response, sink),
     )
@@ -103,18 +106,19 @@ def _install_fake_client(
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _has_ephemeral_cache(blocks: Any) -> bool:
     """True if any content-block in `blocks` carries cache_control ephemeral."""
     if not isinstance(blocks, list):
         return False
     return any(
-        isinstance(b, dict)
-        and b.get("cache_control", {}).get("type") == "ephemeral"
+        isinstance(b, dict) and b.get("cache_control", {}).get("type") == "ephemeral"
         for b in blocks
     )
 
 
 # ─── analyze_portfolio (plain text) ──────────────────────────────────────────
+
 
 def test_analyze_portfolio_caches_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _FakeMessage([_TextBlock("RISK SCORE: 4/10")])
@@ -134,6 +138,7 @@ def test_analyze_portfolio_caches_system_prompt(monkeypatch: pytest.MonkeyPatch)
 
 
 # ─── deep_analyze_portfolio (tool use / JSON) ────────────────────────────────
+
 
 def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = {"portfolio_score": 72, "portfolio_verdict": "balanced"}
@@ -156,6 +161,7 @@ def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPa
 
 # ─── analyze_screener (tool use / JSON) ──────────────────────────────────────
 
+
 def test_analyze_screener_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = {"screen_summary": "ok", "market_bias": "neutral", "top_sectors": [], "picks": []}
     response = _FakeMessage([_ToolBlock(parsed)])
@@ -174,6 +180,7 @@ def test_analyze_screener_caches_system_and_tool_schema(monkeypatch: pytest.Monk
 
 
 # ─── Sanity: model selection unchanged (pure caching, not routing) ───────────
+
 
 def test_model_selection_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _FakeMessage([_TextBlock("ok")])

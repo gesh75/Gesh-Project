@@ -1,39 +1,36 @@
 from __future__ import annotations
-import json, os, re
+
+import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
 import anthropic
 from dotenv import load_dotenv
+
+import llm_gateway
+
 load_dotenv()
 
-MODELS = {
-    "sonnet": "claude-sonnet-4-6",
-    "haiku":  "claude-haiku-4-5-20251001",
-}
-MODEL = MODELS.get(os.getenv("CLAUDE_MODEL", "sonnet").lower(), MODELS["sonnet"])
+# Canonical routing lives in llm_gateway — keep these public names for callers
+# and existing tests that assert request shape against MODEL / SCREENER_MODEL.
+MODEL = llm_gateway.resolve_model(os.getenv("CLAUDE_MODEL"), default="sonnet")
 # Screener = structured scoring over pre-computed candidates → Haiku by default
 # (cost-routing convention: cheap batch tasks → Haiku). Override: CLAUDE_SCREENER_MODEL.
-SCREENER_MODEL = MODELS.get(
-    os.getenv("CLAUDE_SCREENER_MODEL", "haiku").lower(), MODELS["haiku"]
-)
+SCREENER_MODEL = llm_gateway.resolve_model(os.getenv("CLAUDE_SCREENER_MODEL"), default="haiku")
 # One count, used by BOTH screener prompts — they used to contradict each other
 # ("exactly 20" in the system prompt vs "best 6" in the user message).
 SCREENER_PICK_COUNT = int(os.getenv("SCREENER_PICK_COUNT", "6"))
 
 # Bounded client everywhere: SDK defaults (600s timeout × retries) allow a
-# ~30-min silent stall in the daily chain.
-_CLIENT_TIMEOUT_S = 240.0
-_CLIENT_MAX_RETRIES = 2
+# ~30-min silent stall in the daily chain. Retries are owned by llm_gateway
+# (max_retries=0 on the SDK client); timeout from GESH_LLM_TIMEOUT_SECONDS.
+_CLIENT_TIMEOUT_S = llm_gateway.default_timeout_seconds()
 
 
 def _client() -> anthropic.Anthropic:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise EnvironmentError("ANTHROPIC_API_KEY must be set in your .env file.")
-    return anthropic.Anthropic(
-        api_key=api_key, timeout=_CLIENT_TIMEOUT_S, max_retries=_CLIENT_MAX_RETRIES
-    )
+    return llm_gateway.create_client(timeout_seconds=_CLIENT_TIMEOUT_S)
 
 
 def _create_streaming(client: anthropic.Anthropic, **kwargs: Any) -> Any:
@@ -65,7 +62,7 @@ _USAGE_LOG = Path(os.getenv("LLM_USAGE_LOG") or (Path(__file__).parent / "llm_us
 _DAILY_BUDGET_USD = float(os.getenv("LLM_DAILY_BUDGET_USD", "0") or 0)
 _PRICE_PER_MTOK = {  # (input $, output $) per million tokens
     "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-haiku-4-5-20251001": (1.0, 5.0),
+    "claude-haiku-4-5": (1.0, 5.0),
 }
 
 
@@ -84,8 +81,10 @@ def _record_usage(fn: str, model: str, message: Any) -> None:
         out_tok = int(getattr(usage, "output_tokens", 0) or 0)
         row = {
             "ts": datetime.now(timezone.utc).isoformat(),
-            "fn": fn, "model": model,
-            "input_tokens": in_tok, "output_tokens": out_tok,
+            "fn": fn,
+            "model": model,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
             "est_cost_usd": round(_est_cost_usd(model, in_tok, out_tok), 6),
         }
         with open(_USAGE_LOG, "a") as f:
@@ -157,6 +156,7 @@ def _extract_tool_input(message: Any, fn_name: str) -> dict[str, Any]:
         f"Model returned text instead of calling the tool: {text[:300]!r}"
     )
 
+
 # ─── Quick Risk Analysis (plain text) ────────────────────────────────────────
 SYSTEM_PROMPT = """You are an elite quantitative risk manager. Analyze the portfolio and produce exactly these sections:
 1. PORTFOLIO OVERVIEW - equity, cash, buying power, position count
@@ -167,17 +167,26 @@ SYSTEM_PROMPT = """You are an elite quantitative risk manager. Analyze the portf
 6. RISK SCORE - 1-10 with one-sentence justification
 Be direct, precise, use dollar figures and percentages."""
 
+
 def analyze_portfolio(payload: dict[str, Any]) -> str:
     _budget_guard("analyze_portfolio")
     client = _client()
     message = client.messages.create(
-        model=MODEL, max_tokens=2048,
+        model=MODEL,
+        max_tokens=2048,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"Analyze this portfolio:\n\n```json\n{json.dumps(payload, separators=(',', ':'))}\n```"}]
+        messages=[
+            {
+                "role": "user",
+                "content": f"Analyze this portfolio:\n\n```json\n{json.dumps(payload, separators=(',', ':'))}\n```",
+            }
+        ],
     )
     _record_usage("analyze_portfolio", MODEL, message)
     if getattr(message, "stop_reason", None) == "max_tokens":
-        raise RuntimeError("analyze_portfolio: response truncated at max_tokens (2048) — output incomplete")
+        raise RuntimeError(
+            "analyze_portfolio: response truncated at max_tokens (2048) — output incomplete"
+        )
     if not message.content:
         raise ValueError("analyze_portfolio: empty response from Claude")
     # content[0] is not guaranteed to be a text block (refusal / leading non-text
@@ -209,7 +218,6 @@ claim you then contradict with per-name exceptions. Use the same regime label fo
 ticker everywhere it appears in your response."""
 
 
-
 # The per-holding research card — extracted so BOTH the portfolio deep-analysis
 # and the single-ticker customer card (TICKER_ANALYSIS_SCHEMA) share ONE definition
 # and can never drift apart (the frontend daRender markup renders both).
@@ -225,10 +233,12 @@ _HOLDING_ANALYSIS_ITEM = {
         # this is model prose with no taxonomy behind it. Rendering the two side by side
         # unlabeled made them read as competing sector values (GESH-6). No enum here on
         # purpose — the model was never given a taxonomy to conform to.
-        "company_type": {"type": "string", "description":
-                         "Short plain-language descriptor of what the business does "
-                         "(e.g. 'Mega-cap consumer tech'). A descriptor, NOT a GICS or "
-                         "vendor sector classification."},
+        "company_type": {
+            "type": "string",
+            "description": "Short plain-language descriptor of what the business does "
+            "(e.g. 'Mega-cap consumer tech'). A descriptor, NOT a GICS or "
+            "vendor sector classification.",
+        },
         "scores": {
             "type": "object",
             "properties": {
@@ -236,9 +246,9 @@ _HOLDING_ANALYSIS_ITEM = {
                 "growth": {"type": "integer"},
                 "health": {"type": "integer"},
                 "momentum": {"type": "integer"},
-                "dividend": {"type": "integer"}
+                "dividend": {"type": "integer"},
             },
-            "required": ["valuation", "growth", "health", "momentum", "dividend"]
+            "required": ["valuation", "growth", "health", "momentum", "dividend"],
         },
         "snowflake_summary": {"type": "string"},
         "fair_value": {
@@ -247,30 +257,34 @@ _HOLDING_ANALYSIS_ITEM = {
                 "estimate": {"type": "number"},
                 "current": {"type": "number"},
                 "status": {"type": "string"},
-                "pct_diff": {"type": "number"}
+                "pct_diff": {"type": "number"},
             },
-            "required": ["estimate", "current", "status", "pct_diff"]
+            "required": ["estimate", "current", "status", "pct_diff"],
         },
         "risks": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {"text": {"type": "string"}, "severity": {"type": "string"}},
-                "required": ["text", "severity"]
-            }
+                "required": ["text", "severity"],
+            },
         },
         "rewards": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
-                "required": ["text"]
-            }
+                "required": ["text"],
+            },
         },
         "prediction": {
             "type": "object",
-            "properties": {"3m": {"type": "string"}, "12m": {"type": "string"}, "rationale": {"type": "string"}},
-            "required": ["3m", "12m", "rationale"]
+            "properties": {
+                "3m": {"type": "string"},
+                "12m": {"type": "string"},
+                "rationale": {"type": "string"},
+            },
+            "required": ["3m", "12m", "rationale"],
         },
         "verdict": {"type": "string"},
         "analyst_note": {"type": "string"},
@@ -280,24 +294,36 @@ _HOLDING_ANALYSIS_ITEM = {
         "bear_case": {
             "type": "object",
             "properties": {
-                "thesis": {"type": "string", "description":
-                           "The single strongest argument AGAINST your verdict, "
-                           "2-3 sentences, grounded in the same data you used — "
-                           "steelman it, do not strawman."},
+                "thesis": {
+                    "type": "string",
+                    "description": "The single strongest argument AGAINST your verdict, "
+                    "2-3 sentences, grounded in the same data you used — "
+                    "steelman it, do not strawman.",
+                },
                 "invalidators": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description":
-                        "2-4 concrete OBSERVABLE conditions that would flip this "
-                        "verdict, each tied to a number or event, e.g. 'gross "
-                        "margin prints below 70% next quarter' — never vague "
-                        "('sentiment worsens')."
-                }
+                    "description": "2-4 concrete OBSERVABLE conditions that would flip this "
+                    "verdict, each tied to a number or event, e.g. 'gross "
+                    "margin prints below 70% next quarter' — never vague "
+                    "('sentiment worsens').",
+                },
             },
-            "required": ["thesis", "invalidators"]
-        }
+            "required": ["thesis", "invalidators"],
+        },
     },
-    "required": ["symbol", "company_type", "scores", "snowflake_summary", "fair_value", "risks", "rewards", "prediction", "verdict", "analyst_note"]
+    "required": [
+        "symbol",
+        "company_type",
+        "scores",
+        "snowflake_summary",
+        "fair_value",
+        "risks",
+        "rewards",
+        "prediction",
+        "verdict",
+        "analyst_note",
+    ],
 }
 
 DEEP_ANALYSIS_SCHEMA = {
@@ -309,17 +335,14 @@ DEEP_ANALYSIS_SCHEMA = {
         "risk_score": {"type": "integer"},
         "market_context": {"type": "string"},
         "diversification_score": {"type": "integer"},
-        "holdings_analysis": {
-            "type": "array",
-            "items": _HOLDING_ANALYSIS_ITEM
-        },
+        "holdings_analysis": {"type": "array", "items": _HOLDING_ANALYSIS_ITEM},
         "portfolio_risks": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {"text": {"type": "string"}, "severity": {"type": "string"}},
-                "required": ["text", "severity"]
-            }
+                "required": ["text", "severity"],
+            },
         },
         "portfolio_recommendations": {
             "type": "array",
@@ -333,21 +356,36 @@ DEEP_ANALYSIS_SCHEMA = {
                     # advisory NEW-name diversification idea from the radar. category
                     # "DIVERSIFICATION" lets the UI group it; symbol names the new ticker.
                     "category": {"type": "string"},
-                    "symbol": {"type": "string"}
+                    "symbol": {"type": "string"},
                 },
-                "required": ["action", "priority", "rationale"]
-            }
+                "required": ["action", "priority", "rationale"],
+            },
         },
         "sector_breakdown": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"sector": {"type": "string"}, "allocation_pct": {"type": "number"}, "assessment": {"type": "string"}},
-                "required": ["sector", "allocation_pct", "assessment"]
-            }
-        }
+                "properties": {
+                    "sector": {"type": "string"},
+                    "allocation_pct": {"type": "number"},
+                    "assessment": {"type": "string"},
+                },
+                "required": ["sector", "allocation_pct", "assessment"],
+            },
+        },
     },
-    "required": ["portfolio_score", "portfolio_verdict", "portfolio_type", "risk_score", "market_context", "diversification_score", "holdings_analysis", "portfolio_risks", "portfolio_recommendations", "sector_breakdown"]
+    "required": [
+        "portfolio_score",
+        "portfolio_verdict",
+        "portfolio_type",
+        "risk_score",
+        "market_context",
+        "diversification_score",
+        "holdings_analysis",
+        "portfolio_risks",
+        "portfolio_recommendations",
+        "sector_breakdown",
+    ],
 }
 
 SCREENER_SCHEMA = {
@@ -378,14 +416,34 @@ SCREENER_SCHEMA = {
                     "analyst_target": {"type": ["number", "null"]},
                     "analyst_upside": {"type": ["number", "null"]},
                     "num_analysts": {"type": "integer"},
-                    "recommendation": {"type": "string"}
+                    "recommendation": {"type": "string"},
                 },
-                "required": ["symbol", "company_name", "sector", "composite_score", "momentum_score", "value_score", "growth_score", "analyst_score", "verdict", "key_thesis", "main_risk", "price", "ret_1w", "ret_1m", "analyst_target", "analyst_upside", "num_analysts", "recommendation"]
-            }
-        }
+                "required": [
+                    "symbol",
+                    "company_name",
+                    "sector",
+                    "composite_score",
+                    "momentum_score",
+                    "value_score",
+                    "growth_score",
+                    "analyst_score",
+                    "verdict",
+                    "key_thesis",
+                    "main_risk",
+                    "price",
+                    "ret_1w",
+                    "ret_1m",
+                    "analyst_target",
+                    "analyst_upside",
+                    "num_analysts",
+                    "recommendation",
+                ],
+            },
+        },
     },
-    "required": ["screen_summary", "market_bias", "top_sectors", "picks"]
+    "required": ["screen_summary", "market_bias", "top_sectors", "picks"],
 }
+
 
 def deep_analyze_portfolio(
     payload: dict[str, Any],
@@ -401,21 +459,28 @@ def deep_analyze_portfolio(
     # silent stall. 240s covers a slow ~7-10K-token generation.
     client = _client()
 
-    today = __import__('datetime').date.today().isoformat()
+    today = __import__("datetime").date.today().isoformat()
     regime_block = f"\n\n{regime_context}" if regime_context else ""
-    brevity = ("\n\nBE CONCISE — this is a fast interactive report on a larger book. "
-               "For each holding give at most 2 short risks, 2 short rewards, and "
-               "one-line 3M/12M outlooks; a one-sentence snowflake_summary; "
-               "bear_case: a one-sentence thesis and at most 2 invalidators. "
-               "No preamble or repetition.") if concise else ""
+    brevity = (
+        (
+            "\n\nBE CONCISE — this is a fast interactive report on a larger book. "
+            "For each holding give at most 2 short risks, 2 short rewards, and "
+            "one-line 3M/12M outlooks; a one-sentence snowflake_summary; "
+            "bear_case: a one-sentence thesis and at most 2 invalidators. "
+            "No preamble or repetition."
+        )
+        if concise
+        else ""
+    )
     _max_tokens = max_tokens if max_tokens is not None else 24000
 
     import copy
+
     sanitized = copy.deepcopy(payload)
     for h in sanitized.get("holdings", []):
         h.pop("equity_history", None)
     sanitized.pop("watchlist", None)
-    
+
     def prune_dict(d):
         for k, v in list(d.items()):
             if isinstance(v, float):
@@ -438,20 +503,26 @@ def deep_analyze_portfolio(
         client,
         model=MODEL,
         max_tokens=_max_tokens,
-        system=[{"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        tools=[{
-            "name": "return_portfolio_analysis",
-            "input_schema": DEEP_ANALYSIS_SCHEMA,
-            "cache_control": {"type": "ephemeral"},
-        }],
+        system=[
+            {"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+        ],
+        tools=[
+            {
+                "name": "return_portfolio_analysis",
+                "input_schema": DEEP_ANALYSIS_SCHEMA,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         tool_choice={"type": "tool", "name": "return_portfolio_analysis"},
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Perform a deep financial analysis of this portfolio. Today is {today}.{regime_block}{brevity}\n\n"
-                f"```json\n{json.dumps(sanitized, separators=(',', ':'))}\n```"
-            )
-        }]
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Perform a deep financial analysis of this portfolio. Today is {today}.{regime_block}{brevity}\n\n"
+                    f"```json\n{json.dumps(sanitized, separators=(',', ':'))}\n```"
+                ),
+            }
+        ],
     )
     _record_usage("deep_analyze_portfolio", MODEL, message)
     if getattr(message, "stop_reason", None) == "max_tokens":
@@ -508,32 +579,39 @@ def deep_analyze_ticker(
     has it."""
     _budget_guard("deep_analyze_ticker")
     client = _client()
-    today = __import__('datetime').date.today().isoformat()
+    today = __import__("datetime").date.today().isoformat()
     regime_block = f"\n\n{regime_context}" if regime_context else ""
     # Ground the valuation on the caller's real quote — never let the model invent
     # a current price (it would derive status/pct_diff/verdict off a stale base).
     price_block = (
         f" The latest share price is ${current_price:,.2f} — use EXACTLY this value "
         f"as fair_value.current and derive status/pct_diff from it; do not invent a price."
-        if current_price is not None else ""
+        if current_price is not None
+        else ""
     )
     message = client.messages.create(
         model=MODEL,
         max_tokens=2000,
-        system=[{"type": "text", "text": TICKER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        tools=[{
-            "name": "return_ticker_analysis",
-            "input_schema": TICKER_ANALYSIS_SCHEMA,
-            "cache_control": {"type": "ephemeral"},
-        }],
+        system=[
+            {"type": "text", "text": TICKER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+        ],
+        tools=[
+            {
+                "name": "return_ticker_analysis",
+                "input_schema": TICKER_ANALYSIS_SCHEMA,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         tool_choice={"type": "tool", "name": "return_ticker_analysis"},
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Provide a deep single-stock research analysis of {symbol}. "
-                f"Today is {today}.{price_block}{regime_block}"
-            ),
-        }],
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Provide a deep single-stock research analysis of {symbol}. "
+                    f"Today is {today}.{price_block}{regime_block}"
+                ),
+            }
+        ],
     )
     _record_usage("deep_analyze_ticker", MODEL, message)
     if getattr(message, "stop_reason", None) == "max_tokens":
@@ -546,8 +624,6 @@ def deep_analyze_ticker(
     # it — never let a missing key surface as a KeyError on the customer surface.
     card.setdefault("bear_case", {"thesis": "", "invalidators": []})
     return card
-
-
 
 
 # ─── Investment Screener AI Analysis ─────────────────────────────────────────
@@ -576,26 +652,32 @@ def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
     _budget_guard("analyze_screener")
     client = _client()
 
-    today = __import__('datetime').date.today().isoformat()
+    today = __import__("datetime").date.today().isoformat()
 
     message = client.messages.create(
         model=SCREENER_MODEL,
         max_tokens=6000,
-        system=[{"type": "text", "text": SCREENER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        tools=[{
-            "name": "return_screener_picks",
-            "input_schema": SCREENER_SCHEMA,
-            "cache_control": {"type": "ephemeral"},
-        }],
+        system=[
+            {"type": "text", "text": SCREENER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+        ],
+        tools=[
+            {
+                "name": "return_screener_picks",
+                "input_schema": SCREENER_SCHEMA,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         tool_choice={"type": "tool", "name": "return_screener_picks"},
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Today is {today}. Analyze these {len(candidates)} stock candidates "
-                f"and select the best {SCREENER_PICK_COUNT} investment opportunities this week.\n\n"
-                f"```json\n{json.dumps(candidates, separators=(',', ':'))}\n```"
-            )
-        }]
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Today is {today}. Analyze these {len(candidates)} stock candidates "
+                    f"and select the best {SCREENER_PICK_COUNT} investment opportunities this week.\n\n"
+                    f"```json\n{json.dumps(candidates, separators=(',', ':'))}\n```"
+                ),
+            }
+        ],
     )
     _record_usage("analyze_screener", SCREENER_MODEL, message)
     if getattr(message, "stop_reason", None) == "max_tokens":

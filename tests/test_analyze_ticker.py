@@ -34,6 +34,7 @@ def _clear_ticker_cache():
 
 # ─── Fakes (mirror tests/test_ai_analyzer_caching.py) ────────────────────────
 
+
 class _ToolBlock:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.type = "tool_use"
@@ -95,13 +96,17 @@ _CARD = {
     "fair_value": {"estimate": 180.0, "current": 195.0, "status": "OVERVALUED", "pct_diff": -7.7},
     "risks": [{"text": "Trades ~8% above a $180 intrinsic estimate.", "severity": "MEDIUM"}],
     "rewards": [{"text": "Net-cash fortress with durable services growth."}],
-    "prediction": {"3m": "$185-205", "12m": "$170-230", "rationale": "Range-bound near fair value."},
+    "prediction": {
+        "3m": "$185-205",
+        "12m": "$170-230",
+        "rationale": "Range-bound near fair value.",
+    },
     "verdict": "HOLD",
     "analyst_note": "Wall St target ~$210; our fair value is $180 — wait for a pullback.",
     "bear_case": {
         "thesis": "Services growth decelerates below 8% YoY while the multiple "
-                   "still prices in mid-teens growth, closing the gap to fair value "
-                   "from the other side.",
+        "still prices in mid-teens growth, closing the gap to fair value "
+        "from the other side.",
         "invalidators": [
             "Services revenue growth prints below 8% YoY next quarter",
             "Gross margin falls below 44% for two consecutive quarters",
@@ -111,21 +116,35 @@ _CARD = {
 
 
 def _install_fake_client(monkeypatch, response: _FakeMessage) -> dict[str, Any]:
+    import llm_gateway
+
     sink: dict[str, Any] = {}
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
-    monkeypatch.setattr(ai_analyzer.anthropic, "Anthropic",
-                        lambda *a, **k: _FakeClient(response, sink))
+    monkeypatch.setattr(
+        llm_gateway.anthropic,
+        "Anthropic",
+        lambda *a, **k: _FakeClient(response, sink),
+    )
     return sink
 
 
 # ─── Unit: deep_analyze_ticker contract (money-free, per-ticker) ─────────────
 
+
 def test_deep_analyze_ticker_returns_card(monkeypatch):
     _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(_CARD)]))
     out = ai_analyzer.deep_analyze_ticker("AAPL")
     # rich per-ticker fields present
-    for k in ("scores", "fair_value", "prediction", "verdict", "risks", "rewards",
-              "snowflake_summary", "analyst_note"):
+    for k in (
+        "scores",
+        "fair_value",
+        "prediction",
+        "verdict",
+        "risks",
+        "rewards",
+        "snowflake_summary",
+        "analyst_note",
+    ):
         assert k in out, f"missing per-ticker field {k!r}"
     assert set(out["scores"]) == {"valuation", "growth", "health", "momentum", "dividend"}
 
@@ -138,8 +157,15 @@ def test_schema_is_money_free_no_portfolio_keys(monkeypatch):
     schema = sink["tools"][0]["input_schema"]
     props = schema["properties"]
     assert {"scores", "fair_value", "prediction", "verdict", "risks", "rewards"} <= set(props)
-    for banned in ("portfolio_score", "holdings_analysis", "sector_breakdown",
-                   "portfolio_recommendations", "portfolio_risks", "kelly", "delta_usd"):
+    for banned in (
+        "portfolio_score",
+        "holdings_analysis",
+        "sector_breakdown",
+        "portfolio_recommendations",
+        "portfolio_risks",
+        "kelly",
+        "delta_usd",
+    ):
         assert banned not in props, f"portfolio/dollar key {banned!r} leaked into the ticker schema"
     assert sink["tool_choice"]["name"] == "return_ticker_analysis"
 
@@ -151,7 +177,7 @@ def test_prompt_carries_symbol_not_owner_book(monkeypatch):
     ai_analyzer.deep_analyze_ticker("AAPL")
     user_msg = sink["messages"][0]["content"]
     assert "AAPL" in user_msg
-    for owner_marker in ("equity_summary", "portfolio_equity", "buying_power", "\"holdings\""):
+    for owner_marker in ("equity_summary", "portfolio_equity", "buying_power", '"holdings"'):
         assert owner_marker not in user_msg
 
 
@@ -159,8 +185,7 @@ def test_ticker_schema_matches_internal_holding_card(monkeypatch):
     """The customer card MUST stay identical to the internal per-holding card so
     the shared daRender markup renders it — guard against drift."""
     item = ai_analyzer.DEEP_ANALYSIS_SCHEMA["properties"]["holdings_analysis"]["items"]
-    assert ai_analyzer.TICKER_ANALYSIS_SCHEMA is item or \
-        ai_analyzer.TICKER_ANALYSIS_SCHEMA == item
+    assert ai_analyzer.TICKER_ANALYSIS_SCHEMA is item or ai_analyzer.TICKER_ANALYSIS_SCHEMA == item
 
 
 def test_ticker_schema_includes_bear_case(monkeypatch):
@@ -193,12 +218,10 @@ def test_portfolio_holdings_default_bear_case_when_model_omits_it(monkeypatch):
     parsed = {
         "portfolio_score": 60,
         "portfolio_verdict": "HOLD",
-        "holdings_analysis": [holding_no_bc,
-                              {**holding_no_bc, "symbol": "NVDA"}],
+        "holdings_analysis": [holding_no_bc, {**holding_no_bc, "symbol": "NVDA"}],
     }
     _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
-    out = ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"},
-                                                           {"symbol": "NVDA"}]})
+    out = ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}, {"symbol": "NVDA"}]})
     for h in out["holdings_analysis"]:
         assert h["bear_case"] == {"thesis": "", "invalidators": []}
 
@@ -207,17 +230,16 @@ def test_concise_portfolio_prompt_caps_bear_case(monkeypatch):
     """The customer book analysis runs concise + token-budget-constrained (12000
     max_tokens with a truncation retry ladder) — the brevity instruction must cap
     bear_case output so the new field can't blow that budget."""
-    parsed = {"portfolio_score": 60, "portfolio_verdict": "HOLD",
-              "holdings_analysis": []}
+    parsed = {"portfolio_score": 60, "portfolio_verdict": "HOLD", "holdings_analysis": []}
     sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
-    ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]},
-                                       concise=True)
+    ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]}, concise=True)
     user_msg = sink["messages"][0]["content"]
-    assert "bear_case" in user_msg           # concise mode explicitly caps the field
-    assert "BE CONCISE" in user_msg          # ...inside the existing brevity block
+    assert "bear_case" in user_msg  # concise mode explicitly caps the field
+    assert "BE CONCISE" in user_msg  # ...inside the existing brevity block
 
 
 # ─── Route: POST /api/analyze-ticker ─────────────────────────────────────────
+
 
 def _customer_client(monkeypatch, card=None, boom=None, price=195.0):
     """A TestClient with the auth wall ON and the session bound to a CUSTOMER
@@ -231,14 +253,18 @@ def _customer_client(monkeypatch, card=None, boom=None, price=195.0):
     # and _latest_close is now only a thin wrapper over it. Stubbing the wrapper left
     # the endpoint fetching a LIVE price — invisible to conftest's `_no_network`,
     # because yfinance fetches through curl_cffi and never opens a Python socket.
-    monkeypatch.setattr(server, "_latest_close_meta",
-                        lambda sym: (price, {"source": "yahoo", "substituted": False}),
-                        raising=True)
+    monkeypatch.setattr(
+        server,
+        "_latest_close_meta",
+        lambda sym: (price, {"source": "yahoo", "substituted": False}),
+        raising=True,
+    )
 
     def _fake(sym, current_price=None, regime_context=None):
         if boom:
             raise boom
         return {**(card or _CARD), "symbol": sym}
+
     monkeypatch.setattr(server, "deep_analyze_ticker", _fake, raising=True)
     c = TestClient(server.app, raise_server_exceptions=False)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
@@ -252,19 +278,20 @@ def test_route_customer_allowed_returns_200(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["data"]["symbol"] == "AAPL"          # _safe_symbol uppercased
+    assert body["data"]["symbol"] == "AAPL"  # _safe_symbol uppercased
 
 
 def test_analyze_ticker_reports_cached_and_generated_at(monkeypatch):
     """GESH-4: the AI card is stamped generated_at + a cached flag, so the UI can tag
     it 'AI-GENERATED · <time>' instead of hiding it under a global 'LIVE' banner."""
     from datetime import datetime
+
     c = _customer_client(monkeypatch)
     r1 = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     b1 = r1.json()
     assert b1["cached"] is False
-    datetime.fromisoformat(b1["data"]["generated_at"])      # parses as ISO 8601
-    r2 = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})   # cache hit, no spend
+    datetime.fromisoformat(b1["data"]["generated_at"])  # parses as ISO 8601
+    r2 = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})  # cache hit, no spend
     b2 = r2.json()
     assert b2["cached"] is True
     assert b2["data"]["generated_at"] == b1["data"]["generated_at"]  # same cached card
@@ -279,7 +306,7 @@ def test_card_always_carries_provenance_block(monkeypatch):
     p = card["provenance"]
     assert p["generated_at"] and p["model"]
     assert p["suspect"] in (True, False)
-    assert "price_source" in p and "price_as_of" in p     # keys present even when None
+    assert "price_source" in p and "price_as_of" in p  # keys present even when None
 
 
 def test_card_carries_bear_case_and_invalidators(monkeypatch):
@@ -300,20 +327,20 @@ def test_route_prose_not_masked_for_customer(monkeypatch):
     body = c.post("/api/analyze-ticker", json={"symbol": "AAPL"}).json()
     assert "$180" in body["data"]["analyst_note"]
     assert "$•••" not in body["data"]["analyst_note"]
-    assert body.get("view") != "model_book"          # exempt from model-book scaling
+    assert body.get("view") != "model_book"  # exempt from model-book scaling
 
 
 def test_route_bad_symbol_is_clean_4xx(monkeypatch):
     c = _customer_client(monkeypatch)
     r = c.post("/api/analyze-ticker", json={"symbol": "@@@"})
-    assert r.status_code == 400                       # never 500
+    assert r.status_code == 400  # never 500
 
 
 def test_route_llm_error_is_500_not_leak(monkeypatch):
     c = _customer_client(monkeypatch, boom=RuntimeError("anthropic exploded: sk-secret"))
     r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     assert r.status_code == 500
-    assert "sk-secret" not in r.text                  # _server_error hides internals
+    assert "sk-secret" not in r.text  # _server_error hides internals
 
 
 def test_route_rejects_anonymous_when_wall_on(monkeypatch):
@@ -322,8 +349,12 @@ def test_route_rejects_anonymous_when_wall_on(monkeypatch):
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
     spent = {"llm": False}
-    monkeypatch.setattr(server, "deep_analyze_ticker",
-                        lambda *a, **k: spent.__setitem__("llm", True) or _CARD, raising=True)
+    monkeypatch.setattr(
+        server,
+        "deep_analyze_ticker",
+        lambda *a, **k: spent.__setitem__("llm", True) or _CARD,
+        raising=True,
+    )
     c = TestClient(server.app, raise_server_exceptions=False)
     r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     assert r.status_code == 401
@@ -335,8 +366,12 @@ def test_route_unknown_ticker_is_404_no_spend(monkeypatch):
     model can't fabricate a card for a nonexistent symbol."""
     spent = {"llm": False}
     c = _customer_client(monkeypatch, price=None)
-    monkeypatch.setattr(server, "deep_analyze_ticker",
-                        lambda *a, **k: spent.__setitem__("llm", True) or _CARD, raising=True)
+    monkeypatch.setattr(
+        server,
+        "deep_analyze_ticker",
+        lambda *a, **k: spent.__setitem__("llm", True) or _CARD,
+        raising=True,
+    )
     r = c.post("/api/analyze-ticker", json={"symbol": "ZZZZ9"})
     assert r.status_code == 404
     assert spent["llm"] is False
@@ -350,6 +385,7 @@ def test_route_caches_repeat_symbol(monkeypatch):
     def _counting(sym, current_price=None, regime_context=None):
         calls["n"] += 1
         return {**_CARD, "symbol": sym}
+
     monkeypatch.setattr(server, "deep_analyze_ticker", _counting, raising=True)
     c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
@@ -367,12 +403,16 @@ def test_prompt_grounds_current_price(monkeypatch):
 
 # ── inspection fixes 2026-07-08: cache eviction + single-flight dedup ─────────
 
+
 def test_ticker_card_store_evicts_expired():
     """The card cache is process-wide and long-lived — expired entries must be
     purged on store, not accumulate for the life of the process."""
     import time as _time
-    server._ticker_card_cache["OLD"] = (_time.monotonic() - server._TICKER_CARD_TTL - 1,
-                                        {"symbol": "OLD"})
+
+    server._ticker_card_cache["OLD"] = (
+        _time.monotonic() - server._TICKER_CARD_TTL - 1,
+        {"symbol": "OLD"},
+    )
     server._ticker_card_store("NEW", {"symbol": "NEW"})
     assert "OLD" not in server._ticker_card_cache
     assert "NEW" in server._ticker_card_cache
@@ -389,23 +429,30 @@ def test_concurrent_same_symbol_spends_one_llm_call(monkeypatch):
     def _slow(sym, current_price=None, regime_context=None):
         calls["n"] += 1
         import time as _time
-        _time.sleep(0.05)                     # long enough for the follower to queue
+
+        _time.sleep(0.05)  # long enough for the follower to queue
         return {**_CARD, "symbol": sym}
+
     monkeypatch.setattr(server, "deep_analyze_ticker", _slow, raising=True)
-    monkeypatch.setattr(server, "_latest_close_meta",           # the seam the handler calls
-                        lambda s: (195.0, {"source": "yahoo", "substituted": False}),
-                        raising=True)
+    monkeypatch.setattr(
+        server,
+        "_latest_close_meta",  # the seam the handler calls
+        lambda s: (195.0, {"source": "yahoo", "substituted": False}),
+        raising=True,
+    )
 
     # Call the endpoint function directly (its Depends auth gate is route-level and
     # covered by the route tests above) so both coroutines share one event loop.
-    class _Req:                               # endpoint reads .json() + (usage-log) .cookies
-        cookies: dict = {}                    # empty → _session_email resolves without error
+    class _Req:  # endpoint reads .json() + (usage-log) .cookies
+        cookies: dict = {}  # empty → _session_email resolves without error
+
         async def json(self):
             return {"symbol": "AAPL"}
 
     async def _go():
-        return await asyncio.gather(server.analyze_ticker_endpoint(_Req()),
-                                    server.analyze_ticker_endpoint(_Req()))
+        return await asyncio.gather(
+            server.analyze_ticker_endpoint(_Req()), server.analyze_ticker_endpoint(_Req())
+        )
 
     r1, r2 = asyncio.run(_go())
     assert r1["data"]["symbol"] == "AAPL" and r2["data"]["symbol"] == "AAPL"
