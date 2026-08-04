@@ -14,6 +14,7 @@ Env:
 """
 from __future__ import annotations
 
+import html as _html
 import logging
 import os
 
@@ -68,13 +69,18 @@ def send_email(to: str, subject: str, html: str, headers: dict | None = None) ->
 
 def send_magic_link(to: str, link: str, tier: str | None = None) -> bool:
     """Onboarding email with a one-time login link (no password)."""
-    tier_line = f"<p>Your plan: <strong>{tier}</strong></p>" if tier else ""
+    # `tier` (from billing/DB) and `link` (built from APP_BASE_URL) are embedded
+    # in HTML — escape them so a malformed tier string or a mis-set base URL can't
+    # inject markup / break out of the href attribute into the email body.
+    safe_link = _html.escape(link, quote=True)
+    safe_tier = _html.escape(tier) if tier else ""
+    tier_line = f"<p>Your plan: <strong>{safe_tier}</strong></p>" if tier else ""
     html = (
         "<div style=\"font-family:system-ui,sans-serif;max-width:480px;margin:auto\">"
         "<h2>Welcome to GESH Financial</h2>"
         "<p>Your access is ready. Click below to sign in — no password needed.</p>"
         f"{tier_line}"
-        f"<p><a href=\"{link}\" style=\"display:inline-block;background:#00d4ff;"
+        f"<p><a href=\"{safe_link}\" style=\"display:inline-block;background:#00d4ff;"
         "color:#001018;padding:12px 20px;border-radius:8px;text-decoration:none;"
         "font-weight:600\">Sign in to GESH</a></p>"
         "<p style=\"color:#667;font-size:13px\">This link expires shortly. If it lapses, "

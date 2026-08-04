@@ -1689,10 +1689,17 @@ def pricing_page():
     per-tier entitlement gating exists (Phase 2). Checkout URL + price from env; no card
     data ever touches this server."""
     import os as _os
+    import html as _h
 
-    name = _os.getenv("LS_PLAN_NAME", "GESH Access")
-    price = _os.getenv("LS_PLAN_PRICE", "49")
-    url = _os.getenv("LS_CHECKOUT_PRIMARY", _os.getenv("LS_CHECKOUT_OBSERVER", "#"))
+    # These come from operator-set env vars and are interpolated into HTML below;
+    # escape them (defense-in-depth) so a stray quote in a checkout URL / plan name
+    # can't break out of an attribute or inject markup under the page CSP.
+    name = _h.escape(_os.getenv("LS_PLAN_NAME", "GESH Access"))
+    price = _h.escape(_os.getenv("LS_PLAN_PRICE", "49"))
+    url = _h.escape(
+        _os.getenv("LS_CHECKOUT_PRIMARY", _os.getenv("LS_CHECKOUT_OBSERVER", "#")),
+        quote=True,
+    )
     feats = [
         "Signal-accuracy proof (live track record)",
         "Daily AI portfolio report",
@@ -2414,9 +2421,17 @@ TICKER_GET_TTL_SEC = 300
 
 
 def _ticker_get_cached(bucket: str, sym: str) -> dict | None:
+    import copy
+
     with _ticker_get_lock:
         hit = _ticker_get_cache.get((bucket, sym))
-    return hit[1] if hit and (time.monotonic() - hit[0]) < TICKER_GET_TTL_SEC else None
+    if hit and (time.monotonic() - hit[0]) < TICKER_GET_TTL_SEC:
+        # Return a deep copy: a cache HIT previously handed callers the SAME dict
+        # that stays in the cache, so any handler/middleware that mutated the
+        # response would poison every subsequent serve of that (bucket, symbol)
+        # for the whole TTL. The copy keeps the stored entry immutable.
+        return copy.deepcopy(hit[1])
+    return None
 
 
 def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
