@@ -89,8 +89,8 @@ GESH is a sophisticated, production-leaning AI financial observability + paper-t
 
 ### 4. Security & Secrets (High — Recent Progress Excellent)
 - Good: hmac compare, owner/customer separation, require_api_key fails closed, NaN guard, rate limits, customer leak/XSS tests, spend gates.
-- Risks: .env with real keys on disk (normal for dev), RH password in env/plain (use keychain or env-only + 1password), GESH_API_KEY generation not automated.
-- CI secret (GESH_CORE_PAT) is single point.
+- Risks: local secret storage and bootstrap need a documented, provider-neutral
+  secure-storage policy; service credentials should not depend on one principal.
 - No static security scanning in CI.
 
 **Improvements (do before any live):**
@@ -196,49 +196,22 @@ GESH is a sophisticated, production-leaning AI financial observability + paper-t
 - Win-rate proof page with >50 closed paper trades, sharpe/drawdown stats.
 - LLM spend per analysis < $0.02 average.
 
-## Full Git Ecosystem Check (All Gits + All Local, 2026-07-09)
-Broad scans (one took >17 min) are slow/noisy on this machine, so we used targeted + efficient enumeration (cd loops over */.git, git -C, limited-depth finds) + the final completed broad `find` for confirmation. The last broad scans (both .git and *gesh*) surfaced only the expected items plus heavy Android build cruft and caches — no missed significant gesh git projects.
+## Ecosystem Review (2026-07-09)
 
-**All gesh* and gesh75-org git repos discovered and inspected (final confirmed list):**
-- Core product: gesh-project (Gesh-Project.git), gesh-project-trading, gesh-core, gesh-ai-network-tool (archived), agentic-rh-test (agentic-rh-gesh)
-- Public/hub mirrors: .claude/agent-tracker/_remote/gesh75, .claude/agent-tracker/_remote/gesh75.github.io
-- Supporting gesh75-org in workspace: project-radar, netops-mcp, cli-work-v2, ecp-mcp-swiss-knife, ecp-aegis-lab (argus), _AEGIS_PROPOSALS, various claude-skills/MCP repos
-- Incidental: gesh-project/career-ops (unrelated nested clone)
-
-**Complete local "gesh" footprint (from final broad + targeted scans):**
-- Active product: ~/Projects/gesh-project, gesh-project-trading, gesh-core
-- Runtime ops (critical for prod reliability): ~/.gesh/ (gatewatch.sh, gs_gapwatch.sh for GS stop, morning_allgood.sh, firstprod_verify, logs). Current state (from logs): closed trades progressing (recently ~16/30), GS position with buffer, no active KILL switch.
-- Archived: 02_Projects/gesh_kb (minimal/templates only)
-- Android/mobile: gesh-project-trading/android/GeshFinancial (real source + massive build intermediates under com/gesh), plus gesh-project/android, "android 2", "android 3" with build/ dirs
-- Caches/tooling: .cursor/projects/ for the two mains, .grok/sessions, multiple venv site-packages/gesh_core-*.dist-info, gesh-core egg-info
-- Nested: gesh-project/career-ops (polluting unrelated clone)
-
-**Public presence / hub (critical for product):**
-- gesh75 (https://github.com/gesh75/gesh75) — profile hub. Prominently lists Argus, Aegis, multivendor labs, CLI tool, Claude mastery etc. **GESH Financial is completely absent.**
-- gesh75.github.io — minimal docs hub, still references archived gesh-ai-network-tool in places. No mention of the financial/trading product.
-
-**Other notes (final, post all background scans including the very last cleaned broad *gesh* dir scan):**
-- The exhaustive searches (targeted + every broad scan the user surfaced) confirm no other significant active gesh source trees or git repos beyond the ones below.
-- ~/Projects/Git is empty (only .DS_Store) — not used.
-- Old cruft exists in Downloads, Documents/Archive, 02_Projects/gesh_kb, various .claude/projects temp entries, and Android build artifacts scattered across duplicate "android*" trees.
-- **Definitive clean list of meaningful gesh locations (synthesized):**
-  - Core product: ~/Projects/gesh-project, gesh-project-trading, gesh-core
-  - Archived/support: gesh-ai-network-tool, agentic-rh-test
-  - Runtime ops: ~/.gesh (shell watchers + logs)
-  - Autonomous/scheduled layer: ~/Documents/Claude/Scheduled/gesh-* (the four skills we inspected)
-  - Public mirrors: ~/.claude/agent-tracker/_remote/gesh75*, gesh75.github.io
-  - Transient/work: .claude/projects/-private-tmp-gesh75-hub, Documents/Claude/Artifacts/gesh-workbench
-- The product has a sophisticated hybrid automation stack (native launchd + ~/.gesh + Claude Scheduled skills supervising the host chain). This is a strength for reliability but creates documentation and mental-model complexity.
-
-**Impact on "best product":** We now have the complete map from *every* broad scan the user triggered (the very last one confirmed ~/Projects/Git is empty with only .DS_Store, no new .git under /Git/* paths for gesh work, and gesh mentions in *.md are the expected core docs + attribution in other gesh75 projects). 
+The review covered the product repositories, tests, CI, documentation, and public
+product surface. Machine-specific repository inventories, filesystem paths,
+automation topology, and runtime observations are intentionally omitted; they are
+operational reconnaissance and belong in an access-controlled runbook.
 
 The biggest remaining productization gaps are:
-- Public visibility (still completely absent from the gesh75 profile hub and gesh75.github.io — the MD grep proves rich internal docs but zero external product presence).
-- Android cruft hygiene (duplicates + build artifacts keep appearing in every scan).
-- Hybrid automation complexity (native launchd + ~/.gesh + Claude Scheduled skills + host chain) — powerful for resilience but needs unified, clear docs and possibly simplification.
-- Old cruft and empty dirs (02_Projects/gesh_kb, Downloads old Aegis_Gesh, empty Projects/Git, transient .claude temp hubs).
+- Public product visibility and documentation.
+- Generated-artifact and archived-project hygiene.
+- A simpler, clearly owned orchestration model.
+- A unified, authenticated operational view that does not expose portfolio or
+  security-control state.
 
-Internal engineering is advanced; the "product" surface (docs, presence, polish, unified ops view, hygiene) is where the focus must go to make this the best product.
+Internal engineering is advanced; product documentation, polish, operational
+clarity, and repository hygiene remain the focus.
 
 ## Evidence Sources Used in This Review
 - Local: git status/log/branch/remote (targeted + limited finds), file trees, pyproject, CI workflow, server.py, risk_gate.py, .env.example, gesh_config, tests/ (50+), README/CLAUDE/AGENTS, multiple audits, full enumeration of gesh75 remotes and hub content.
