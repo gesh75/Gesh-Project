@@ -471,9 +471,33 @@ def _scan_impl(holdings, equity_summary, *, screened, regime_lookup, fft_lookup,
 
     # PII discipline: only cash + total ever leave equity_summary.
     cash = float(equity_summary.get("cash") or 0.0)
-    total = float(equity_summary.get("total") or 0.0) or 1.0
+    # `total` is the sizing/weight denominator. A live-shaped equity_summary
+    # (get_total_equity/build_data_payload) may omit `total` (that alias is only
+    # added by server._reconcile_equity_summary), so fall back through the other
+    # canonical totals — and FAIL CLOSED rather than defaulting to $1, which used
+    # to turn every sector weight into holdings_value/1 (thousands of percent).
+    total = float(
+        equity_summary.get("total")
+        or equity_summary.get("portfolio_equity")
+        or equity_summary.get("calculated_total_equity")
+        or 0.0
+    )
     min_buf = float(cfg["min_cash_buffer"])
-    deployable = max(0.0, cash - min_buf)
+    # Size from the canonical settled, leverage-capped `deployable` when present
+    # (a Gold / robinhood_live snapshot can carry cash > deployable — sizing from
+    # raw cash would recommend buys the rest of the stack blocks). Fall back to
+    # cash only when the snapshot has no `deployable` figure.
+    _base = equity_summary.get("deployable")
+    base_cash = float(_base) if _base is not None else cash
+    deployable = max(0.0, base_cash - min_buf)
+    open_slots_all = max(0, int(cfg["max_open_positions"]) - len(holdings))
+    if total <= 0:
+        return _empty("NO_ACTION", now=now, deployable=deployable,
+                      open_slots=open_slots_all, new_names=min(open_slots_all, MAX_NEW_NAMES),
+                      excluded=sorted(s for s in
+                                      {str(h.get("symbol", "")).upper() for h in holdings} if s),
+                      warnings=["portfolio total unavailable — cannot compute "
+                                "sector weights or size new names (fail-closed)"])
     open_slots = max(0, int(cfg["max_open_positions"]) - len(holdings))
     new_names = min(open_slots, MAX_NEW_NAMES)
     held = {str(h.get("symbol", "")).upper() for h in holdings}
