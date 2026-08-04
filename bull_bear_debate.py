@@ -52,9 +52,7 @@ def _tool_call(
         tools=[tool],
         tool_choice={"type": "tool", "name": tool_name},
     )
-    return llm_contracts.extract_tool_input(
-        resp, expected_tool=tool_name, operation=operation
-    )
+    return llm_contracts.extract_tool_input(resp, expected_tool=tool_name, operation=operation)
 
 
 def _context_prompt(symbol: str, consensus: dict[str, Any], fundamentals: dict[str, Any]) -> str:

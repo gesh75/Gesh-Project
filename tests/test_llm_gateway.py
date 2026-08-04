@@ -148,7 +148,9 @@ def test_stream_retries_three_times_and_keeps_unknown_cost_reservations(
         budget_usd=0.0,
         max_attempts=3,
     )
-    with pytest.raises(llm_gateway.LLMUnavailableError, match="AI provider temporarily unavailable"):
+    with pytest.raises(
+        llm_gateway.LLMUnavailableError, match="AI provider temporarily unavailable"
+    ):
         gw.stream(
             operation="deep_analyze_portfolio",
             model="claude-sonnet-4-6",
@@ -160,7 +162,9 @@ def test_stream_retries_three_times_and_keeps_unknown_cost_reservations(
     assert summary["unknown_charge_reservations"] == 3
 
 
-def test_budget_exhaustion_denies_further_attempt(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_budget_exhaustion_denies_further_attempt(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(llm_gateway, "backoff_seconds", lambda *a, **k: 0)
     # Tiny budget: one Sonnet reservation (50k in + 100 out) exceeds $0.001.
     reserved = llm_gateway.reserve_cost_microusd("claude-sonnet-4-6", 100)

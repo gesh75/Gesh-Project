@@ -601,9 +601,7 @@ class Gateway:
     def daily_usage_summary(self, days: int = 1) -> dict[str, Any]:
         return self._ledger.daily_usage_summary(days=days)
 
-    def _invoke_once(
-        self, *, mode: str, model: str, max_tokens: int, **kwargs: Any
-    ) -> Any:
+    def _invoke_once(self, *, mode: str, model: str, max_tokens: int, **kwargs: Any) -> Any:
         client = self._client_factory()
         if mode == "stream":
             with client.messages.stream(model=model, max_tokens=max_tokens, **kwargs) as stream:
@@ -627,9 +625,7 @@ class Gateway:
                 budget_microusd=budget_micro,
             )
             try:
-                message = self._invoke_once(
-                    mode=mode, model=model, max_tokens=max_tokens, **kwargs
-                )
+                message = self._invoke_once(mode=mode, model=model, max_tokens=max_tokens, **kwargs)
             except Exception as exc:
                 kind = type(exc).__name__
                 if _is_retryable(exc):
@@ -661,9 +657,7 @@ class Gateway:
             if stop == "max_tokens":
                 in_tok, out_tok, _, _ = _usage_tokens(message)
                 settled = estimate_cost_microusd(model, in_tok, out_tok)
-                self._ledger.mark_truncated(
-                    call_id, message=message, settled_microusd=settled
-                )
+                self._ledger.mark_truncated(call_id, message=message, settled_microusd=settled)
                 raise LLMTruncatedError(_MSG_TRUNCATED)
             return self._ledger.settle_message(call_id, message, model=model)
 

@@ -18,6 +18,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
 import price_source  # locked yf.download adapter (thread-safety)
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
@@ -27,10 +28,10 @@ import price_source  # locked yf.download adapter (thread-safety)
 # days, not hours, to bite. Also enforced via launchd plist as defense-in-depth.
 try:
     import resource
+
     _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     _target = 10240
-    resource.setrlimit(resource.RLIMIT_NOFILE,
-                       (max(_soft, _target), max(_hard, _target)))
+    resource.setrlimit(resource.RLIMIT_NOFILE, (max(_soft, _target), max(_hard, _target)))
     print(f"✓ RLIMIT_NOFILE raised: soft={_soft}→{max(_soft, _target)}")
 except Exception as _rl_err:
     print(f"⚠  Could not raise RLIMIT_NOFILE: {_rl_err}")
@@ -71,7 +72,9 @@ def require_api_key(
             raise HTTPException(status_code=403, detail="Owner-only action")
     expected = os.getenv("GESH_API_KEY", "")
     if not expected:
-        raise HTTPException(status_code=503, detail="Endpoint disabled: GESH_API_KEY not configured")
+        raise HTTPException(
+            status_code=503, detail="Endpoint disabled: GESH_API_KEY not configured"
+        )
     if not x_api_key or not hmac.compare_digest(x_api_key, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return True
@@ -95,7 +98,9 @@ def require_customer_or_owner(
         raise HTTPException(status_code=401, detail="Authentication required")
     expected = os.getenv("GESH_API_KEY", "")
     if not expected:
-        raise HTTPException(status_code=503, detail="Endpoint disabled: GESH_API_KEY not configured")
+        raise HTTPException(
+            status_code=503, detail="Endpoint disabled: GESH_API_KEY not configured"
+        )
     if not x_api_key or not hmac.compare_digest(x_api_key, expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return True
@@ -208,6 +213,7 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
     """Map known network / LLM-provider outages to a user-actionable 503."""
     try:
         import anthropic
+
         if isinstance(exc, (anthropic.APIConnectionError, anthropic.APITimeoutError)):
             return HTTPException(
                 status_code=503,
@@ -236,8 +242,37 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
     return None
 
 
-_ALLOWED_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h", "1d", "5d", "1wk", "1mo", "3mo"}
-_ALLOWED_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max", "10d", "30d", "60d"}
+_ALLOWED_INTERVALS = {
+    "1m",
+    "2m",
+    "5m",
+    "15m",
+    "30m",
+    "60m",
+    "90m",
+    "1h",
+    "1d",
+    "5d",
+    "1wk",
+    "1mo",
+    "3mo",
+}
+_ALLOWED_PERIODS = {
+    "1d",
+    "5d",
+    "1mo",
+    "3mo",
+    "6mo",
+    "1y",
+    "2y",
+    "5y",
+    "10y",
+    "ytd",
+    "max",
+    "10d",
+    "30d",
+    "60d",
+}
 
 
 def _validate_timeframe(interval: str, period: str) -> None:
@@ -262,8 +297,17 @@ def _safe_symbol(symbol: str) -> str:
 # needed or faked into the weighting. The absolute figure is illustrative only.
 _EQUAL_WEIGHT_NOTIONAL = 100_000.0
 
-_BULK_HEADER_WORDS = {"SYMBOL", "TICKER", "SHARES", "QTY", "QUANTITY",
-                      "COST", "PRICE", "AVGCOST", "TOTAL"}
+_BULK_HEADER_WORDS = {
+    "SYMBOL",
+    "TICKER",
+    "SHARES",
+    "QTY",
+    "QUANTITY",
+    "COST",
+    "PRICE",
+    "AVGCOST",
+    "TOTAL",
+}
 
 
 def _parse_pos_float(tok: str | None) -> float | None:
@@ -301,11 +345,13 @@ def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
         if sym in seen:
             continue
         seen.add(sym)
-        items.append({
-            "symbol": sym,
-            "shares": _parse_pos_float(parts[1]) if len(parts) > 1 else None,
-            "avg_cost": _parse_pos_float(parts[2]) if len(parts) > 2 else None,
-        })
+        items.append(
+            {
+                "symbol": sym,
+                "shares": _parse_pos_float(parts[1]) if len(parts) > 1 else None,
+                "avg_cost": _parse_pos_float(parts[2]) if len(parts) > 2 else None,
+            }
+        )
     return items, invalid
 
 
@@ -313,15 +359,26 @@ def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
 _RATE_LOCK = threading.Lock()
 _RATE_HITS: dict[tuple, deque] = defaultdict(deque)
 _HEAVY_PREFIXES = (
-    "/api/deep-analysis", "/api/analyze-ticker", "/api/screener", "/api/consensus",
-    "/api/monte-carlo", "/api/agents/", "/api/gemini/", "/api/trading/deep-debate",
+    "/api/deep-analysis",
+    "/api/analyze-ticker",
+    "/api/screener",
+    "/api/consensus",
+    "/api/monte-carlo",
+    "/api/agents/",
+    "/api/gemini/",
+    "/api/trading/deep-debate",
     # Per-ticker analyze GETs: each cache miss is 1-2 live upstream fetches
     # (yfinance+FRED / Robinhood / RSS), so an authed customer cycling symbols at
     # the normal 300/min cap could hammer the providers. Trailing slash on purpose:
     # the exact "/api/regime" (dashboard-polled, chain-cached) stays in the normal
     # bucket — only the /{symbol} variants are heavy.
-    "/api/regime/", "/api/fundamentals/", "/api/analyst/", "/api/news/", "/api/momentum/",
-    "/api/levels/", "/api/earnings/",
+    "/api/regime/",
+    "/api/fundamentals/",
+    "/api/analyst/",
+    "/api/news/",
+    "/api/momentum/",
+    "/api/levels/",
+    "/api/earnings/",
     # Customer-book analysis = regime + Monte Carlo + Kelly + one Claude call.
     # Book CRUD (/api/mybook without /analyze) stays in the normal bucket.
     "/api/mybook/analyze",
@@ -363,8 +420,8 @@ def _bucket_ok(ip: str, bucket: str, limit: int, window: int) -> bool:
 # login clears both buckets so a legitimate owner is never locked out by earlier
 # fat-fingered attempts. We key on the IP too (not email alone) so an attacker
 # can't lock a victim out of their own account by spraying failures at it.
-LOGIN_FAIL_LIMIT = 8          # blocked after this many failures in the window
-LOGIN_FAIL_WINDOW = 300       # 5-minute sliding window
+LOGIN_FAIL_LIMIT = 8  # blocked after this many failures in the window
+LOGIN_FAIL_WINDOW = 300  # 5-minute sliding window
 _LOGIN_FAILS: dict[str, deque] = defaultdict(deque)
 _LOGIN_LOCK = threading.Lock()
 
@@ -398,52 +455,81 @@ def _login_clear(ip: str, email: str) -> None:
             _LOGIN_FAILS.pop(key, None)
 
 
-from ai_analyzer import MODEL, analyze_portfolio, deep_analyze_portfolio, deep_analyze_ticker, analyze_screener
-import fair_value                       # canonical fair-value % (Codex #2)
-import price_cache                      # shared close-price cache (also used by cron digest)
-import portfolio_valuation              # CANONICAL money arithmetic — see module docstring
-import model_portfolio                  # the ONLY portfolio shape a customer receives
-import verdict_reconciliation           # ONE stance from the mechanical + valuation layers
-from urllib.parse import urlparse as _urlparse   # CSRF same-origin check
+from urllib.parse import urlparse as _urlparse  # CSRF same-origin check
+
 from starlette.exceptions import HTTPException as StarletteHTTPException
-import price_sanity                     # cross-source price quality + strict mode (Codex #3)
-import decision_quality                 # unified degraded-decision block (Codex #6)
+
+import auth_users  # multi-user login wall (OFF unless GESH_AUTH_ENABLED is set)
+import billing  # Lemon Squeezy payment webhook → provision/revoke auth_users
+import decision_quality  # unified degraded-decision block (Codex #6)
+import email_sender  # transactional email (magic-link recovery via /auth/request-link)
+import fair_value  # canonical fair-value % (Codex #2)
+import model_portfolio  # the ONLY portfolio shape a customer receives
+import portfolio_valuation  # CANONICAL money arithmetic — see module docstring
+import price_cache  # shared close-price cache (also used by cron digest)
+import price_sanity  # cross-source price quality + strict mode (Codex #3)
+import verdict_reconciliation  # ONE stance from the mechanical + valuation layers
+from ai_analyzer import (
+    MODEL,
+    analyze_portfolio,
+    analyze_screener,
+    deep_analyze_portfolio,
+    deep_analyze_ticker,
+)
+from allocation_config import (
+    load_config,
+    update_config,
+)
 from auth import login, logout
-from data_fetcher import DEFAULT_WATCHLIST, build_data_payload, RobinhoodOfflineError, load_snapshot_payload
-from fundamental_agent import run_fundamental_scan, get_latest_fundamental_scan
-from news_agent import scan_news, get_news_history
-from sec_agent import watch_filings, get_filing_history
-from db import init_db, log_analysis, log_equity_snapshot, get_analysis_history, get_analysis_by_id, get_equity_history
+from consensus import run_consensus_portfolio
+from consolidation_zone import detect_consolidation, scan_consolidations
+from data_fetcher import (
+    DEFAULT_WATCHLIST,
+    RobinhoodOfflineError,
+    build_data_payload,
+    load_snapshot_payload,
+)
+from db import (
+    get_analysis_by_id,
+    get_analysis_history,
+    get_equity_history,
+    init_db,
+    log_analysis,
+    log_equity_snapshot,
+)
 from ecg import compute_ecg
 from fft_cycles import batch_fft_cycles
+from fundamental_agent import get_latest_fundamental_scan, run_fundamental_scan
+
 # Ollama removed — 3B local model provides no signal value vs Sonnet. Use Gemini for second opinions.
 from gemini_agent import (
-    get_gemini_status,
+    gemini_market_commentary,
     gemini_quick_analysis,
     gemini_second_opinion,
-    gemini_market_commentary,
-    gemini_news_sentiment,
+    get_gemini_status,
 )
-from market_data import get_all_market_data, screen_market, get_analyst_targets
 from kelly import run_kelly_analysis
-from consensus import run_consensus_portfolio
+from market_data import get_all_market_data, get_analyst_targets, screen_market
 from monte_carlo import run_monte_carlo
+from news_agent import get_news_history, scan_news
+from paper_trading import check_and_close_paper_positions, get_paper_summary, run_paper_session
 from regime import detect_regimes
-from allocation_config import load_config, update_config, validate_action, get_allocation_summary, get_scanner_params
-from trade_log import log_trade, close_trade, get_win_rate, get_trade_history, get_scanner_performance, trade_summary_for_report
-from paper_trading import run_paper_session, check_and_close_paper_positions, get_paper_summary
-from consolidation_zone import scan_consolidations, detect_consolidation
+from sec_agent import get_filing_history, watch_filings
 from sector_filter import batch_sector_check, is_sector_hot
-from trading.state import init_trading_tables
-from trading.contract import from_consensus, manual as manual_intent
-from trading.risk_gate import evaluate as risk_gate_evaluate
+from trade_log import (
+    close_trade,
+    get_trade_history,
+    log_trade,
+    trade_summary_for_report,
+)
+from trading.contract import from_consensus
+from trading.contract import manual as manual_intent
 from trading.execution import place as execution_place
-import auth_users   # multi-user login wall (OFF unless GESH_AUTH_ENABLED is set)
-import billing      # Lemon Squeezy payment webhook → provision/revoke auth_users
-import email_sender # transactional email (magic-link recovery via /auth/request-link)
-
+from trading.risk_gate import evaluate as risk_gate_evaluate
+from trading.state import init_trading_tables
 
 # ─── Startup / Shutdown ───────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app):
@@ -462,6 +548,7 @@ async def lifespan(app):
         # skill always has fresh data even before the first dashboard poll.
         try:
             from fetch_live_data import fetch_and_cache
+
             fetch_and_cache(logout_after=False)  # keep session alive for server
         except Exception as _ce:
             print(f"⚠  Startup cache write failed: {_ce}")
@@ -492,7 +579,9 @@ async def _rate_limit_middleware(request: Request, call_next):
         ip = request.client.host if request.client else "unknown"
         heavy = path.startswith(_HEAVY_PREFIXES)
         if not _rate_ok(ip, heavy):
-            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded — slow down"})
+            return JSONResponse(
+                status_code=429, content={"detail": "Rate limit exceeded — slow down"}
+            )
     return await call_next(request)
 
 
@@ -509,7 +598,9 @@ async def _auth_gate_middleware(request: Request, call_next):
         if decision == "redirect":
             return RedirectResponse(url="/login", status_code=302)
         if decision == "unauthorized":
-            return JSONResponse(status_code=401, content={"detail": "Authentication required — sign in"})
+            return JSONResponse(
+                status_code=401, content={"detail": "Authentication required — sign in"}
+            )
     return await call_next(request)
 
 
@@ -553,35 +644,75 @@ _MASK_EXEMPT_PREFIXES = (
     "/api/account",
 )
 _MONEY_KEYS = {
-    "equity", "cash", "deployable", "settled_cash", "buying_power",
-    "buying_power_leveraged", "margin_buying_power", "withdrawable_amount",
-    "pending_deposits", "uncleared_deposits", "total", "account_equity",
-    "portfolio_equity", "adjusted_equity_previous_close", "equity_value",
-    "market_value", "recommended_usd", "delta_usd", "cost_basis",
-    "total_equity", "day_change", "total_value",
+    "equity",
+    "cash",
+    "deployable",
+    "settled_cash",
+    "buying_power",
+    "buying_power_leveraged",
+    "margin_buying_power",
+    "withdrawable_amount",
+    "pending_deposits",
+    "uncleared_deposits",
+    "total",
+    "account_equity",
+    "portfolio_equity",
+    "adjusted_equity_previous_close",
+    "equity_value",
+    "market_value",
+    "recommended_usd",
+    "delta_usd",
+    "cost_basis",
+    "total_equity",
+    "day_change",
+    "total_value",
     # Monte-Carlo / distribution outcomes (Codex P0: these leaked raw dollars)
-    "mean", "median", "p5", "p25", "p75", "p95", "var_95", "cvar_95",
-    "current_equity", "center",
+    "mean",
+    "median",
+    "p5",
+    "p25",
+    "p75",
+    "p95",
+    "var_95",
+    "cvar_95",
+    "current_equity",
+    "center",
     # 8th-pass (Fable audit): owner-$ keys the recursion previously passed through
     # RAW — same leak class as the ECG array / sparkline `series`. `equity_change`
     # = per-position unrealized $ P&L (data_fetcher), `extended_hours_equity` =
     # account equity (data_fetcher), `realized_pnl`/`total_realized_pnl` = trade $
     # P&L (trade_log, incl. nested best/worst_trade rows — scaled recursively).
-    "equity_change", "extended_hours_equity", "realized_pnl", "total_realized_pnl",
+    "equity_change",
+    "extended_hours_equity",
+    "realized_pnl",
+    "total_realized_pnl",
     # Reconciliation block (_reconcile_equity_summary): the broker's own account
     # total and its delta against positions+cash. Both are OWNER DOLLARS — the
     # leak sweep caught them passing through raw the moment they were added.
-    "reported_total", "reported_total_delta",
+    "reported_total",
+    "reported_total_delta",
     # Canonical valuation block (portfolio_valuation.as_dict) — every one of these
     # is a dollar amount on whichever book the payload describes.
-    "positions_market_value", "prior_close_positions_value", "prior_close_equity",
-    "day_change_amount", "total_cost_basis", "unrealized_pnl", "prior_close",
+    "positions_market_value",
+    "prior_close_positions_value",
+    "prior_close_equity",
+    "day_change_amount",
+    "total_cost_basis",
+    "unrealized_pnl",
+    "prior_close",
     # Published model portfolio (model_portfolio.publish): owner-denominated on
     # the way out of the handler, scaled to the model notional here — exactly once.
     "calculated_total_equity",
 }
-_QTY_KEYS = {"quantity", "qty", "shares", "fill_qty", "delta_shares",
-             "shares_to_buy", "shares_to_trim"}
+_QTY_KEYS = {
+    "quantity",
+    "qty",
+    "shares",
+    "fill_qty",
+    "delta_shares",
+    "shares_to_buy",
+    "shares_to_trim",
+}
 
 # PUBLIC market-data subtrees kept VERBATIM (never scaled). The key `shares`
 # scales owner sizing (fetch_live_data / paper_trading holdings), but the same key
@@ -593,8 +724,12 @@ _PUBLIC_RAW_KEYS = {"insider_trades"}
 # Bare-number arrays that carry OWNER DOLLARS (no dict key on the elements, so
 # the recursive scaler would return them unchanged and leak — Codex P0 on
 # /api/ecg's equity_history). Listed keys have their numeric elements scaled.
-_MONEY_LIST_KEYS = {"equity_history", "equity_series", "equity_curve",
-                    "series"}   # /api/portfolio/history KPI-sparkline equity (owner $)
+_MONEY_LIST_KEYS = {
+    "equity_history",
+    "equity_series",
+    "equity_curve",
+    "series",
+}  # /api/portfolio/history KPI-sparkline equity (owner $)
 
 # Prose REDACTION (Codex P0): AI narratives embed owner sizing ("sell 4-5 shares
 # ~$450 at $112.73"). The old regex SCALER was doubly broken — it scaled only the
@@ -616,18 +751,27 @@ _NUM_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 #   KEEP   — the value is a PER-SHARE price / forecast (public, stock-level, not
 #            owner-private): predictions, fair value, targets → leave raw.
 #   REDACT — everything else with a $-amount or share count is owner sizing prose.
-_KEEP_STRING_KEYS = {"3m", "12m", "prediction", "fair_value", "estimate",
-                     "target", "current", "price", "forecast", "analyst_target"}
+_KEEP_STRING_KEYS = {
+    "3m",
+    "12m",
+    "prediction",
+    "fair_value",
+    "estimate",
+    "target",
+    "current",
+    "price",
+    "forecast",
+    "analyst_target",
+}
 
 
 def _scale_label(text: str, factor: float) -> str:
-    return _NUM_RE.sub(
-        lambda m: f"{float(m.group(0).replace(',', '')) * factor:,.0f}", text)
+    return _NUM_RE.sub(lambda m: f"{float(m.group(0).replace(',', '')) * factor:,.0f}", text)
 
 
 def _redact_prose(text: str) -> str:
-    text = _MONEY_RE.sub("$•••", text)          # owner $-amounts / ranges
-    text = _SHARES_RE.sub("a position", text)   # share counts / ranges
+    text = _MONEY_RE.sub("$•••", text)  # owner $-amounts / ranges
+    text = _SHARES_RE.sub("a position", text)  # share counts / ranges
     return text
 
 
@@ -683,8 +827,14 @@ def _basis_rows(holdings: list) -> list[dict] | None:
         price_d = portfolio_valuation.to_decimal(price)
         if price_d is None or price_d <= 0:
             return None
-        rows.append({"symbol": h.get("symbol"), "quantity": qty,
-                     "current_price": price, "equity": h.get("equity")})
+        rows.append(
+            {
+                "symbol": h.get("symbol"),
+                "quantity": qty,
+                "current_price": price,
+                "equity": h.get("equity"),
+            }
+        )
     return rows
 
 
@@ -705,12 +855,13 @@ def model_basis_from_payload(payload: dict) -> float | None:
     eq = payload.get("equity_summary") or {}
     cash = portfolio_valuation.to_decimal(eq.get("cash"))
     if cash is None:
-        return None                      # non-finite / missing / non-numeric cash
+        return None  # non-finite / missing / non-numeric cash
     rows = _basis_rows(payload.get("holdings") or [])
     if rows is None:
         return None
     _published, report = model_portfolio.canonical_holdings(
-        rows, model_portfolio.PUBLISHED_HOLDING_FIELDS)
+        rows, model_portfolio.PUBLISHED_HOLDING_FIELDS
+    )
     if report.get("non_finite") or report.get("unpriced"):
         return None
     return float(report["positions_value"]) + float(cash)
@@ -728,34 +879,39 @@ def _model_scale_factor(basis: float | None) -> float:
 
 def _scale_money(obj, factor: float, parent_key: str = ""):
     """Recursively build a customer-safe copy (never mutates):
-      * dict money/qty fields → scaled by factor;
-      * bare-number arrays under a MONEY_LIST key (e.g. equity_history) → each
-        element scaled (semantic list context, Codex P0 — these have no dict key
-        so the naive recursion returned them raw);
-      * strings → owner-specific $-amounts and share counts REDACTED (never
-        scaled: a scaler corrupts per-share prices and half-scales ranges)."""
+    * dict money/qty fields → scaled by factor;
+    * bare-number arrays under a MONEY_LIST key (e.g. equity_history) → each
+      element scaled (semantic list context, Codex P0 — these have no dict key
+      so the naive recursion returned them raw);
+    * strings → owner-specific $-amounts and share counts REDACTED (never
+      scaled: a scaler corrupts per-share prices and half-scales ranges)."""
     if isinstance(obj, dict):
         out = {}
         for k, v in obj.items():
             lk = str(k).lower()
             if lk in _PUBLIC_RAW_KEYS:
-                out[k] = v                          # public market data — never scale
-            elif isinstance(v, (int, float)) and not isinstance(v, bool) and (
-                lk in _MONEY_KEYS or lk.endswith("_usd") or lk.endswith("_dollars")
+                out[k] = v  # public market data — never scale
+            elif (
+                isinstance(v, (int, float))
+                and not isinstance(v, bool)
+                and (lk in _MONEY_KEYS or lk.endswith("_usd") or lk.endswith("_dollars"))
             ):
                 out[k] = round(v * factor, 2)
             elif isinstance(v, (int, float)) and not isinstance(v, bool) and lk in _QTY_KEYS:
                 out[k] = round(v * factor, 4)
             elif isinstance(v, list) and lk in _MONEY_LIST_KEYS:
-                out[k] = [round(x * factor, 2) if isinstance(x, (int, float))
-                          and not isinstance(x, bool) else _scale_money(x, factor, lk)
-                          for x in v]
+                out[k] = [
+                    round(x * factor, 2)
+                    if isinstance(x, (int, float)) and not isinstance(x, bool)
+                    else _scale_money(x, factor, lk)
+                    for x in v
+                ]
             elif isinstance(v, str) and lk == "label" and parent_key == "buckets":
-                out[k] = _scale_label(v, factor)   # MC histogram label = portfolio $
+                out[k] = _scale_label(v, factor)  # MC histogram label = portfolio $
             elif isinstance(v, str) and lk in _KEEP_STRING_KEYS:
-                out[k] = v                          # per-share price/forecast — keep raw
+                out[k] = v  # per-share price/forecast — keep raw
             elif isinstance(v, str) and ("$" in v or "share" in v.lower()):
-                out[k] = _redact_prose(v)           # owner sizing prose — redact
+                out[k] = _redact_prose(v)  # owner sizing prose — redact
             else:
                 out[k] = _scale_money(v, factor, lk)
         return out
@@ -783,6 +939,7 @@ def _scale_money(obj, factor: float, parent_key: str = ""):
 # conversely a body of pure prose must still be masked even when no factor
 # exists, or a correctness fix becomes a disclosure bug.
 
+
 def _requires_scaling_factor(obj) -> bool:
     """True when any part of this response would change if the factor changed.
 
@@ -797,8 +954,12 @@ def _requires_scaling_factor(obj) -> bool:
 def _usable_factor(factor: object) -> bool:
     """A factor must be finite and strictly positive. Zero erases the book and a
     negative inverts it; neither can be presented as a customer's holdings."""
-    return (isinstance(factor, (int, float)) and not isinstance(factor, bool)
-            and math.isfinite(factor) and factor > 0)
+    return (
+        isinstance(factor, (int, float))
+        and not isinstance(factor, bool)
+        and math.isfinite(factor)
+        and factor > 0
+    )
 
 
 def _model_unavailable_response() -> JSONResponse:
@@ -828,6 +989,7 @@ def _model_unavailable_response() -> JSONResponse:
 # framework internals presented as the product (audit BUG-08). API clients still
 # get JSON; only requests that ASK for HTML get a page.
 
+
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
     return "text/html" in accept and not request.url.path.startswith("/api/")
@@ -853,9 +1015,11 @@ def _refusal_response(request: Request, status: int, title: str, body: str = "")
     """One refusal, rendered for whoever asked: HTML for a browser, JSON for an API."""
     if _wants_html(request):
         import html as _h
+
         return HTMLResponse(
             status_code=status,
-            content=_ERROR_PAGE.format(title=_h.escape(title), body=_h.escape(body or title)))
+            content=_ERROR_PAGE.format(title=_h.escape(title), body=_h.escape(body or title)),
+        )
     return JSONResponse(status_code=status, content={"detail": title})
 
 
@@ -863,17 +1027,27 @@ def _refusal_response(request: Request, status: int, title: str, body: str = "")
 async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Give browser navigations a page instead of a JSON fragment."""
     if _wants_html(request):
-        titles = {404: "Page not found", 403: "Not available on your account",
-                  401: "Please sign in", 405: "Action not allowed"}
+        titles = {
+            404: "Page not found",
+            403: "Not available on your account",
+            401: "Please sign in",
+            405: "Action not allowed",
+        }
         title = titles.get(exc.status_code, "Something went wrong")
         detail = exc.detail if isinstance(exc.detail, str) else ""
         # 5xx detail can carry internal context; never render it.
-        body = detail if (exc.status_code < 500 and detail and detail != "Not Found") else \
-            "The page you asked for isn't here."
+        body = (
+            detail
+            if (exc.status_code < 500 and detail and detail != "Not Found")
+            else "The page you asked for isn't here."
+        )
         return _refusal_response(request, exc.status_code, title, body)
     # API clients keep the exact JSON contract they had before.
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail},
-                        headers=getattr(exc, "headers", None))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
 
 
 # ─── CSRF / content-type hardening on cookie-authenticated mutations ──────────
@@ -1012,17 +1186,20 @@ async def _csrf_guard_middleware(request: Request, call_next):
     Applies to POST/PUT/PATCH/DELETE regardless of whether a body is present:
     a bodyless DELETE is exactly as forgeable as a POST."""
     path = request.url.path
-    if (request.method not in _MUTATING_METHODS
-            or not path.startswith("/api/")
-            or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)):
+    if (
+        request.method not in _MUTATING_METHODS
+        or not path.startswith("/api/")
+        or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)
+    ):
         return await call_next(request)
 
     # Method override would let a GET-shaped request become a DELETE and skip
     # the check above. The app does not support it; refuse rather than ignore.
     for hdr in ("x-http-method-override", "x-method-override", "x-http-method"):
         if request.headers.get(hdr):
-            return JSONResponse(status_code=400,
-                                content={"detail": "Method override is not supported."})
+            return JSONResponse(
+                status_code=400, content={"detail": "Method override is not supported."}
+            )
 
     # PR105-SEC-02b: a SINGLETON security header appearing twice is ambiguous —
     # `request.headers.get()` silently returns the first, so a proxy or raw client
@@ -1032,12 +1209,14 @@ async def _csrf_guard_middleware(request: Request, call_next):
         values = _raw_header_values(request, singleton)
         if len(values) > 1 and len(set(values)) > 1:
             return JSONResponse(
-                status_code=400,
-                content={"detail": f"Ambiguous duplicate {singleton} header."})
+                status_code=400, content={"detail": f"Ambiguous duplicate {singleton} header."}
+            )
 
     ctype = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
-    has_body = bool(request.headers.get("content-length", "").strip("0 ")
-                    or request.headers.get("transfer-encoding"))
+    has_body = bool(
+        request.headers.get("content-length", "").strip("0 ")
+        or request.headers.get("transfer-encoding")
+    )
     # PR105-SEC-02: a body-bearing mutation must DECLARE application/json. The old
     # `and ctype` short-circuit meant an ABSENT Content-Type skipped the check
     # entirely, so raw JSON bytes with no declared type bypassed the JSON-only
@@ -1045,15 +1224,15 @@ async def _csrf_guard_middleware(request: Request, call_next):
     # so only a genuinely different — or missing — media type is refused.
     if has_body and ctype != "application/json":
         return JSONResponse(
-            status_code=415,
-            content={"detail": "This endpoint accepts application/json only."})
+            status_code=415, content={"detail": "This endpoint accepts application/json only."}
+        )
 
     if _is_api_key_authenticated(request):
         return await call_next(request)
 
     cookie_authenticated = bool(request.cookies.get(auth_users.COOKIE_NAME))
     if not cookie_authenticated:
-        return await call_next(request)      # no ambient authority to forge
+        return await call_next(request)  # no ambient authority to forge
 
     raw = (request.headers.get("origin") or "").strip()
     source = "Origin"
@@ -1071,10 +1250,10 @@ async def _csrf_guard_middleware(request: Request, call_next):
 
 
 def _csrf_refusal(request: Request, why: str):
-    logger.warning("cross-origin mutation refused (%s): %s %s",
-                   why, request.method, request.url.path)
-    return JSONResponse(status_code=403,
-                        content={"detail": "Cross-origin request refused."})
+    logger.warning(
+        "cross-origin mutation refused (%s): %s %s", why, request.method, request.url.path
+    )
+    return JSONResponse(status_code=403, content={"detail": "Cross-origin request refused."})
 
 
 @app.middleware("http")
@@ -1087,8 +1266,9 @@ async def _customer_view_middleware(request: Request, call_next):
 
     path = request.url.path
     if path == "/report" or any(path == p or path.startswith(p + "/") for p in _OWNER_ONLY_PATHS):
-        return _refusal_response(request, 403, "Owner-only view",
-                                 "This page is part of the operator console.")
+        return _refusal_response(
+            request, 403, "Owner-only view", "This page is part of the operator console."
+        )
 
     # Public single-ticker research cards carry no owner dollars — serve RAW so their
     # per-share price prose is not redacted into uselessness for the customer.
@@ -1096,7 +1276,9 @@ async def _customer_view_middleware(request: Request, call_next):
         return await call_next(request)
 
     resp = await call_next(request)
-    if not path.startswith("/api/") or "application/json" not in resp.headers.get("content-type", ""):
+    if not path.startswith("/api/") or "application/json" not in resp.headers.get(
+        "content-type", ""
+    ):
         return resp
     body = b"".join([chunk async for chunk in resp.body_iterator])
     try:
@@ -1108,8 +1290,10 @@ async def _customer_view_middleware(request: Request, call_next):
         factor = None
         if isinstance(decoded, dict):
             data = decoded.get("data")
-            if (isinstance(data, dict)
-                    and data.get("model_portfolio_id") == model_portfolio.MODEL_PORTFOLIO_ID):
+            if (
+                isinstance(data, dict)
+                and data.get("model_portfolio_id") == model_portfolio.MODEL_PORTFOLIO_ID
+            ):
                 factor = _model_scale_factor(data.get("calculated_total_equity"))
         if factor is None:
             factor = _customer_scale_factor()
@@ -1131,9 +1315,12 @@ async def _customer_view_middleware(request: Request, call_next):
                     logger.warning(
                         "model scaling unavailable — refusing customer financial "
                         "responses (most recent: %s %s)%s",
-                        request.method, path,
-                        f" [+{suppressed} suppressed in the last "
-                        f"{int(_THROTTLED_LOG_INTERVAL_S)}s]" if suppressed else "")
+                        request.method,
+                        path,
+                        f" [+{suppressed} suppressed in the last {int(_THROTTLED_LOG_INTERVAL_S)}s]"
+                        if suppressed
+                        else "",
+                    )
                 # The refusal itself is NOT conditional on the log: throttling is a
                 # logging concern and must never change what the customer receives.
                 return _model_unavailable_response()
@@ -1145,7 +1332,7 @@ async def _customer_view_middleware(request: Request, call_next):
 
         masked = _scale_money(decoded, factor)
         if isinstance(masked, dict):
-            masked["view"] = "model_book"   # UI/debug tell — customer-scaled response
+            masked["view"] = "model_book"  # UI/debug tell — customer-scaled response
         return JSONResponse(status_code=resp.status_code, content=masked)
     except Exception:
         # Fail CLOSED for customers: never fall through to the raw-dollar body.
@@ -1292,8 +1479,10 @@ def watchlist_remove(symbol: str, request: Request):
 
 
 def _preferences_payload(email: str) -> dict:
-    return {"alerts_opt_out": auth_users.get_alerts_opt_out(email),
-            "digest_opt_out": auth_users.get_digest_opt_out(email)}
+    return {
+        "alerts_opt_out": auth_users.get_alerts_opt_out(email),
+        "digest_opt_out": auth_users.get_digest_opt_out(email),
+    }
 
 
 @app.get("/api/preferences")
@@ -1367,12 +1556,8 @@ def _secure_cookie_config_ready() -> bool:
 
 def _require_secure_cookie_config() -> None:
     if not _secure_cookie_config_ready():
-        logger.error(
-            "Authentication disabled: HTTPS APP_BASE_URL with insecure cookie override"
-        )
-        raise HTTPException(
-            status_code=503, detail="Authentication temporarily unavailable"
-        )
+        logger.error("Authentication disabled: HTTPS APP_BASE_URL with insecure cookie override")
+        raise HTTPException(status_code=503, detail="Authentication temporarily unavailable")
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -1389,28 +1574,33 @@ async def auth_login(request: Request):
     per (IP, email); the 200k-round PBKDF2 verify runs in a worker thread so it
     never blocks the event loop."""
     ip = request.client.host if request.client else "unknown"
-    body = await _read_json_capped(request)   # [CLAUDE V1] capped public body
+    body = await _read_json_capped(request)  # [CLAUDE V1] capped public body
     email = (body.get("email") or "").strip()
     password = body.get("password") or ""
     if _login_blocked(ip, email):
         # [CLAUDE Task3 2026-07-18] tell well-behaved clients when to come back
-        return JSONResponse(status_code=429,
-                            content={"ok": False, "detail": "Too many login attempts — try again shortly"},
-                            headers={"Retry-After": str(LOGIN_FAIL_WINDOW)})
+        return JSONResponse(
+            status_code=429,
+            content={"ok": False, "detail": "Too many login attempts — try again shortly"},
+            headers={"Retry-After": str(LOGIN_FAIL_WINDOW)},
+        )
     _require_secure_cookie_config()
     # PBKDF2 is CPU-bound (~200k rounds); off-load so concurrent requests keep flowing.
-    ok = await asyncio.to_thread(
-        auth_users.verify_credentials_constant_time, email, password
-    )
+    ok = await asyncio.to_thread(auth_users.verify_credentials_constant_time, email, password)
     if not ok:
         _login_record_fail(ip, email)
-        return JSONResponse(status_code=401, content={"ok": False, "detail": "Invalid email or password"})
+        return JSONResponse(
+            status_code=401, content={"ok": False, "detail": "Invalid email or password"}
+        )
     _login_clear(ip, email)
     auth_users.touch_last_login(email)
     resp = JSONResponse(content={"ok": True})
     resp.set_cookie(
-        auth_users.COOKIE_NAME, auth_users.issue_token(email),
-        httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
+        auth_users.COOKIE_NAME,
+        auth_users.issue_token(email),
+        httponly=True,
+        samesite="lax",
+        max_age=auth_users.TOKEN_TTL_SECONDS,
         secure=_cookie_secure(request),
     )
     return resp
@@ -1442,9 +1632,13 @@ def auth_magic(request: Request, token: str = ""):
         _subject_uid = auth_users.verify_token(token, expected_typ="magic")
         _subject = auth_users.get_user_by_id(_subject_uid) if _subject_uid else None
         if _subject and _subject["email"] != _current:
-            return HTMLResponse(status_code=409, content=(
-                "<h2>Already signed in</h2><p>This browser is signed in as a different "
-                "user. Sign out first, then open the link again.</p>"))
+            return HTMLResponse(
+                status_code=409,
+                content=(
+                    "<h2>Already signed in</h2><p>This browser is signed in as a different "
+                    "user. Sign out first, then open the link again.</p>"
+                ),
+            )
     email = auth_users.consume_magic_token(token)
     if not email:
         return RedirectResponse(url="/login?e=expired", status_code=302)
@@ -1452,12 +1646,14 @@ def auth_magic(request: Request, token: str = ""):
     if not u or not u["is_active"]:
         return RedirectResponse(url="/login?e=expired", status_code=302)
     auth_users.touch_last_login(email)
-    resp = RedirectResponse(url="/", status_code=303)   # 303 See Other after consuming the token
+    resp = RedirectResponse(url="/", status_code=303)  # 303 See Other after consuming the token
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.set_cookie(
         auth_users.COOKIE_NAME,
-        auth_users.issue_token(email, typ="session"),   # fresh SESSION token (not the magic one)
-        httponly=True, samesite="lax", max_age=auth_users.TOKEN_TTL_SECONDS,
+        auth_users.issue_token(email, typ="session"),  # fresh SESSION token (not the magic one)
+        httponly=True,
+        samesite="lax",
+        max_age=auth_users.TOKEN_TTL_SECONDS,
         secure=_cookie_secure(request),
     )
     return resp
@@ -1472,11 +1668,12 @@ async def auth_request_link(request: Request):
     ip = request.client.host if request.client else "unknown"
     if not _bucket_ok(ip, "request-link", limit=5, window=600):
         return JSONResponse(status_code=429, content={"ok": False, "detail": "Too many requests"})
-    body = await _read_json_capped(request)   # [CLAUDE V1] capped public body
+    body = await _read_json_capped(request)  # [CLAUDE V1] capped public body
     email = (body.get("email") or "").strip()
     token = auth_users.issue_magic_token(email) if email else None
     if token:
         import os as _os
+
         base = _os.getenv("APP_BASE_URL", "").rstrip("/")
         tier = (auth_users.get_user(email) or {}).get("tier")
         email_sender.send_magic_link(email, f"{base}/auth/magic?token={token}", tier=tier)
@@ -1492,11 +1689,16 @@ def pricing_page():
     per-tier entitlement gating exists (Phase 2). Checkout URL + price from env; no card
     data ever touches this server."""
     import os as _os
+
     name = _os.getenv("LS_PLAN_NAME", "GESH Access")
     price = _os.getenv("LS_PLAN_PRICE", "49")
     url = _os.getenv("LS_CHECKOUT_PRIMARY", _os.getenv("LS_CHECKOUT_OBSERVER", "#"))
-    feats = ["Signal-accuracy proof (live track record)", "Daily AI portfolio report",
-             "Watch dashboard", "Diversification radar"]
+    feats = [
+        "Signal-accuracy proof (live track record)",
+        "Daily AI portfolio report",
+        "Watch dashboard",
+        "Diversification radar",
+    ]
     items = "".join(f"<li>{f}</li>" for f in feats)
     if _signups_paused():
         # The Legal Hub's L5 recommends pausing net-new paid signups until the ToS
@@ -1504,48 +1706,49 @@ def pricing_page():
         # stop taking money is a BUSINESS decision, so this is an explicit env
         # flag defaulting to OFF — the mechanism exists, the choice stays human.
         card = (
-            "<div style=\"border:1px solid #6b5410;border-radius:12px;padding:28px;"
-            "background:#1a1405;max-width:460px;color:#e8d9b0\">"
-            "<h2 style=\"color:#f0b429;margin:0 0 10px\">Not accepting new subscribers</h2>"
-            "<p style=\"margin:0 0 10px\">GESH is in beta and we have paused new paid "
+            '<div style="border:1px solid #6b5410;border-radius:12px;padding:28px;'
+            'background:#1a1405;max-width:460px;color:#e8d9b0">'
+            '<h2 style="color:#f0b429;margin:0 0 10px">Not accepting new subscribers</h2>'
+            '<p style="margin:0 0 10px">GESH is in beta and we have paused new paid '
             "signups while our terms and regulatory position are being finalised with "
             "counsel. Existing subscribers are unaffected.</p>"
-            "<p style=\"margin:0\">The <a href=\"/track-record\" style=\"color:#00e87a\">"
-            "track record</a> and research pages remain open to read.</p></div>")
+            '<p style="margin:0">The <a href="/track-record" style="color:#00e87a">'
+            "track record</a> and research pages remain open to read.</p></div>"
+        )
     else:
         card = (
-            "<div style=\"border:1px solid #1a2840;border-radius:12px;padding:28px;"
-            "background:#0d1520;max-width:360px\">"
-            f"<h2 style=\"color:#00d4ff;margin:0\">{name}</h2>"
-            f"<p style=\"font-size:34px;margin:8px 0\"><strong>${price}</strong>"
-            "<span style=\"color:#667;font-size:14px\">/mo</span></p>"
-            f"<ul style=\"color:#aeb9c7;line-height:1.8\">{items}</ul>"
-            f"<a href=\"{url}\" style=\"display:block;text-align:center;background:#00d4ff;"
+            '<div style="border:1px solid #1a2840;border-radius:12px;padding:28px;'
+            'background:#0d1520;max-width:360px">'
+            f'<h2 style="color:#00d4ff;margin:0">{name}</h2>'
+            f'<p style="font-size:34px;margin:8px 0"><strong>${price}</strong>'
+            '<span style="color:#667;font-size:14px">/mo</span></p>'
+            f'<ul style="color:#aeb9c7;line-height:1.8">{items}</ul>'
+            f'<a href="{url}" style="display:block;text-align:center;background:#00d4ff;'
             "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
-            "font-weight:600;margin-top:12px\">Subscribe</a></div>"
+            'font-weight:600;margin-top:12px">Subscribe</a></div>'
         )
     return (
         "<!doctype html><html><head><meta charset=utf-8><title>GESH — Pricing</title>"
-        "<meta name=viewport content=\"width=device-width,initial-scale=1\"></head>"
-        "<body style=\"font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;"
-        "max-width:900px;margin:auto;padding:32px\">"
-        "<h1 style=\"color:#00d4ff\">GESH Financial — Access</h1>"
+        '<meta name=viewport content="width=device-width,initial-scale=1"></head>'
+        '<body style="font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;'
+        'max-width:900px;margin:auto;padding:32px">'
+        '<h1 style="color:#00d4ff">GESH Financial — Access</h1>'
         # L5 beta framing, shown where money changes hands. The ToS is still a
         # DRAFT and counsel has not classified "My Book", so the product must
         # present itself as beta research/education rather than as advice.
-        "<div style=\"background:#1a1405;border:1px solid #6b5410;border-left:3px solid #f0b429;"
-        "border-radius:6px;padding:12px 16px;margin:0 0 20px;color:#e8d9b0;font-size:13px\">"
+        '<div style="background:#1a1405;border:1px solid #6b5410;border-left:3px solid #f0b429;'
+        'border-radius:6px;padding:12px 16px;margin:0 0 20px;color:#e8d9b0;font-size:13px">'
         "<b>BETA · educational use.</b> GESH is a research and education tool in beta. "
         "It is <b>not investment advice</b> and does not manage money or place trades. "
         "Analytics are AI-generated and may be wrong; all decisions remain yours.</div>"
-        "<p style=\"color:#aeb9c7\">AI research tooling for your portfolio. "
-        "See the <a href=\"/track-record\" style=\"color:#00e87a\">track record</a> first — "
+        '<p style="color:#aeb9c7">AI research tooling for your portfolio. '
+        'See the <a href="/track-record" style="color:#00e87a">track record</a> first — '
         "results shown are hypothetical/simulated.</p>"
-        f"<div style=\"margin:24px 0\">{card}</div>"
-        "<p style=\"color:#667;font-size:12px\">By subscribing you agree to the "
-        "<a href=\"/terms\" style=\"color:#889\">Terms</a>, "
-        "<a href=\"/privacy\" style=\"color:#889\">Privacy Policy</a> &amp; "
-        "<a href=\"/disclaimer\" style=\"color:#889\">Disclaimer</a>. "
+        f'<div style="margin:24px 0">{card}</div>'
+        '<p style="color:#667;font-size:12px">By subscribing you agree to the '
+        '<a href="/terms" style="color:#889">Terms</a>, '
+        '<a href="/privacy" style="color:#889">Privacy Policy</a> &amp; '
+        '<a href="/disclaimer" style="color:#889">Disclaimer</a>. '
         "NOT FINANCIAL ADVICE — FOR INFORMATIONAL AND EDUCATIONAL PURPOSES ONLY."
         "</p></body></html>"
     )
@@ -1556,12 +1759,12 @@ def billing_success():
     """Post-checkout landing — the magic-link email lands separately."""
     return (
         "<!doctype html><html><head><meta charset=utf-8><title>Payment received</title></head>"
-        "<body style=\"font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;"
-        "max-width:560px;margin:auto;padding:48px;text-align:center\">"
-        "<h1 style=\"color:#00e87a\">✓ Payment received</h1>"
+        '<body style="font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;'
+        'max-width:560px;margin:auto;padding:48px;text-align:center">'
+        '<h1 style="color:#00e87a">✓ Payment received</h1>'
         "<p>Check your email for a sign-in link to access GESH. "
         "It can take a minute to arrive.</p>"
-        "<p><a href=\"/login\" style=\"color:#00d4ff\">Go to login</a></p></body></html>"
+        '<p><a href="/login" style="color:#00d4ff">Go to login</a></p></body></html>'
     )
 
 
@@ -1652,6 +1855,7 @@ def track_record_page():
     the tracker (honest 'day X of 180, N/30 closed' until the gate is met)."""
     try:
         import proof_page
+
         return proof_page.render_html(proof_page.load_track_record())
     except Exception as exc:
         raise _server_error(exc)
@@ -1664,6 +1868,7 @@ def congress_watch_page():
     no execution, no advice; publisher-lane). Offline-safe empty state."""
     try:
         import congress_agent
+
         return congress_agent.render_watch_html(congress_agent.load_watch_data())
     except Exception as exc:
         raise _server_error(exc)
@@ -1676,21 +1881,26 @@ def api_congress():
     Includes source provenance (chambers, fetched-at, degraded flag) so an
     upstream outage is reported as degraded — never as successful empty data."""
     import congress_agent
+
     lb = congress_agent.leaderboard()
-    return {"status": "ok", "data": {
-        "leaderboard": lb.get("top_bought", []),
-        "window": lb.get("window"),
-        "recent": congress_agent.recent_activity(limit=40).get("trades", []),
-        "disclaimer": congress_agent.DISCLOSURE_LAG_NOTE,
-        "attribution": congress_agent.FILING_ATTRIBUTION_NOTE,
-        "source": congress_agent.source_status(),
-    }}
+    return {
+        "status": "ok",
+        "data": {
+            "leaderboard": lb.get("top_bought", []),
+            "window": lb.get("window"),
+            "recent": congress_agent.recent_activity(limit=40).get("trades", []),
+            "disclaimer": congress_agent.DISCLOSURE_LAG_NOTE,
+            "attribution": congress_agent.FILING_ATTRIBUTION_NOTE,
+            "source": congress_agent.source_status(),
+        },
+    }
 
 
 @app.get("/api/congress/{symbol}")
 def api_congress_symbol(symbol: str):
     """Congressional trades for one ticker — informational, attaches to the research card."""
     import congress_agent
+
     return {"status": "ok", "data": congress_agent.for_symbol(_safe_symbol(symbol))}
 
 
@@ -1699,6 +1909,7 @@ def api_congress_symbol(symbol: str):
 def terms_page():
     """Public Terms of Service & Disclaimer (internal compliance notes stripped)."""
     import legal_pages
+
     return legal_pages.render_terms_html()
 
 
@@ -1741,8 +1952,9 @@ async def account_delete(request: Request):
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
     if auth_users.is_owner(email):
-        raise HTTPException(status_code=403,
-                            detail="The owner account cannot be deleted from the app.")
+        raise HTTPException(
+            status_code=403, detail="The owner account cannot be deleted from the app."
+        )
     try:
         body = await request.json()
     except Exception:
@@ -1750,15 +1962,18 @@ async def account_delete(request: Request):
     if (body or {}).get("confirm") != "DELETE":
         raise HTTPException(
             status_code=400,
-            detail='Confirmation required — send {"confirm": "DELETE"} to erase your account.')
+            detail='Confirmation required — send {"confirm": "DELETE"} to erase your account.',
+        )
     try:
         sub_id, sub_status = auth_users.billing_subscription_status(email)
         report = auth_users.delete_user_data(email)
         notice = ""
         if sub_id and (sub_status or "").lower() in ("active", "past_due", "paused"):
-            notice = ("Your account data is deleted, but your subscription is billed by "
-                      "Lemon Squeezy and is NOT cancelled by this action — cancel it from "
-                      "the billing-portal link in your receipt email to stop future charges.")
+            notice = (
+                "Your account data is deleted, but your subscription is billed by "
+                "Lemon Squeezy and is NOT cancelled by this action — cancel it from "
+                "the billing-portal link in your receipt email to stop future charges."
+            )
         resp = JSONResponse({"status": "ok", **report, "notice": notice})
         resp.delete_cookie(auth_users.COOKIE_NAME, path="/")
         return resp
@@ -1777,6 +1992,7 @@ def privacy_page():
     now had NO published policy at all. Public (in PUBLIC_PREFIXES) because a
     policy nobody can read before signing up is not a published policy."""
     import legal_pages
+
     return legal_pages.render_privacy_html()
 
 
@@ -1811,7 +2027,7 @@ def _unsub_confirm_page(kind: str, token: str) -> HTMLResponse:
     _typ, label, _setter = _UNSUB_KINDS[kind]
     if not _unsub_user(kind, token):
         raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
-    tok_js = json.dumps(token)          # JSON-string embedding — token is ours, escape anyway
+    tok_js = json.dumps(token)  # JSON-string embedding — token is ours, escape anyway
     return HTMLResponse(
         f"<div style='font-family:system-ui,sans-serif;max-width:480px;margin:40px auto'>"
         f"<h2>Unsubscribe from {label}?</h2>"
@@ -1826,13 +2042,14 @@ def _unsub_confirm_page(kind: str, token: str) -> HTMLResponse:
         f"headers:{{'Content-Type':'application/json'}},"
         f"body:JSON.stringify({{token:{tok_js}}})}});"
         f"if(r.ok){{document.getElementById('go').style.display='none';"
-        f"document.getElementById('done').style.display='block';}}}};</script></div>")
+        f"document.getElementById('done').style.display='block';}}}};</script></div>"
+    )
 
 
 async def _unsub_perform(kind: str, request: Request, token_qs: str) -> JSONResponse:
     _typ, _label, setter_name = _UNSUB_KINDS[kind]
     token = (token_qs or "").strip()
-    if not token:                       # JSON or urlencoded body (both capped — [CLAUDE V1])
+    if not token:  # JSON or urlencoded body (both capped — [CLAUDE V1])
         try:
             raw = await _read_limited_body(request, PUBLIC_BODY_MAX_BYTES)
         except HTTPException:
@@ -1845,13 +2062,15 @@ async def _unsub_perform(kind: str, request: Request, token_qs: str) -> JSONResp
                 token = str((_b or {}).get("token") or "").strip() if isinstance(_b, dict) else ""
             except Exception:
                 token = ""
-            if not token:               # RFC 8058 one-click: urlencoded fallback
+            if not token:  # RFC 8058 one-click: urlencoded fallback
                 from urllib.parse import parse_qsl
+
                 token = dict(parse_qsl(raw.decode("utf-8", "replace"))).get("token", "").strip()
     user = _unsub_user(kind, token)
     if not user:
-        return JSONResponse(status_code=400,
-                            content={"ok": False, "detail": "Invalid or expired unsubscribe link"})
+        return JSONResponse(
+            status_code=400, content={"ok": False, "detail": "Invalid or expired unsubscribe link"}
+        )
     getattr(auth_users, setter_name)(user["email"], True)
     return JSONResponse(content={"ok": True})
 
@@ -1887,6 +2106,7 @@ def progress_page():
     no /progress in the auth public-prefix list, so the login wall gates it."""
     try:
         import progress_view
+
         return progress_view.render_progress_html(progress_view.load_progress())
     except Exception as exc:
         raise _server_error(exc)
@@ -1899,6 +2119,7 @@ def watch_page():
     NOT public: not in the auth public-prefix list, so the login wall gates it."""
     try:
         import watch_view
+
         return watch_view.render_watch_html(watch_view.load_watch_data())
     except Exception as exc:
         raise _server_error(exc)
@@ -1912,8 +2133,9 @@ def daily_report_page():
     NOT public: not in the auth public-prefix list, so the login wall gates it."""
     report_path = Path(__file__).parent / "gesh_report.html"
     if not report_path.exists():
-        raise HTTPException(status_code=404,
-                            detail="No daily report yet — the 10:30 chain has not produced one.")
+        raise HTTPException(
+            status_code=404, detail="No daily report yet — the 10:30 chain has not produced one."
+        )
     try:
         return HTMLResponse(report_path.read_text())
     except Exception as exc:
@@ -1925,6 +2147,7 @@ def watch_data(lookback_days: int = 7, activity_limit: int = 50):
     """Read-only JSON snapshot powering the /watch 12s poll. Same auth gate as /watch."""
     try:
         import watch_view
+
         return JSONResponse(
             watch_view.load_watch_data(lookback_days=lookback_days, activity_limit=activity_limit)
         )
@@ -1941,6 +2164,7 @@ def invest_page():
     (the dollar figures are account-identifying)."""
     try:
         import invest_view
+
         return invest_view.render_invest_html(invest_view.load_invest_data())
     except Exception as exc:
         raise _server_error(exc)
@@ -1953,6 +2177,7 @@ def invest_data(what_if_cash: float | None = None):
     the picks for a hypothetical deployable amount server-side. Same auth gate as /invest."""
     try:
         import invest_view
+
         return JSONResponse(invest_view.load_invest_data(what_if_cash=what_if_cash))
     except Exception as exc:
         raise _server_error(exc)
@@ -1971,14 +2196,17 @@ def favicon():
     """Inline SVG favicon (cyan up-trend on the dark house background) — silences the
     /favicon.ico 404. Already in auth_users.PUBLIC_PREFIXES, so it stays public."""
     from fastapi.responses import Response
+
     return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
+
 
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
 # Reuses the engine_results.json file Gesh already maintains. POST run-handlers
 # persist their result here; the dashboard reads it back via GET /api/*/cached
 # so each run-tab shows the last result by default instead of a blank screen.
 import json as _json
-from datetime import datetime as _dt, timezone as _tz
+from datetime import datetime as _dt
+from datetime import timezone as _tz
 
 ENGINE_RESULTS = Path(__file__).parent / "engine_results.json"
 _engine_cache_lock = threading.Lock()
@@ -2014,8 +2242,7 @@ def _cached_engine(key: str) -> dict:
     data = _load_engine_results()
     val = data.get(key)
     if val is not None:
-        return {"status": "ok", "cached": True, "data": val,
-                "ran_at": data.get(f"{key}_ran_at")}
+        return {"status": "ok", "cached": True, "data": val, "ran_at": data.get(f"{key}_ran_at")}
     return {"cached": False}
 
 
@@ -2034,12 +2261,11 @@ def _is_fresh(ran_at: str | None, max_age_h: float = 24.0) -> bool:
 def _holding_consensus_args(symbol: str, payload: dict) -> dict[str, float]:
     """Derive run_consensus_holding() kwargs from a portfolio snapshot."""
     symbol = symbol.upper()
-    total_portfolio = float(
-        (payload.get("equity_summary") or {}).get("portfolio_equity", 0) or 0
-    ) or 1.0
+    total_portfolio = (
+        float((payload.get("equity_summary") or {}).get("portfolio_equity", 0) or 0) or 1.0
+    )
     holding = next(
-        (h for h in payload.get("holdings", [])
-         if (h.get("symbol") or "").upper() == symbol),
+        (h for h in payload.get("holdings", []) if (h.get("symbol") or "").upper() == symbol),
         None,
     )
     if holding is not None:
@@ -2050,8 +2276,7 @@ def _holding_consensus_args(symbol: str, payload: dict) -> dict[str, float]:
             "current_price": float(holding.get("current_price", 0) or 0),
         }
     quote = next(
-        (w for w in payload.get("watchlist", [])
-         if (w.get("symbol") or "").upper() == symbol),
+        (w for w in payload.get("watchlist", []) if (w.get("symbol") or "").upper() == symbol),
         None,
     )
     current_price = float((quote or {}).get("last_trade_price", 0) or 0)
@@ -2109,10 +2334,12 @@ def _resolve_consensus_row(symbol: str, payload: dict, *, use_cached: bool = Tru
         if cached:
             return cached
     from consensus import run_consensus_holding
+
     args = _holding_consensus_args(symbol, payload)
     row = run_consensus_holding(symbol, **args)
     row.setdefault("symbol", symbol)
     return row
+
 
 # ─── In-process throttles / caches (FD-leak mitigation) ──────────────────────
 # Dashboard polls /api/portfolio every few seconds. Logging an equity snapshot
@@ -2123,6 +2350,7 @@ SNAPSHOT_INTERVAL_SEC = 300  # 5 minutes — plenty for ECG
 _last_snapshot_at: float = 0.0
 _snapshot_lock = threading.Lock()
 
+
 def _is_real_observation(h: dict) -> bool:
     """A holding is a REAL equity observation only if BOTH price and equity are finite
     and > 0. A degraded/offline snapshot can carry current_price=0 and a stale constant
@@ -2130,10 +2358,16 @@ def _is_real_observation(h: dict) -> bool:
     as a -96% crash and fires false "SUSPENDED — consider exiting" alarms (external audit
     2026-07-18). Missing data must stay MISSING, never a loss."""
     price, equity = h.get("current_price"), h.get("equity")
-    return (isinstance(price, (int, float)) and not isinstance(price, bool)
-            and math.isfinite(price) and price > 0
-            and isinstance(equity, (int, float)) and not isinstance(equity, bool)
-            and math.isfinite(equity) and equity > 0)
+    return (
+        isinstance(price, (int, float))
+        and not isinstance(price, bool)
+        and math.isfinite(price)
+        and price > 0
+        and isinstance(equity, (int, float))
+        and not isinstance(equity, bool)
+        and math.isfinite(equity)
+        and equity > 0
+    )
 
 
 def _maybe_log_snapshot(holdings: list[dict]) -> None:
@@ -2155,11 +2389,14 @@ def _maybe_log_snapshot(holdings: list[dict]) -> None:
         print(f"⚠  Snapshot log failed: {snap_err}")
     # Refresh live cache so the daily-analysis skill always gets current data
     try:
-        from fetch_live_data import fetch_and_cache
         import threading as _t
+
+        from fetch_live_data import fetch_and_cache
+
         _t.Thread(target=fetch_and_cache, kwargs={"logout_after": False}, daemon=True).start()
     except Exception as cache_err:
         print(f"⚠  Live cache refresh failed: {cache_err}")
+
 
 # /api/chart/{symbol}?period=… cache. yfinance opens its tz cache + a fresh
 # session every call; back-to-back polls were a major FD churn source.
@@ -2194,7 +2431,7 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
     # observation. Endpoints that KNOW which feed served the row set `source` explicitly
     # (setdefault yields to them); the rest omit it rather than assert something
     # unverified (GESH-8).
-    if isinstance(resp, dict) and "price" not in resp:   # skip tiny price-only blobs
+    if isinstance(resp, dict) and "price" not in resp:  # skip tiny price-only blobs
         resp.setdefault("as_of", _dt.now(_tz.utc).isoformat())
     with _ticker_get_lock:
         _ticker_get_cache[(bucket, sym)] = (time.monotonic(), resp)
@@ -2205,11 +2442,27 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
 
 # Elements that never close (HTML void elements) — they can't wrap a subtree, so
 # the balancer must not look for a closing tag for them.
-_VOID_TAGS = frozenset((
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
-))
-_TAG_OPEN_RE = re.compile(r"<(?P<close>/?)(?P<tag>[a-zA-Z][\w-]*)(?P<attrs>[^>]*?)(?P<selfclose>/?)>")
+_VOID_TAGS = frozenset(
+    (
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    )
+)
+_TAG_OPEN_RE = re.compile(
+    r"<(?P<close>/?)(?P<tag>[a-zA-Z][\w-]*)(?P<attrs>[^>]*?)(?P<selfclose>/?)>"
+)
 _OWNER_CLASS_RE = re.compile(r"""\bclass\s*=\s*(?P<q>["'])(?P<val>[^"']*)(?P=q)""")
 _RAWTEXT_TAGS = ("script", "style")
 
@@ -2249,7 +2502,7 @@ def _strip_owner_only_html(html: str) -> str:
             break
         out.append(html[i:lt])
 
-        if html.startswith("<!--", lt):                  # comment — copy verbatim
+        if html.startswith("<!--", lt):  # comment — copy verbatim
             end = html.find("-->", lt)
             end = n if end == -1 else end + 3
             out.append(html[lt:end])
@@ -2257,21 +2510,25 @@ def _strip_owner_only_html(html: str) -> str:
             continue
 
         m = _TAG_OPEN_RE.match(html, lt)
-        if not m:                                        # stray "<" — literal text
+        if not m:  # stray "<" — literal text
             out.append(html[lt])
             i = lt + 1
             continue
 
         tag = m.group("tag").lower()
-        if not m.group("close") and tag in _RAWTEXT_TAGS:   # raw text — copy verbatim
+        if not m.group("close") and tag in _RAWTEXT_TAGS:  # raw text — copy verbatim
             close = html.lower().find(f"</{tag}>", m.end())
             end = n if close == -1 else close + len(tag) + 3
             out.append(html[lt:end])
             i = end
             continue
 
-        if (m.group("close") or tag in _VOID_TAGS or m.group("selfclose")
-                or not _has_owner_only_class(m.group("attrs"))):
+        if (
+            m.group("close")
+            or tag in _VOID_TAGS
+            or m.group("selfclose")
+            or not _has_owner_only_class(m.group("attrs"))
+        ):
             out.append(m.group(0))
             i = m.end()
             continue
@@ -2288,11 +2545,11 @@ def _strip_owner_only_html(html: str) -> str:
                     end = inner.end()
                     break
             j = inner.end()
-        if end is None:                                  # malformed — keep as-is
+        if end is None:  # malformed — keep as-is
             out.append(m.group(0))
             i = m.end()
             continue
-        i = end                                          # drop [lt, end)
+        i = end  # drop [lt, end)
     return "".join(out)
 
 
@@ -2309,19 +2566,19 @@ def _strip_owner_only_html(html: str) -> str:
 OWNER_PARTIAL = Path(__file__).parent / "templates" / "owner_console.html"
 _SLOT_RE = re.compile(r"<!--GESH_SLOT:(?P<name>[A-Za-z0-9_]+)-->")
 _BLOCK_RE = re.compile(
-    r"<!--GESH_BLOCK:(?P<name>[A-Za-z0-9_]+)-->\n(?P<body>.*?)\n<!--/GESH_BLOCK:(?P=name)-->",
-    re.S)
+    r"<!--GESH_BLOCK:(?P<name>[A-Za-z0-9_]+)-->\n(?P<body>.*?)\n<!--/GESH_BLOCK:(?P=name)-->", re.S
+)
 
 
 def _owner_blocks() -> dict[str, str]:
     """Owner console blocks by slot name. Read per call so a template edit shows
     up without a restart, matching how the shell is already read."""
     try:
-        return {m.group("name"): m.group("body")
-                for m in _BLOCK_RE.finditer(OWNER_PARTIAL.read_text())}
+        return {
+            m.group("name"): m.group("body") for m in _BLOCK_RE.finditer(OWNER_PARTIAL.read_text())
+        }
     except OSError:
-        logger.error("owner console partial missing at %s — rendering without it",
-                     OWNER_PARTIAL)
+        logger.error("owner console partial missing at %s — rendering without it", OWNER_PARTIAL)
         return {}
 
 
@@ -2351,8 +2608,9 @@ def _render_dashboard(role: str) -> str:
         # `tab-overview` carries the initial `active` class and lives in the
         # owner partial, so a customer document would open with NO active pane
         # until applyRoleNav's fetch resolved. Promote the landing pane instead.
-        html = html.replace('<div class="tab-pane" id="tab-home">',
-                            '<div class="tab-pane active" id="tab-home">', 1)
+        html = html.replace(
+            '<div class="tab-pane" id="tab-home">', '<div class="tab-pane active" id="tab-home">', 1
+        )
     return html
 
 
@@ -2366,12 +2624,13 @@ def dashboard(request: Request):
     html = _render_dashboard(role)
     # Inject initial role synchronously so customer UI (hiding owner-only nav) applies
     # before first paint. This eliminates the 1-2s flash of full owner menu on refresh.
-    html = html.replace('<body', f'<body data-initial-role="{role}"', 1)
+    html = html.replace("<body", f'<body data-initial-role="{role}"', 1)
     html = html.replace("{{ model }}", MODEL)
     return HTMLResponse(html)
 
 
 # ─── Portfolio data ───────────────────────────────────────────────────────────
+
 
 def _resolved_payload(_watchlist=None) -> dict:
     """Portfolio payload with the confirmed-offline → MCP-snapshot fallback.
@@ -2385,7 +2644,7 @@ def _resolved_payload(_watchlist=None) -> dict:
     try:
         return build_data_payload(_watchlist if _watchlist is not None else DEFAULT_WATCHLIST)
     except RobinhoodOfflineError:
-        return load_snapshot_payload()   # re-raises RobinhoodOfflineError only if NO snapshot exists
+        return load_snapshot_payload()  # re-raises RobinhoodOfflineError only if NO snapshot exists
 
 
 def _context_payload(request: Request | None) -> dict:
@@ -2465,7 +2724,7 @@ def _attach_freshness(payload: dict) -> dict:
     else:
         state, label = "cached", "Stored snapshot — not live prices"
     payload["data_freshness"] = {
-        "state": state,                       # live | cached | stale | unknown
+        "state": state,  # live | cached | stale | unknown
         "label": label,
         "data_as_of": payload.get("as_of"),
         "age_seconds": age,
@@ -2541,12 +2800,18 @@ def _reconcile_equity_summary(eq: dict, holdings: list | None = None) -> dict:
     total for existing owner consumers."""
     cash_d = portfolio_valuation.to_decimal(eq.get("cash"))
     broker = portfolio_valuation.to_decimal(
-        eq.get("account_equity") if eq.get("account_equity") is not None
-        else (eq.get("portfolio_equity") if eq.get("portfolio_equity") is not None
-              else eq.get("total")))
+        eq.get("account_equity")
+        if eq.get("account_equity") is not None
+        else (
+            eq.get("portfolio_equity")
+            if eq.get("portfolio_equity") is not None
+            else eq.get("total")
+        )
+    )
 
     rows, report = model_portfolio.canonical_holdings(
-        holdings or [], model_portfolio.PUBLISHED_HOLDING_FIELDS)
+        holdings or [], model_portfolio.PUBLISHED_HOLDING_FIELDS
+    )
     positions = report["positions_value"]
 
     if cash_d is None or report.get("non_finite"):
@@ -2587,7 +2852,8 @@ def _reconcile_equity_summary(eq: dict, holdings: list | None = None) -> dict:
         logger.warning(
             "equity variance: broker account equity disagrees with positions+cash "
             "by %.4f%% — serving the itemised total, source marked degraded",
-            abs(delta) / derived * 100 if derived else 0.0)
+            abs(delta) / derived * 100 if derived else 0.0,
+        )
     return eq
 
 
@@ -2595,9 +2861,10 @@ def _is_owner_request(request: Request | None) -> bool:
     """True only for a confirmed owner session. Fails CLOSED: with the wall on
     and no valid session, the caller is treated as a customer."""
     if request is None or not auth_users.auth_enabled():
-        return True                      # single-tenant / wall-off = owner mode
+        return True  # single-tenant / wall-off = owner mode
     email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
     return bool(email and auth_users.is_owner(email))
+
 
 @app.get("/api/portfolio")
 def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direct calls
@@ -2608,16 +2875,19 @@ def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direc
             # ONLY a confirmed-offline session degrades to the MCP-built snapshot (Option A).
             # Any OTHER exception is a real bug — it must NOT be masked by serving stale data;
             # it falls through to _server_error (500) and reaches monitoring (Codex MEDIUM-4).
-            payload = load_snapshot_payload()       # may re-raise RobinhoodOfflineError → 503
+            payload = load_snapshot_payload()  # may re-raise RobinhoodOfflineError → 503
             # Throttled: this fires on EVERY poll while the RH session is dead and
             # cannot self-heal off-hours. First hit is immediate; repeats collapse.
             suppressed = _throttled_log_due("api_portfolio_offline")
             if suppressed is not None:
                 logger.warning(
                     "api/portfolio: live RH offline (%s) — serving snapshot (age=%ss)%s",
-                    type(live_err).__name__, payload.get("snapshot_age_seconds"),
+                    type(live_err).__name__,
+                    payload.get("snapshot_age_seconds"),
                     f" [+{suppressed} suppressed in the last {int(_THROTTLED_LOG_INTERVAL_S)}s]"
-                    if suppressed else "")
+                    if suppressed
+                    else "",
+                )
 
         eq = payload["equity_summary"]
         _reconcile_equity_summary(eq, payload.get("holdings"))
@@ -2657,9 +2927,9 @@ def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direc
             # to the owner payload later (audit A-01). Dollars are still
             # normalised to the model-book notional by the masking middleware,
             # which runs exactly once, after this.
-            return _sanitize({"status": "ok",
-                              "data": model_portfolio.publish(
-                                  payload, prior_close=_prior_close)})
+            return _sanitize(
+                {"status": "ok", "data": model_portfolio.publish(payload, prior_close=_prior_close)}
+            )
 
         return _sanitize({"status": "ok", "data": payload})
     except Exception as e:
@@ -2668,10 +2938,11 @@ def get_portfolio(request: Request = None):  # noqa: B008 — Optional for direc
 
 # ─── Quick AI analysis ────────────────────────────────────────────────────────
 
+
 @app.post("/api/analyze", dependencies=[Depends(require_api_key)])
 def run_analysis():
     try:
-        payload  = _resolved_payload()
+        payload = _resolved_payload()
         analysis = analyze_portfolio(payload)
         resp = {"status": "ok", "analysis": analysis, "model": MODEL}
         if payload.get("offline"):
@@ -2683,21 +2954,22 @@ def run_analysis():
 
 # ─── Deep AI analysis (with regime injection + DB logging) ───────────────────
 
+
 @app.post("/api/deep-analysis", dependencies=[Depends(require_api_key)])
 def run_deep_analysis():
     try:
         payload = _resolved_payload()
         offline = bool(payload.get("offline"))
-        eq      = payload["equity_summary"]
-        prev    = eq.get("adjusted_equity_previous_close", 0)
-        curr    = eq.get("portfolio_equity", 0)
-        eq["day_change"]     = round(curr - prev, 2)
+        eq = payload["equity_summary"]
+        prev = eq.get("adjusted_equity_previous_close", 0)
+        curr = eq.get("portfolio_equity", 0)
+        eq["day_change"] = round(curr - prev, 2)
         eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0, 2)
 
         symbols = [h["symbol"] for h in payload["holdings"]]
 
         # Regime detection injected into prompt (cached when portfolio is offline)
-        regime_data    = _regime_for_symbols(symbols, offline=offline)
+        regime_data = _regime_for_symbols(symbols, offline=offline)
         regime_context = regime_data.get("regime_summary")
 
         # Market intelligence (analyst targets, performance, insiders, ownership)
@@ -2722,12 +2994,12 @@ def run_deep_analysis():
             run_id = None
 
         resp = {
-            "status":   "ok",
+            "status": "ok",
             "analysis": analysis,
-            "model":    MODEL,
-            "regimes":  regime_data.get("regimes", []),
-            "market":   mkt,
-            "run_id":   run_id,
+            "model": MODEL,
+            "regimes": regime_data.get("regimes", []),
+            "market": mkt,
+            "run_id": run_id,
         }
         if offline:
             resp["offline"] = True
@@ -2740,13 +3012,14 @@ def run_deep_analysis():
 
 # ─── Step 2 — Monte Carlo stress test ────────────────────────────────────────
 
+
 @app.post("/api/monte-carlo", dependencies=[Depends(require_api_key)])
 def monte_carlo():
     try:
-        payload  = _resolved_payload()
+        payload = _resolved_payload()
         holdings = payload["holdings"]
-        eq_sum   = payload["equity_summary"]
-        result   = run_monte_carlo(holdings, eq_sum)
+        eq_sum = payload["equity_summary"]
+        result = run_monte_carlo(holdings, eq_sum)
         # _jsonable: same numpy-scalar hazard as /api/kelly (GBM percentiles are
         # np.float64) — coerce before FastAPI's encoder sees it.
         resp = {"status": "ok", "data": _jsonable(result)}
@@ -2760,6 +3033,7 @@ def monte_carlo():
 
 # ─── Step 3 — Equity Curve Gate ──────────────────────────────────────────────
 
+
 @app.get("/api/ecg")
 def equity_curve_gate(request: Request = None):  # noqa: B008
     try:
@@ -2769,10 +3043,14 @@ def equity_curve_gate(request: Request = None):  # noqa: B008
             # No live session AND no snapshot: degrade explicitly, never 503 into a
             # forever-spinner. ECG runs off the equity_snapshots table, so a snapshot
             # is normally present; this is the true-dark fallback.
-            return {"status": "degraded",
-                    "data": {"portfolio_gate": "UNKNOWN",
-                             "portfolio_message": "Live data unavailable — ECG paused. Showing no live gate.",
-                             "states": []}}
+            return {
+                "status": "degraded",
+                "data": {
+                    "portfolio_gate": "UNKNOWN",
+                    "portfolio_message": "Live data unavailable — ECG paused. Showing no live gate.",
+                    "states": [],
+                },
+            }
         holdings = payload["holdings"]
 
         def history_fn(symbol: str):
@@ -2782,21 +3060,23 @@ def equity_curve_gate(request: Request = None):  # noqa: B008
             # value among sentinels reads as a ~-96% drawdown → a false "SUSPENDED —
             # consider exiting" panic alarm. Drop non-observations here so a corrupt
             # symbol degrades to "insufficient history / HEALTHY", never a fake crash.
-            return [r for r in get_equity_history(symbol, days=30)
-                    if _is_real_observation(r)]
+            return [r for r in get_equity_history(symbol, days=30) if _is_real_observation(r)]
 
         result = compute_ecg(holdings, history_fn)
         result.setdefault("portfolio_gate", "UNKNOWN")
         result.setdefault("portfolio_message", "")
         if payload.get("offline"):
             result["degraded"] = True
-            result["portfolio_message"] = (result.get("portfolio_message") or "") + " (cached snapshot)"
+            result["portfolio_message"] = (
+                result.get("portfolio_message") or ""
+            ) + " (cached snapshot)"
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
 
 
 # ─── Step 4 — Regime detection standalone ────────────────────────────────────
+
 
 @app.get("/api/regime")
 def regime_endpoint(force_live: bool = False, request: Request = None):  # noqa: B008
@@ -2816,7 +3096,9 @@ def regime_endpoint(force_live: bool = False, request: Request = None):  # noqa:
 
     if not force_live and cached and cached.get("regimes") and ran:
         try:
-            from datetime import datetime as _rdt, timezone as _rtz
+            from datetime import datetime as _rdt
+            from datetime import timezone as _rtz
+
             age_s = (_rdt.now(_rtz.utc) - _rdt.fromisoformat(str(ran))).total_seconds()
             if age_s < 4 * 3600:
                 return {"status": "ok", "data": cached, "cached": True, "ran_at": ran}
@@ -2824,22 +3106,25 @@ def regime_endpoint(force_live: bool = False, request: Request = None):  # noqa:
             pass
 
     try:
-        payload  = _context_payload(request)
-        symbols  = [h["symbol"] for h in payload["holdings"]]
-        result   = detect_regimes(symbols)
+        payload = _context_payload(request)
+        symbols = [h["symbol"] for h in payload["holdings"]]
+        result = detect_regimes(symbols)
         return {"status": "ok", "data": result}
     except RobinhoodOfflineError:
         # No live session AND (usually) a stale cache — serve the stale cache as a
         # degraded snapshot rather than 503-ing the whole Risk tab into an error.
         if cached and cached.get("regimes"):
             return {"status": "degraded", "data": cached, "cached": True, "ran_at": ran}
-        return {"status": "degraded",
-                "data": {"regimes": [], "regime_summary": "Live regime unavailable."}}
+        return {
+            "status": "degraded",
+            "data": {"regimes": [], "regime_summary": "Live regime unavailable."},
+        }
     except Exception as e:
         raise _server_error(e)
 
 
 # ─── Step 1 — Analysis history ────────────────────────────────────────────────
+
 
 @app.get("/api/history")
 def analysis_history(limit: int = Query(20, ge=1, le=500)):
@@ -2865,12 +3150,13 @@ def analysis_detail(run_id: int):
 
 # ─── Market Intelligence (SWS-style) ──────────────────────────────────────────────────
 
+
 @app.get("/api/market-data")
 def market_data_endpoint(request: Request = None):  # noqa: B008
     try:
         payload = _context_payload(request)
         symbols = [h["symbol"] for h in payload["holdings"]]
-        result  = get_all_market_data(symbols)
+        result = get_all_market_data(symbols)
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
@@ -2878,13 +3164,14 @@ def market_data_endpoint(request: Request = None):  # noqa: B008
 
 # ─── Company Intelligence Agents ─────────────────────────────────────────────
 
+
 @app.post("/api/agents/sec", dependencies=[Depends(require_api_key)])
 def agent_sec():
     """Watch SEC filings for current holdings (last 7 days)."""
     try:
         payload = _resolved_payload()
         symbols = [h["symbol"] for h in payload["holdings"]]
-        result  = watch_filings(symbols, days_back=7)
+        result = watch_filings(symbols, days_back=7)
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
@@ -2896,7 +3183,7 @@ def agent_sec_history(days: int = 30, request: Request = None):  # noqa: B008
     try:
         payload = _context_payload(request)
         symbols = [h["symbol"] for h in payload["holdings"]]
-        result  = get_filing_history(symbols, days=days)
+        result = get_filing_history(symbols, days=days)
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
@@ -2907,8 +3194,10 @@ def agent_news():
     """Scan news sentiment for current holdings + watchlist."""
     try:
         payload = _resolved_payload()
-        symbols = list({h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]})
-        result  = scan_news(symbols, days_back=7)
+        symbols = list(
+            {h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]}
+        )
+        result = scan_news(symbols, days_back=7)
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
@@ -2919,14 +3208,24 @@ def agent_news_history(days: int = 7, request: Request = None):  # noqa: B008
     """Return cached news sentiment from DB."""
     try:
         payload = _context_payload(request)
-        symbols = list({h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]})
-        rows    = get_news_history(symbols, days=days)
-        scores  = [r["sentiment_score"] for r in rows if isinstance(r.get("sentiment_score"), (int, float))]
-        avg     = round(sum(scores) / len(scores), 1) if scores else 0.0
-        mood    = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
-        return {"status": "ok", "data": {
-            "results": rows, "avg_score": avg, "market_mood": mood, "cached": True,
-        }}
+        symbols = list(
+            {h["symbol"] for h in payload["holdings"]} | {w["symbol"] for w in payload["watchlist"]}
+        )
+        rows = get_news_history(symbols, days=days)
+        scores = [
+            r["sentiment_score"] for r in rows if isinstance(r.get("sentiment_score"), (int, float))
+        ]
+        avg = round(sum(scores) / len(scores), 1) if scores else 0.0
+        mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
+        return {
+            "status": "ok",
+            "data": {
+                "results": rows,
+                "avg_score": avg,
+                "market_mood": mood,
+                "cached": True,
+            },
+        }
     except Exception as e:
         raise _server_error(e)
 
@@ -2947,7 +3246,11 @@ def agent_fundamentals_latest():
     try:
         result = get_latest_fundamental_scan()
         if not result:
-            return {"status": "ok", "data": None, "message": "No scan yet — run POST /api/agents/fundamentals first"}
+            return {
+                "status": "ok",
+                "data": None,
+                "message": "No scan yet — run POST /api/agents/fundamentals first",
+            }
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
@@ -2955,15 +3258,26 @@ def agent_fundamentals_latest():
 
 # ─── Investment Screener ──────────────────────────────────────────────────────
 
+
 @app.post("/api/screener", dependencies=[Depends(require_api_key)])
 def run_screener():
     try:
         # Reduced from 20 to 10 to instantly resolve perceived hangs
         candidates = screen_market(top_n=10)
         if not candidates:
-            raise HTTPException(status_code=503, detail="No screener data returned — market may be closed")
+            raise HTTPException(
+                status_code=503, detail="No screener data returned — market may be closed"
+            )
         result = analyze_screener(candidates)
-        resp = {"status": "ok", "data": result, "candidates_screened": len(candidates), "as_of": __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat() + "Z"}
+        resp = {
+            "status": "ok",
+            "data": result,
+            "candidates_screened": len(candidates),
+            "as_of": __import__("datetime")
+            .datetime.now(__import__("datetime").timezone.utc)
+            .isoformat()
+            + "Z",
+        }
         _save_engine_result("screener", resp)
         return resp
     except HTTPException:
@@ -2974,19 +3288,23 @@ def run_screener():
 
 # ─── Kelly Criterion Position Sizer ──────────────────────────────────────────
 
+
 @app.post("/api/kelly", dependencies=[Depends(require_api_key)])
 def kelly_endpoint():
     try:
-        payload        = _resolved_payload()
-        holdings       = payload["holdings"]
-        total_equity   = payload["equity_summary"].get("portfolio_equity", 0)
-        symbols        = [h["symbol"] for h in holdings]
-        analyst_data   = get_analyst_targets(symbols)
-        analyst_upside = {s: {"upside_pct": analyst_data[s].get("upside_pct")} for s in analyst_data}
-        
+        payload = _resolved_payload()
+        holdings = payload["holdings"]
+        total_equity = payload["equity_summary"].get("portfolio_equity", 0)
+        symbols = [h["symbol"] for h in holdings]
+        analyst_data = get_analyst_targets(symbols)
+        analyst_upside = {
+            s: {"upside_pct": analyst_data[s].get("upside_pct")} for s in analyst_data
+        }
+
         ai_verdicts = {}
         try:
-            from db import get_analysis_history, get_analysis_by_id
+            from db import get_analysis_by_id, get_analysis_history
+
             history = get_analysis_history(limit=1)
             if history:
                 latest_run = get_analysis_by_id(history[0]["id"])
@@ -2995,12 +3313,14 @@ def kelly_endpoint():
                     for ha in holdings_analysis:
                         ai_verdicts[ha["symbol"]] = {
                             "verdict": ha.get("verdict"),
-                            "pct_diff": fair_value.canonical_pct_diff(ha.get("fair_value")),  # canonical, not the model pct_diff (Codex #2)
+                            "pct_diff": fair_value.canonical_pct_diff(
+                                ha.get("fair_value")
+                            ),  # canonical, not the model pct_diff (Codex #2)
                         }
         except Exception as err:
             print(f"Failed to fetch AI verdicts for Kelly: {err}")
 
-        result         = run_kelly_analysis(holdings, total_equity, analyst_upside, ai_verdicts)
+        result = run_kelly_analysis(holdings, total_equity, analyst_upside, ai_verdicts)
         # _jsonable: kelly leans on numpy and can emit np.bool_/np.float64 scalars
         # that FastAPI's encoder rejects ("'numpy.bool' object is not iterable" —
         # the QA-observed 500 of 2026-07-17). The customer path already coerces;
@@ -3020,19 +3340,19 @@ def kelly_endpoint():
 # ("1mo") and the conventional UI labels ("1M", "1d"/"1D") — matching is
 # case-insensitive. Anything not listed is a 400, never a silent substitution.
 _CHART_RANGES: dict[str, dict] = {
-    "1d":   {"period": "1d",  "yf_period": "1d",  "interval": "5m"},
-    "5d":   {"period": "5d",  "yf_period": "5d",  "interval": "5m"},
-    "1w":   {"period": "5d",  "yf_period": "5d",  "interval": "5m"},
-    "1mo":  {"period": "1mo", "yf_period": "1mo", "interval": "1d"},
-    "1m":   {"period": "1mo", "yf_period": "1mo", "interval": "1d"},
-    "3mo":  {"period": "3mo", "yf_period": "3mo", "interval": "1d"},
-    "3m":   {"period": "3mo", "yf_period": "3mo", "interval": "1d"},
-    "6mo":  {"period": "6mo", "yf_period": "6mo", "interval": "1d"},
-    "6m":   {"period": "6mo", "yf_period": "6mo", "interval": "1d"},
-    "1y":   {"period": "1y",  "yf_period": "1y",  "interval": "1d"},
-    "ytd":  {"period": "ytd", "yf_period": "ytd", "interval": "1d"},
-    "5y":   {"period": "5y",  "yf_period": "5y",  "interval": "1wk"},
-    "max":  {"period": "max", "yf_period": "max", "interval": "1wk"},
+    "1d": {"period": "1d", "yf_period": "1d", "interval": "5m"},
+    "5d": {"period": "5d", "yf_period": "5d", "interval": "5m"},
+    "1w": {"period": "5d", "yf_period": "5d", "interval": "5m"},
+    "1mo": {"period": "1mo", "yf_period": "1mo", "interval": "1d"},
+    "1m": {"period": "1mo", "yf_period": "1mo", "interval": "1d"},
+    "3mo": {"period": "3mo", "yf_period": "3mo", "interval": "1d"},
+    "3m": {"period": "3mo", "yf_period": "3mo", "interval": "1d"},
+    "6mo": {"period": "6mo", "yf_period": "6mo", "interval": "1d"},
+    "6m": {"period": "6mo", "yf_period": "6mo", "interval": "1d"},
+    "1y": {"period": "1y", "yf_period": "1y", "interval": "1d"},
+    "ytd": {"period": "ytd", "yf_period": "ytd", "interval": "1d"},
+    "5y": {"period": "5y", "yf_period": "5y", "interval": "1wk"},
+    "max": {"period": "max", "yf_period": "max", "interval": "1wk"},
 }
 
 
@@ -3048,13 +3368,18 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
     # the same 21-point month (audit F-02). Unrecognized values are now a 400 —
     # `period_map.get(period, "1mo")` silently answered a DIFFERENT question than
     # the one asked, which for a price chart is a correctness bug, not leniency.
-    requested = (range if range is not None else period)
+    requested = range if range is not None else period
     resolved = _CHART_RANGES.get(str(requested).strip().lower())
     if resolved is None:
         raise HTTPException(
             status_code=400,
-            detail=("Unsupported range '" + str(requested)[:16] + "'. Supported: "
-                    + ", ".join(sorted(_CHART_RANGES))))
+            detail=(
+                "Unsupported range '"
+                + str(requested)[:16]
+                + "'. Supported: "
+                + ", ".join(sorted(_CHART_RANGES))
+            ),
+        )
     period = resolved["period"]
     key = (sym, period)
     now = time.monotonic()
@@ -3070,6 +3395,7 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
         # which Yahoo/RH-unauth can't serve here — route those to Alpaca via
         # price_source.intraday_5m (key-gated; honest fallback when unconfigured).
         import price_source
+
         yf_period = resolved["yf_period"]
         interval = resolved["interval"]
         if period in ("1d", "5d"):
@@ -3077,41 +3403,61 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
             if raw is None or getattr(raw, "empty", True):
                 # No intraday provider configured / no data → honest empty state;
                 # the frontend renders "try a daily range". Cache it briefly too.
-                result = {"symbol": sym, "period": period, "intraday_unavailable": True,
-                          "dates": [], "prices": [], "pct_change": 0,
-                          "current": None, "start": None,
-                          "resolved_period": yf_period, "resolved_interval": interval,
-                          "point_count": 0, "first_timestamp": None, "last_timestamp": None,
-                          "source": None}
+                result = {
+                    "symbol": sym,
+                    "period": period,
+                    "intraday_unavailable": True,
+                    "dates": [],
+                    "prices": [],
+                    "pct_change": 0,
+                    "current": None,
+                    "start": None,
+                    "resolved_period": yf_period,
+                    "resolved_interval": interval,
+                    "point_count": 0,
+                    "first_timestamp": None,
+                    "last_timestamp": None,
+                    "source": None,
+                }
                 with _chart_cache_lock:
                     _chart_cache[key] = (now, result)
                 return {**result, "requested_range": str(requested)}
         else:
-            raw = price_source.yf_download(sym, period=yf_period, interval=interval,
-                                           auto_adjust=True, progress=False)
+            raw = price_source.yf_download(
+                sym, period=yf_period, interval=interval, auto_adjust=True, progress=False
+            )
             if raw is None or raw.empty:
                 raise HTTPException(status_code=404, detail="No data")
         closes = raw["Close"].squeeze().dropna()
-        dates  = [str(d)[:16] if interval=="5m" else str(d)[:10] for d in closes.index]
+        dates = [str(d)[:16] if interval == "5m" else str(d)[:10] for d in closes.index]
         # .flatten() ensures 1D array if yf returns MultiIndex dataframe,
         # handle Series or DataFrame robustly
         import numpy as np
+
         prices = [round(float(v), 2) for v in np.array(closes).flatten()]
-        pct_chg = round((prices[-1]/prices[0]-1)*100, 2) if len(prices)>1 else 0
+        pct_chg = round((prices[-1] / prices[0] - 1) * 100, 2) if len(prices) > 1 else 0
         try:
             source = price_source.frame_source(raw)
         except Exception:  # noqa: BLE001 — provenance is metadata, never a 500
             source = None
-        result = {"symbol":sym,"period":period,"dates":dates,"prices":prices,
-                  "pct_change":pct_chg,"current":prices[-1],"start":prices[0],
-                  # Contract metadata: a client must be able to VERIFY it got the
-                  # window it asked for instead of trusting that it did.
-                  "resolved_period": yf_period, "resolved_interval": interval,
-                  "point_count": len(prices),
-                  "first_timestamp": dates[0] if dates else None,
-                  "last_timestamp": dates[-1] if dates else None,
-                  "source": source,
-                  "data_as_of": _dt.now(_tz.utc).isoformat()}
+        result = {
+            "symbol": sym,
+            "period": period,
+            "dates": dates,
+            "prices": prices,
+            "pct_change": pct_chg,
+            "current": prices[-1],
+            "start": prices[0],
+            # Contract metadata: a client must be able to VERIFY it got the
+            # window it asked for instead of trusting that it did.
+            "resolved_period": yf_period,
+            "resolved_interval": interval,
+            "point_count": len(prices),
+            "first_timestamp": dates[0] if dates else None,
+            "last_timestamp": dates[-1] if dates else None,
+            "source": source,
+            "data_as_of": _dt.now(_tz.utc).isoformat(),
+        }
         with _chart_cache_lock:
             _chart_cache[key] = (now, result)
         return {**result, "requested_range": str(requested)}
@@ -3123,13 +3469,14 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
 
 # ─── Consensus Engine ────────────────────────────────────────────────────────
 
+
 @app.post("/api/consensus", dependencies=[Depends(require_api_key)])
 def consensus_endpoint():
     try:
-        payload      = _resolved_payload()
-        holdings     = payload["holdings"]
+        payload = _resolved_payload()
+        holdings = payload["holdings"]
         total_equity = payload["equity_summary"].get("portfolio_equity", 0)
-        result       = run_consensus_portfolio(holdings, total_equity)
+        result = run_consensus_portfolio(holdings, total_equity)
         resp = {"status": "ok", "data": result}
         _save_engine_result("consensus", resp)
         return resp
@@ -3149,14 +3496,25 @@ def _cached_response(key: str) -> dict:
     ran = data.get(f"{key}_ran_at")
     if val is None:
         return {"cached": False}
-    if key in ("consensus", "kelly") and isinstance(val, dict) \
-            and "holdings" not in val and "data" not in val:
+    if (
+        key in ("consensus", "kelly")
+        and isinstance(val, dict)
+        and "holdings" not in val
+        and "data" not in val
+    ):
         # The daily chain (run_engines2) stores these as per-symbol dicts;
         # the dashboard renderers expect the POST shape {holdings: [...]} —
         # normalize here so the Signals tab renders the 10:30 results.
-        val = {"holdings": [{"symbol": s, **(v if isinstance(v, dict) else {})}
-                            for s, v in val.items()]}
-    out = dict(val) if isinstance(val, dict) and ("data" in val or "analysis" in val) else {"data": val}
+        val = {
+            "holdings": [
+                {"symbol": s, **(v if isinstance(v, dict) else {})} for s, v in val.items()
+            ]
+        }
+    out = (
+        dict(val)
+        if isinstance(val, dict) and ("data" in val or "analysis" in val)
+        else {"data": val}
+    )
     out["cached"] = True
     out["ran_at"] = ran
     out["fresh"] = _is_fresh(ran)
@@ -3209,8 +3567,13 @@ def _unavailable_response(sym: str, *, data: object = None) -> dict:
     back-compat, so existing readers of data.available / data.error / data.regime
     keep working and the frontend degrades exactly as before."""
     reason = "data_unavailable" if _symbol_has_market_identity(sym) else "symbol_not_found"
-    body = {"status": "unavailable", "reason_code": reason, "symbol": sym,
-            "data_as_of": None, "source": None}
+    body = {
+        "status": "unavailable",
+        "reason_code": reason,
+        "symbol": sym,
+        "data_as_of": None,
+        "source": None,
+    }
     if data is not None:
         body["data"] = data
     return body
@@ -3227,12 +3590,17 @@ def consensus_symbol(symbol: str):
     sym = _safe_symbol(symbol)
     try:
         from consensus import run_consensus_holding
-        row = run_consensus_holding(sym, equity=0.0, total_portfolio=1.0,
-                                    avg_cost=0.0, current_price=0.0)
+
+        row = run_consensus_holding(
+            sym, equity=0.0, total_portfolio=1.0, avg_cost=0.0, current_price=0.0
+        )
         # No node could vote (no price/history) → INSUFFICIENT DATA, not a
         # fabricated balanced consensus.
-        if (not isinstance(row, dict) or row.get("verdict") == "INSUFFICIENT DATA"
-                or (row.get("active_nodes") or 0) == 0):
+        if (
+            not isinstance(row, dict)
+            or row.get("verdict") == "INSUFFICIENT DATA"
+            or (row.get("active_nodes") or 0) == 0
+        ):
             return _unavailable_response(sym, data=row)
         return {"status": "ok", "data": row}
     except HTTPException:
@@ -3261,7 +3629,7 @@ def screener_cached():
 # Two layers: long_term_macro caches the raw upstream fetches (6h/24h files); the
 # serve-side cache below lets /cached repaint INSTANTLY from memory without
 # re-entering the module, while the live route always recomputes + refreshes it.
-_LTM_TTL_SEC = 900   # 15-min serve cache
+_LTM_TTL_SEC = 900  # 15-min serve cache
 _ltm_cache: dict[str, tuple[float, dict]] = {}
 _ltm_lock = threading.Lock()
 
@@ -3269,6 +3637,7 @@ _ltm_lock = threading.Lock()
 def _ltm_compute() -> dict:
     """Compute the overlay (module-cached upstream) and refresh the serve cache."""
     from long_term_macro import get_long_term_macro_sentiment
+
     data = _sanitize(get_long_term_macro_sentiment())
     with _ltm_lock:
         _ltm_cache["v"] = (time.monotonic(), data)
@@ -3305,9 +3674,11 @@ def portfolio_history(points: int = Query(default=60, ge=1, le=365)):
     """Portfolio equity series for the KPI sparklines. Always returns a list."""
     try:
         from db import get_portfolio_equity_history
+
         hist = get_portfolio_equity_history(points)
-        series = [round(float(h["total_equity"]), 2)
-                  for h in hist if h.get("total_equity") is not None]
+        series = [
+            round(float(h["total_equity"]), 2) for h in hist if h.get("total_equity") is not None
+        ]
         return {"status": "ok", "series": series, "points": len(series)}
     except Exception as e:
         # Graceful — the sparkline draws nothing rather than erroring. Log the
@@ -3342,21 +3713,26 @@ def sections_status():
 
     snap = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else {}
     snap_at = snap.get("fetched_at")
-    overview = {"ran_at": snap_at, "fresh": _is_fresh(snap_at)} if snap_at else {"ran_at": None, "fresh": False}
+    overview = (
+        {"ran_at": snap_at, "fresh": _is_fresh(snap_at)}
+        if snap_at
+        else {"ran_at": None, "fresh": False}
+    )
 
     out = {
-        "overview":     overview,
-        "analysis":     _stamp("ai_result"),
-        "daily":        _stamp("ai_result"),
-        "risk":         _stamp("monte_carlo"),
-        "radar":        _stamp("screener"),
+        "overview": overview,
+        "analysis": _stamp("ai_result"),
+        "daily": _stamp("ai_result"),
+        "risk": _stamp("monte_carlo"),
+        "radar": _stamp("screener"),
         "intelligence": _stamp("regime"),
-        "signals":      sig,
+        "signals": sig,
     }
     return {k: v for k, v in out.items() if v is not None}
 
 
 # ─── FFT Cycle Detection ──────────────────────────────────────────────────────
+
 
 @app.get("/api/fft-cycles")
 def fft_cycles_endpoint(request: Request = None):  # noqa: B008
@@ -3368,7 +3744,7 @@ def fft_cycles_endpoint(request: Request = None):  # noqa: B008
     try:
         payload = _context_payload(request)
         symbols = [h["symbol"] for h in payload["holdings"]]
-        result  = batch_fft_cycles(symbols)
+        result = batch_fft_cycles(symbols)
         return {"status": "ok", "data": result}
     except Exception as e:
         raise _server_error(e)
@@ -3379,6 +3755,7 @@ def fft_cycles_single(symbol: str):
     """FFT cycle analysis for a single symbol."""
     try:
         from fft_cycles import detect_fft_cycles
+
         sym = _safe_symbol(symbol)
         result = detect_fft_cycles(sym)
         if not isinstance(result, dict) or result.get("error"):
@@ -3395,6 +3772,7 @@ def symbol_search(q: str = "", limit: int = 10):
     Alpaca once and cached 24h in-memory, so this is a cheap in-memory match."""
     try:
         import symbol_search as _ss
+
         return {"status": "ok", "data": _ss.search(q, limit)}
     except Exception as e:
         raise _server_error(e)
@@ -3410,6 +3788,7 @@ def momentum_symbol(symbol: str):
         return cached
     try:
         import momentum_signal
+
         mom = momentum_signal.compute(sym)
         if isinstance(mom, dict) and mom.get("available") is False:
             return _unavailable_response(sym, data=mom)
@@ -3428,6 +3807,7 @@ def levels_symbol(symbol: str):
         return cached
     try:
         import trade_levels
+
         # Bind the trade-setup ENTRY (and the header quote) to the SAME canonical
         # quote the chart / AI card / portfolio table use (_latest_close — the
         # bad-tick-guarded 1mo last close), instead of trade_levels' independent 6mo
@@ -3449,7 +3829,8 @@ def levels_symbol(symbol: str):
                 raise HTTPException(
                     status_code=422,
                     detail=f"Price rejected as unreliable — {reason}. "
-                           "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
+                    "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).",
+                )
             if isinstance(data, dict):
                 data["price_suspect"] = True
                 data["price_suspect_reason"] = reason
@@ -3463,7 +3844,8 @@ def levels_symbol(symbol: str):
         decision_quality.attach(
             data,
             _quality_block(pmeta, suspect, reason, degraded=px is None),
-            context=f"levels:{sym}")
+            context=f"levels:{sym}",
+        )
         # The levels card's feed is the one that served the quote — already observed
         # off the frame (GESH-8 uses the same truth as decision_quality, never a label).
         resp = {"status": "ok", "data": data}
@@ -3487,6 +3869,7 @@ def earnings_symbol(symbol: str):
         return cached
     try:
         import earnings_viz
+
         data = earnings_viz.get_earnings(sym)
         # `diagnostic` names providers and env vars — operator detail. Log it,
         # never ship it (audit BUG-05: internal config surfaced in customer copy).
@@ -3510,6 +3893,7 @@ def regime_symbol(symbol: str):
         return cached
     try:
         import regime as _regime
+
         out = _regime.detect_regimes([sym])
         rows = out.get("regimes") or []
         if not rows:
@@ -3528,10 +3912,10 @@ def regime_symbol(symbol: str):
 # fills `company_name` with the ticker itself for symbols it has never heard of,
 # so these carry no evidence that the vendor knows the security.
 _FUNDAMENTAL_IDENTITY_KEYS = frozenset(
-    ("symbol", "company_name", "name", "sector_source", "error", "source", "as_of"))
+    ("symbol", "company_name", "name", "sector_source", "error", "source", "as_of")
+)
 
-_FUNDAMENTAL_ZERO_DEFAULT_KEYS = frozenset(
-    ("insider_buys", "insider_sells", "num_analysts"))
+_FUNDAMENTAL_ZERO_DEFAULT_KEYS = frozenset(("insider_buys", "insider_sells", "num_analysts"))
 
 
 def _fundamentals_value_is_empty(key: str, value: object) -> bool:
@@ -3540,11 +3924,10 @@ def _fundamentals_value_is_empty(key: str, value: object) -> bool:
         return True
     if isinstance(value, str):
         normalized = value.strip().lower()
-        return ((key == "recommendation" and normalized == "hold")
-                or (key == "insider_signal" and normalized == "neutral"))
-    return (key in _FUNDAMENTAL_ZERO_DEFAULT_KEYS
-            and not isinstance(value, bool)
-            and value == 0)
+        return (key == "recommendation" and normalized == "hold") or (
+            key == "insider_signal" and normalized == "neutral"
+        )
+    return key in _FUNDAMENTAL_ZERO_DEFAULT_KEYS and not isinstance(value, bool) and value == 0
 
 
 def _fundamentals_row_is_empty(row: dict) -> bool:
@@ -3575,6 +3958,7 @@ def fundamentals_symbol(symbol: str):
         return cached
     try:
         import market_data
+
         # Track WHICH vendor actually served this row. `sector` is a vendor
         # CLASSIFICATION from a defined taxonomy (Robinhood's is non-GICS — it calls
         # TSLA "Consumer Durables"), not an absolute truth, and the two vendors do not
@@ -3584,6 +3968,7 @@ def fundamentals_symbol(symbol: str):
         vendor = "robinhood"
         if not row:
             import fundamental_agent
+
             rows = fundamental_agent._fetch_fundamentals_batch([sym])
             row = rows[0] if rows and not rows[0].get("error") else None
             vendor = "yfinance"
@@ -3600,17 +3985,20 @@ def fundamentals_symbol(symbol: str):
         # ~$73 vs a ~$500+ low). _cached_close is the shared 5-min cache — cheap.
         try:
             import price_sanity
+
             px = _cached_close(sym)
             suspect, reason = price_sanity.is_price_suspect(
-                px, row.get("low_52"), row.get("high_52"))
+                px, row.get("low_52"), row.get("high_52")
+            )
             if suspect:
                 row["price_suspect"] = True
                 row["price_suspect_reason"] = reason
         except Exception:  # noqa: BLE001 — advisory flag must never break the card
             pass
         # Real feed, not a constant: `vendor` is the branch that actually served (GESH-8).
-        return _ticker_get_store("fundamentals", sym,
-                                 {"status": "ok", "data": row, "source": vendor})
+        return _ticker_get_store(
+            "fundamentals", sym, {"status": "ok", "data": row, "source": vendor}
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -3632,6 +4020,7 @@ def _reconcile_card(sym: str, card: dict) -> dict | None:
         mech_verdict = mech_conf = None
         try:
             import signal_history
+
             hist = signal_history.get_history(sym, days=1)
             if hist:
                 mech_verdict = hist[-1].get("verdict")
@@ -3639,13 +4028,15 @@ def _reconcile_card(sym: str, card: dict) -> dict | None:
         except Exception:  # noqa: BLE001 — optional context
             pass
         fv = card.get("fair_value") or {}
-        return verdict_reconciliation.reconcile(verdict_reconciliation.Inputs(
-            mechanical_verdict=mech_verdict,
-            mechanical_confidence=(float(mech_conf) if mech_conf is not None else None),
-            valuation_status=fv.get("status"),
-            valuation_pct_diff=fair_value.canonical_pct_diff(fv) if fv else None,
-            ai_verdict=card.get("verdict"),
-        )).as_dict()
+        return verdict_reconciliation.reconcile(
+            verdict_reconciliation.Inputs(
+                mechanical_verdict=mech_verdict,
+                mechanical_confidence=(float(mech_conf) if mech_conf is not None else None),
+                valuation_status=fv.get("status"),
+                valuation_pct_diff=fair_value.canonical_pct_diff(fv) if fv else None,
+                ai_verdict=card.get("verdict"),
+            )
+        ).as_dict()
     except Exception:  # noqa: BLE001
         return None
 
@@ -3661,8 +4052,10 @@ def _analyst_row_is_empty(row: dict) -> bool:
         return True
     if row.get("num_analysts"):
         return False
-    return not any(row.get(k) is not None for k in
-                   ("target_mean", "target_median", "target_high", "target_low"))
+    return not any(
+        row.get(k) is not None
+        for k in ("target_mean", "target_median", "target_high", "target_low")
+    )
 
 
 @app.get("/api/analyst/{symbol}")
@@ -3675,6 +4068,7 @@ def analyst_symbol(symbol: str):
         return cached
     try:
         import market_data
+
         row = market_data.rh_analyst(sym)
         vendor = "robinhood"
         if not row:
@@ -3689,8 +4083,7 @@ def analyst_symbol(symbol: str):
             # No coverage is a 404, not a Hold.
             raise HTTPException(status_code=404, detail="No analyst coverage for this symbol")
         # Real feed, not a constant (GESH-8).
-        return _ticker_get_store("analyst", sym,
-                                 {"status": "ok", "data": row, "source": vendor})
+        return _ticker_get_store("analyst", sym, {"status": "ok", "data": row, "source": vendor})
     except HTTPException:
         raise
     except Exception as e:
@@ -3714,6 +4107,7 @@ def news_symbol(symbol: str):
         return cached
     try:
         import news_agent
+
         # Alpaca first (VPN-safe, key-gated); RSS fallback (blocked on the owner's VPN).
         # Split the `or` chain so the feed that ACTUALLY served is observable (GESH-8)
         # rather than inferred — Alpaca first (VPN-safe), RSS fallback.
@@ -3735,16 +4129,22 @@ def news_symbol(symbol: str):
                 items = []
                 feed = None
         items = items or []
-        trimmed = [{"title": it.get("title", ""), "url": it.get("url", ""),
-                    "source": it.get("source", ""), "published": it.get("published", "")}
-                   for it in items[:8]]
+        trimmed = [
+            {
+                "title": it.get("title", ""),
+                "url": it.get("url", ""),
+                "source": it.get("source", ""),
+                "published": it.get("published", ""),
+            }
+            for it in items[:8]
+        ]
         # Empty news for a REAL symbol is legitimate ("no recent news"); empty
         # news for a symbol with no market identity is an unknown ticker. Only the
         # latter is unavailable — news availability is not proof a symbol exists.
         if not trimmed and not _symbol_has_market_identity(sym):
             return _unavailable_response(sym, data=[])
         resp = {"status": "ok", "data": trimmed}
-        if feed:                      # omitted entirely when nothing served
+        if feed:  # omitted entirely when nothing served
             resp["source"] = feed
         # News-as-sentiment chip (plan T4): attach the CACHED sentiment row — a
         # zero-cost DB read, never a live LLM call, so the customer path stays
@@ -3782,6 +4182,7 @@ def signals_history(symbol: str):
         return cached
     try:
         import signal_history
+
         data = {"symbol": sym, "history": signal_history.get_history(sym, days=30)}
         return _ticker_get_store("sighist", sym, {"status": "ok", "data": data})
     except HTTPException:
@@ -3842,14 +4243,18 @@ def _check_customer_quota(email: str | None, event: str) -> None:
             return
         used = auth_users.usage_count_24h(email, event)
     except Exception:
-        logger.warning("quota metering unavailable (%s/%s) — denying spend (fail-closed)", email, event)
-        raise HTTPException(status_code=503,
-                            detail="Usage metering temporarily unavailable — please retry shortly.")
+        logger.warning(
+            "quota metering unavailable (%s/%s) — denying spend (fail-closed)", email, event
+        )
+        raise HTTPException(
+            status_code=503, detail="Usage metering temporarily unavailable — please retry shortly."
+        )
     if used >= limit:
         raise HTTPException(
             status_code=429,
             detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results "
-                   f"remain free; the limit resets on a rolling 24-hour window.")
+            f"remain free; the limit resets on a rolling 24-hour window.",
+        )
 
 
 # Short-TTL shared cache for the single-ticker AI card. The card is PUBLIC per-ticker
@@ -3889,10 +4294,12 @@ def _price_quality(sym: str, price) -> tuple[bool, str]:
     only flagged for display on the fundamentals card. Advisory; (False, "") on error."""
     try:
         import price_sanity
+
         cached = _ticker_get_cached("fundamentals", sym)
         row = (cached or {}).get("data") if cached else None
         if not row:
             import market_data
+
             row = market_data.rh_fundamentals(sym) or {}
         return price_sanity.is_price_suspect(price, row.get("low_52"), row.get("high_52"))
     except Exception:  # noqa: BLE001 — advisory flag, never break the card
@@ -3918,8 +4325,9 @@ def _decision_sources(quote_source: str | None, *extra: str) -> list[str]:
     return feeds
 
 
-def _quality_block(pmeta: dict, suspect: bool, reason: str, *,
-                   degraded: bool = False, as_of=None) -> dict:
+def _quality_block(
+    pmeta: dict, suspect: bool, reason: str, *, degraded: bool = False, as_of=None
+) -> dict:
     """decision_quality.build() fed with REAL provenance (Codex #6).
 
     A decision is degraded when we have a concrete reason to distrust the number:
@@ -3932,13 +4340,17 @@ def _quality_block(pmeta: dict, suspect: bool, reason: str, *,
     # rh_fundamentals_52w is named only when the 52-wk cross-check actually ran.
     sources = _decision_sources(src, "rh_fundamentals_52w" if reason or suspect else "")
     block = decision_quality.build(
-        price_suspect=suspect, reason=reason,
+        price_suspect=suspect,
+        reason=reason,
         degraded=bool(degraded or substituted or not src),
-        data_sources=sources, as_of=as_of)
+        data_sources=sources,
+        as_of=as_of,
+    )
     if substituted:
         block["reasons"].append(
             "latest quote rejected as a bad tick — a prior in-band close was "
-            "substituted, so this is not the last traded price")
+            "substituted, so this is not the last traded price"
+        )
     if not src:
         block["reasons"].append("price feed unattributable — source could not be verified")
     return block
@@ -3992,7 +4404,8 @@ async def analyze_ticker_endpoint(request: Request):
                 raise HTTPException(
                     status_code=422,
                     detail=f"Price rejected as unreliable — {reason}. "
-                           "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).")
+                    "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).",
+                )
             card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
             # Warn-only default: mark the DECISION output when the grounding quote is
             # cross-source-suspect — the card was built on this price, so the user must see it.
@@ -4008,7 +4421,8 @@ async def analyze_ticker_endpoint(request: Request):
                 decision_quality.attach(
                     card,
                     _quality_block(pmeta, suspect, reason, as_of=card["generated_at"]),
-                    context=f"analyze-ticker:{sym}")
+                    context=f"analyze-ticker:{sym}",
+                )
                 # Provenance strip (feature 2): a compact, ALWAYS-present block the
                 # UI renders under every card — timestamp, model, price feed, and
                 # the suspect flag so trust signals never depend on parsing prose.
@@ -4041,6 +4455,7 @@ async def analyze_ticker_endpoint(request: Request):
 # data — which is why /api/mybook is mask-exempt (masking would redact the
 # customer's own dollars back at them).
 
+
 def _cached_close(sym: str) -> float | None:
     """_latest_close with the shared 5-min per-ticker cache in front — valuing a
     book re-reads every symbol, so repeat views must not re-fetch upstream.
@@ -4072,15 +4487,13 @@ def _customer_book_payload(positions: list[dict], equal_weight: bool = False) ->
     # valued per-symbol is 40 upstream fetches serialized by the yfinance
     # download lock — batched it's one round-trip. Anything the batch misses
     # falls through to the per-symbol path in the loop below.
-    uncached = [p["symbol"] for p in positions
-                if not price_cache.has_cached_close(p["symbol"])]
+    uncached = [p["symbol"] for p in positions if not price_cache.has_cached_close(p["symbol"])]
     if len(uncached) > 1:
         price_cache.warm_close_cache_batch(uncached)
     priced, unpriced = [], []
     for p in positions:
         price = _cached_close(p["symbol"])
-        (unpriced.append(p["symbol"]) if price is None or price <= 0
-         else priced.append((p, price)))
+        (unpriced.append(p["symbol"]) if price is None or price <= 0 else priced.append((p, price)))
     eq_each = (_EQUAL_WEIGHT_NOTIONAL / len(priced)) if (equal_weight and priced) else None
 
     # Build canonical Positions, then let portfolio_valuation do ALL the money
@@ -4093,45 +4506,67 @@ def _customer_book_payload(positions: list[dict], equal_weight: bool = False) ->
             # the dollars here are illustrative by construction and are labeled as
             # such. Cost basis and prior close are meaningless against a synthetic
             # quantity, so both stay absent and day change/P&L report unavailable.
-            canonical.append(portfolio_valuation.Position.build(
-                p["symbol"], eq_each / price, current_price=price))
+            canonical.append(
+                portfolio_valuation.Position.build(
+                    p["symbol"], eq_each / price, current_price=price
+                )
+            )
         else:
-            canonical.append(portfolio_valuation.Position.build(
-                p["symbol"], p["shares"], average_cost=p.get("avg_cost"),
-                current_price=price, prior_close=_prior_close(p["symbol"])))
+            canonical.append(
+                portfolio_valuation.Position.build(
+                    p["symbol"],
+                    p["shares"],
+                    average_cost=p.get("avg_cost"),
+                    current_price=price,
+                    prior_close=_prior_close(p["symbol"]),
+                )
+            )
 
     val = portfolio_valuation.value_positions(canonical, cash=0)
 
     holdings = []
     for pos in canonical:
         mv = pos.market_value
-        holdings.append({
-            "symbol": pos.symbol,
-            "quantity": float(pos.quantity),
-            "average_buy_price": float(pos.average_cost) if pos.average_cost else 0.0,
-            "equity": float(mv) if mv is not None else 0.0,
-            # `percent_change` is the LIFETIME return vs cost. It is None — not 0.0 —
-            # when there is no cost basis: the dashboard used to read a 0 here as a
-            # real "flat" reading and, worse, multiplied it into a "Day change".
-            "percent_change": (round(float((pos.current_price - pos.average_cost)
-                                           / pos.average_cost * 100), 2)
-                               if pos.average_cost else None),
-            "day_change_pct": (round(float((pos.current_price - pos.prior_close)
-                                           / pos.prior_close * 100), 2)
-                               if pos.prior_close else None),
-            "equity_change": (float(mv - pos.cost_basis)
-                              if (mv is not None and pos.cost_basis is not None) else None),
-            "current_price": float(pos.current_price),
-            "prior_close": float(pos.prior_close) if pos.prior_close else None,
-            "type": "stock", "pe_ratio": None, "portfolio_percentage": 0.0,
-        })
+        holdings.append(
+            {
+                "symbol": pos.symbol,
+                "quantity": float(pos.quantity),
+                "average_buy_price": float(pos.average_cost) if pos.average_cost else 0.0,
+                "equity": float(mv) if mv is not None else 0.0,
+                # `percent_change` is the LIFETIME return vs cost. It is None — not 0.0 —
+                # when there is no cost basis: the dashboard used to read a 0 here as a
+                # real "flat" reading and, worse, multiplied it into a "Day change".
+                "percent_change": (
+                    round(float((pos.current_price - pos.average_cost) / pos.average_cost * 100), 2)
+                    if pos.average_cost
+                    else None
+                ),
+                "day_change_pct": (
+                    round(float((pos.current_price - pos.prior_close) / pos.prior_close * 100), 2)
+                    if pos.prior_close
+                    else None
+                ),
+                "equity_change": (
+                    float(mv - pos.cost_basis)
+                    if (mv is not None and pos.cost_basis is not None)
+                    else None
+                ),
+                "current_price": float(pos.current_price),
+                "prior_close": float(pos.prior_close) if pos.prior_close else None,
+                "type": "stock",
+                "pe_ratio": None,
+                "portfolio_percentage": 0.0,
+            }
+        )
     total = float(val.positions_market_value)
     for h in holdings:
         h["portfolio_percentage"] = round(h["equity"] / total * 100, 1) if total else 0.0
 
     valuation = val.as_dict()
     equity_summary = {
-        "portfolio_equity": total, "cash": 0.0, "buying_power": 0.0,
+        "portfolio_equity": total,
+        "cash": 0.0,
+        "buying_power": 0.0,
         # Canonical, and None when the inputs don't support it. Callers MUST check
         # day_change_available instead of treating a missing value as zero.
         "day_change": valuation["day_change_amount"],
@@ -4142,12 +4577,18 @@ def _customer_book_payload(positions: list[dict], equal_weight: bool = False) ->
         "unrealized_pnl": valuation["unrealized_pnl"],
         "unrealized_pnl_percent": valuation["unrealized_pnl_percent"],
     }
-    if equal_weight:      # illustrative dollars — no real day change to report
+    if equal_weight:  # illustrative dollars — no real day change to report
         equity_summary["day_change"] = None
         equity_summary["day_change_pct"] = None
-    return {"as_of": _dt.now(_tz.utc).isoformat(), "equity_summary": equity_summary,
-            "holdings": holdings, "watchlist": [], "unpriced": unpriced,
-            "equal_weight": bool(equal_weight), "valuation": valuation}
+    return {
+        "as_of": _dt.now(_tz.utc).isoformat(),
+        "equity_summary": equity_summary,
+        "holdings": holdings,
+        "watchlist": [],
+        "unpriced": unpriced,
+        "equal_weight": bool(equal_weight),
+        "valuation": valuation,
+    }
 
 
 @app.get("/api/mybook")
@@ -4167,6 +4608,7 @@ def mybook_get(request: Request):
         signals: dict[str, dict] = {}
         try:
             import signal_history
+
             for s in syms:
                 hist = signal_history.get_history(s, days=1)
                 if hist:
@@ -4182,10 +4624,12 @@ def mybook_get(request: Request):
                 if k.get("symbol") in syms and k.get("action"):
                     kelly_deltas[k["symbol"]] = {
                         "action": k["action"],
-                        "delta_pp": round((k.get("optimal_pct") or 0)
-                                          - (k.get("current_pct") or 0), 1)}
+                        "delta_pp": round(
+                            (k.get("optimal_pct") or 0) - (k.get("current_pct") or 0), 1
+                        ),
+                    }
             risk_syms: set[str] = set()
-            for r in ((saved.get("analysis") or {}).get("portfolio_risks") or []):
+            for r in (saved.get("analysis") or {}).get("portfolio_risks") or []:
                 # Whole-word AND case-sensitive against the ORIGINAL text: real
                 # tickers are English words (ON, SO, ALL, NOW, IT, T), so a
                 # substring test — or even a word-boundary match on uppercased
@@ -4197,21 +4641,24 @@ def mybook_get(request: Request):
                     if re.search(rf"\b{re.escape(s)}\b", txt):
                         risk_syms.add(s)
             risky_symbols = sorted(risk_syms)
-        return {"status": "ok", "data": {
-            "positions": payload["holdings"],
-            "total_equity": payload["equity_summary"]["portfolio_equity"],
-            # Canonical valuation block — the ONLY source the UI may use for
-            # day change / P&L. It previously recomputed "Day change" in the
-            # browser from lifetime-vs-cost returns and rendered
-            # "+$271,639 (5920.4%)" on a real book (audit Q-02).
-            "valuation": payload["valuation"],
-            "unpriced": payload["unpriced"],
-            "equal_weight": ew,
-            "signals": signals,
-            "kelly_deltas": kelly_deltas,
-            "analysis_stale": stale,
-            "risky_symbols": risky_symbols,
-        }}
+        return {
+            "status": "ok",
+            "data": {
+                "positions": payload["holdings"],
+                "total_equity": payload["equity_summary"]["portfolio_equity"],
+                # Canonical valuation block — the ONLY source the UI may use for
+                # day change / P&L. It previously recomputed "Day change" in the
+                # browser from lifetime-vs-cost returns and rendered
+                # "+$271,639 (5920.4%)" on a real book (audit Q-02).
+                "valuation": payload["valuation"],
+                "unpriced": payload["unpriced"],
+                "equal_weight": ew,
+                "signals": signals,
+                "kelly_deltas": kelly_deltas,
+                "analysis_stale": stale,
+                "risky_symbols": risky_symbols,
+            },
+        }
     except Exception as e:
         raise _server_error(e)
 
@@ -4229,8 +4676,7 @@ async def mybook_set(request: Request):
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
     shares_input = (body or {}).get("shares")
-    ok = auth_users.set_position(email, sym, shares_input,
-                                 (body or {}).get("avg_cost"))
+    ok = auth_users.set_position(email, sym, shares_input, (body or {}).get("avg_cost"))
     if not ok and len(auth_users.get_positions(email)) < auth_users._MAX_POSITIONS:
         raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
     # If the user supplied a real positive share count via the form, exit privacy/equal-weight mode.
@@ -4283,9 +4729,7 @@ def _positive_env_int(name: str, default: int) -> int:
 
 _MYBOOK_WORKERS = _positive_env_int("GESH_MYBOOK_WORKERS", 2)
 _MYBOOK_QUEUE = _positive_env_int("GESH_MYBOOK_QUEUE", _MYBOOK_WORKERS * 2)
-_mybook_executor = ThreadPoolExecutor(
-    max_workers=_MYBOOK_WORKERS, thread_name_prefix="gesh-mybook"
-)
+_mybook_executor = ThreadPoolExecutor(max_workers=_MYBOOK_WORKERS, thread_name_prefix="gesh-mybook")
 _mybook_slots = threading.BoundedSemaphore(_MYBOOK_WORKERS + _MYBOOK_QUEUE)
 
 
@@ -4306,7 +4750,9 @@ def _load_mybook_job_state(user_id: str) -> tuple[dict | None, dict | None]:
     """Read durable state fail-closed without exposing database details."""
     try:
         auth_users.expire_stale_mybook_jobs(
-            _positive_env_int("GESH_MYBOOK_STALE_SECONDS", 900)  # [CLAUDE V3] runs are minutes; 15m orphan expiry
+            _positive_env_int(
+                "GESH_MYBOOK_STALE_SECONDS", 900
+            )  # [CLAUDE V3] runs are minutes; 15m orphan expiry
         )
         return (
             auth_users.get_active_mybook_job(user_id),
@@ -4335,8 +4781,12 @@ def _assert_valuation_sound(payload: dict, *, where: str) -> None:
     val = payload.get("valuation") or {}
     failures = list(val.get("issues") or [])
     if val.get("reconciles") is False or any("!=" in f for f in failures):
-        logger.error("valuation integrity failure (%s): %d issue(s), %d position(s)",
-                     where, len(failures), len(payload.get("holdings") or []))
+        logger.error(
+            "valuation integrity failure (%s): %d issue(s), %d position(s)",
+            where,
+            len(failures),
+            len(payload.get("holdings") or []),
+        )
         raise ValuationIntegrityError(
             "We could not reconcile this portfolio's value, so the analysis was "
             "stopped rather than run on inconsistent numbers. Please re-check the "
@@ -4371,8 +4821,7 @@ def _deep_analyze_for_book(
     for cap in caps:
         payload = analysis_payload
         if cap < len(holdings):
-            top = sorted(holdings, key=lambda h: h.get("equity") or 0,
-                         reverse=True)[:cap]
+            top = sorted(holdings, key=lambda h: h.get("equity") or 0, reverse=True)[:cap]
             payload = {**analysis_payload, "holdings": top}
         try:
             analysis = deep_analyze_portfolio(
@@ -4447,8 +4896,9 @@ def _run_book_engines(payload: dict) -> dict:
     }
     truncated = None
     if len(holdings) > _BOOK_ANALYSIS_MAX_HOLDINGS:
-        top = sorted(holdings, key=lambda h: h.get("equity") or 0,
-                     reverse=True)[:_BOOK_ANALYSIS_MAX_HOLDINGS]
+        top = sorted(holdings, key=lambda h: h.get("equity") or 0, reverse=True)[
+            :_BOOK_ANALYSIS_MAX_HOLDINGS
+        ]
         analysis_payload = {
             **analysis_payload,
             "holdings": top,
@@ -4479,7 +4929,9 @@ def _run_book_engines(payload: dict) -> dict:
         if ha.get("symbol"):
             ai_verdicts[ha["symbol"]] = {
                 "verdict": ha.get("verdict"),
-                "pct_diff": fair_value.canonical_pct_diff(ha.get("fair_value")),  # canonical (Codex #2)
+                "pct_diff": fair_value.canonical_pct_diff(
+                    ha.get("fair_value")
+                ),  # canonical (Codex #2)
             }
     try:
         mc = run_monte_carlo(payload["holdings"], payload["equity_summary"])
@@ -4487,18 +4939,29 @@ def _run_book_engines(payload: dict) -> dict:
         mc = {"error": f"monte carlo unavailable: {type(e).__name__}"}
     try:
         analyst = get_analyst_targets(analyzed_symbols) or {}
-        upside = {s: {"upside_pct": analyst[s].get("upside_pct")} for s in analyst
-                  if not analyst[s].get("error")}
-        kelly = run_kelly_analysis(payload["holdings"],
-                                   payload["equity_summary"]["portfolio_equity"],
-                                   upside, ai_verdicts)
+        upside = {
+            s: {"upside_pct": analyst[s].get("upside_pct")}
+            for s in analyst
+            if not analyst[s].get("error")
+        }
+        kelly = run_kelly_analysis(
+            payload["holdings"], payload["equity_summary"]["portfolio_equity"], upside, ai_verdicts
+        )
     except Exception as e:
         kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
-    return _jsonable({"analysis": analysis, "kelly": kelly, "monte_carlo": mc,
-                      "detailed_coverage": coverage,
-                      "book": {"positions": payload["holdings"],
-                               "total_equity": payload["equity_summary"]["portfolio_equity"],
-                               "unpriced": payload["unpriced"]}})
+    return _jsonable(
+        {
+            "analysis": analysis,
+            "kelly": kelly,
+            "monte_carlo": mc,
+            "detailed_coverage": coverage,
+            "book": {
+                "positions": payload["holdings"],
+                "total_equity": payload["equity_summary"]["portfolio_equity"],
+                "unpriced": payload["unpriced"],
+            },
+        }
+    )
 
 
 def _mybook_analyze_worker(
@@ -4511,13 +4974,14 @@ def _mybook_analyze_worker(
 ) -> None:
     """Run one durably identified generation in the bounded worker pool."""
     if not auth_users.mark_mybook_job_running(user_id, job_id, fp):
-        auth_users.release_usage(job_id, user_id)   # [CLAUDE V5] tenant-scoped
+        auth_users.release_usage(job_id, user_id)  # [CLAUDE V5] tenant-scoped
         return
     try:
         payload = _customer_book_payload(positions, ew)
         if not payload["holdings"]:
-            raise HTTPException(status_code=404,
-                                detail="No market data for any symbol on your book")
+            raise HTTPException(
+                status_code=404, detail="No market data for any symbol on your book"
+            )
         _assert_valuation_sound(payload, where=f"mybook job {job_id}")
         result = _run_book_engines(payload)
         # Stamp the book fingerprint this analysis was computed FOR — persisted via
@@ -4538,23 +5002,22 @@ def _mybook_analyze_worker(
 
         # finish_mybook_job compares the durable latest generation and persists the
         # analysis in the same transaction before it releases the active-job slot.
-        if not auth_users.finish_mybook_job(
-            user_id, job_id, fp, "done", result=result
-        ):
+        if not auth_users.finish_mybook_job(user_id, job_id, fp, "done", result=result):
             return
         with _mybook_lock:
             latest = auth_users.get_latest_mybook_job(user_id)
             if not latest or latest.get("job_id") != job_id:
                 return
             _mybook_cache[user_id] = (time.monotonic(), fp, result)
-            for k in [k for k, (ts, _, _) in _mybook_cache.items()
-                      if (time.monotonic() - ts) >= _MYBOOK_TTL]:
+            for k in [
+                k
+                for k, (ts, _, _) in _mybook_cache.items()
+                if (time.monotonic() - ts) >= _MYBOOK_TTL
+            ]:
                 del _mybook_cache[k]
     except BaseException as exc:
         code = f"HTTP_{exc.status_code}" if isinstance(exc, HTTPException) else type(exc).__name__
-        auth_users.finish_mybook_job(
-            user_id, job_id, fp, "failed", error_code=code
-        )
+        auth_users.finish_mybook_job(user_id, job_id, fp, "failed", error_code=code)
 
 
 @app.post("/api/mybook/analyze", dependencies=[Depends(require_customer_or_owner)])
@@ -4592,7 +5055,9 @@ async def mybook_analyze(request: Request):
         if latest.get("status") == "failed":
             auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
             if latest.get("error_code") == "HTTP_404":
-                raise HTTPException(status_code=404, detail="No market data for any symbol on your book")
+                raise HTTPException(
+                    status_code=404, detail="No market data for any symbol on your book"
+                )
             raise HTTPException(status_code=500, detail="Book analysis failed — please retry.")
         if latest.get("status") == "done" and latest.get("result") is not None:
             auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
@@ -4607,9 +5072,7 @@ async def mybook_analyze(request: Request):
     try:
         limit = _customer_quota_limit(email, "book_analysis")
         job_id = str(uuid.uuid4())
-        started = auth_users.start_mybook_job(
-            user_id, job_id, fp, "book_analysis", limit
-        )
+        started = auth_users.start_mybook_job(user_id, job_id, fp, "book_analysis", limit)
     except Exception:
         logger.warning("mybook job reservation unavailable for %s", user_id)
         raise HTTPException(
@@ -4628,9 +5091,7 @@ async def mybook_analyze(request: Request):
             content={"status": "running", "job_id": job.get("job_id")},
         )
     if not _submit_mybook_job(email, user_id, job_id, fp, positions, ew):
-        auth_users.finish_mybook_job(
-            user_id, job_id, fp, "failed", error_code="queue_full"
-        )
+        auth_users.finish_mybook_job(user_id, job_id, fp, "failed", error_code="queue_full")
         raise HTTPException(status_code=503, detail="Analysis capacity is busy — retry shortly.")
     return JSONResponse(
         status_code=202,
@@ -4693,15 +5154,21 @@ async def mybook_bulk(request: Request):
     any_sized = any(it["shares"] is not None for it in items)
     imported, skipped_cap = [], []
     for it in items:
-        shares = it["shares"] if it["shares"] is not None else 1.0   # placeholder for symbols-only
+        shares = it["shares"] if it["shares"] is not None else 1.0  # placeholder for symbols-only
         ok = auth_users.set_position(email, it["symbol"], shares, it["avg_cost"])
         (imported if ok else skipped_cap).append(it["symbol"])
     if imported:
         # Symbols-only paste → equal-weight (sizes private); any explicit size → real weights.
         auth_users.set_equal_weight(email, not any_sized)
-    return {"status": "ok", "imported": imported, "skipped_cap": skipped_cap,
-            "invalid": invalid, "equal_weight": auth_users.get_equal_weight(email),
-            "replaced": replace, "data": mybook_get(request)["data"]}
+    return {
+        "status": "ok",
+        "imported": imported,
+        "skipped_cap": skipped_cap,
+        "invalid": invalid,
+        "equal_weight": auth_users.get_equal_weight(email),
+        "replaced": replace,
+        "data": mybook_get(request)["data"],
+    }
 
 
 def _analysis_stale_for(email: str, saved: dict | None) -> bool:
@@ -4775,8 +5242,9 @@ async def mybook_deploy_cash(request: Request):
     try:
         saved = auth_users.get_latest_book_analysis(email)
         if not saved:
-            raise HTTPException(status_code=404,
-                                detail="No analysis yet — run Analyze My Portfolio first")
+            raise HTTPException(
+                status_code=404, detail="No analysis yet — run Analyze My Portfolio first"
+            )
         stale = _analysis_stale_for(email, saved)
         # Normalize once: legacy persisted rows can carry current_pct/optimal_pct
         # as None or omit them entirely — `or 0` covers both (dict.get defaults
@@ -4799,14 +5267,26 @@ async def mybook_deploy_cash(request: Request):
             shares = int(dollars // price)
             if shares < 1:
                 continue
-            allocations.append({"symbol": sym,
-                                "weight_pct": round(gaps[sym] / total_gap * 100, 1),
-                                "dollars": dollars, "shares": shares, "price": price,
-                                "rationale": f"Kelly gap {k['current_pct']:.1f}% → {k['optimal_pct']:.1f}%"})
+            allocations.append(
+                {
+                    "symbol": sym,
+                    "weight_pct": round(gaps[sym] / total_gap * 100, 1),
+                    "dollars": dollars,
+                    "shares": shares,
+                    "price": price,
+                    "rationale": f"Kelly gap {k['current_pct']:.1f}% → {k['optimal_pct']:.1f}%",
+                }
+            )
             spent += shares * price
-        return {"status": "ok", "data": {"cash": cash, "stale": stale,
-                                         "allocations": allocations,
-                                         "leftover": round(cash - spent, 2)}}
+        return {
+            "status": "ok",
+            "data": {
+                "cash": cash,
+                "stale": stale,
+                "allocations": allocations,
+                "leftover": round(cash - spent, 2),
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -4825,18 +5305,24 @@ def mybook_summary(request: Request):
     ew = auth_users.get_equal_weight(email)
     # Equal-weight books never expose real dollars (sizes are private by design) —
     # the hero shows position count prominently instead (see buildHomeHero).
-    total = 0.0 if ew else sum(
-        p["shares"] * (_cached_close(p["symbol"]) or 0) for p in positions)
+    total = 0.0 if ew else sum(p["shares"] * (_cached_close(p["symbol"]) or 0) for p in positions)
     saved = auth_users.get_latest_book_analysis(email)
     stale = _analysis_stale_for(email, saved)
     top_changes: list[dict] = []
     try:
         import signal_history
+
         syms = sorted({p["symbol"] for p in positions} | set(watch))
         flips = signal_history.detect_confirmed_flips(syms, persistence_days=2)
-        top_changes = [{"symbol": f["symbol"], "prior_verdict": f["prior_verdict"],
-                        "new_verdict": f["new_verdict"], "date": f["confirmed_since"]}
-                       for f in flips[:3]]
+        top_changes = [
+            {
+                "symbol": f["symbol"],
+                "prior_verdict": f["prior_verdict"],
+                "new_verdict": f["new_verdict"],
+                "date": f["confirmed_since"],
+            }
+            for f in flips[:3]
+        ]
     except Exception:  # noqa: BLE001 — hero must render without signal history
         pass
     if not positions:
@@ -4847,13 +5333,19 @@ def mybook_summary(request: Request):
         action = {"label": "Re-run analysis — your book changed", "target": "analyze"}
     else:
         action = {"label": "View your report", "target": "report"}
-    return {"status": "ok", "data": {
-        "total_equity": round(total, 2), "positions_count": len(positions),
-        "watch_count": len(watch),
-        "last_verdict": ((saved or {}).get("analysis") or {}).get("portfolio_verdict"),
-        "analysis_stale": stale,
-        "analyzed_at": (saved or {}).get("_saved_at"),
-        "top_changes": top_changes, "next_action": action}}
+    return {
+        "status": "ok",
+        "data": {
+            "total_equity": round(total, 2),
+            "positions_count": len(positions),
+            "watch_count": len(watch),
+            "last_verdict": ((saved or {}).get("analysis") or {}).get("portfolio_verdict"),
+            "analysis_stale": stale,
+            "analyzed_at": (saved or {}).get("_saved_at"),
+            "top_changes": top_changes,
+            "next_action": action,
+        },
+    }
 
 
 def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
@@ -4866,7 +5358,7 @@ def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
     cut = t.find(". ", max_lead)
     if cut == -1:
         return t, ""
-    return t[:cut + 1], t[cut + 2:]
+    return t[: cut + 1], t[cut + 2 :]
 
 
 def _render_book_report(email: str) -> str:
@@ -4874,6 +5366,7 @@ def _render_book_report(email: str) -> str:
     persisted analysis. Server-side rendered with every dynamic string escaped —
     this page bypasses the dashboard's audited JS builders."""
     import html as _h
+
     ew = auth_users.get_equal_weight(email)
     positions = auth_users.get_positions(email)
     book = _customer_book_payload(positions, equal_weight=ew)
@@ -4889,8 +5382,10 @@ def _render_book_report(email: str) -> str:
     stale = _analysis_stale_for(email, saved)
 
     def row(label, val):
-        return (f"<tr><td style='padding:6px 12px;color:#555'>{e(str(label))}</td>"
-                f"<td style='padding:6px 12px;font-weight:600'>{e(str(val))}</td></tr>")
+        return (
+            f"<tr><td style='padding:6px 12px;color:#555'>{e(str(label))}</td>"
+            f"<td style='padding:6px 12px;font-weight:600'>{e(str(val))}</td></tr>"
+        )
 
     pos_rows = "".join(
         f"<tr><td style='padding:6px 12px;font-weight:600'>{e(h['symbol'])}</td>"
@@ -4898,12 +5393,18 @@ def _render_book_report(email: str) -> str:
         f"<td style='padding:6px 12px;text-align:right'>${h['current_price']:,.2f}</td>"
         f"<td style='padding:6px 12px;text-align:right'>{('—' if ew else '$' + format(h['equity'], ',.2f'))}</td>"
         f"<td style='padding:6px 12px;text-align:right'>{h['portfolio_percentage']:.1f}%</td></tr>"
-        for h in book["holdings"])
+        for h in book["holdings"]
+    )
     total = book["equity_summary"]["portfolio_equity"]
-    total_html = ((f"<b>Equal-weight basis</b> — position sizes are private, so each of the "
-                   f"{len(book['holdings'])} priced names is weighted equally (1/N). "
-                   f"Dollar values are illustrative, not real holdings.")
-                  if ew else f"<b>Total: ${total:,.2f}</b>")
+    total_html = (
+        (
+            f"<b>Equal-weight basis</b> — position sizes are private, so each of the "
+            f"{len(book['holdings'])} priced names is weighted equally (1/N). "
+            f"Dollar values are illustrative, not real holdings."
+        )
+        if ew
+        else f"<b>Total: ${total:,.2f}</b>"
+    )
 
     stale_banner = ""
     if stale and _ready_analysis_pending(email):
@@ -4917,7 +5418,8 @@ def _render_book_report(email: str) -> str:
             "listed above. Open <b>Analyze My Portfolio</b> on the dashboard to load it "
             "instantly (it is already computed — no new AI usage), then reload this report. "
             "Everything below is the PREVIOUS analysis"
-            f" ({e(str(saved.get('_saved_at', ''))[:16])} UTC).</div>")
+            f" ({e(str(saved.get('_saved_at', ''))[:16])} UTC).</div>"
+        )
     elif stale:
         stale_banner = (
             "<div style='background:#fff3cd;border:1px solid #d39e00;border-radius:6px;"
@@ -4926,85 +5428,95 @@ def _render_book_report(email: str) -> str:
             f" ({e(str(saved.get('_saved_at', ''))[:16])} UTC). The scores, Monte Carlo, "
             "Kelly sizing and per-holding research below reflect the OLD portfolio, not the "
             "positions listed above. Re-run <b>Analyze My Portfolio</b> on the dashboard, "
-            "then reload this report.</div>")
+            "then reload this report.</div>"
+        )
 
     body = ""
     if saved:
         d = saved.get("analysis") or {}
         mc, ky = saved.get("monte_carlo") or {}, saved.get("kelly") or {}
-        risks = "".join(f"<li>{e(r.get('text', ''))} <em>({e(r.get('severity', ''))})</em></li>"
-                        for r in (d.get("portfolio_risks") or []))
+        risks = "".join(
+            f"<li>{e(r.get('text', ''))} <em>({e(r.get('severity', ''))})</em></li>"
+            for r in (d.get("portfolio_risks") or [])
+        )
         cards = "".join(
             f"<h3 style='margin:18px 0 4px'>{e(h.get('symbol', ''))} — {e(h.get('verdict', ''))}</h3>"
             f"<p style='margin:4px 0;color:#444'>{e(h.get('snowflake_summary', ''))}</p>"
             f"<p style='margin:4px 0;color:#666;font-size:13px'>3M: {e((h.get('prediction') or {}).get('3m', ''))} · "
             f"12M: {e((h.get('prediction') or {}).get('12m', ''))}</p>"
-            for h in (d.get("holdings_analysis") or []))
+            for h in (d.get("holdings_analysis") or [])
+        )
         # `or 0` (not just a .get default) — a persisted row can carry an
         # explicit None, which the :.1f format would crash on.
         kelly_rows = "".join(
-            row(f"{k.get('symbol', '')} · {k.get('action', '')}",
-                f"{(k.get('current_pct') or 0):.1f}% → {(k.get('optimal_pct') or 0):.1f}%")
-            for k in (ky.get("holdings") or [])[:15])
+            row(
+                f"{k.get('symbol', '')} · {k.get('action', '')}",
+                f"{(k.get('current_pct') or 0):.1f}% → {(k.get('optimal_pct') or 0):.1f}%",
+            )
+            for k in (ky.get("holdings") or [])[:15]
+        )
         sectors = "".join(
             f"<tr><td style='padding:6px 12px'>{e(s.get('sector', ''))}</td>"
             f"<td style='padding:6px 12px;text-align:right;font-weight:600'>{float(s.get('allocation_pct', 0) or 0):.1f}%</td>"
             f"<td style='padding:6px 12px;color:#555'>{e(s.get('assessment', ''))}</td></tr>"
-            for s in (d.get("sector_breakdown") or []))
+            for s in (d.get("sector_breakdown") or [])
+        )
         sector_block = (f"<h2>Sector breakdown</h2><table>{sectors}</table>") if sectors else ""
         # Conclusions first, mechanics folded (plan T2): each engine section LEADS
         # with one plain-language line; the raw tables stay complete but move
         # behind <details>. Nothing is deleted — fold, don't remove.
-        adjustments = [k for k in (ky.get("holdings") or [])
-                       if k.get("action") in ("ADD", "TRIM")]
+        adjustments = [k for k in (ky.get("holdings") or []) if k.get("action") in ("ADD", "TRIM")]
         # "largest" = biggest |optimal - current| gap. The holdings list arrives
         # sorted by optimal_pct DESC, so taking the first row would headline a
         # 0.1pp trim over a 14pp add (PR #79 review, finding 1).
-        top_adj = max(adjustments,
-                      key=lambda k: abs((k.get("optimal_pct") or 0)
-                                        - (k.get("current_pct") or 0)),
-                      default=None)
+        top_adj = max(
+            adjustments,
+            key=lambda k: abs((k.get("optimal_pct") or 0) - (k.get("current_pct") or 0)),
+            default=None,
+        )
         n_adj = len(adjustments)
-        kelly_conclusion = (
-            f"{n_adj} sizing adjustment{'s' if n_adj != 1 else ''} suggested"
-            + (f" — largest: {e(str(top_adj.get('symbol', '')))} "
-               f"{e(str(top_adj.get('action', '')))}." if top_adj else "."))
+        kelly_conclusion = f"{n_adj} sizing adjustment{'s' if n_adj != 1 else ''} suggested" + (
+            f" — largest: {e(str(top_adj.get('symbol', '')))} {e(str(top_adj.get('action', '')))}."
+            if top_adj
+            else "."
+        )
         mc_var = mc.get("var_95", 0) or 0
         # The headline pairs the SAVED analysis's VaR dollars with TODAY'S live
         # book total — when the analysis is stale that mix understates risk, so
         # the caveat rides on the conclusion line itself (the banner above is
         # skippable; the headline is not — finding 3).
-        mc_stale_note = (" (from your last analysis — re-run for current positions)"
-                         if stale else "")
+        mc_stale_note = " (from your last analysis — re-run for current positions)" if stale else ""
         mc_conclusion = (
             f"Worst plausible {e(str(mc.get('horizon_days') or 21))}-day stretch "
             f"(95% confidence): &minus;${mc_var:,.0f} on your ${total:,.0f} book."
-            f"{mc_stale_note}")
+            f"{mc_stale_note}"
+        )
         # Structured-only AI output (plan T3): one bold takeaway sentence, the
         # rest of the model prose folded — never a free-standing wall of text.
         ctx_lead, ctx_rest = _lead_and_fold(str(d.get("market_context", "")))
-        ctx_html = (
-            f"<p style='color:#444;line-height:1.6'><b>{e(ctx_lead)}</b></p>"
-            + (f"<details><summary>Full context</summary>"
-               f"<p style='color:#444;line-height:1.6'>{e(ctx_rest)}</p></details>"
-               if ctx_rest else ""))
+        ctx_html = f"<p style='color:#444;line-height:1.6'><b>{e(ctx_lead)}</b></p>" + (
+            f"<details><summary>Full context</summary>"
+            f"<p style='color:#444;line-height:1.6'>{e(ctx_rest)}</p></details>"
+            if ctx_rest
+            else ""
+        )
         body = f"""
-  <h2>AI Verdict: {e(str(d.get('portfolio_verdict', '—')))}</h2>
-  <table>{row('Portfolio score', d.get('portfolio_score', '—'))}{row('Risk score', d.get('risk_score', '—'))}
-  {row('Diversification', d.get('diversification_score', '—'))}{row('Portfolio type', d.get('portfolio_type', '—'))}</table>
+  <h2>AI Verdict: {e(str(d.get("portfolio_verdict", "—")))}</h2>
+  <table>{row("Portfolio score", d.get("portfolio_score", "—"))}{row("Risk score", d.get("risk_score", "—"))}
+  {row("Diversification", d.get("diversification_score", "—"))}{row("Portfolio type", d.get("portfolio_type", "—"))}</table>
   {ctx_html}
-  {('<h2>Key risks</h2><ul>' + risks + '</ul>') if risks else ''}
+  {("<h2>Key risks</h2><ul>" + risks + "</ul>") if risks else ""}
   {sector_block}
   <h2>Risk check</h2><p style='color:#111;line-height:1.6'><b>{mc_conclusion}</b></p>
-  <details><summary>How this was computed — Monte Carlo ({e(str(mc.get('horizon_days') or 21))} trading days)</summary>
-  <table>{row('Median outcome', '$' + format(mc.get('median', 0) or 0, ',.0f'))}
-  {row('P5 – P95', '$' + format(mc.get('p5', 0) or 0, ',.0f') + ' – $' + format(mc.get('p95', 0) or 0, ',.0f'))}
-  {row('VaR 95%', '$' + format(mc_var, ',.0f'))}</table></details>
+  <details><summary>How this was computed — Monte Carlo ({e(str(mc.get("horizon_days") or 21))} trading days)</summary>
+  <table>{row("Median outcome", "$" + format(mc.get("median", 0) or 0, ",.0f"))}
+  {row("P5 – P95", "$" + format(mc.get("p5", 0) or 0, ",.0f") + " – $" + format(mc.get("p95", 0) or 0, ",.0f"))}
+  {row("VaR 95%", "$" + format(mc_var, ",.0f"))}</table></details>
   <h2>Position sizing</h2><p style='color:#111;line-height:1.6'><b>{kelly_conclusion}</b></p>
   <details><summary>How this was computed — Kelly sizing</summary>
-  <table>{kelly_rows or row('Status', 'unavailable')}</table></details>
+  <table>{kelly_rows or row("Status", "unavailable")}</table></details>
   <h2>Per-holding research</h2>{cards}
-  <p style='color:#888;font-size:12px'>Analysis generated {e(str(saved.get('_saved_at', ''))[:16])} UTC.</p>"""
+  <p style='color:#888;font-size:12px'>Analysis generated {e(str(saved.get("_saved_at", ""))[:16])} UTC.</p>"""
     else:
         body = "<p><em>No analysis yet — run <b>Analyze My Portfolio</b> on the dashboard, then reload this report.</em></p>"
 
@@ -5017,12 +5529,12 @@ details{{margin:8px 0;page-break-inside:avoid}}details summary{{cursor:pointer;c
 <div style='border-bottom:3px solid #111;padding-bottom:10px;display:flex;justify-content:space-between;align-items:baseline'>
 <h1>GESH <span style='font-weight:300'>Portfolio Report</span></h1>
 <span style='color:#666;font-size:13px'>AI portfolio intelligence · 11-node consensus · verified signals</span></div>
-<p style='color:#666'>Prepared for {e(email)} · {_dt.now(_tz.utc).strftime('%Y-%m-%d %H:%M')} UTC</p>
+<p style='color:#666'>Prepared for {e(email)} · {_dt.now(_tz.utc).strftime("%Y-%m-%d %H:%M")} UTC</p>
 <h2>Positions</h2>
 <table><tr style='border-bottom:1px solid #ccc'><th style='padding:6px 12px;text-align:left'>Symbol</th>
 <th style='padding:6px 12px'>Shares</th><th style='padding:6px 12px'>Price</th>
 <th style='padding:6px 12px'>Value</th><th style='padding:6px 12px'>Weight</th></tr>{pos_rows}</table>
-<p>{total_html}{(' · No price data: ' + e(', '.join(book['unpriced']))) if book['unpriced'] else ''}</p>
+<p>{total_html}{(" · No price data: " + e(", ".join(book["unpriced"]))) if book["unpriced"] else ""}</p>
 {stale_banner}
 {body}
 <hr><p style='color:#888;font-size:12px'>Informational and educational only — not financial advice.
@@ -5057,6 +5569,7 @@ def usage_page(request: Request, days: int = 30):
     In _OWNER_ONLY_PATHS (customer sessions 403 at the middleware) plus a
     defense-in-depth owner check here. Server-rendered, everything escaped."""
     import html as _h
+
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -5073,7 +5586,8 @@ def usage_page(request: Request, days: int = 30):
             f"<td style='padding:6px 12px'>{e(r['event'])}</td>"
             f"<td style='padding:6px 12px;text-align:right;font-weight:600'>{r['count']}</td>"
             f"<td style='padding:6px 12px;color:#666'>{e(str(r['last_at'])[:16])}</td></tr>"
-            for r in rows)
+            for r in rows
+        )
         live_llm = sum(r["count"] for r in rows if r["event"] in ("ticker_card", "book_analysis"))
         # Provider-side spend/telemetry (owner-only; never on customer routes).
         import llm_gateway
@@ -5081,10 +5595,15 @@ def usage_page(request: Request, days: int = 30):
         try:
             llm_provider = llm_gateway.daily_usage_summary(days=days)
         except Exception:
-            llm_provider = {"attempt_count": 0, "total_estimated_spend_usd": 0.0, "error": "unavailable"}
+            llm_provider = {
+                "attempt_count": 0,
+                "total_estimated_spend_usd": 0.0,
+                "error": "unavailable",
+            }
         # Job Health — launchd jobs print their JSON summary only to /tmp logs, so a
         # failing/misconfigured job is invisible without this (Grok review 2026-07-17).
         import job_health
+
         job_runs = job_health.latest_runs()
         job_rows = []
         for label in ("com.gesh.signal-alerts", "com.gesh.weekly-digest"):
@@ -5105,7 +5624,8 @@ def usage_page(request: Request, days: int = 30):
                 f"<tr><td style='padding:6px 12px;font-weight:600'>{e(label)}</td>"
                 f"<td style='padding:6px 12px;color:{color};font-weight:700'>{e(status)}</td>"
                 f"<td style='padding:6px 12px;color:#666'>{e(str(ran_at)[:16]) if ran_at else 'never'}</td>"
-                f"<td style='padding:6px 12px;font-family:monospace;font-size:12px'>{summary_html}</td></tr>")
+                f"<td style='padding:6px 12px;font-family:monospace;font-size:12px'>{summary_html}</td></tr>"
+            )
         provider_html = e(_json.dumps(llm_provider), quote=False)
         return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>GESH — Usage</title><style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:900px;
@@ -5117,7 +5637,7 @@ tr:nth-child(even){{background:#f6f6f6}}</style></head><body>
 window <a href='/usage?days=7'>7d</a> · <a href='/usage?days=30'>30d</a> · <a href='/usage?days=90'>90d</a></p>
 <h2>Job Health</h2>
 <table><tr><th>JOB</th><th>STATUS</th><th>LAST RUN (UTC)</th><th>LAST SUMMARY</th></tr>
-{''.join(job_rows)}</table>
+{"".join(job_rows)}</table>
 <h2>LLM Provider</h2>
 <pre style='background:#f6f6f6;padding:12px;overflow:auto;font-size:12px'>{provider_html}</pre>
 <h2>Usage</h2>
@@ -5168,17 +5688,19 @@ def usage_summary_endpoint(request: Request, days: int = 30):
 #
 # Legacy endpoints return 410 Gone with a redirect message.
 
+
 @app.get("/api/ollama/status")
 @app.post("/api/ollama/analyze", dependencies=[Depends(require_api_key)])
 @app.post("/api/ollama/second-opinion/{symbol}", dependencies=[Depends(require_api_key)])
 async def ollama_removed_endpoint(symbol: str = ""):
     raise HTTPException(
         status_code=410,
-        detail="Ollama endpoints removed. Use /api/gemini/second-opinion/{symbol} instead."
+        detail="Ollama endpoints removed. Use /api/gemini/second-opinion/{symbol} instead.",
     )
 
 
 # ─── Gemini AI Endpoints ─────────────────────────────────────────────────────
+
 
 @app.get("/api/gemini/status")
 def gemini_status_endpoint():
@@ -5200,8 +5722,8 @@ def gemini_analyze_endpoint():
     holdings, equity_summary = [], {}
     data_error: str | None = None
     try:
-        payload        = _resolved_payload()
-        holdings       = payload.get("holdings", [])
+        payload = _resolved_payload()
+        holdings = payload.get("holdings", [])
         equity_summary = payload.get("equity_summary", {})
     except Exception as de:
         data_error = str(de)
@@ -5216,14 +5738,11 @@ def gemini_analyze_endpoint():
         result["note"] = "Portfolio data unavailable — general commentary only"
     else:
         total = equity_summary.get("portfolio_equity", 0)
-        top   = sorted(holdings, key=lambda h: h.get("equity", 0), reverse=True)[:6]
-        summary = (
-            f"Total equity: ${total:,.0f}\n"
-            + "\n".join(
-                f"  {h['symbol']}: {h.get('portfolio_percentage', 0):.1f}% alloc, "
-                f"{h.get('percent_change', 0):+.1f}% today"
-                for h in top
-            )
+        top = sorted(holdings, key=lambda h: h.get("equity", 0), reverse=True)[:6]
+        summary = f"Total equity: ${total:,.0f}\n" + "\n".join(
+            f"  {h['symbol']}: {h.get('portfolio_percentage', 0):.1f}% alloc, "
+            f"{h.get('percent_change', 0):+.1f}% today"
+            for h in top
         )
         result = gemini_quick_analysis(summary)
 
@@ -5243,9 +5762,13 @@ async def gemini_second_opinion_endpoint(symbol: str, request: Request):
             body = await request.json()
         except Exception:
             body = {}
-        analysis = "".join(c for c in str(body.get("analysis", f"Symbol: {symbol}")) if c.isprintable() or c in "\n\t")[:2000]
-        verdict  = "".join(c for c in str(body.get("verdict", "")) if c.isprintable())[:64]
-        result   = gemini_second_opinion(symbol.upper(), analysis, verdict)
+        analysis = "".join(
+            c
+            for c in str(body.get("analysis", f"Symbol: {symbol}"))
+            if c.isprintable() or c in "\n\t"
+        )[:2000]
+        verdict = "".join(c for c in str(body.get("verdict", "")) if c.isprintable())[:64]
+        result = gemini_second_opinion(symbol.upper(), analysis, verdict)
         return {"status": "ok", "data": _sanitize(result)}
     except Exception as e:
         raise _server_error(e)
@@ -5265,14 +5788,14 @@ async def gemini_market_commentary_endpoint(request: Request):
             body = {}
 
         regime_summary = ""
-        macro_context  = ""
+        macro_context = ""
 
         if body.get("include_regime", True):
             try:
-                regime_data    = detect_regimes(DEFAULT_WATCHLIST)
+                regime_data = detect_regimes(DEFAULT_WATCHLIST)
                 regime_summary = regime_data.get("regime_summary", "")
-                macro_ctx      = regime_data.get("macro", {})
-                macro_context  = macro_ctx.get("macro_summary", "")
+                macro_ctx = regime_data.get("macro", {})
+                macro_context = macro_ctx.get("macro_summary", "")
             except Exception:
                 pass
 
@@ -5286,6 +5809,7 @@ async def gemini_market_commentary_endpoint(request: Request):
 
 
 # ─── Allocation Config ────────────────────────────────────────────────────────
+
 
 @app.get("/api/config", dependencies=[Depends(require_api_key)])
 def get_config():
@@ -5319,6 +5843,7 @@ async def set_config(request: Request):
 
 # ─── Consolidation Zone + Sector Filter ──────────────────────────────────────
 
+
 @app.get("/api/scanner/consolidation/{symbol}")
 def consolidation_zone_single(symbol: str, interval: str = "5m", period: str = "1d"):
     """Detect consolidation zone for a single symbol."""
@@ -5341,10 +5866,12 @@ async def consolidation_zone_batch(request: Request):
         symbols = body.get("symbols", [])
         if not symbols:
             payload = _resolved_payload()
-            symbols = list({h["symbol"] for h in payload["holdings"]} |
-                           {w["symbol"] for w in payload["watchlist"]})
+            symbols = list(
+                {h["symbol"] for h in payload["holdings"]}
+                | {w["symbol"] for w in payload["watchlist"]}
+            )
         _interval = body.get("interval", "5m")
-        _period   = body.get("period", "1d")
+        _period = body.get("period", "1d")
         _validate_timeframe(_interval, _period)
         result = scan_consolidations(
             symbols,
@@ -5378,8 +5905,10 @@ async def sector_hot_batch(request: Request):
         symbols = body.get("symbols", [])
         if not symbols:
             payload = _resolved_payload()
-            symbols = list({h["symbol"] for h in payload["holdings"]} |
-                           {w["symbol"] for w in payload["watchlist"]})
+            symbols = list(
+                {h["symbol"] for h in payload["holdings"]}
+                | {w["symbol"] for w in payload["watchlist"]}
+            )
         result = batch_sector_check(symbols)
         return {"status": "ok", "data": result}
     except Exception as e:
@@ -5388,8 +5917,14 @@ async def sector_hot_batch(request: Request):
 
 # ─── Trade Log ────────────────────────────────────────────────────────────────
 
+
 @app.get("/api/trades")
-def get_trades(symbol: str = None, limit: int = Query(50, ge=1, le=500), open_only: bool = False, paper: bool = False):
+def get_trades(
+    symbol: str = None,
+    limit: int = Query(50, ge=1, le=500),
+    open_only: bool = False,
+    paper: bool = False,
+):
     """Return trade history. ?paper=true for paper trades."""
     try:
         rows = get_trade_history(symbol=symbol, limit=limit, open_only=open_only, is_paper=paper)
@@ -5454,6 +5989,7 @@ async def close_trade_endpoint(trade_id: int, request: Request):
 
 # ─── Paper Trading ────────────────────────────────────────────────────────────
 
+
 @app.post("/api/paper/run", dependencies=[Depends(require_api_key)])
 async def paper_run_endpoint(request: Request):
     """
@@ -5497,6 +6033,7 @@ def paper_summary_endpoint(days: int = 7):
 
 
 # ─── Trading Execution Layer (Risk Gate + Paper Execution) ───────────────────
+
 
 @app.post("/api/trading/dry-run", dependencies=[Depends(require_api_key)])
 async def trading_dry_run(request: Request):
@@ -5573,21 +6110,24 @@ async def trading_consensus_order(request: Request):
         consensus_row = _resolve_consensus_row(symbol, payload, use_cached=use_cached)
 
         from trading.config import load_risk_config
+
         cfg = load_risk_config()
         intent = from_consensus(consensus_row, max_position_pct=cfg.max_position_pct)
 
         verdict = risk_gate_evaluate(intent, payload)
         result = execution_place(intent, verdict, payload)
 
-        return _sanitize({
-            "status":    "ok",
-            "symbol":    symbol,
-            "cached":    use_cached and _cached_consensus_row(symbol) is not None,
-            "consensus": consensus_row,
-            "intent":    intent.to_dict(),
-            "verdict":   verdict.to_dict(),
-            "order":     result.to_dict(),
-        })
+        return _sanitize(
+            {
+                "status": "ok",
+                "symbol": symbol,
+                "cached": use_cached and _cached_consensus_row(symbol) is not None,
+                "consensus": consensus_row,
+                "intent": intent.to_dict(),
+                "verdict": verdict.to_dict(),
+                "order": result.to_dict(),
+            }
+        )
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
     except Exception as e:
@@ -5600,14 +6140,17 @@ def trading_gate_status():
     try:
         from trading.config import load_risk_config
         from trading.state import count_orders_today
+
         cfg = load_risk_config()
         used = count_orders_today()
-        return _sanitize({
-            "status": "ok",
-            "orders_today": used,
-            "max_orders_per_day": cfg.max_orders_per_day,
-            "cap_reached": used >= cfg.max_orders_per_day,
-        })
+        return _sanitize(
+            {
+                "status": "ok",
+                "orders_today": used,
+                "max_orders_per_day": cfg.max_orders_per_day,
+                "cap_reached": used >= cfg.max_orders_per_day,
+            }
+        )
     except Exception as e:
         raise _server_error(e)
 
@@ -5634,6 +6177,7 @@ async def trading_simulate_session(request: Request):
             holdings = [h for h in holdings if (h.get("symbol") or "").upper() in only]
 
         from trading.config import load_risk_config
+
         cfg = load_risk_config()
         results: list[dict] = []
         cap_hit = False
@@ -5644,11 +6188,13 @@ async def trading_simulate_session(request: Request):
             if not sym:
                 continue
             if cap_hit:
-                results.append({
-                    "symbol": sym,
-                    "skipped": True,
-                    "reason": cap_reason or "Daily order cap already reached",
-                })
+                results.append(
+                    {
+                        "symbol": sym,
+                        "skipped": True,
+                        "reason": cap_reason or "Daily order cap already reached",
+                    }
+                )
                 continue
             try:
                 consensus_row = _resolve_consensus_row(sym, payload, use_cached=use_cached)
@@ -5656,14 +6202,16 @@ async def trading_simulate_session(request: Request):
                 verdict = risk_gate_evaluate(intent, payload)
                 result = execution_place(intent, verdict, payload)
                 vd = verdict.to_dict()
-                results.append({
-                    "symbol": sym,
-                    "cached": use_cached and _cached_consensus_row(sym) is not None,
-                    "consensus_verdict": consensus_row.get("verdict"),
-                    "intent": intent.to_dict(),
-                    "verdict": vd,
-                    "order": result.to_dict(),
-                })
+                results.append(
+                    {
+                        "symbol": sym,
+                        "cached": use_cached and _cached_consensus_row(sym) is not None,
+                        "consensus_verdict": consensus_row.get("verdict"),
+                        "intent": intent.to_dict(),
+                        "verdict": vd,
+                        "order": result.to_dict(),
+                    }
+                )
                 reason = vd.get("reason") or ""
                 if not vd.get("approved") and "Daily order cap" in reason:
                     cap_hit = True
@@ -5671,14 +6219,16 @@ async def trading_simulate_session(request: Request):
             except Exception as exc:
                 results.append({"symbol": sym, "error": str(exc)})
 
-        return _sanitize({
-            "status": "ok",
-            "count": len(results),
-            "cap_reached": cap_hit,
-            "cap_reason": cap_reason or None,
-            "use_cached": use_cached,
-            "results": results,
-        })
+        return _sanitize(
+            {
+                "status": "ok",
+                "count": len(results),
+                "cap_reached": cap_hit,
+                "cap_reason": cap_reason or None,
+                "use_cached": use_cached,
+                "results": results,
+            }
+        )
     except Exception as e:
         raise _server_error(e)
 
@@ -5704,30 +6254,36 @@ async def trading_deep_debate(symbol: str, request: Request):
         consensus = _resolve_consensus_row(symbol, payload, use_cached=use_cached)
 
         from fundamentals_openbb import get_fundamentals_openbb
+
         fundamentals = get_fundamentals_openbb(symbol) or {}
 
         from bull_bear_debate import run_debate
+
         result = run_debate(symbol, consensus, fundamentals)
 
-        return _sanitize({
-            "status":            "ok",
-            "symbol":            symbol,
-            "cached_consensus":  use_cached and _cached_consensus_row(symbol) is not None,
-            "debate":            result,
-            "consensus_verdict": consensus.get("verdict"),
-            "consensus_score":   consensus.get("raw_score"),
-        })
+        return _sanitize(
+            {
+                "status": "ok",
+                "symbol": symbol,
+                "cached_consensus": use_cached and _cached_consensus_row(symbol) is not None,
+                "debate": result,
+                "consensus_verdict": consensus.get("verdict"),
+                "consensus_score": consensus.get("raw_score"),
+            }
+        )
     except Exception as e:
         raise _server_error(e)
 
 
 # ─── Phase 1-3 Enhancement Endpoints ─────────────────────────────────────────
 
+
 @app.get("/api/tax/harvest")
 async def api_tax_harvest(request: Request = None):  # noqa: B008
     """Tax-loss harvesting candidates + wash-sale window status."""
     try:
         from tax_harvester import get_harvest_summary
+
         payload = _context_payload(request)
         positions = {h["symbol"]: h for h in payload.get("holdings", [])}
         cost_basis = {h["symbol"]: h.get("average_buy_price") for h in payload.get("holdings", [])}
@@ -5742,9 +6298,10 @@ async def api_benchmarks(period: str = "1mo", request: Request = None):  # noqa:
     """Thematic alpha benchmarking vs sector ETFs."""
     try:
         from benchmarks import batch_alpha
+
         payload = _context_payload(request)
         tickers = [h["symbol"] for h in payload.get("holdings", [])]
-        result  = batch_alpha(tickers, period)
+        result = batch_alpha(tickers, period)
         return _sanitize({"status": "ok", "period": period, "alpha_table": result})
     except Exception as e:
         raise _server_error(e)
@@ -5754,9 +6311,10 @@ async def api_benchmarks(period: str = "1mo", request: Request = None):  # noqa:
 async def api_explainability(symbol: str):
     """Plain-English explanation of consensus verdict for a symbol."""
     try:
-        from explainability import build_transparency_report
         from consensus import run_consensus_holding
-        consensus  = run_consensus_holding(symbol.upper())
+        from explainability import build_transparency_report
+
+        consensus = run_consensus_holding(symbol.upper())
         regime_str = consensus.get("regime", "NEUTRAL")
         report = build_transparency_report(symbol.upper(), consensus, regime=regime_str)
         return _sanitize({"status": "ok", "symbol": symbol.upper(), **report})
@@ -5769,9 +6327,10 @@ async def api_crypto_correlation(request: Request = None):  # noqa: B008
     """Crypto-equity correlation risk summary for portfolio."""
     try:
         from crypto_correlation import crypto_risk_summary
-        payload  = _context_payload(request)
+
+        payload = _context_payload(request)
         holdings = payload.get("holdings", [])
-        result   = crypto_risk_summary(holdings)
+        result = crypto_risk_summary(holdings)
         return _sanitize({"status": "ok", **result})
     except Exception as e:
         raise _server_error(e)
@@ -5782,9 +6341,10 @@ async def api_yield_landscape(request: Request = None):  # noqa: B008
     """DeFi & cash yield landscape for idle cash (informational)."""
     try:
         from defi_yield import get_yield_landscape
-        payload  = _context_payload(request)
+
+        payload = _context_payload(request)
         cash_usd = float(payload.get("equity_summary", {}).get("cash", 0) or 0)
-        result   = get_yield_landscape(cash_usd)
+        result = get_yield_landscape(cash_usd)
         return _sanitize({"status": "ok", **result})
     except Exception as e:
         raise _server_error(e)
@@ -5795,6 +6355,7 @@ async def api_security_health():
     """API health report — latency, rate-limit hits, last errors."""
     try:
         from security.api_verifier import all_api_health
+
         return _sanitize({"status": "ok", "sources": all_api_health()})
     except Exception as e:
         raise _server_error(e)
@@ -5805,11 +6366,15 @@ async def api_vol_compare(symbol: str):
     """Compare EWMA vs GARCH(1,1) volatility for a symbol."""
     try:
         import numpy as np
+
         from volatility_models import compare_vol_models
-        data   = price_source.locked_yf_download(symbol.upper(), period="1y", auto_adjust=True, progress=False)["Close"]
+
+        data = price_source.locked_yf_download(
+            symbol.upper(), period="1y", auto_adjust=True, progress=False
+        )["Close"]
         if isinstance(data, __import__("pandas").DataFrame):
             data = data.iloc[:, 0]
-        rets   = np.log(data / data.shift(1)).dropna()
+        rets = np.log(data / data.shift(1)).dropna()
         result = compare_vol_models(rets, symbol.upper())
         return _sanitize({"status": "ok", **result})
     except Exception as e:
@@ -5820,6 +6385,7 @@ async def api_vol_compare(symbol: str):
 
 if __name__ == "__main__":
     import os
+
     port = int(os.environ.get("PORT", 9000))
     # host=127.0.0.1 is intentional — never bind 0.0.0.0; the API has no network-level auth.
     uvicorn.run("server:app", host="127.0.0.1", port=port, reload=False)

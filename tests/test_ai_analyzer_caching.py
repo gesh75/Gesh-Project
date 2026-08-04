@@ -110,7 +110,11 @@ def _install_fake_client(
     sink: dict[str, Any] = {}
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
     monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
-    db = Path(tmp_path) / "llm_usage.db" if tmp_path is not None else Path(tempfile.mkdtemp()) / "llm_usage.db"
+    db = (
+        Path(tmp_path) / "llm_usage.db"
+        if tmp_path is not None
+        else Path(tempfile.mkdtemp()) / "llm_usage.db"
+    )
     monkeypatch.setenv("LLM_USAGE_DB", str(db))
     llm_gateway.reset_gateway()
     monkeypatch.setattr(
