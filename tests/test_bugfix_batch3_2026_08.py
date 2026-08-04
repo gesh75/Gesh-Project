@@ -11,12 +11,9 @@ All offline.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
-
 
 # ── S2: owner-view defense-in-depth gate ─────────────────────────────────────
 
@@ -83,10 +80,14 @@ def test_auth_logout_refuses_cross_origin_with_cookie(client):
 
 # ── S3b: bulk import body cap ────────────────────────────────────────────────
 
-def test_mybook_bulk_rejects_oversize_body(client):
-    # >256 KiB body → 413 before parsing (authenticated DoS guard). Auth is off in
-    # tests, so _session_email resolves to the owner and passes the 401 check; the
-    # size cap is what must fire.
+def test_mybook_bulk_rejects_oversize_body(client, monkeypatch):
+    import auth_users
+
+    # Force auth OFF so _session_email resolves to the owner (passing the handler's
+    # 401 check) and the login wall stays inert — otherwise a leaked auth-enabled
+    # state from another test would 401 before the size cap. The size cap (413) is
+    # what this test must exercise.
+    monkeypatch.setattr(auth_users, "auth_enabled", lambda: False)
     huge = "A" * 300_000
     resp = client.post("/api/mybook/bulk", json={"text": huge})
     assert resp.status_code == 413

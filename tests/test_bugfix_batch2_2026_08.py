@@ -16,7 +16,6 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 
-
 # ── F1: invest_radar sizing ──────────────────────────────────────────────────
 
 def test_invest_radar_total_falls_back_to_portfolio_equity():
