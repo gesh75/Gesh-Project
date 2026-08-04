@@ -8,7 +8,7 @@ on every Robinhood password change).
 Reads a raw MCP dump (written by fetch_snapshot_mcp.sh via `claude -p`) and writes
 live_portfolio_snapshot.json in the EXACT schema run_engines2.py expects.
 
-Raw dump schema (/tmp/gesh_mcp_raw.json):
+Raw dump schema (path supplied by fetch_snapshot_mcp.sh):
   {"fetched_account": "...",
    "portfolio":  <get_portfolio data object>,
    "positions":  <get_equity_positions data.positions array>,
@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).parent
-RAW = Path("/tmp/gesh_mcp_raw.json")
 OUTPUT = BASE_DIR / "live_portfolio_snapshot.json"
 
 
@@ -59,10 +58,15 @@ def quote_provenance(item: dict[str, Any], session: str) -> dict[str, Any]:
 def build(
     *,
     raw_data: dict[str, Any] | None = None,
+    raw_path: Path | None = None,
     output: Path = OUTPUT,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    raw = raw_data if raw_data is not None else json.loads(RAW.read_text())
+    if raw_data is None:
+        if raw_path is None:
+            raise ValueError("raw_path is required when raw_data is not provided")
+        raw_data = json.loads(raw_path.read_text())
+    raw = raw_data
     pf = raw["portfolio"]
     positions = raw["positions"]
     # get_equity_quotes returns results[] as {"quote": {...}, "close": {...}};
@@ -144,7 +148,11 @@ def build(
 
 
 if __name__ == "__main__":
-    if not RAW.exists():
-        print(f"[build_snapshot] FATAL: raw MCP dump not found at {RAW}", flush=True)
+    if len(sys.argv) != 2:
+        print(f"usage: {Path(sys.argv[0]).name} RAW_PATH", file=sys.stderr)
+        sys.exit(2)
+    raw_path = Path(sys.argv[1])
+    if not raw_path.is_file():
+        print(f"[build_snapshot] FATAL: raw MCP dump not found at {raw_path}", flush=True)
         sys.exit(1)
-    build()
+    build(raw_path=raw_path)
