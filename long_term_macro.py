@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -42,16 +43,20 @@ import pandas as pd
 import requests
 
 import price_source  # locked yf.download adapter (thread-safety)
+
 logger = logging.getLogger(__name__)
 
 CACHE_DIR = Path(__file__).parent
 F_G_CACHE = CACHE_DIR / ".fear_greed_cache.json"
 MARGIN_CACHE = CACHE_DIR / ".margin_debt_cache.json"
 CACHE_TTL_H = 6
+UPSTREAM_TIMEOUT_SEC = 10
+MAX_UPSTREAM_BYTES = 2_000_000
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def _utc_now() -> datetime:
     """Timezone-aware UTC now — datetime.utcnow() is deprecated (Codex #7)."""
@@ -96,14 +101,41 @@ def _save_cache(path: Path, data: dict) -> None:
         logger.warning(f"Cache save failed for {path}: {e}")
 
 
+def _bounded_get(url: str, **kwargs: Any) -> bytes:
+    """Download an upstream response with a deadline and hard byte ceiling."""
+    with requests.get(
+        url,
+        timeout=UPSTREAM_TIMEOUT_SEC,
+        stream=True,
+        **kwargs,
+    ) as response:
+        response.raise_for_status()
+        declared = int(response.headers.get("Content-Length", "0") or 0)
+        if declared > MAX_UPSTREAM_BYTES:
+            raise ValueError("upstream response exceeded size limit")
+        payload = bytearray()
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            payload.extend(chunk)
+            if len(payload) > MAX_UPSTREAM_BYTES:
+                raise ValueError("upstream response exceeded size limit")
+        return bytes(payload)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # VIX (reuse/extend existing)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def fetch_vix(period: str = "1y") -> Optional[pd.Series]:
-    """Fetch VIX close. Uses yfinance ^VIX (fast, no key needed)."""
+    """Fetch VIX close through the shared, TTL-cached market-data adapter."""
     try:
-        df = price_source.locked_yf_download("^VIX", period=period, progress=False, auto_adjust=True)
+        df = price_source.yf_download(
+            "^VIX",
+            period=period,
+            progress=False,
+            auto_adjust=True,
+            timeout=UPSTREAM_TIMEOUT_SEC,
+        )
         if df is None or df.empty:
             return None
         # .squeeze() to handle MultiIndex columns that yfinance sometimes returns
@@ -122,10 +154,12 @@ def vix_regime_score(vix_series: Optional[pd.Series]) -> Dict[str, Any]:
         return {"score": 0, "detail": "VIX insufficient data", "level": None}
 
     latest = float(vix_series.iloc[-1])
-    avg_1y = float(vix_series.tail(252).mean()) if len(vix_series) > 252 else float(vix_series.mean())
+    avg_1y = (
+        float(vix_series.tail(252).mean()) if len(vix_series) > 252 else float(vix_series.mean())
+    )
 
     if latest > 30:
-        score = 1   # high fear → long-term bullish tilt
+        score = 1  # high fear → long-term bullish tilt
         detail = f"VIX high {latest:.1f} (avg {avg_1y:.1f})"
     elif latest < 15:
         score = -1  # complacency
@@ -147,8 +181,10 @@ def vix_regime_score(vix_series: Optional[pd.Series]) -> Dict[str, Any]:
 # old page-scrape (fragile regex) and the long-dead GitHub CSV fallback are gone —
 # they returned no / empty / 6-year-stale data.
 _CNN_HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.cnn.com/markets/fear-and-greed",
@@ -172,11 +208,8 @@ def fetch_fear_greed() -> Optional[pd.DataFrame]:
     try:
         start = (_utc_now() - timedelta(days=40)).strftime("%Y-%m-%d")
         url = f"https://production.dataviz.cnn.io/index/fearandgreed/graphdata/{start}"
-        resp = requests.get(url, headers=_CNN_HEADERS, timeout=10)
-        if resp.status_code != 200:
-            logger.warning("F&G graphdata HTTP %s", resp.status_code)
-            return None
-        hist = (resp.json().get("fear_and_greed_historical") or {}).get("data") or []
+        payload = json.loads(_bounded_get(url, headers=_CNN_HEADERS))
+        hist = (payload.get("fear_and_greed_historical") or {}).get("data") or []
         if not hist:
             return None
         df = pd.DataFrame(hist)
@@ -184,8 +217,9 @@ def fetch_fear_greed() -> Optional[pd.DataFrame]:
         df = df[["date", "y"]].rename(columns={"y": "fear_greed"}).dropna()
         if df.empty:
             return None
-        _save_cache(F_G_CACHE, {"fetched_at": _utc_now().isoformat(),
-                                "data": df.to_dict("records")})
+        _save_cache(
+            F_G_CACHE, {"fetched_at": _utc_now().isoformat(), "data": df.to_dict("records")}
+        )
         return df
     except Exception as e:
         logger.warning("F&G fetch failed: %s", e)
@@ -224,7 +258,9 @@ def fear_greed_score(fg_df: Optional[pd.DataFrame]) -> Dict[str, Any]:
 # Margin Debt (FINRA)
 # ──────────────────────────────────────────────────────────────────────────────
 
-FINRA_MARGIN_URL = "https://www.finra.org/rules-guidance/key-topics/margin-accounts/margin-statistics"
+FINRA_MARGIN_URL = (
+    "https://www.finra.org/rules-guidance/key-topics/margin-accounts/margin-statistics"
+)
 FINRA_MARGIN_SOURCE = "FINRA margin statistics (finra.org)"
 # FINRA month labels are "May-26" style — parsed with an EXPLICIT format only.
 # An inferring parser turns "May-26" into year-0001 garbage that mis-sorts rows.
@@ -235,8 +271,9 @@ MARGIN_CACHE_SCHEMA = 2
 
 
 def _fetch_finra_tables() -> list[pd.DataFrame]:
-    """Network seam: raw tables from the FINRA margin-statistics page."""
-    return pd.read_html(FINRA_MARGIN_URL, header=0)
+    """Network seam: bounded download of FINRA's margin-statistics page."""
+    payload = _bounded_get(FINRA_MARGIN_URL)
+    return pd.read_html(BytesIO(payload), header=0)
 
 
 def _parse_finra_margin_table(tables: list[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -245,22 +282,21 @@ def _parse_finra_margin_table(tables: list[pd.DataFrame]) -> Optional[pd.DataFra
     df = None
     for t in tables:
         cols_lower = [str(c).lower() for c in t.columns]
-        if any('debit' in c or 'margin' in c for c in cols_lower):
+        if any("debit" in c or "margin" in c for c in cols_lower):
             df = t
             break
     if df is None:
         return None
     df = df.iloc[:, [0, 1]].copy()
-    df.columns = ['date', 'margin_debt_millions']
-    df['date'] = pd.to_datetime(df['date'], format=FINRA_DATE_FORMAT, errors='coerce')
-    df['margin_debt_millions'] = pd.to_numeric(
-        df['margin_debt_millions'].astype(str).str.replace(',', '', regex=False),
-        errors='coerce'
+    df.columns = ["date", "margin_debt_millions"]
+    df["date"] = pd.to_datetime(df["date"], format=FINRA_DATE_FORMAT, errors="coerce")
+    df["margin_debt_millions"] = pd.to_numeric(
+        df["margin_debt_millions"].astype(str).str.replace(",", "", regex=False), errors="coerce"
     )
-    df = df.dropna(subset=['date', 'margin_debt_millions']).set_index('date').sort_index()
+    df = df.dropna(subset=["date", "margin_debt_millions"]).set_index("date").sort_index()
     if df.empty:
         return None
-    return df[['margin_debt_millions']]
+    return df[["margin_debt_millions"]]
 
 
 def _margin_cache_payload(cache: Optional[dict]) -> Optional[Dict[str, Any]]:
@@ -301,13 +337,16 @@ def fetch_margin_debt() -> Dict[str, Any]:
                 for ts, v in df["margin_debt_millions"].items()
             ]
             as_of = series[-1]["date"]
-            _save_cache(MARGIN_CACHE, {
-                "schema": MARGIN_CACHE_SCHEMA,
-                "fetched_at": _utc_now().isoformat(),
-                "source": FINRA_MARGIN_SOURCE,
-                "as_of": as_of,
-                "series": series,
-            })
+            _save_cache(
+                MARGIN_CACHE,
+                {
+                    "schema": MARGIN_CACHE_SCHEMA,
+                    "fetched_at": _utc_now().isoformat(),
+                    "source": FINRA_MARGIN_SOURCE,
+                    "as_of": as_of,
+                    "series": series,
+                },
+            )
             return {
                 "status": "ok",
                 "source": FINRA_MARGIN_SOURCE,
@@ -344,9 +383,10 @@ def margin_debt_score(md: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
     series = md.get("series") or []
     if md.get("status") != "ok" or len(series) < 3:
-        detail = "Margin debt unavailable" if md.get("status") != "ok" else "Margin debt insufficient"
-        return {"score": 0, "detail": detail, "level": None,
-                "status": "unavailable", **provenance}
+        detail = (
+            "Margin debt unavailable" if md.get("status") != "ok" else "Margin debt insufficient"
+        )
+        return {"score": 0, "detail": detail, "level": None, "status": "unavailable", **provenance}
 
     latest = float(series[-1]["margin_debt_millions"])
     prev = float(series[-2]["margin_debt_millions"])
@@ -354,13 +394,13 @@ def margin_debt_score(md: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     if mom > 0.08:  # strong rise
         score = -1
-        detail = f"Margin debt rising fast +{mom*100:.1f}% (record risk)"
+        detail = f"Margin debt rising fast +{mom * 100:.1f}% (record risk)"
     elif mom < -0.03:
         score = 1
-        detail = f"Margin debt contracting {mom*100:.1f}%"
+        detail = f"Margin debt contracting {mom * 100:.1f}%"
     else:
         score = 0
-        detail = f"Margin debt stable (latest {latest/1e6:.1f}T)"
+        detail = f"Margin debt stable (latest {latest / 1e6:.1f}T)"
 
     return {"score": score, "detail": detail, "level": latest, "status": "ok", **provenance}
 
@@ -368,6 +408,7 @@ def margin_debt_score(md: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API for Proposal 1
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def get_long_term_macro_sentiment() -> Dict[str, Any]:
     """Main entry for Proposal 1 overlay.
@@ -465,10 +506,16 @@ def engine_block(sentiment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         md_elevated = None
     return {
         "vix": {"level": vix.get("level"), "detail": vix.get("detail")},
-        "fear_greed": {"level": fg_level, "label": _fear_greed_label(fg_level),
-                       "detail": fg.get("detail")},
-        "margin_debt": {"elevated": md_elevated, "level": md.get("level"),
-                        "detail": md.get("detail")},
+        "fear_greed": {
+            "level": fg_level,
+            "label": _fear_greed_label(fg_level),
+            "detail": fg.get("detail"),
+        },
+        "margin_debt": {
+            "elevated": md_elevated,
+            "level": md.get("level"),
+            "detail": md.get("detail"),
+        },
         "combined_score": s.get("combined_score"),
         "bias": s.get("bias", "NEUTRAL"),
         "fetched_at": s.get("fetched_at"),
