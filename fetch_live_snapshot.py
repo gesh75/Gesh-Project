@@ -117,18 +117,18 @@ def fetch():
     # Profile / cash
     profile = r.profiles.load_portfolio_profile()
     account = r.profiles.load_account_profile()
-    # ── Deployable cash — THREE distinct fields, verified against the RH MCP 2026-06-09 ──
-    # Confusing these three is the source of the $531/$1,718/$4,031 churn the radar saw:
+    # ── Deployable cash — THREE distinct fields, verified against the RH MCP ──
+    # Confusing these three can cause deployable-cash values to churn:
     #   • portfolio_cash         = settled, UNLEVERAGED cash. Matches the RH MCP's
     #                              buying_power.buying_power (the broker's authoritative
     #                              spendable). THIS is the figure to size against.
-    #   • uncleared_deposits     = pending instant-deposit credit (e.g. $3,500). The broker
+    #   • uncleared_deposits     = pending instant-deposit credit (e.g. $Y). The broker
     #                              only *sometimes* extends it as buying power; it is
     #                              revocable and NOT settled — never size against it as
     #                              durable dry powder. Surfaced separately so reports can
     #                              show "settled $X + $Y pending".
-    #   • account['buying_power'] = LEVERAGED Gold-margin buying power (observed $21,632
-    #                              while settled was only $1,718). NEVER use this for
+    #   • account['buying_power'] = LEVERAGED Gold-margin buying power (e.g. $Y while
+    #                              settled cash is $X). NEVER use this for
     #                              deployability — it would size real trades on margin.
     #                              Kept as a reference field only.
     # Do NOT use withdrawable_amount (reads $0 while a deposit clears) and NEVER
