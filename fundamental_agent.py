@@ -20,39 +20,122 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
-import anthropic
-import numpy as np
 import pandas as pd
 import yfinance as yf
-import price_source  # locked yf.download adapter (thread-safety)
 from dotenv import load_dotenv
 
+import llm_contracts
+import llm_gateway
+import price_source  # locked yf.download adapter (thread-safety)
+
 load_dotenv()
+
+SONNET_MODEL = llm_gateway.resolve_model("sonnet", default="sonnet")
 
 # Extended screening universe for fundamental analysis
 FUNDAMENTAL_UNIVERSE: list[str] = [
     # High-growth tech
-    "NVDA","META","GOOGL","MSFT","AAPL","AMZN","AVGO","ORCL","CRM","ADBE",
-    "AMD","PLTR","SNOW","NET","DDOG","CRWD","PANW","MDB","HUBS","ARM",
+    "NVDA",
+    "META",
+    "GOOGL",
+    "MSFT",
+    "AAPL",
+    "AMZN",
+    "AVGO",
+    "ORCL",
+    "CRM",
+    "ADBE",
+    "AMD",
+    "PLTR",
+    "SNOW",
+    "NET",
+    "DDOG",
+    "CRWD",
+    "PANW",
+    "MDB",
+    "HUBS",
+    "ARM",
     # Finance / value
-    "JPM","GS","BAC","V","MA","AXP","BLK","SCHW","COF","MS",
+    "JPM",
+    "GS",
+    "BAC",
+    "V",
+    "MA",
+    "AXP",
+    "BLK",
+    "SCHW",
+    "COF",
+    "MS",
     # Healthcare / biotech
-    "LLY","UNH","ABBV","ISRG","TMO","REGN","DXCM","MRNA","GEHC","CI",
+    "LLY",
+    "UNH",
+    "ABBV",
+    "ISRG",
+    "TMO",
+    "REGN",
+    "DXCM",
+    "MRNA",
+    "GEHC",
+    "CI",
     # Energy
-    "XOM","CVX","COP","EOG","OXY","SLB","MPC","HAL","DVN","BKR",
+    "XOM",
+    "CVX",
+    "COP",
+    "EOG",
+    "OXY",
+    "SLB",
+    "MPC",
+    "HAL",
+    "DVN",
+    "BKR",
     # Consumer
-    "COST","WMT","HD","MCD","NKE","BKNG","MAR","CMG","SBUX","LULU",
+    "COST",
+    "WMT",
+    "HD",
+    "MCD",
+    "NKE",
+    "BKNG",
+    "MAR",
+    "CMG",
+    "SBUX",
+    "LULU",
     # Industrials / infra
-    "CAT","DE","GE","RTX","HON","LMT","NOC","BA","UPS","FDX",
+    "CAT",
+    "DE",
+    "GE",
+    "RTX",
+    "HON",
+    "LMT",
+    "NOC",
+    "BA",
+    "UPS",
+    "FDX",
     # Emerging / speculative
-    "RDDT","HOOD","SOFI","AFRM","UPST","IONQ","RXRX","SOUN","ASTS","RKLB",
+    "RDDT",
+    "HOOD",
+    "SOFI",
+    "AFRM",
+    "UPST",
+    "IONQ",
+    "RXRX",
+    "SOUN",
+    "ASTS",
+    "RKLB",
     # Small/mid value
-    "SMCI","DELL","HPE","WDC","STX","PSTG","NTAP","NTNX","ZM","DOCU",
+    "SMCI",
+    "DELL",
+    "HPE",
+    "WDC",
+    "STX",
+    "PSTG",
+    "NTAP",
+    "NTNX",
+    "ZM",
+    "DOCU",
 ]
 
 FUNDAMENTAL_PROMPT = """You are a fundamental equity analyst. Analyze these stocks and identify the TOP 15 with the best IMPROVING fundamentals where price has NOT yet caught up.
@@ -108,18 +191,22 @@ def _fetch_fundamentals_batch(symbols: list[str]) -> list[dict]:
 
     # Price momentum in one batch call
     try:
-        raw = price_source.locked_yf_download(symbols, period="3mo", progress=False, auto_adjust=True)
+        raw = price_source.locked_yf_download(
+            symbols, period="3mo", progress=False, auto_adjust=True
+        )
         if isinstance(raw.columns, pd.MultiIndex):
             closes = raw["Close"]
         else:
-            closes = raw[["Close"]].rename(columns={"Close": symbols[0]}) if symbols else pd.DataFrame()
+            closes = (
+                raw[["Close"]].rename(columns={"Close": symbols[0]}) if symbols else pd.DataFrame()
+            )
     except Exception:
         closes = pd.DataFrame()
 
     for sym in symbols:
         try:
             ticker = yf.Ticker(sym)
-            info   = ticker.info
+            info = ticker.info
 
             def safe(key, default=None):
                 v = info.get(key)
@@ -145,26 +232,26 @@ def _fetch_fundamentals_batch(symbols: list[str]) -> list[dict]:
             ret_3m = round((p_now / p_3m - 1) * 100, 2) if p_now and p_3m else None
 
             # Core fundamentals
-            rev_growth     = safe("revenueGrowth")      # quarterly YoY
-            earn_growth    = safe("earningsGrowth")
-            gross_margin   = safe("grossMargins")
-            op_margin      = safe("operatingMargins")
-            forward_pe     = safe("forwardPE")
-            trailing_pe    = safe("trailingPE")
-            pb             = safe("priceToBook")
-            debt_equity    = safe("debtToEquity")
-            curr_ratio     = safe("currentRatio")
-            free_cashflow  = safe("freeCashflow")
-            inst_pct       = safe("institutionsPercentHeld")
-            insider_pct    = safe("heldPercentInsiders")
-            target_mean    = safe("targetMeanPrice")
-            num_analysts   = safe("numberOfAnalystOpinions", 0)
-            reco_key       = info.get("recommendationKey", "hold")
-            short_pct      = safe("shortPercentOfFloat")
-            beta           = safe("beta")
-            sector         = info.get("sector", "")
-            company        = info.get("shortName", sym)
-            market_cap     = safe("marketCap", 0.0)
+            rev_growth = safe("revenueGrowth")  # quarterly YoY
+            earn_growth = safe("earningsGrowth")
+            gross_margin = safe("grossMargins")
+            op_margin = safe("operatingMargins")
+            forward_pe = safe("forwardPE")
+            trailing_pe = safe("trailingPE")
+            pb = safe("priceToBook")
+            debt_equity = safe("debtToEquity")
+            curr_ratio = safe("currentRatio")
+            free_cashflow = safe("freeCashflow")
+            inst_pct = safe("institutionsPercentHeld")
+            insider_pct = safe("heldPercentInsiders")
+            target_mean = safe("targetMeanPrice")
+            num_analysts = safe("numberOfAnalystOpinions", 0)
+            reco_key = info.get("recommendationKey", "hold")
+            short_pct = safe("shortPercentOfFloat")
+            beta = safe("beta")
+            sector = info.get("sector", "")
+            company = info.get("shortName", sym)
+            market_cap = safe("marketCap", 0.0)
 
             analyst_upside = None
             if target_mean and p_now and p_now > 0:
@@ -184,38 +271,44 @@ def _fetch_fundamentals_batch(symbols: list[str]) -> list[dict]:
             except Exception:
                 pass
 
-            insider_signal = "BUYING" if insider_buys > insider_sells else ("SELLING" if insider_sells > insider_buys else "NEUTRAL")
+            insider_signal = (
+                "BUYING"
+                if insider_buys > insider_sells
+                else ("SELLING" if insider_sells > insider_buys else "NEUTRAL")
+            )
 
-            results.append({
-                "symbol":         sym,
-                "company_name":   company,
-                "sector":         sector,
-                "price":          round(p_now, 2) if p_now else None,
-                "ret_1m":         ret_1m,
-                "ret_3m":         ret_3m,
-                "revenue_growth": round(rev_growth * 100, 1) if rev_growth else None,
-                "earnings_growth":round(earn_growth * 100, 1) if earn_growth else None,
-                "gross_margin":   round(gross_margin * 100, 1) if gross_margin else None,
-                "op_margin":      round(op_margin * 100, 1) if op_margin else None,
-                "forward_pe":     round(forward_pe, 1) if forward_pe else None,
-                "trailing_pe":    round(trailing_pe, 1) if trailing_pe else None,
-                "pb_ratio":       round(pb, 2) if pb else None,
-                "debt_equity":    round(debt_equity, 2) if debt_equity else None,
-                "current_ratio":  round(curr_ratio, 2) if curr_ratio else None,
-                "free_cashflow_b":round(free_cashflow / 1e9, 2) if free_cashflow else None,
-                "inst_ownership": round(inst_pct * 100, 1) if inst_pct else None,
-                "insider_pct":    round(insider_pct * 100, 1) if insider_pct else None,
-                "insider_signal": insider_signal,
-                "insider_buys":   insider_buys,
-                "insider_sells":  insider_sells,
-                "analyst_target": round(target_mean, 2) if target_mean else None,
-                "analyst_upside": analyst_upside,
-                "num_analysts":   int(num_analysts) if num_analysts else 0,
-                "recommendation": reco_key,
-                "short_float_pct":round(short_pct * 100, 1) if short_pct else None,
-                "beta":           round(beta, 2) if beta else None,
-                "market_cap_b":   round(market_cap / 1e9, 1) if market_cap else None,
-            })
+            results.append(
+                {
+                    "symbol": sym,
+                    "company_name": company,
+                    "sector": sector,
+                    "price": round(p_now, 2) if p_now else None,
+                    "ret_1m": ret_1m,
+                    "ret_3m": ret_3m,
+                    "revenue_growth": round(rev_growth * 100, 1) if rev_growth else None,
+                    "earnings_growth": round(earn_growth * 100, 1) if earn_growth else None,
+                    "gross_margin": round(gross_margin * 100, 1) if gross_margin else None,
+                    "op_margin": round(op_margin * 100, 1) if op_margin else None,
+                    "forward_pe": round(forward_pe, 1) if forward_pe else None,
+                    "trailing_pe": round(trailing_pe, 1) if trailing_pe else None,
+                    "pb_ratio": round(pb, 2) if pb else None,
+                    "debt_equity": round(debt_equity, 2) if debt_equity else None,
+                    "current_ratio": round(curr_ratio, 2) if curr_ratio else None,
+                    "free_cashflow_b": round(free_cashflow / 1e9, 2) if free_cashflow else None,
+                    "inst_ownership": round(inst_pct * 100, 1) if inst_pct else None,
+                    "insider_pct": round(insider_pct * 100, 1) if insider_pct else None,
+                    "insider_signal": insider_signal,
+                    "insider_buys": insider_buys,
+                    "insider_sells": insider_sells,
+                    "analyst_target": round(target_mean, 2) if target_mean else None,
+                    "analyst_upside": analyst_upside,
+                    "num_analysts": int(num_analysts) if num_analysts else 0,
+                    "recommendation": reco_key,
+                    "short_float_pct": round(short_pct * 100, 1) if short_pct else None,
+                    "beta": round(beta, 2) if beta else None,
+                    "market_cap_b": round(market_cap / 1e9, 1) if market_cap else None,
+                }
+            )
         except Exception as e:
             results.append({"symbol": sym, "error": str(e)})
 
@@ -225,21 +318,28 @@ def _fetch_fundamentals_batch(symbols: list[str]) -> list[dict]:
 def _pre_score(stock: dict) -> float:
     """Quick numeric pre-score to rank stocks before sending to Claude."""
     score = 0.0
-    rev   = stock.get("revenue_growth")
-    earn  = stock.get("earnings_growth")
+    rev = stock.get("revenue_growth")
+    earn = stock.get("earnings_growth")
     upside = stock.get("analyst_upside")
-    pe    = stock.get("forward_pe")
-    ins   = stock.get("insider_signal", "NEUTRAL")
+    pe = stock.get("forward_pe")
+    ins = stock.get("insider_signal", "NEUTRAL")
     ret1m = stock.get("ret_1m", 0) or 0
 
-    if rev  and rev  > 0: score += min(rev, 60) * 0.4
-    if earn and earn > 0: score += min(earn, 40) * 0.3
-    if upside and upside > 0: score += min(upside, 30) * 0.5
-    if pe and 0 < pe < 30: score += 15
-    if ins == "BUYING": score += 20
-    elif ins == "SELLING": score -= 10
+    if rev and rev > 0:
+        score += min(rev, 60) * 0.4
+    if earn and earn > 0:
+        score += min(earn, 40) * 0.3
+    if upside and upside > 0:
+        score += min(upside, 30) * 0.5
+    if pe and 0 < pe < 30:
+        score += 15
+    if ins == "BUYING":
+        score += 20
+    elif ins == "SELLING":
+        score -= 10
     # Penalise pure momentum (price already moved)
-    if ret1m and ret1m > 30: score -= 10
+    if ret1m and ret1m > 30:
+        score -= 10
     return round(score, 1)
 
 
@@ -258,30 +358,32 @@ def _build_fallback_opportunities(valid: list[dict], n: int = 15) -> list[dict]:
         earn = s.get("earnings_growth")
         upside = s.get("analyst_upside")
         ins = s.get("insider_signal", "NEUTRAL")
-        opps.append({
-            "symbol":              s["symbol"],
-            "company_name":        s.get("name") or s["symbol"],
-            "sector":              s.get("sector") or "",
-            "fundamental_score":   min(100, max(0, int(score))),
-            "momentum_gap":        "HIGH" if score >= 50 else "MEDIUM" if score >= 25 else "LOW",
-            "revenue_trend":       "ACCELERATING" if rev and rev > 15 else "STABLE",
-            "margin_trend":        "STABLE",
-            "balance_sheet":       "STABLE",
-            "valuation_vs_growth": "FAIR",
-            "insider_activity":    ins,
-            "key_catalyst":        "Pre-score rank from yfinance fundamentals",
-            "investment_horizon":  "3-6 months",
-            "thesis": (
-                f"Ranked #{len(opps)+1} by deterministic pre-score ({score:.0f}/100): "
-                f"rev {rev or 'n/a'}%, analyst upside {upside or 'n/a'}%."
-            ),
-            "risk":                "Claude deep scan unavailable — verify thesis manually.",
-            "pe_ratio":            s.get("forward_pe") or s.get("trailing_pe"),
-            "revenue_growth":      rev,
-            "earnings_growth":     earn,
-            "analyst_upside":      upside,
-            "source":              "pre_score_fallback",
-        })
+        opps.append(
+            {
+                "symbol": s["symbol"],
+                "company_name": s.get("name") or s["symbol"],
+                "sector": s.get("sector") or "",
+                "fundamental_score": min(100, max(0, int(score))),
+                "momentum_gap": "HIGH" if score >= 50 else "MEDIUM" if score >= 25 else "LOW",
+                "revenue_trend": "ACCELERATING" if rev and rev > 15 else "STABLE",
+                "margin_trend": "STABLE",
+                "balance_sheet": "STABLE",
+                "valuation_vs_growth": "FAIR",
+                "insider_activity": ins,
+                "key_catalyst": "Pre-score rank from yfinance fundamentals",
+                "investment_horizon": "3-6 months",
+                "thesis": (
+                    f"Ranked #{len(opps) + 1} by deterministic pre-score ({score:.0f}/100): "
+                    f"rev {rev or 'n/a'}%, analyst upside {upside or 'n/a'}%."
+                ),
+                "risk": "Claude deep scan unavailable — verify thesis manually.",
+                "pe_ratio": s.get("forward_pe") or s.get("trailing_pe"),
+                "revenue_growth": rev,
+                "earnings_growth": earn,
+                "analyst_upside": upside,
+                "source": "pre_score_fallback",
+            }
+        )
     return opps
 
 
@@ -291,17 +393,23 @@ def _finalize_fundamental_result(result: dict, valid: list[dict]) -> dict:
     if not opps and valid:
         opps = _build_fallback_opportunities(valid)
         result["fallback"] = True
+        result["availability"] = "UNAVAILABLE"
         result.setdefault(
             "market_summary",
             "Claude scan unavailable — showing top names from the deterministic pre-score rank.",
         )
     result["top_opportunities"] = opps
     result["stocks_analyzed"] = result.get("stocks_analyzed") or len(valid)
+    if result.get("fallback"):
+        result["availability"] = "UNAVAILABLE"
+    else:
+        result.setdefault("availability", "AVAILABLE")
     return result
 
 
 def _save_fundamental_scan(results: dict) -> None:
     from agent_db import agent_db_path
+
     db_path = str(agent_db_path())
     conn = sqlite3.connect(db_path)
     try:
@@ -320,6 +428,7 @@ def _save_fundamental_scan(results: dict) -> None:
 
 def get_latest_fundamental_scan() -> dict | None:
     from agent_db import agent_db_path
+
     db_path = str(agent_db_path())
     if not os.path.exists(db_path):
         return None
@@ -347,7 +456,9 @@ def get_latest_fundamental_scan() -> dict | None:
         conn.close()
 
 
-def run_fundamental_scan(universe: list[str] | None = None, top_n_for_ai: int = 35) -> dict[str, Any]:
+def run_fundamental_scan(
+    universe: list[str] | None = None, top_n_for_ai: int = 35
+) -> dict[str, Any]:
     """
     Main entry point — fetch fundamentals for universe, score, send top N to Claude.
 
@@ -378,34 +489,45 @@ def run_fundamental_scan(universe: list[str] | None = None, top_n_for_ai: int = 
         _save_fundamental_scan(result)
         return result
 
-    client = anthropic.Anthropic(api_key=api_key)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
+        tool = llm_contracts.strict_tool(
+            "return_fundamental_scan",
+            "Return the complete fundamental scan contract.",
+            llm_contracts.FUNDAMENTAL_SCAN_SCHEMA,
+        )
+        msg = llm_gateway.get_gateway().create(
+            operation="fundamental_scan",
+            model=SONNET_MODEL,
             max_tokens=6000,
             system=FUNDAMENTAL_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Today is {today}. Analyze these {len(top)} stocks and identify the top 15 "
-                    f"fundamental improvement opportunities where price has not yet caught up.\n\n"
-                    f"```json\n{json.dumps(top, indent=2)}\n```\n\n"
-                    "Return ONLY valid JSON starting with {{. No apostrophes in strings."
-                )
-            }]
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Today is {today}. Analyze these {len(top)} stocks and identify the top 15 "
+                        f"fundamental improvement opportunities where price has not yet caught up.\n\n"
+                        f"```json\n{json.dumps(top, indent=2)}\n```"
+                    ),
+                }
+            ],
+            tools=[tool],
+            tool_choice={"type": "tool", "name": "return_fundamental_scan"},
         )
-        raw = msg.content[0].text
-        raw = re.sub(r'^```(?:json)?\s*', '', raw.strip())
-        raw = re.sub(r'\s*```$', '', raw)
-
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError:
-            # Try fixing trailing commas
-            fixed = re.sub(r',\s*([}\]])', r'\1', raw)
-            result = json.loads(fixed)
+        result = llm_contracts.extract_tool_input(
+            msg,
+            expected_tool="return_fundamental_scan",
+            operation="fundamental_scan",
+        )
+        # Validate each opportunity; drop invalid rows rather than failing the scan.
+        validated: list[dict] = []
+        for opp in result.get("top_opportunities") or []:
+            try:
+                validated.append(llm_contracts.validate_fundamental_opportunity(opp))
+            except llm_contracts.LLMContractError:
+                continue
+        result["top_opportunities"] = validated
 
         result["stocks_analyzed"] = len(valid)
         result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
@@ -413,8 +535,24 @@ def run_fundamental_scan(universe: list[str] | None = None, top_n_for_ai: int = 
         _save_fundamental_scan(result)
         return result
 
-    except Exception as e:
-        result = _finalize_fundamental_result({"error": str(e)}, valid)
+    except (
+        llm_gateway.LLMUnavailableError,
+        llm_gateway.LLMRefusalError,
+        llm_gateway.LLMTruncatedError,
+        llm_gateway.LLMBudgetExceededError,
+        llm_gateway.LLMConfigurationError,
+        llm_contracts.LLMContractError,
+    ):
+        result = _finalize_fundamental_result(
+            {"error": "AI provider temporarily unavailable"}, valid
+        )
+        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        _save_fundamental_scan(result)
+        return result
+    except Exception:
+        result = _finalize_fundamental_result(
+            {"error": "AI provider temporarily unavailable"}, valid
+        )
         result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
         _save_fundamental_scan(result)
         return result

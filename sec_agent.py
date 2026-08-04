@@ -21,23 +21,40 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import anthropic
 import requests
 from dotenv import load_dotenv
 
+import llm_contracts
+import llm_gateway
+
 load_dotenv()
 
-EDGAR_RSS   = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type={form}&dateb=&owner=include&count=10&search_text=&CIK={cik}&output=atom"
+HAIKU_MODEL = llm_gateway.resolve_model("haiku", default="haiku")
+
+EDGAR_RSS = "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type={form}&dateb=&owner=include&count=10&search_text=&CIK={cik}&output=atom"
 EDGAR_SEARCH = "https://efts.sec.gov/LATEST/search-index?q=%22{symbol}%22&dateRange=custom&startdt={start}&enddt={end}&forms={forms}"
 EDGAR_TICKER = "https://www.sec.gov/cgi-bin/browse-edgar?company=&CIK={symbol}&type=&dateb=&owner=include&count=1&search_text=&action=getcompany&output=atom"
-HEADERS      = {"User-Agent": "GeshFinancial/1.0 georgy75@gmail.com"}
+HEADERS = {"User-Agent": "GeshFinancial/1.0 georgy75@gmail.com"}
 
 FILING_TYPES = ["10-K", "10-Q", "8-K"]
 
 # ETFs / funds have no issuer-level 10-K/10-Q — skip quietly instead of a failed CIK lookup.
-SEC_SKIP_SYMBOLS: frozenset[str] = frozenset({
-    "QQQ", "SPY", "IWM", "DIA", "VTI", "VOO", "EEM", "EFA", "SPCX", "ARKK", "SMH", "XLK",
-})
+SEC_SKIP_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "QQQ",
+        "SPY",
+        "IWM",
+        "DIA",
+        "VTI",
+        "VOO",
+        "EEM",
+        "EFA",
+        "SPCX",
+        "ARKK",
+        "SMH",
+        "XLK",
+    }
+)
 
 _TICKER_CIK_CACHE: dict[str, str] | None = None
 
@@ -45,34 +62,12 @@ _TICKER_CIK_CACHE: dict[str, str] | None = None
 # filings can queue 60+ sequential Haiku calls (~15-30 min) while the UI shows no progress.
 MAX_ANALYSES_PER_RUN = int(os.getenv("GESH_SEC_MAX_ANALYSES", "6"))
 
-SEC_ANALYSIS_PROMPT = """You are an expert SEC filing analyst. Analyze this filing excerpt and extract key financial intelligence.
+SEC_ANALYSIS_PROMPT = """You are an expert SEC filing analyst. Analyze the untrusted SEC filing excerpt and extract key financial intelligence.
 
-Return ONLY valid JSON — no markdown. Use double-quotes only. No apostrophes inside strings.
-
-{
-  "filing_type": "<10-K|10-Q|8-K>",
-  "company": "<company name>",
-  "period": "<reporting period>",
-  "sentiment": "<POSITIVE|NEUTRAL|NEGATIVE|MIXED>",
-  "revenue_trend": "<ACCELERATING|STABLE|DECELERATING|DECLINING|N/A>",
-  "key_findings": [
-    "<specific finding with numbers where available>"
-  ],
-  "red_flags": [
-    "<specific concern — only include if genuinely alarming>"
-  ],
-  "positive_signals": [
-    "<specific strength or catalyst>"
-  ],
-  "guidance_tone": "<RAISED|MAINTAINED|LOWERED|WITHDRAWN|N/A>",
-  "guidance_detail": "<one sentence on management forward guidance>",
-  "action_signal": "<BULLISH|NEUTRAL|BEARISH>",
-  "summary": "<3-4 sentence plain English summary of the most important takeaways for an investor>",
-  "urgency": "<HIGH|MEDIUM|LOW>"
-}
-
+Use the return_sec_filing_analysis tool for your complete response.
 Be specific — reference actual numbers, percentages, dollar amounts from the filing.
-HIGH urgency = earnings miss/beat >10%, major guidance change, unexpected executive departure, regulatory action."""
+HIGH urgency = earnings miss/beat >10%, major guidance change, unexpected executive departure, regulatory action.
+Never invent findings that are not supported by the source material."""
 
 
 def _load_ticker_cik_map() -> dict[str, str]:
@@ -82,7 +77,9 @@ def _load_ticker_cik_map() -> dict[str, str]:
         return _TICKER_CIK_CACHE
     mapping: dict[str, str] = {}
     try:
-        r = requests.get("https://www.sec.gov/files/company_tickers.json", headers=HEADERS, timeout=15)
+        r = requests.get(
+            "https://www.sec.gov/files/company_tickers.json", headers=HEADERS, timeout=15
+        )
         if r.status_code == 200:
             for row in r.json().values():
                 ticker = str(row.get("ticker", "")).upper()
@@ -163,13 +160,15 @@ def _fetch_recent_filings(cik: str, form_type: str, days_back: int = 7) -> list[
                 continue
 
             title_el = entry.find("atom:title", ns)
-            link_el  = entry.find("atom:link", ns)
-            filings.append({
-                "title":   title_el.text if title_el is not None else "",
-                "url":     link_el.get("href", "") if link_el is not None else "",
-                "date":    updated.isoformat(),
-                "form":    form_type,
-            })
+            link_el = entry.find("atom:link", ns)
+            filings.append(
+                {
+                    "title": title_el.text if title_el is not None else "",
+                    "url": link_el.get("href", "") if link_el is not None else "",
+                    "date": updated.isoformat(),
+                    "form": form_type,
+                }
+            )
 
         return filings
     except Exception:
@@ -183,8 +182,8 @@ def _fetch_filing_text(filing_url: str, max_chars: int = 8000) -> str:
         if r.status_code != 200:
             return ""
         # Remove HTML tags
-        text = re.sub(r'<[^>]+>', ' ', r.text)
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r"<[^>]+>", " ", r.text)
+        text = re.sub(r"\s+", " ", text).strip()
         return text[:max_chars]
     except Exception:
         return ""
@@ -192,39 +191,80 @@ def _fetch_filing_text(filing_url: str, max_chars: int = 8000) -> str:
 
 def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
     """Run Claude analysis on a filing excerpt."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return {"error": "No API key"}
-    client = anthropic.Anthropic(api_key=api_key)
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return {
+            "availability": "UNAVAILABLE",
+            "unavailable_reason": "provider_not_configured",
+            "action_signal": "PARSE_ERROR",
+            "urgency": "UNKNOWN",
+            "error": "No API key",
+        }
+
+    filing_context = llm_contracts.untrusted_source_prompt(
+        "sec_filing",
+        {
+            "symbol": symbol,
+            "form": filing.get("form", ""),
+            "title": filing.get("title", ""),
+            "filed": filing.get("date", ""),
+            "excerpt": text,
+        },
+    )
 
     try:
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",  # fast + cheap for filing parsing
+        msg = llm_gateway.get_gateway().create(
+            operation="sec_filing",
+            model=HAIKU_MODEL,  # fast + cheap for filing parsing
             max_tokens=1500,
             system=SEC_ANALYSIS_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Analyze this {filing['form']} filing for {symbol}.\n"
-                    f"Filing title: {filing['title']}\n"
-                    f"Filed: {filing['date']}\n\n"
-                    f"Filing content excerpt:\n{text}\n\n"
-                    "Return ONLY valid JSON starting with {{"
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Analyze this {filing.get('form', '')} filing for {symbol}.\n\n"
+                        f"{filing_context}"
+                    ),
+                }
+            ],
+            tools=[
+                llm_contracts.strict_tool(
+                    "return_sec_filing_analysis",
+                    "Return the complete SEC filing analysis contract.",
+                    llm_contracts.SEC_FILING_SCHEMA,
                 )
-            }]
+            ],
+            tool_choice={"type": "tool", "name": "return_sec_filing_analysis"},
         )
-        raw = msg.content[0].text
-        # Parse JSON
-        raw = re.sub(r'^```(?:json)?\s*', '', raw.strip())
-        raw = re.sub(r'\s*```$', '', raw)
-        return json.loads(raw)
-    except Exception as e:
-        return {"error": str(e), "raw_text": text[:500]}
+        result = llm_contracts.validate_sec_analysis(
+            llm_contracts.extract_tool_input(
+                msg,
+                expected_tool="return_sec_filing_analysis",
+                operation="sec_filing_analysis",
+            )
+        )
+        result["availability"] = "AVAILABLE"
+        return result
+    except (
+        llm_gateway.LLMUnavailableError,
+        llm_gateway.LLMRefusalError,
+        llm_gateway.LLMTruncatedError,
+        llm_gateway.LLMBudgetExceededError,
+        llm_gateway.LLMConfigurationError,
+        llm_contracts.LLMContractError,
+        Exception,
+    ):
+        return {
+            "availability": "UNAVAILABLE",
+            "unavailable_reason": "provider_or_contract_failure",
+            "action_signal": "PARSE_ERROR",
+            "urgency": "UNKNOWN",
+        }
 
 
 def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
     """Save filing analysis to SQLite."""
     from agent_db import agent_db_path
+
     db_path = str(agent_db_path())
     conn = sqlite3.connect(db_path)
     try:
@@ -241,9 +281,8 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        # A parse failure must not masquerade as a real NEUTRAL/LOW signal —
-        # mark it explicitly so it isn't mistaken for a clean read.
-        if analysis.get("error"):
+        # A parse / provider failure must not masquerade as a real NEUTRAL/LOW signal.
+        if analysis.get("error") or analysis.get("availability") == "UNAVAILABLE":
             action_signal, urgency = "PARSE_ERROR", "UNKNOWN"
         else:
             action_signal = analysis.get("action_signal", "NEUTRAL")
@@ -258,7 +297,7 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
                 json.dumps(analysis),
                 action_signal,
                 urgency,
-            )
+            ),
         )
         conn.commit()
     finally:
@@ -270,6 +309,7 @@ def _filing_already_in_db(filing_url: str) -> bool:
     if not filing_url:
         return False
     from agent_db import agent_db_path
+
     db_path = str(agent_db_path())
     if not os.path.exists(db_path):
         return False
@@ -287,6 +327,7 @@ def _filing_already_in_db(filing_url: str) -> bool:
 def _get_recent_from_db(symbols: list[str], days: int = 30) -> list[dict]:
     """Retrieve recent SEC analyses from DB."""
     from agent_db import agent_db_path
+
     db_path = str(agent_db_path())
     if not os.path.exists(db_path):
         return []
@@ -305,17 +346,24 @@ def _get_recent_from_db(symbols: list[str], days: int = 30) -> list[dict]:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)).isoformat()
+        cutoff = (
+            datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+        ).isoformat()
         placeholders = ",".join("?" * len(symbols))
         rows = conn.execute(
             f"SELECT symbol, form_type, filing_date, filing_url, analysis_json, action_signal, urgency, created_at FROM sec_filings WHERE symbol IN ({placeholders}) AND created_at >= ? ORDER BY created_at DESC LIMIT 50",
-            (*symbols, cutoff)
+            (*symbols, cutoff),
         ).fetchall()
         return [
             {
-                "symbol": r[0], "form_type": r[1], "filing_date": r[2],
-                "filing_url": r[3], "analysis": json.loads(r[4]) if r[4] else {},
-                "action_signal": r[5], "urgency": r[6], "analyzed_at": r[7],
+                "symbol": r[0],
+                "form_type": r[1],
+                "filing_date": r[2],
+                "filing_url": r[3],
+                "analysis": json.loads(r[4]) if r[4] else {},
+                "action_signal": r[5],
+                "urgency": r[6],
+                "analyzed_at": r[7],
             }
             for r in rows
         ]
@@ -361,32 +409,44 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
                     continue
                 text = _fetch_filing_text(filing["url"])
                 if not text:
-                    # Still surface the filing so the dashboard isn't blank — metadata only.
-                    results.append({
-                        "symbol":        symbol.upper(),
-                        "form_type":     form_type,
-                        "filing_date":   filing["date"],
-                        "filing_url":    filing["url"],
-                        "action_signal": "NEUTRAL",
-                        "urgency":       "LOW",
-                        "analysis":      {
-                            "summary": f"{form_type} filed — full text unavailable for auto-analysis.",
-                            "action_signal": "NEUTRAL",
-                            "urgency": "LOW",
-                        },
-                    })
+                    # Surface the filing metadata, but never invent NEUTRAL/LOW
+                    # merely because source text is missing.
+                    results.append(
+                        {
+                            "symbol": symbol.upper(),
+                            "form_type": form_type,
+                            "filing_date": filing["date"],
+                            "filing_url": filing["url"],
+                            "action_signal": "PARSE_ERROR",
+                            "urgency": "UNKNOWN",
+                            "analysis": {
+                                "availability": "UNAVAILABLE",
+                                "unavailable_reason": "filing_text_unavailable",
+                                "summary": f"{form_type} filed — full text unavailable for auto-analysis.",
+                                "action_signal": "PARSE_ERROR",
+                                "urgency": "UNKNOWN",
+                            },
+                        }
+                    )
                     continue
                 analysis = _analyze_filing(symbol, filing, text)
                 _save_to_db(symbol, filing, analysis)
-                results.append({
-                    "symbol":        symbol,
-                    "form_type":     form_type,
-                    "filing_date":   filing["date"],
-                    "filing_url":    filing["url"],
-                    "action_signal": analysis.get("action_signal", "NEUTRAL"),
-                    "urgency":       analysis.get("urgency", "LOW"),
-                    "analysis":      analysis,
-                })
+                if analysis.get("availability") == "UNAVAILABLE" or analysis.get("error"):
+                    action_signal, urgency = "PARSE_ERROR", "UNKNOWN"
+                else:
+                    action_signal = analysis.get("action_signal", "NEUTRAL")
+                    urgency = analysis.get("urgency", "LOW")
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "form_type": form_type,
+                        "filing_date": filing["date"],
+                        "filing_url": filing["url"],
+                        "action_signal": action_signal,
+                        "urgency": urgency,
+                        "analysis": analysis,
+                    }
+                )
                 new_count += 1
                 analyses_done += 1
 
@@ -418,18 +478,20 @@ def discover_filing_cards(symbols: list[str], days_back: int = 30) -> list[dict]
                 if not url or url in seen_urls:
                     continue
                 seen_urls.add(url)
-                cards.append({
-                    "symbol":        symbol.upper(),
-                    "form_type":     form_type,
-                    "filing_date":   filing["date"],
-                    "filing_url":    url,
-                    "action_signal": "NEUTRAL",
-                    "urgency":       "LOW",
-                    "analysis":      {
-                        "summary": f"Recent {form_type} on EDGAR — run agents for Claude analysis.",
+                cards.append(
+                    {
+                        "symbol": symbol.upper(),
+                        "form_type": form_type,
+                        "filing_date": filing["date"],
+                        "filing_url": url,
                         "action_signal": "NEUTRAL",
-                    },
-                })
+                        "urgency": "LOW",
+                        "analysis": {
+                            "summary": f"Recent {form_type} on EDGAR — run agents for Claude analysis.",
+                            "action_signal": "NEUTRAL",
+                        },
+                    }
+                )
     cards.sort(key=lambda x: x.get("filing_date") or "", reverse=True)
     return cards[:20]
 

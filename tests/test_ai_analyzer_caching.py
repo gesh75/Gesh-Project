@@ -17,6 +17,7 @@ We assert two independent things per analyzer:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -24,6 +25,7 @@ import pytest
 import ai_analyzer
 
 # ─── Fakes ───────────────────────────────────────────────────────────────────
+
 
 class _TextBlock:
     """Mimics a plain-text content block from a Messages response."""
@@ -35,14 +37,23 @@ class _TextBlock:
 class _ToolBlock:
     """Mimics a tool_use content block (carries parsed `.input`)."""
 
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.type = "tool_use"  # _extract_tool_input() now iterates for type=="tool_use"
+    def __init__(self, payload: dict[str, Any], name: str = "return_portfolio_analysis") -> None:
+        self.type = "tool_use"
+        self.name = name
         self.input = payload
 
 
 class _FakeMessage:
-    def __init__(self, content: list[Any]) -> None:
+    def __init__(self, content: list[Any], stop_reason: str | None = "end_turn") -> None:
         self.content = content
+        self.stop_reason = stop_reason
+        self.usage = SimpleNamespace(
+            input_tokens=0,
+            output_tokens=0,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        self._request_id = "req_test"
 
 
 class _FakeStreamContext:
@@ -73,9 +84,8 @@ class _FakeMessages:
         return self._response
 
     def stream(self, **kwargs: Any) -> _FakeStreamContext:
-        # ai_analyzer._create_streaming() drives deep_analyze_portfolio through
-        # client.messages.stream(...).get_final_message() (2026-07-27, dodges a
-        # wall-clock timeout on long generations) — mirror create()'s capture.
+        # Gateway.stream() drives deep_analyze_portfolio through
+        # client.messages.stream(...).get_final_message().
         self._sink.clear()
         self._sink.update(kwargs)
         return _FakeStreamContext(self._response)
@@ -89,12 +99,26 @@ class _FakeClient:
 def _install_fake_client(
     monkeypatch: pytest.MonkeyPatch,
     response: _FakeMessage,
+    tmp_path: Any | None = None,
 ) -> dict[str, Any]:
     """Patch the Anthropic constructor; return the dict that records kwargs."""
+    import tempfile
+    from pathlib import Path
+
+    import llm_gateway
+
     sink: dict[str, Any] = {}
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
+    db = (
+        Path(tmp_path) / "llm_usage.db"
+        if tmp_path is not None
+        else Path(tempfile.mkdtemp()) / "llm_usage.db"
+    )
+    monkeypatch.setenv("LLM_USAGE_DB", str(db))
+    llm_gateway.reset_gateway()
     monkeypatch.setattr(
-        ai_analyzer.anthropic,
+        llm_gateway.anthropic,
         "Anthropic",
         lambda *a, **k: _FakeClient(response, sink),
     )
@@ -103,18 +127,19 @@ def _install_fake_client(
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _has_ephemeral_cache(blocks: Any) -> bool:
     """True if any content-block in `blocks` carries cache_control ephemeral."""
     if not isinstance(blocks, list):
         return False
     return any(
-        isinstance(b, dict)
-        and b.get("cache_control", {}).get("type") == "ephemeral"
+        isinstance(b, dict) and b.get("cache_control", {}).get("type") == "ephemeral"
         for b in blocks
     )
 
 
 # ─── analyze_portfolio (plain text) ──────────────────────────────────────────
+
 
 def test_analyze_portfolio_caches_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _FakeMessage([_TextBlock("RISK SCORE: 4/10")])
@@ -135,9 +160,10 @@ def test_analyze_portfolio_caches_system_prompt(monkeypatch: pytest.MonkeyPatch)
 
 # ─── deep_analyze_portfolio (tool use / JSON) ────────────────────────────────
 
+
 def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = {"portfolio_score": 72, "portfolio_verdict": "balanced"}
-    response = _FakeMessage([_ToolBlock(parsed)])
+    response = _FakeMessage([_ToolBlock(parsed, name="return_portfolio_analysis")])
     sink = _install_fake_client(monkeypatch, response)
 
     result = ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]})
@@ -147,8 +173,9 @@ def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPa
     assert sink["system"][0]["text"] == ai_analyzer.DEEP_SYSTEM_PROMPT
     # ...and the large static tool schema is also cache-tagged.
     assert sink["tools"][-1]["cache_control"]["type"] == "ephemeral"
-    # Schema content is unchanged (no behavior change).
-    assert sink["tools"][0]["input_schema"] is ai_analyzer.DEEP_ANALYSIS_SCHEMA
+    # Strict-mode tool: deepcopy schema with additionalProperties=false everywhere.
+    assert sink["tools"][0]["strict"] is True
+    assert sink["tools"][0]["input_schema"]["additionalProperties"] is False
 
     # (b) parsed tool output is returned verbatim.
     assert result == parsed
@@ -156,9 +183,10 @@ def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPa
 
 # ─── analyze_screener (tool use / JSON) ──────────────────────────────────────
 
+
 def test_analyze_screener_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = {"screen_summary": "ok", "market_bias": "neutral", "top_sectors": [], "picks": []}
-    response = _FakeMessage([_ToolBlock(parsed)])
+    response = _FakeMessage([_ToolBlock(parsed, name="return_screener_picks")])
     sink = _install_fake_client(monkeypatch, response)
 
     result = ai_analyzer.analyze_screener([{"symbol": "NVDA"}])
@@ -167,13 +195,15 @@ def test_analyze_screener_caches_system_and_tool_schema(monkeypatch: pytest.Monk
     assert _has_ephemeral_cache(sink["system"]), sink["system"]
     assert sink["system"][0]["text"] == ai_analyzer.SCREENER_SYSTEM_PROMPT
     assert sink["tools"][-1]["cache_control"]["type"] == "ephemeral"
-    assert sink["tools"][0]["input_schema"] is ai_analyzer.SCREENER_SCHEMA
+    assert sink["tools"][0]["strict"] is True
+    assert sink["tools"][0]["input_schema"]["additionalProperties"] is False
 
     # (b) parsed result preserved.
     assert result == parsed
 
 
 # ─── Sanity: model selection unchanged (pure caching, not routing) ───────────
+
 
 def test_model_selection_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _FakeMessage([_TextBlock("ok")])

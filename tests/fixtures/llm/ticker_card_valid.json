@@ -1,0 +1,43 @@
+{
+  "symbol": "AAPL",
+  "company_type": "Mega-cap consumer tech",
+  "scores": {
+    "valuation": 45,
+    "growth": 62,
+    "health": 90,
+    "momentum": 55,
+    "dividend": 30
+  },
+  "snowflake_summary": "Healthy balance sheet, fair value, moderate growth.",
+  "fair_value": {
+    "estimate": 180.0,
+    "current": 195.0,
+    "status": "OVERVALUED",
+    "pct_diff": -7.7
+  },
+  "risks": [
+    {
+      "text": "Trades ~8% above a $180 intrinsic estimate.",
+      "severity": "MEDIUM"
+    }
+  ],
+  "rewards": [
+    {
+      "text": "Net-cash fortress with durable services growth."
+    }
+  ],
+  "prediction": {
+    "3m": "$185-205",
+    "12m": "$170-230",
+    "rationale": "Range-bound near fair value."
+  },
+  "verdict": "HOLD",
+  "analyst_note": "Wall St target ~$210; our fair value is $180 — wait for a pullback.",
+  "bear_case": {
+    "thesis": "Services growth decelerates below 8% YoY while the multiple still prices in mid-teens growth, closing the gap to fair value from the other side.",
+    "invalidators": [
+      "Services revenue growth prints below 8% YoY next quarter",
+      "Gross margin falls below 44% for two consecutive quarters"
+    ]
+  }
+}
