@@ -83,15 +83,20 @@ def reconcile(store_id: str | None = None) -> dict[str, Any]:
             continue
 
         tier = billing._tier_for(variant, a.get("variant_name", ""), a.get("product_name", ""))
-        user = auth_users.get_user(email)
+        # A Lemon Squeezy billing email is mutable; the subscription id is the
+        # authoritative account identity.  Prefer the bound account so an email
+        # change cannot create a second, unbound login or evade later revocation.
+        user = auth_users.get_user_by_sub_id(sub_id) or auth_users.get_user(email)
+        account_email = user["email"] if user else email
 
         if status in _ENDED_STATUSES:
             # Revoke ONLY the account bound to THIS subscription (never comp'd rows).
             if user and user.get("is_active") and user.get("billing_sub_id") == sub_id:
-                auth_users.set_active(email, False)
-                auth_users.set_billing(email, status="expired")
-                summary["revoked"].append(email)
-                logger.warning("reconcile: revoked %s (LS sub %s is %s)", email, sub_id, status)
+                auth_users.set_active(account_email, False)
+                auth_users.set_billing(account_email, status="expired")
+                summary["revoked"].append(account_email)
+                logger.warning("reconcile: revoked %s (LS sub %s is %s)",
+                               account_email, sub_id, status)
             continue
 
         if status in _ACCESS_STATUSES:
@@ -101,15 +106,16 @@ def reconcile(store_id: str | None = None) -> dict[str, Any]:
                                sub_id, email, variant)
                 continue
             if user is None or not user.get("is_active"):
-                billing.provision(email, tier, str(a.get("customer_id") or "") or None,
+                billing.provision(account_email, tier,
+                                  str(a.get("customer_id") or "") or None,
                                   sub_id, event_at=a.get("updated_at") or "")
-                summary["provisioned"].append(email)
+                summary["provisioned"].append(account_email)
                 logger.warning("reconcile: provisioned %s tier=%s (missed webhook? LS sub %s %s)",
-                               email, tier, sub_id, status)
+                               account_email, tier, sub_id, status)
             elif user.get("billing_sub_id") == sub_id and user.get("tier") != tier:
-                auth_users.set_billing(email, tier=tier)
-                summary["tier_fixed"].append(email)
-                logger.warning("reconcile: fixed tier for %s -> %s", email, tier)
+                auth_users.set_billing(account_email, tier=tier)
+                summary["tier_fixed"].append(account_email)
+                logger.warning("reconcile: fixed tier for %s -> %s", account_email, tier)
 
     healed = len(summary["provisioned"]) + len(summary["revoked"]) + len(summary["tier_fixed"])
     summary["healed"] = healed
