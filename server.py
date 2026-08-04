@@ -4327,10 +4327,10 @@ _TICKER_CARD_TTL = 900  # 15 min
 _ticker_card_cache: dict[str, tuple[float, dict]] = {}
 _ticker_card_lock = threading.Lock()
 # Single-flight: per-symbol asyncio locks so N concurrent first requests for a hot
-# ticker spend ONE Claude call, not N — the waiters find the cache filled. Also the
-# eviction hook: expired cache entries (and their locks) are purged on every store,
-# so neither dict grows past the set of symbols queried in the last TTL window.
-_ticker_card_flight: dict[str, asyncio.Lock] = {}
+# ticker spend ONE Claude call, not N — the waiters find the cache filled. Each entry
+# also counts its leader and waiters, allowing it to be removed as soon as the last
+# request leaves (including 404s and upstream failures).
+_ticker_card_flight: dict[str, tuple[asyncio.Lock, int]] = {}
 
 
 def _ticker_card_get(sym: str) -> dict | None:
@@ -4345,9 +4345,33 @@ def _ticker_card_store(sym: str, card: dict) -> None:
         _ticker_card_cache[sym] = (now, card)
         for k in [k for k, (ts, _) in _ticker_card_cache.items() if (now - ts) >= _TICKER_CARD_TTL]:
             del _ticker_card_cache[k]
-            lock = _ticker_card_flight.get(k)
-            if lock is not None and not lock.locked():
-                del _ticker_card_flight[k]
+
+
+def _ticker_card_join_flight(sym: str) -> asyncio.Lock:
+    """Join ``sym``'s active flight and account for this request.
+
+    This runs without an ``await`` on the application's event-loop thread, so the
+    read/update is atomic with respect to other endpoint coroutines.
+    """
+    entry = _ticker_card_flight.get(sym)
+    if entry is None:
+        flight = asyncio.Lock()
+        _ticker_card_flight[sym] = (flight, 1)
+        return flight
+    flight, users = entry
+    _ticker_card_flight[sym] = (flight, users + 1)
+    return flight
+
+
+def _ticker_card_leave_flight(sym: str, flight: asyncio.Lock) -> None:
+    """Release a request's flight reference, deleting the entry at zero users."""
+    entry = _ticker_card_flight.get(sym)
+    if entry is None or entry[0] is not flight:
+        return
+    if entry[1] == 1:
+        del _ticker_card_flight[sym]
+    else:
+        _ticker_card_flight[sym] = (flight, entry[1] - 1)
 
 
 def _price_quality(sym: str, price) -> tuple[bool, str]:
@@ -4445,82 +4469,85 @@ async def analyze_ticker_endpoint(request: Request):
     try:
         # Single-flight per symbol: the ~15s LLM call means concurrent first
         # requests are the norm for a hot ticker — followers wait on the leader's
-        # lock, then re-check the cache instead of spending again. setdefault is
-        # safe here: this coroutine runs on the single event loop, unawaited.
-        flight = _ticker_card_flight.setdefault(sym, asyncio.Lock())
-        async with flight:
-            card = _ticker_card_get(sym)
-            if card is not None:
-                auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
-                return {"status": "ok", "data": card, "cached": True}
-            # Quota gate sits AFTER the cache re-check (cached hits are free) and
-            # BEFORE any spend — a capped user costs nothing, not even the quote.
-            email = _session_email(request)
-            reservation = _reserve_customer_quota(email, "ticker_card")
-            # Ground the valuation on a REAL quote: no price = unknown ticker / data
-            # outage → 404 rather than let the model fabricate a price and card.
-            price, pmeta = await asyncio.to_thread(_latest_close_meta, sym)
-            if price is None:
-                raise HTTPException(status_code=404, detail="No market data for this ticker")
-            # Cross-source price quality is checked BEFORE the spend so strict mode can
-            # refuse to build a decision on a broken feed at zero LLM cost (Codex #3).
-            suspect, reason = await asyncio.to_thread(_price_quality, sym, price)
-            if suspect and price_sanity.strict_reject_enabled():
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Price rejected as unreliable — {reason}. "
-                    "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).",
-                )
-            card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
-            # Warn-only default: mark the DECISION output when the grounding quote is
-            # cross-source-suspect — the card was built on this price, so the user must see it.
-            if suspect and isinstance(card, dict):
-                card["price_suspect"] = True
-                card["price_suspect_reason"] = reason
-            # Stamp when the AI card was generated so the UI can tag it "AI-GENERATED
-            # · <time>" and never let it hide under a global "LIVE" banner (GESH-4/5).
-            if isinstance(card, dict):
-                card["generated_at"] = _dt.now(_tz.utc).isoformat()
-                # Unified degraded-decision block (Codex #6): same shape the /api/levels
-                # setup and the dashboard/audit read, plus a structured degraded log.
-                decision_quality.attach(
-                    card,
-                    _quality_block(pmeta, suspect, reason, as_of=card["generated_at"]),
-                    context=f"analyze-ticker:{sym}",
-                )
-                # Provenance strip (feature 2): a compact, ALWAYS-present block the
-                # UI renders under every card — timestamp, model, price feed, and
-                # the suspect flag so trust signals never depend on parsing prose.
-                card["provenance"] = {
-                    "generated_at": card.get("generated_at"),
-                    "price_source": pmeta.get("source"),
-                    "price_as_of": card.get("generated_at"),
-                    "model": MODEL,
-                    "suspect": bool(suspect),
-                    "suspect_reason": reason if suspect else None,
-                }
-                # ONE stance, with the disagreement stated. The mechanical verdict
-                # and this card's valuation opinion used to be rendered side by
-                # side with equal weight — "STRONG BUY" next to "HOLD, overvalued
-                # −18.1%" for the same symbol off the same snapshot (audit BUG-03).
-                card["reconciliation"] = _reconcile_card(sym, card)
-            _ticker_card_store(sym, card)
-            if reservation is None:
-                auth_users.log_usage(email, "ticker_card", sym)
-            else:
-                user_id, reservation_id = reservation
-                # Paid work has happened: never release this slot, even if the
-                # cosmetic reserved→completed transition temporarily fails.
-                reservation = None
-                try:
-                    completed = auth_users.complete_usage(reservation_id, user_id)
-                except Exception:
-                    completed = False
-                if not completed:
-                    logger.warning(
-                        "ticker-card quota reservation completion failed: %s", reservation_id
+        # lock, then re-check the cache instead of spending again. Joining is safe
+        # here: this coroutine runs on the single event loop without an await.
+        flight = _ticker_card_join_flight(sym)
+        try:
+            async with flight:
+                card = _ticker_card_get(sym)
+                if card is not None:
+                    auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
+                    return {"status": "ok", "data": card, "cached": True}
+                # Quota gate sits AFTER the cache re-check (cached hits are free) and
+                # BEFORE any spend — a capped user costs nothing, not even the quote.
+                email = _session_email(request)
+                reservation = _reserve_customer_quota(email, "ticker_card")
+                # Ground the valuation on a REAL quote: no price = unknown ticker / data
+                # outage → 404 rather than let the model fabricate a price and card.
+                price, pmeta = await asyncio.to_thread(_latest_close_meta, sym)
+                if price is None:
+                    raise HTTPException(status_code=404, detail="No market data for this ticker")
+                # Cross-source price quality is checked BEFORE the spend so strict mode can
+                # refuse to build a decision on a broken feed at zero LLM cost (Codex #3).
+                suspect, reason = await asyncio.to_thread(_price_quality, sym, price)
+                if suspect and price_sanity.strict_reject_enabled():
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Price rejected as unreliable — {reason}. "
+                        "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).",
                     )
-            return {"status": "ok", "data": card, "cached": False}
+                card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
+                # Warn-only default: mark the DECISION output when the grounding quote is
+                # cross-source-suspect — the card was built on this price, so the user must see it.
+                if suspect and isinstance(card, dict):
+                    card["price_suspect"] = True
+                    card["price_suspect_reason"] = reason
+                # Stamp when the AI card was generated so the UI can tag it "AI-GENERATED
+                # · <time>" and never let it hide under a global "LIVE" banner (GESH-4/5).
+                if isinstance(card, dict):
+                    card["generated_at"] = _dt.now(_tz.utc).isoformat()
+                    # Unified degraded-decision block (Codex #6): same shape the /api/levels
+                    # setup and the dashboard/audit read, plus a structured degraded log.
+                    decision_quality.attach(
+                        card,
+                        _quality_block(pmeta, suspect, reason, as_of=card["generated_at"]),
+                        context=f"analyze-ticker:{sym}",
+                    )
+                    # Provenance strip (feature 2): a compact, ALWAYS-present block the
+                    # UI renders under every card — timestamp, model, price feed, and
+                    # the suspect flag so trust signals never depend on parsing prose.
+                    card["provenance"] = {
+                        "generated_at": card.get("generated_at"),
+                        "price_source": pmeta.get("source"),
+                        "price_as_of": card.get("generated_at"),
+                        "model": MODEL,
+                        "suspect": bool(suspect),
+                        "suspect_reason": reason if suspect else None,
+                    }
+                    # ONE stance, with the disagreement stated. The mechanical verdict
+                    # and this card's valuation opinion used to be rendered side by
+                    # side with equal weight — "STRONG BUY" next to "HOLD, overvalued
+                    # −18.1%" for the same symbol off the same snapshot (audit BUG-03).
+                    card["reconciliation"] = _reconcile_card(sym, card)
+                _ticker_card_store(sym, card)
+                if reservation is None:
+                    auth_users.log_usage(email, "ticker_card", sym)
+                else:
+                    user_id, reservation_id = reservation
+                    # Paid work has happened: never release this slot, even if the
+                    # cosmetic reserved→completed transition temporarily fails.
+                    reservation = None
+                    try:
+                        completed = auth_users.complete_usage(reservation_id, user_id)
+                    except Exception:
+                        completed = False
+                    if not completed:
+                        logger.warning(
+                            "ticker-card quota reservation completion failed: %s", reservation_id
+                        )
+                return {"status": "ok", "data": card, "cached": False}
+        finally:
+            _ticker_card_leave_flight(sym, flight)
     except HTTPException:
         _release_customer_quota(reservation)
         raise
