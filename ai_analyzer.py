@@ -98,20 +98,16 @@ def _spent_today_usd() -> float:
     try:
         today = datetime.now(timezone.utc).date().isoformat()
         total = 0.0
-        # Read only the TAIL: rows are append-only so today's are always at the end.
-        # Bounds the per-call budget check no matter how large the log grows (1 MiB ≫
-        # any single day). A partial first line after the seek fails json.loads → skipped.
-        with open(_USAGE_LOG, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 1_048_576))
-            chunk = f.read().decode("utf-8", "replace")
-        for line in chunk.splitlines():
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if str(row.get("ts", "")).startswith(today):
-                total += float(row.get("est_cost_usd", 0) or 0)
+        # Scan the complete append-only ledger: a fixed-size tail can omit earlier
+        # same-day rows and let actual spend exceed the configured daily cap.
+        with open(_USAGE_LOG, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if str(row.get("ts", "")).startswith(today):
+                    total += float(row.get("est_cost_usd", 0) or 0)
         return total
     except FileNotFoundError:
         return 0.0
