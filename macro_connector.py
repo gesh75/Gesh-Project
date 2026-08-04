@@ -39,6 +39,7 @@ import numpy as np
 import requests
 
 import price_source  # locked yf.download adapter (thread-safety)
+from run_manifest import atomic_write_json
 # ── Optional fredapi ──────────────────────────────────────────────────────────
 try:
     from fredapi import Fred
@@ -98,10 +99,8 @@ def _load_cache() -> dict | None:
 
 def _save_cache(data: dict) -> None:
     try:
-        # Atomic (temp + replace) so a concurrent reader never sees a half-write.
-        tmp = CACHE_FILE.with_name(CACHE_FILE.name + ".tmp")
-        tmp.write_text(json.dumps(data, default=str))
-        tmp.replace(CACHE_FILE)
+        # Use a unique sibling temp file: multiple processes can refresh this cache.
+        atomic_write_json(CACHE_FILE, data)
     except Exception:
         pass
 
