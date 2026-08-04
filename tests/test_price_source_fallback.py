@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 import price_source
+import server
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +134,41 @@ def test_yf_download_falls_back_on_yahoo_401(monkeypatch, fake_rh):
     assert df is not None
     assert list(df.columns) == ["Open", "High", "Low", "Close", "Volume"]
     assert len(df) >= 5
+
+
+def test_customer_safe_fallback_never_uses_authenticated_session(monkeypatch, fake_rh):
+    """A request-scoped fallback cannot spend the owner's broker session quota."""
+    _yahoo_dead(monkeypatch)
+    called = {"authenticated": False, "public": False}
+    fake_rh.get_stock_historicals = lambda *a, **k: called.__setitem__("authenticated", True)
+    monkeypatch.setattr(
+        price_source, "_ensure_rh_session",
+        lambda: pytest.fail("customer fallback attempted to restore the owner session"),
+    )
+
+    def _public_history(symbol, span):
+        called["public"] = True
+        rows = _fake_rows(symbol)
+        return pd.DataFrame(
+            [{"Open": float(r["open_price"]), "High": float(r["high_price"]),
+              "Low": float(r["low_price"]), "Close": float(r["close_price"]),
+              "Volume": float(r["volume"])} for r in rows],
+            index=pd.to_datetime([r["begins_at"] for r in rows]),
+        )
+
+    monkeypatch.setattr(price_source, "_rh_history_one_unauth", _public_history)
+    with price_source.unauthenticated_rh_fallback():
+        df = price_source.yf_download("OBSCURE", period="1y")
+
+    assert df is not None
+    assert called == {"authenticated": False, "public": True}
+
+
+def test_explainability_is_heavy_and_rejects_malformed_symbols():
+    assert "/api/explainability/NVDA".startswith(server._HEAVY_PREFIXES)
+    with pytest.raises(server.HTTPException) as exc:
+        server._safe_symbol("BAD$$$")
+    assert exc.value.status_code == 400
 
 
 # ─── yf_download: Yahoo healthy → its frame is returned untouched ──────────────

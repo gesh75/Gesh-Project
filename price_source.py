@@ -37,6 +37,8 @@ import pickle  # noqa: S403  # nosec B403 — loads only the user's own RH sessi
 import threading
 import time
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import pandas as pd
 
@@ -169,6 +171,23 @@ _PICKLE_PATH = os.path.expanduser("~/.tokens/robinhoodrobinhood_session.pickle")
 _RH_SESSION_READY: bool | None = None
 _RH_SESSION_CHECKED_AT: float = 0.0
 _RH_SESSION_RETRY_S = float(os.getenv("RH_SESSION_RETRY_S", "300"))
+
+# Customer-triggered analysis must never borrow the owner's authenticated broker
+# session.  A ContextVar keeps the restriction local to the current request while
+# scheduled/owner engine runs retain the resilient authenticated fallback.
+_ALLOW_AUTHENTICATED_RH: ContextVar[bool] = ContextVar(
+    "allow_authenticated_robinhood_price_fallback", default=True
+)
+
+
+@contextmanager
+def unauthenticated_rh_fallback():
+    """Restrict Robinhood price fallback to its public, unauthenticated feed."""
+    token = _ALLOW_AUTHENTICATED_RH.set(False)
+    try:
+        yield
+    finally:
+        _ALLOW_AUTHENTICATED_RH.reset(token)
 
 
 def _usable_rows(frame: pd.DataFrame | None) -> int:
@@ -372,7 +391,7 @@ def _rh_history_one(symbol: str, span: str, interval: str) -> pd.DataFrame | Non
     daily endpoint (daily intervals only) so fetches survive the VPN block.
     """
     rows = None
-    if _RH_SESSION_READY:
+    if _ALLOW_AUTHENTICATED_RH.get() and _RH_SESSION_READY:
         try:
             import robin_stocks.robinhood as rh
             rows = rh.get_stock_historicals(
@@ -427,7 +446,8 @@ def rh_fallback(
     the fallback still works when the RH session is expired (the common case —
     robin_stocks 3.4.0 cannot refresh it) or absent.
     """
-    _ensure_rh_session()   # populate _RH_SESSION_READY; never gate on it (unauth fallback)
+    if _ALLOW_AUTHENTICATED_RH.get():
+        _ensure_rh_session()  # populate session only for trusted host-side callers
 
     span = _span_from_period(period, start, end)
     rh_interval = _interval_to_rh(interval)
