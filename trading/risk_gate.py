@@ -128,6 +128,10 @@ def _quote_age_seconds(portfolio: dict[str, Any]) -> float | None:
             # data_fetcher snapshot age) treats naive as UTC; do the same so the
             # freshness gate actually measures age instead of failing closed on a
             # format quirk. The staleness threshold itself is unchanged.
+            #
+            # MIRROR: the 9003 sidecar imports gesh-core's risk_gate copy — keep
+            # the identical naive→UTC treatment there or autopilot will still
+            # false-reject on fresh snapshots (deep-audit P0, PR #186).
             ts = ts.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - ts).total_seconds()
     except Exception:
