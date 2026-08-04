@@ -49,6 +49,30 @@ def test_expired_sub_revokes_only_matching_account(sandbox, monkeypatch):
     assert auth_users.get_user("comped@example.com")["is_active"]  # untouched
 
 
+def test_changed_billing_email_does_not_create_duplicate(sandbox, monkeypatch):
+    billing.provision("original@example.com", "observer", "c1", "77")
+    monkeypatch.setattr(br, "fetch_all_subscriptions",
+                        lambda store: [_sub(77, "changed@example.com", "active")])
+
+    out = br.reconcile("421028")
+
+    assert out["healed"] == 0
+    assert auth_users.get_user("changed@example.com") is None
+    assert auth_users.get_user_by_sub_id("77")["email"] == "original@example.com"
+
+
+def test_changed_billing_email_revokes_subscription_bound_account(sandbox, monkeypatch):
+    billing.provision("original@example.com", "observer", "c1", "77")
+    monkeypatch.setattr(br, "fetch_all_subscriptions",
+                        lambda store: [_sub(77, "changed@example.com", "expired")])
+
+    out = br.reconcile("421028")
+
+    assert out["revoked"] == ["original@example.com"]
+    assert not auth_users.get_user("original@example.com")["is_active"]
+    assert auth_users.get_user("changed@example.com") is None
+
+
 def test_in_sync_and_cancelled_users_untouched(sandbox, monkeypatch):
     billing.provision("ok@example.com", "observer", "c1", "5")
     monkeypatch.setattr(br, "fetch_all_subscriptions",
