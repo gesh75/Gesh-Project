@@ -82,7 +82,10 @@ tg_alert() {
 
 # Cap the append-forever log at ~5MB (keep the most recent ~1MB).
 if [ -f "$LOG" ] && [ "$(stat -f%z "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
-    tail -c 1048576 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+    LOG_TMP=$(mktemp "${LOG}.tmp.XXXXXX") || exit 1
+    if ! tail -c 1048576 "$LOG" > "$LOG_TMP" || ! mv "$LOG_TMP" "$LOG"; then
+        rm -f "$LOG_TMP"
+    fi
 fi
 
 exec >>"$LOG" 2>&1
