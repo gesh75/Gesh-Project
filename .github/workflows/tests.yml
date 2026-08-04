@@ -71,8 +71,9 @@ jobs:
         env:
           GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
         run: |
-          # Keep the credential in a step-scoped temporary config. The trap
-          # removes it before any repository-controlled test code executes.
+          python -m pip install --upgrade pip
+          # Use the credential only for a data-only clone. --no-checkout keeps
+          # repository-controlled files from being processed while it is live.
           export GIT_CONFIG_GLOBAL="$(mktemp)"
           trap 'rm -f "$GIT_CONFIG_GLOBAL"' EXIT
           if [ -n "$GESH_CORE_PAT" ]; then
@@ -80,7 +81,12 @@ jobs:
           else
             echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
           fi
-          python -m pip install --upgrade pip
+          git clone --no-checkout https://github.com/gesh75/gesh-core.git "$RUNNER_TEMP/gesh-core"
+          rm -f "$GIT_CONFIG_GLOBAL"
+          unset GESH_CORE_PAT GIT_CONFIG_GLOBAL
+          trap - EXIT
+          git -C "$RUNNER_TEMP/gesh-core" checkout --detach d4e9f467c8fcb1ec952245469f6ac15d16a52075
+          test "$(git -C "$RUNNER_TEMP/gesh-core" rev-parse HEAD)" = d4e9f467c8fcb1ec952245469f6ac15d16a52075
           # Install the RUNTIME FROM THE LOCK, not from requirements.txt. The
           # lock is the fully-resolved manifest, so the tree CI tests is exactly
           # the tree that was reviewed — including gesh-core at its pinned,
@@ -93,7 +99,9 @@ jobs:
           # No dependency cache is configured: every run installs freshly from
           # the lock, which is deterministic. If caching is added later, the key
           # must include the Python version and the requirements.lock hash.
-          pip install -r requirements.lock
+          grep -v '^gesh-core @' requirements.lock > "$RUNNER_TEMP/public-requirements.lock"
+          pip install -r "$RUNNER_TEMP/public-requirements.lock"
+          pip install --no-deps "$RUNNER_TEMP/gesh-core"
           # Fail fast on a broken dependency graph rather than at import time.
           pip check
           # Test + lint tooling, intentionally separate from the runtime lock:
@@ -129,6 +137,7 @@ jobs:
         env:
           GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
         run: |
+          python -m pip install --upgrade pip
           export GIT_CONFIG_GLOBAL="$(mktemp)"
           trap 'rm -f "$GIT_CONFIG_GLOBAL"' EXIT
           if [ -n "$GESH_CORE_PAT" ]; then
@@ -136,10 +145,17 @@ jobs:
           else
             echo "::warning::GESH_CORE_PAT not set — the private gesh-core dependency will fail to install."
           fi
-          python -m pip install --upgrade pip
+          git clone --no-checkout https://github.com/gesh75/gesh-core.git "$RUNNER_TEMP/gesh-core"
+          rm -f "$GIT_CONFIG_GLOBAL"
+          unset GESH_CORE_PAT GIT_CONFIG_GLOBAL
+          trap - EXIT
+          git -C "$RUNNER_TEMP/gesh-core" checkout --detach d4e9f467c8fcb1ec952245469f6ac15d16a52075
+          test "$(git -C "$RUNNER_TEMP/gesh-core" rev-parse HEAD)" = d4e9f467c8fcb1ec952245469f6ac15d16a52075
           # Runtime from the lock (see the test job) so both gates run against
           # the identical, reviewed dependency tree.
-          pip install -r requirements.lock
+          grep -v '^gesh-core @' requirements.lock > "$RUNNER_TEMP/public-requirements.lock"
+          pip install -r "$RUNNER_TEMP/public-requirements.lock"
+          pip install --no-deps "$RUNNER_TEMP/gesh-core"
           pip check
           pip install pytest ruff
       - name: Customer-isolation leak sweep + XSS wiring (deterministic, in-process)
