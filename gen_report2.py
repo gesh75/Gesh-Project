@@ -8,8 +8,24 @@ from pathlib import Path
 
 from run_manifest import report_output_path
 
+
+def _html(value):
+    """Escape untrusted engine/LLM values before inserting them into HTML."""
+    return _esc(str(value), quote=True)
+
+
+def _json_script(value):
+    """Serialize data for an inline script without permitting ``</script>``."""
+    return (json.dumps(value)
+            .replace('<', r'\u003c')
+            .replace('>', r'\u003e')
+            .replace('&', r'\u0026')
+            .replace('\u2028', r'\u2028')
+            .replace('\u2029', r'\u2029'))
+
 BASE = Path(__file__).parent
-with open(BASE / 'engine_results.json') as f:
+engine_results_path = Path(os.environ.get('GESH_ENGINE_RESULTS') or BASE / 'engine_results.json')
+with open(engine_results_path) as f:
     eng = json.load(f)
 
 holdings    = eng['holdings']
@@ -92,7 +108,7 @@ def regime_badge(r):
     col = {'TRENDING':'#00d4ff','MOMENTUM-HIGH':'#f0b429',
            'BREAKOUT-READY':'#00e87a','RANGING':'#aaa',
            'MOMENTUM-LOW':'#ff7c3a'}.get(r,'#aaa')
-    return f'<span class="badge" style="background:{col}22;color:{col};border:1px solid {col}44">{r}</span>'
+    return f'<span class="badge" style="background:{col}22;color:{col};border:1px solid {col}44">{_html(r)}</span>'
 
 def pct_bar(val, max_val=100):
     pct = min(abs(float(val or 0)) / max_val * 100, 100)
@@ -134,7 +150,7 @@ for h in holdings:
     col   = '#00e87a' if pch >= 0 else '#ff3c5a'
     arrow = '▲' if pch >= 0 else '▼'
     tape_items.append(
-        f'<span class="tape-item"><b>{sym}</b> <span style="color:{col}">{arrow} ${px:,.2f} ({pch:+.2f}%)</span></span>'
+        f'<span class="tape-item"><b>{_html(sym)}</b> <span style="color:{col}">{arrow} ${px:,.2f} ({pch:+.2f}%)</span></span>'
     )
 tape_html = ' &nbsp;|&nbsp; '.join(tape_items * 3)
 
@@ -190,12 +206,12 @@ def holding_card(h):
         sf_html += snowflake_bar(scores.get(key, 0), lbl)
 
     risks_html = ''.join(
-        f'<li class="risk-item sev-{(x.get("severity","") if isinstance(x,dict) else "").lower()}">'
-        f'{x["text"] if isinstance(x,dict) else str(x)}</li>'
+        f'<li class="risk-item">'
+        f'{_html(x.get("text", "") if isinstance(x,dict) else x)}</li>'
         for x in risks_raw[:2]
     )
     rewards_html = ''.join(
-        f'<li class="reward-item">{x["text"] if isinstance(x,dict) else str(x)}</li>'
+        f'<li class="reward-item">{_html(x.get("text", "") if isinstance(x,dict) else x)}</li>'
         for x in rewards_raw[:2]
     )
 
@@ -216,7 +232,7 @@ def holding_card(h):
 <div class="holding-card">
   <div class="hc-header">
     <div>
-      <span class="hc-sym">{sym}</span>
+      <span class="hc-sym">{_html(sym)}</span>
       {regime_badge(reg_name)}
       <span class="hc-verdict-badge" style="color:{act_col};border:1px solid {act_col}44;background:{act_col}15;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700">{act}{(' ✋' if reason else '')}</span>
     </div>
@@ -235,10 +251,10 @@ def holding_card(h):
       <div class="hc-section-title">Consensus <span style="font-size:10px;color:#888">({nodes} nodes, conf {conf:.0f}%)</span></div>
       <div class="consensus-row">
         <span class="cons-icon">{verdict_icon(verdict)}</span>
-        <span class="cons-verdict">{verdict}</span>
+        <span class="cons-verdict">{_html(verdict)}</span>
         <span class="cons-score" style="color:{score_col((score+1)/2*100)}">score {score:+.2f}</span>
       </div>
-      {f'<div class="explain-headline">{headline}</div>' if headline else ''}
+      {f'<div class="explain-headline">{_html(headline)}</div>' if headline else ''}
       <div class="hc-section-title" style="margin-top:10px">Kelly Sizing</div>
       <div class="kelly-row">
         <span>Now {curr_pct:.1f}%</span>
@@ -253,7 +269,7 @@ def holding_card(h):
       {sf_html}
       <div class="hc-section-title" style="margin-top:10px">Fair Value</div>
       <div>
-        <span style="font-size:13px;color:{fv_col}">{fv_status}</span>
+        <span style="font-size:13px;color:{fv_col}">{_html(fv_status)}</span>
         <span style="font-size:11px;color:#888;margin-left:6px">est ${fv_est:,.0f} ({fv_diff:+.1f}%)</span>
       </div>
     </div>
@@ -267,14 +283,14 @@ def holding_card(h):
       <div class="hc-section-title">Predictions</div>
       <div class="pred-block">
         <div class="pred-label">3M</div>
-        <div class="pred-text">{pred_3m}</div>
+        <div class="pred-text">{_html(pred_3m)}</div>
       </div>
       <div class="pred-block" style="margin-top:8px">
         <div class="pred-label">12M</div>
-        <div class="pred-text">{pred_12m}</div>
+        <div class="pred-text">{_html(pred_12m)}</div>
       </div>
       <div class="hc-section-title" style="margin-top:10px">AI Verdict</div>
-      <div style="font-size:11px;color:#ccc;line-height:1.5">{verdict_ai}</div>
+      <div style="font-size:11px;color:#ccc;line-height:1.5">{_html(verdict_ai)}</div>
     </div>
   </div>
 </div>'''
@@ -291,9 +307,9 @@ for rec in recs:
     rat      = rec.get('rationale','') if isinstance(rec,dict) else ''
     col      = pri_col.get(pri, '#888')
     action_rows += f'''<tr>
-      <td><span style="color:{col};font-weight:700;font-size:11px">{pri}</span></td>
-      <td style="color:#e0e0e0">{act_text}</td>
-      <td style="color:#888;font-size:11px">{rat}</td>
+      <td><span style="color:{col};font-weight:700;font-size:11px">{_html(pri)}</span></td>
+      <td style="color:#e0e0e0">{_html(act_text)}</td>
+      <td style="color:#888;font-size:11px">{_html(rat)}</td>
     </tr>'''
 
 # ─── Paper & risk-gate audit section (from run_paper_gate2, step 4/5) ─────────
@@ -484,7 +500,7 @@ for rk in port_risks:
     txt = rk.get('text','') if isinstance(rk,dict) else str(rk)
     sev = rk.get('severity','') if isinstance(rk,dict) else ''
     col = sev_col.get(sev,'#888')
-    risks_html_list += f'<div class="port-risk"><span class="sev-pill" style="background:{col}22;color:{col}">{sev}</span> {txt}</div>\n'
+    risks_html_list += f'<div class="port-risk"><span class="sev-pill" style="background:{col}22;color:{col}">{_html(sev)}</span> {_html(txt)}</div>\n'
 
 # ─── Regime cards ─────────────────────────────────────────────────────────────
 regime_cards_html = ''
@@ -498,10 +514,10 @@ for rd in regimes_list:
     desc = rd.get('description','')
     col  = {'TRENDING':'#00d4ff','MOMENTUM-HIGH':'#f0b429','BREAKOUT-READY':'#00e87a','RANGING':'#aaa'}.get(reg,'#aaa')
     regime_cards_html += f'''<div class="regime-card" style="border-left:3px solid {col}">
-  <div class="rc-sym">{sym}</div>
-  <div class="rc-regime" style="color:{col}">{reg}</div>
+  <div class="rc-sym">{_html(sym)}</div>
+  <div class="rc-regime" style="color:{col}">{_html(reg)}</div>
   <div class="rc-stats">ADX {adx:.0f} &nbsp;|&nbsp; RSI {rsi:.0f} &nbsp;|&nbsp; BB-W {bb:.0f}% &nbsp;|&nbsp; %B {pctb:.0f}%</div>
-  <div class="rc-desc">{desc}</div>
+  <div class="rc-desc">{_html(desc)}</div>
 </div>'''
 
 # ─── Vol model table ──────────────────────────────────────────────────────────
@@ -516,7 +532,7 @@ for sym in kelly_syms:
         diff = (gv - ev) / ev * 100 if ev else 0
         diff_str = f'{"↑" if diff>0 else "↓"} {abs(diff):.0f}%'
     vol_rows += f'''<tr>
-      <td>{sym}</td>
+      <td>{_html(sym)}</td>
       <td style="color:#00d4ff">{gv:.1%}</td>
       <td style="color:#f0b429">{ev:.1%}</td>
       <td style="color:#888;font-size:11px">{diff_str}</td>
@@ -532,7 +548,7 @@ for a in (alpha_table or []):
     col_mkt = '#00e87a' if vs_mkt >= 0 else '#ff3c5a'
     col_sec = '#00e87a' if vs_sec >= 0 else '#ff3c5a'
     alpha_rows += f'''<tr>
-      <td>{sym}</td>
+      <td>{_html(sym)}</td>
       <td style="color:{col_mkt}">{vs_mkt:+.1f}%</td>
       <td style="color:{col_sec}">{vs_sec:+.1f}%</td>
       <td style="color:#aaa">{ret_1m:+.1f}%</td>
@@ -545,7 +561,7 @@ if tax_cands:
     for tc in tax_cands:
         sym = tc.get('symbol','') if isinstance(tc,dict) else str(tc)
         loss = tc.get('unrealized_loss',0) if isinstance(tc,dict) else 0
-        tax_html += f'<div class="tax-item"><span>{sym}</span><span style="color:#ff7c3a">${loss:,.0f} harvestable</span></div>'
+        tax_html += f'<div class="tax-item"><span>{_html(sym)}</span><span style="color:#ff7c3a">${loss:,.0f} harvestable</span></div>'
 else:
     tax_html = '<div style="color:#666;font-style:italic">No harvest candidates — all positions profitable.</div>'
 
@@ -559,12 +575,12 @@ if tiers:
         items = tiers.get(tk, []) if isinstance(tiers, dict) else []
         if not items: continue
         col = tier_cols.get(tk,'#aaa')
-        yield_html += f'<div class="yield-tier"><div class="yield-tier-label" style="color:{col}">{tl}</div>'
+        yield_html += f'<div class="yield-tier"><div class="yield-tier-label" style="color:{col}">{_html(tl)}</div>'
         for item in items[:3]:
             name    = item.get('name','') if isinstance(item,dict) else str(item)
             apy     = item.get('apy',0) if isinstance(item,dict) else 0
             risk    = item.get('risk','') if isinstance(item,dict) else ''
-            yield_html += f'<div class="yield-item"><span class="yi-name">{name}</span><span class="yi-apy" style="color:{col}">{apy:.1f}% APY</span><span class="yi-risk">{risk}</span></div>'
+            yield_html += f'<div class="yield-item"><span class="yi-name">{_html(name)}</span><span class="yi-apy" style="color:{col}">{apy:.1f}% APY</span><span class="yi-risk">{_html(risk)}</span></div>'
         yield_html += '</div>'
 else:
     yield_html = '<div style="color:#666;font-style:italic">Yield data unavailable.</div>'
@@ -707,7 +723,7 @@ html = f'''<!DOCTYPE html>
   <div class="header">
     <div>
       <h1>⚡ GESH FINANCIAL</h1>
-      <div style="font-size:11px;color:#00d4ff;margin-top:2px">AI-Powered Portfolio Observability &nbsp;|&nbsp; {port_type}</div>
+      <div style="font-size:11px;color:#00d4ff;margin-top:2px">AI-Powered Portfolio Observability &nbsp;|&nbsp; {_html(port_type)}</div>
     </div>
     <div class="ts" style="text-align:right">
       <div style="font-size:12px;color:{day_gain_col}">${day_gain_usd:+,.2f} ({day_gain_pct:+.2f}%) today</div>
@@ -774,13 +790,13 @@ html = f'''<!DOCTYPE html>
   <!-- AI Verdict -->
   <div class="ai-card">
     <h3>📊 AI Portfolio Verdict</h3>
-    <div class="ai-text">{port_verdict}</div>
+    <div class="ai-text">{_html(port_verdict)}</div>
   </div>
 
   <!-- Market Context -->
   <div class="ai-card">
     <h3>🌍 Market Context</h3>
-    <div class="ai-text">{mkt_ctx}</div>
+    <div class="ai-text">{_html(mkt_ctx)}</div>
   </div>
 
   <!-- Holdings -->
@@ -865,10 +881,10 @@ html = f'''<!DOCTYPE html>
 new Chart(document.getElementById('mcChart').getContext('2d'), {{
   type: 'bar',
   data: {{
-    labels: {json.dumps(mc_labels)},
+    labels: {_json_script(mc_labels)},
     datasets: [{{
       label: '% of simulations',
-      data: {json.dumps(mc_data)},
+      data: {_json_script(mc_data)},
       backgroundColor: [{','.join(mc_colors)}],
       borderRadius: 3,
     }}]
@@ -890,10 +906,10 @@ new Chart(document.getElementById('mcChart').getContext('2d'), {{
 new Chart(document.getElementById('kellyChart').getContext('2d'), {{
   type: 'bar',
   data: {{
-    labels: {json.dumps(kelly_syms)},
+    labels: {_json_script(kelly_syms)},
     datasets: [
-      {{ label:'Current %', data:{json.dumps(kelly_curr)}, backgroundColor:'#00d4ff55', borderColor:'#00d4ff', borderWidth:1, borderRadius:3 }},
-      {{ label:'Kelly Optimal %', data:{json.dumps(kelly_opts)}, backgroundColor:'#f0b42955', borderColor:'#f0b429', borderWidth:1, borderRadius:3 }}
+      {{ label:'Current %', data:{_json_script(kelly_curr)}, backgroundColor:'#00d4ff55', borderColor:'#00d4ff', borderWidth:1, borderRadius:3 }},
+      {{ label:'Kelly Optimal %', data:{_json_script(kelly_opts)}, backgroundColor:'#f0b42955', borderColor:'#f0b429', borderWidth:1, borderRadius:3 }}
     ]
   }},
   options:{{
