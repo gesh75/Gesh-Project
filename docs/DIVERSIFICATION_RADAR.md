@@ -6,13 +6,6 @@
 > research → design → adversarial-review workflow. **PAPER_MODE / autonomy gate
 > unaffected; nothing is ever auto-traded.**
 
-![The /invest Diversification Radar panel in its SWAP_ONLY state: a prominent "NOT FINANCIAL
-ADVICE" advisory banner, the book's 71% Technology concentration flagged, a "what-if cash to
-deploy" slider (preview sizing for a hypothetical deployable amount), four low-correlation
-new-name diversifiers (RDDT/UNH/BAC/MPC across Communication Services, Healthcare, Financials,
-and Energy) surfaced as unsized "fund via swap" previews, and a trim-IONQ→fund-RDDT swap
-idea.](assets/diversification-radar.png)
-
 ## Why
 
 The 10:30 daily analysis scores and recommends actions on the **current portfolio
@@ -93,9 +86,6 @@ Consequences to remember:
   `validate_action` + the radar). The `-trading` autopilot uses its **own** env `RiskConfig`
   and is unaffected; with `auto_trade=false` nothing executes regardless. Lowering
   `min_cash_buffer` removes a safety floor — restore it after any deploy-preview experiment.
-
-> **Live account at build time** (8 holdings > 5 slots, $448 < $500 buffer) correctly
-> resolves to **SWAP_ONLY** and surfaces the book's real concentration: **Technology 71%**.
 
 ## Integration
 
