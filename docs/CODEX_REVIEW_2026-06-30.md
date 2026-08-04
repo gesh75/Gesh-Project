@@ -166,7 +166,7 @@ are the two places a subtle bug actually costs money or corrupts the track recor
 ## 6. Round 2 — Resolutions (commit `9ec2294`)
 
 All four Round-1 findings fixed. Full suite **251 passed**; `/api/portfolio` verified live
-(headline `$38,920.51`, day_change `-$88.79` — matches the account-level value Codex computed).
+(headline and day change match the expected account-level values).
 
 | # | Round-1 finding | Fix | Regression test |
 |---|-----------------|-----|-----------------|
