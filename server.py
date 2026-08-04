@@ -4320,58 +4320,61 @@ def _release_customer_quota(reservation: tuple[str, str] | None) -> None:
         logger.warning("quota reservation release failed: %s", reservation[1])
 
 
-# Short-TTL shared cache for the single-ticker AI card. The card is PUBLIC per-ticker
-# research (no per-customer data), so a process-wide cache is correct and stops a hot
-# ticker from re-spending on Claude every request.
+# Short-TTL per-user cache for the single-ticker AI card. Although the card content
+# is public per-ticker research, sharing cache metadata across users reveals that
+# another customer recently researched a guessed symbol. Scope both cached cards and
+# single-flight locks to the authenticated identity so `cached` and `generated_at`
+# describe only the caller's own prior request.
 _TICKER_CARD_TTL = 900  # 15 min
-_ticker_card_cache: dict[str, tuple[float, dict]] = {}
+_TickerCardKey = tuple[str, str]
+_ticker_card_cache: dict[_TickerCardKey, tuple[float, dict]] = {}
 _ticker_card_lock = threading.Lock()
-# Single-flight: per-symbol asyncio locks so N concurrent first requests for a hot
-# ticker spend ONE Claude call, not N — the waiters find the cache filled. Each entry
-# also counts its leader and waiters, allowing it to be removed as soon as the last
-# request leaves (including 404s and upstream failures).
-_ticker_card_flight: dict[str, tuple[asyncio.Lock, int]] = {}
+# Single-flight: per-user/per-symbol locks so N concurrent requests from one user
+# for a hot ticker spend ONE Claude call, not N — the waiters find the cache filled.
+# Each entry also counts its leader and waiters, allowing it to be removed as soon
+# as the last request leaves (including 404s and upstream failures).
+_ticker_card_flight: dict[_TickerCardKey, tuple[asyncio.Lock, int]] = {}
 
 
-def _ticker_card_get(sym: str) -> dict | None:
+def _ticker_card_get(key: _TickerCardKey) -> dict | None:
     with _ticker_card_lock:
-        hit = _ticker_card_cache.get(sym)
+        hit = _ticker_card_cache.get(key)
     return hit[1] if hit and (time.monotonic() - hit[0]) < _TICKER_CARD_TTL else None
 
 
-def _ticker_card_store(sym: str, card: dict) -> None:
+def _ticker_card_store(key: _TickerCardKey, card: dict) -> None:
     now = time.monotonic()
     with _ticker_card_lock:
-        _ticker_card_cache[sym] = (now, card)
+        _ticker_card_cache[key] = (now, card)
         for k in [k for k, (ts, _) in _ticker_card_cache.items() if (now - ts) >= _TICKER_CARD_TTL]:
             del _ticker_card_cache[k]
 
 
-def _ticker_card_join_flight(sym: str) -> asyncio.Lock:
-    """Join ``sym``'s active flight and account for this request.
+def _ticker_card_join_flight(key: _TickerCardKey) -> asyncio.Lock:
+    """Join ``key``'s active flight and account for this request.
 
     This runs without an ``await`` on the application's event-loop thread, so the
     read/update is atomic with respect to other endpoint coroutines.
     """
-    entry = _ticker_card_flight.get(sym)
+    entry = _ticker_card_flight.get(key)
     if entry is None:
         flight = asyncio.Lock()
-        _ticker_card_flight[sym] = (flight, 1)
+        _ticker_card_flight[key] = (flight, 1)
         return flight
     flight, users = entry
-    _ticker_card_flight[sym] = (flight, users + 1)
+    _ticker_card_flight[key] = (flight, users + 1)
     return flight
 
 
-def _ticker_card_leave_flight(sym: str, flight: asyncio.Lock) -> None:
+def _ticker_card_leave_flight(key: _TickerCardKey, flight: asyncio.Lock) -> None:
     """Release a request's flight reference, deleting the entry at zero users."""
-    entry = _ticker_card_flight.get(sym)
+    entry = _ticker_card_flight.get(key)
     if entry is None or entry[0] is not flight:
         return
     if entry[1] == 1:
-        del _ticker_card_flight[sym]
+        del _ticker_card_flight[key]
     else:
-        _ticker_card_flight[sym] = (flight, entry[1] - 1)
+        _ticker_card_flight[key] = (flight, entry[1] - 1)
 
 
 def _price_quality(sym: str, price) -> tuple[bool, str]:
@@ -4454,7 +4457,7 @@ async def analyze_ticker_endpoint(request: Request):
     Gated to authenticated callers (require_customer_or_owner) so it is never an
     anonymous, uncapped LLM-spend surface; rate-limited via _HEAVY_PREFIXES; the
     optional LLM_DAILY_BUDGET_USD cap applies inside deep_analyze_ticker; results are
-    cached per symbol for _TICKER_CARD_TTL. The blocking Anthropic call is offloaded
+    cached per user and symbol for _TICKER_CARD_TTL. The blocking Anthropic call is offloaded
     to a thread so the single event loop is never frozen. Body: {"symbol": "AAPL"}."""
     reservation: tuple[str, str] | None = None
     try:
@@ -4462,25 +4465,26 @@ async def analyze_ticker_endpoint(request: Request):
     except Exception:
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
-    card = _ticker_card_get(sym)
+    email = _session_email(request)
+    cache_key = (email or "", sym)
+    card = _ticker_card_get(cache_key)
     if card is not None:
-        auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
+        auth_users.log_usage(email, "ticker_card_cached", sym)
         return {"status": "ok", "data": card, "cached": True}
     try:
         # Single-flight per symbol: the ~15s LLM call means concurrent first
         # requests are the norm for a hot ticker — followers wait on the leader's
         # lock, then re-check the cache instead of spending again. Joining is safe
         # here: this coroutine runs on the single event loop without an await.
-        flight = _ticker_card_join_flight(sym)
+        flight = _ticker_card_join_flight(cache_key)
         try:
             async with flight:
-                card = _ticker_card_get(sym)
+                card = _ticker_card_get(cache_key)
                 if card is not None:
-                    auth_users.log_usage(_session_email(request), "ticker_card_cached", sym)
+                    auth_users.log_usage(email, "ticker_card_cached", sym)
                     return {"status": "ok", "data": card, "cached": True}
                 # Quota gate sits AFTER the cache re-check (cached hits are free) and
                 # BEFORE any spend — a capped user costs nothing, not even the quote.
-                email = _session_email(request)
                 reservation = _reserve_customer_quota(email, "ticker_card")
                 # Ground the valuation on a REAL quote: no price = unknown ticker / data
                 # outage → 404 rather than let the model fabricate a price and card.
@@ -4529,7 +4533,7 @@ async def analyze_ticker_endpoint(request: Request):
                     # side with equal weight — "STRONG BUY" next to "HOLD, overvalued
                     # −18.1%" for the same symbol off the same snapshot (audit BUG-03).
                     card["reconciliation"] = _reconcile_card(sym, card)
-                _ticker_card_store(sym, card)
+                _ticker_card_store(cache_key, card)
                 if reservation is None:
                     auth_users.log_usage(email, "ticker_card", sym)
                 else:
@@ -4547,7 +4551,7 @@ async def analyze_ticker_endpoint(request: Request):
                         )
                 return {"status": "ok", "data": card, "cached": False}
         finally:
-            _ticker_card_leave_flight(sym, flight)
+            _ticker_card_leave_flight(cache_key, flight)
     except HTTPException:
         _release_customer_quota(reservation)
         raise

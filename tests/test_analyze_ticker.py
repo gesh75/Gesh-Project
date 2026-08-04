@@ -371,7 +371,9 @@ def test_route_llm_error_is_500_not_leak(monkeypatch):
     r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     assert r.status_code == 500
     assert "sk-secret" not in r.text  # _server_error hides internals
-    assert "AAPL" not in server._ticker_card_flight  # failed flights do not live forever
+    assert not any(
+        k[-1] == "AAPL" for k in server._ticker_card_flight
+    )  # failed flights do not live forever
 
 
 def test_route_rejects_anonymous_when_wall_on(monkeypatch):
@@ -406,7 +408,9 @@ def test_route_unknown_ticker_is_404_no_spend(monkeypatch):
     r = c.post("/api/analyze-ticker", json={"symbol": "ZZZZ9"})
     assert r.status_code == 404
     assert spent["llm"] is False
-    assert "ZZZZ9" not in server._ticker_card_flight  # no-cache miss cannot leak a lock
+    assert not any(
+        k[-1] == "ZZZZ9" for k in server._ticker_card_flight
+    )  # no-cache miss cannot leak a lock
 
 
 def test_route_caches_repeat_symbol(monkeypatch):
@@ -422,6 +426,42 @@ def test_route_caches_repeat_symbol(monkeypatch):
     c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     assert calls["n"] == 1
+
+
+def test_route_cache_is_isolated_between_users(monkeypatch):
+    """A cache hit and its generation time must reveal only this user's research."""
+    calls = {"n": 0}
+    _ensure_quota_customer("alice@x.com")
+    _ensure_quota_customer("bob@x.com")
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
+    monkeypatch.setattr(
+        server.auth_users,
+        "authenticate_session",
+        lambda token: {"alice-token": "alice@x.com", "bob-token": "bob@x.com"}.get(token),
+    )
+    monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    monkeypatch.setattr(
+        server, "_latest_close_meta", lambda sym: (195.0, {"source": "yahoo", "substituted": False})
+    )
+
+    def _counting(sym, current_price=None, regime_context=None):
+        calls["n"] += 1
+        return {**_CARD, "symbol": sym}
+
+    monkeypatch.setattr(server, "deep_analyze_ticker", _counting)
+    alice = TestClient(server.app, raise_server_exceptions=False)
+    bob = TestClient(server.app, raise_server_exceptions=False)
+    alice.cookies.set(server.auth_users.COOKIE_NAME, "alice-token")
+    bob.cookies.set(server.auth_users.COOKIE_NAME, "bob-token")
+
+    alice_first = alice.post("/api/analyze-ticker", json={"symbol": "AAPL"}).json()
+    bob_first = bob.post("/api/analyze-ticker", json={"symbol": "AAPL"}).json()
+    bob_second = bob.post("/api/analyze-ticker", json={"symbol": "AAPL"}).json()
+
+    assert alice_first["cached"] is False
+    assert bob_first["cached"] is False
+    assert bob_second["cached"] is True
+    assert calls["n"] == 2
 
 
 def test_prompt_grounds_current_price(monkeypatch):
@@ -464,17 +504,17 @@ def test_ticker_card_valid_fixture_passes_grounded_price(monkeypatch):
 
 
 def test_ticker_card_store_evicts_expired():
-    """The card cache is process-wide and long-lived — expired entries must be
-    purged on store, not accumulate for the life of the process."""
+    """The per-user card cache is process-wide and long-lived — expired entries must
+    be purged on store, not accumulate for the life of the process."""
     import time as _time
 
-    server._ticker_card_cache["OLD"] = (
+    server._ticker_card_cache[("user", "OLD")] = (
         _time.monotonic() - server._TICKER_CARD_TTL - 1,
         {"symbol": "OLD"},
     )
-    server._ticker_card_store("NEW", {"symbol": "NEW"})
-    assert "OLD" not in server._ticker_card_cache
-    assert "NEW" in server._ticker_card_cache
+    server._ticker_card_store(("user", "NEW"), {"symbol": "NEW"})
+    assert ("user", "OLD") not in server._ticker_card_cache
+    assert ("user", "NEW") in server._ticker_card_cache
 
 
 def test_concurrent_same_symbol_spends_one_llm_call(monkeypatch):
@@ -516,4 +556,4 @@ def test_concurrent_same_symbol_spends_one_llm_call(monkeypatch):
     r1, r2 = asyncio.run(_go())
     assert r1["data"]["symbol"] == "AAPL" and r2["data"]["symbol"] == "AAPL"
     assert calls["n"] == 1
-    assert "AAPL" not in server._ticker_card_flight
+    assert not any(k[-1] == "AAPL" for k in server._ticker_card_flight)
