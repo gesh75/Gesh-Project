@@ -240,9 +240,12 @@ python -m trading.autopilot --job pre_market_scan
 
 Open **http://localhost:9000** for the dashboard.
 
-> **Deep gaps & improvements analysis (2026-07-09):** See `GAPS_AND_IMPROVEMENTS_2026-07-09.md` (full evidence-based review across all gesh repos, code, tests, CI, audits, product surface). Run the verification commands at the end of that doc.
+> **Product improvements:** See `GAPS_AND_IMPROVEMENTS_2026-07-09.md` for the
+> repository-level engineering review and prioritized roadmap.
 
-> **Production Ops Layer:** The durable watchers live in `~/.gesh/`. See the new `OPS_LAYER.md` for details, current scripts (gatewatch, GS stop proximity, etc.), portability notes, and recommendations.
+> **Production operations:** See `OPS_LAYER.md` for public-safe reliability and
+> deployment guidance. Environment-specific runbooks and runtime state are kept
+> outside the repository.
 
 ---
 
