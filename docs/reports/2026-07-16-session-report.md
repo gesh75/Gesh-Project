@@ -1,7 +1,7 @@
 # GESH Financial — Engineering Session Report, 2026-07-16
 
 **Prepared for external review (Grok / Gemini / GPT).**
-Repo: `gesh75/Gesh-Project` (FastAPI + SQLite AI portfolio-intelligence SaaS, prod on `:9000` behind a Cloudflare tunnel at pay.geshfinance.com). All work merged to `main` and deployed the same day. Test suite grew **880 → 949 tests, all green**. Eight PRs merged: **#72, #74, #75, #76, #77, #78, #79, #80**. *(See the 2026-07-17 addendum at the end for the post-review remediation wave: PRs #81+.)*
+Repo: `gesh75/Gesh-Project` (FastAPI + SQLite AI portfolio-intelligence SaaS; production deployment details omitted). All work merged to `main` and deployed the same day. Test suite grew **880 → 949 tests, all green**. Eight PRs merged: **#72, #74, #75, #76, #77, #78, #79, #80**. *(See the 2026-07-17 addendum at the end for the post-review remediation wave: PRs #81+.)*
 
 ---
 
@@ -87,10 +87,10 @@ Cross-PR pass over the cumulative diff verified all 12 tasks landed and the asse
 
 ## Part 5 — Deployment & live verification
 
-- `com.gesh.main` restarted on final main; auth wall verified (`/` → 302, `/track-record` → 200, API → 401 unauthenticated).
-- Live session verification: `/api/mybook/summary` returns the real book ($28,132.55, 9 positions); `/api/preferences` round-trips; `/api/signals/history` serves.
-- Stub test rows (leaked into prod `signal_history` by pre-fix test runs) purged before first real seed.
-- Both launchd jobs installed and bootstrapped; the alerts job was **kickstarted under real launchd** (not a shell run, which would have masked the env bug): `{"symbols_snapshotted": 10, "flips": 0, "emails_sent": 0}` — clean first seed, correct zero-flip day-one behavior.
+- The production service was restarted on final main and its authentication controls were smoke-tested; host, route, and response details are omitted.
+- Authenticated customer endpoints were verified; portfolio values, holding counts, and response data are omitted.
+- Test-data cleanup was completed before the production signal-history seed; database details are omitted.
+- Both scheduled jobs were installed and exercised in their production execution environment; job labels and output metadata are omitted.
 
 ## Part 6 — Incidents handled during the program
 
@@ -132,8 +132,8 @@ Cross-PR pass over the cumulative diff verified all 12 tasks landed and the asse
 
 The report was reviewed by three external models; every actionable finding was verified and closed:
 
-1. **"Prod runs uncommitted security code" (Opus)** — PR #81 (per-request cookie Secure) rebased onto main, conflict with `/api/preferences` resolved, 11 regression tests added, **merged** (`cc69518`). Working tree clean; the fix is both live and committed.
-2. **"The Critical email fix was never exercised" (Gemini + Opus)** — forced a real end-to-end proof: seeded a synthetic prior-day verdict for CAT (a symbol only the owner holds), kickstarted `com.gesh.signal-alerts` **under real launchd** → `{"flips": 1, "emails_sent": 1}`, and **confirmed the email in the Gmail inbox** (from access@geshfinance.com, correct flip copy, unsubscribe link). Synthetic row cleaned up afterward. Resend delivery under launchd is now proven, not assumed.
+1. **"Prod runs uncommitted security code" (Opus)** — PR #81 (per-request cookie Secure) rebased onto main, conflict with `/api/preferences` resolved, 11 regression tests added, **merged** (`cc69518`). Working tree clean; deployment consistency was verified without retaining production details in this report.
+2. **"The Critical email fix was never exercised" (Gemini + Opus)** — completed an end-to-end delivery proof using a synthetic prior-day verdict, then removed the synthetic data. The holding symbol, job output, delivery provider, and account details are omitted; production delivery was verified rather than assumed.
 3. **Digest compose path** — `--dry-run` executed today: 3 customers composed, zero errors.
 4. **New-endpoint auth (Gemini)** — verified: deploy-cash / preferences (GET+POST) / summary / signals-history all return **401 unauthenticated**.
 5. **Schema migrations (Gemini)** — non-issue by design: `signal_history`/`alert_log`/`digest_log` DDL is lazy-on-connect; `users` columns use idempotent ALTER migration on connect; all verified live.
