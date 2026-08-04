@@ -427,7 +427,7 @@ Every decision (approve or reject) is persisted to `risk_decisions` before retur
 - Use vague language — always cite specific dollar amounts, percentages, dates
 - Set `auto_trade=True` or `PAPER_MODE=false` without weeks of clean paper history
 - Size against `account["buying_power"]` — on Gold accounts it is the **leveraged margin**
-  figure (observed $21,632 while settled cash was $1,718). The deployable figure is
+  figure (for example, $Y while settled cash is $X). The deployable figure is
   `account["portfolio_cash"]` (settled, unleveraged — matches the RH MCP's
   `buying_power.buying_power`). Never `account["cash"]` (negative margin-accounting figure).
   `withdrawable_amount` reads $0 while a deposit clears, so it is not a deployability proxy.
@@ -724,7 +724,7 @@ Missed-during-sleep runs fire once at wake (off-hours prices + MARKET_HOURS reje
 pulling cash from `portfolio.buying_power.buying_power` (settled, UNLEVERAGED). **The MCP exposes
 NO Gold-margin figure**, so the builder pins `buying_power_leveraged == margin_buying_power ==
 withdrawable_amount == deployable` — they are back-compat keys only (report/gates read them), carrying
-no independent margin info. This *structurally* eliminates the old ~$21,632 leveraged-BP trap rather
+no independent margin info. This *structurally* eliminates the leveraged-BP trap rather
 than guarding against it downstream. If the MCP path fails, the chain falls back to the legacy
 `fetch_live_snapshot.py` (robin_stocks), which stamps `source: "robinhood_live"` and **repopulates the
 real leveraged figure** — sizing-safe by code (`deployable = min(settled, bp_leveraged)`) but a different
