@@ -84,6 +84,9 @@ gesh_auth.secret
 .rh_mcp_oauth.json
 .venv-clean/
 
+# Private daily-chain logs (holdings + proposed trades)
+.logs/
+
 # ── Attorney / legal correspondence — privileged, never commit ───────────────
 # Broader than *.md on purpose: privileged material also arrives as .pdf/.docx.
 # These files sit untracked in docs/ and this repo has several concurrent agent

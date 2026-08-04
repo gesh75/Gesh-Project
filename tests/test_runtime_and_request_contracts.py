@@ -105,10 +105,10 @@ exit 0
 
     _write_executable(
         fakebin / "python3.12",
-        '''#!/usr/bin/env bash
+        """#!/usr/bin/env bash
 echo "Python 3.12.0"
 exit 0
-''',
+""",
     )
 
     _write_executable(
@@ -130,7 +130,7 @@ exit 0
     # also expose mkdir that can be overridden per-test to write marker + fail
     _write_executable(
         fakebin / "mkdir",
-        '#!/usr/bin/env bash\n# default no-op mkdir for most tests\nexit 0\n',
+        "#!/usr/bin/env bash\n# default no-op mkdir for most tests\nexit 0\n",
     )
 
     return {
@@ -144,6 +144,7 @@ exit 0
 
 
 # ─── PR105-RUN-01: one coherent runtime ───────────────────────────────────────
+
 
 def test_declared_runtime_is_312():
     assert (REPO / ".python-version").read_text().strip() == "3.12"
@@ -176,7 +177,7 @@ def test_daily_chain_fails_clearly_when_the_interpreter_is_missing():
     blocker describes. Shell-level only; the live chain is never run."""
     sh = (REPO / "run_daily_analysis.sh").read_text()
     idx = sh.index('PY="$GP/venv/bin/python"')
-    following = sh[idx:idx + 400]
+    following = sh[idx : idx + 400]
 
     assert '[ ! -x "$PY" ]' in following, "missing interpreter must be detected"
     assert "exit 1" in following, "missing interpreter must abort the chain"
@@ -191,11 +192,22 @@ def test_daily_chain_log_rotation_uses_an_unpredictable_temp_file():
     assert '> "$LOG.tmp"' not in sh
 
 
+def test_daily_chain_keeps_sensitive_logs_private_and_out_of_tmp():
+    """Portfolio holdings and proposed trades must not be written to a shared,
+    predictable /tmp file or created with the caller's permissive umask."""
+    sh = (REPO / "run_daily_analysis.sh").read_text()
+
+    assert "umask 077" in sh
+    assert 'LOG_DIR="$GP/.logs"' in sh
+    assert 'chmod 700 "$LOG_DIR"' in sh
+    assert "LOG=/tmp/gesh_fullchain.log" not in sh
+
+
 def test_setup_creates_the_declared_runtime_and_rejects_others():
     sh = (REPO / "setup.sh").read_text()
 
     assert ".python-version" in sh, "setup must read the declared runtime"
-    assert 'PY_MM' in sh and 'DECLARED' in sh, "setup must compare major.minor"
+    assert "PY_MM" in sh and "DECLARED" in sh, "setup must compare major.minor"
     assert "exit 1" in sh
 
 
@@ -208,14 +220,18 @@ def test_readme_states_python_312():
 
 # ─── PR105-RUN-02: one dependency contract ────────────────────────────────────
 
+
 def _direct_requirements() -> list[str]:
     lines = (REPO / "requirements.txt").read_text().splitlines()
     return [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")]
 
 
 def test_every_direct_requirement_is_pinned_or_an_immutable_sha():
-    unpinned = [ln for ln in _direct_requirements()
-                if "==" not in ln and not re.search(r"@ git\+.*@[0-9a-f]{40}$", ln)]
+    unpinned = [
+        ln
+        for ln in _direct_requirements()
+        if "==" not in ln and not re.search(r"@ git\+.*@[0-9a-f]{40}$", ln)
+    ]
     assert not unpinned, f"unpinned direct requirements: {unpinned}"
 
 
@@ -259,28 +275,33 @@ def test_gesh_core_sha_matches_between_txt_and_lock():
 
 # ─── PR105-SEC-01: malformed Origin cannot 500 ────────────────────────────────
 
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     import auth_users
+
     monkeypatch.setattr(auth_users, "AUTH_DB_PATH", tmp_path / "auth.db")
     auth_users.init_auth_db()
     import server
+
     return TestClient(server.app, raise_server_exceptions=False)
 
 
-@pytest.mark.parametrize("origin", [
-    "https://x:notaport",
-    "https://x:65536",
-    "https://x:-1",
-    "ftp://x.test",
-    "https://user:pass@x.test",
-    "https://",
-    "https://[bad",
-])
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://x:notaport",
+        "https://x:65536",
+        "https://x:-1",
+        "ftp://x.test",
+        "https://user:pass@x.test",
+        "https://",
+        "https://[bad",
+    ],
+)
 def test_malformed_origin_never_500s(client, origin):
     """Pre-auth 500s leak internals and turn a refusal into a server error."""
-    r = client.post("/api/watchlist", json={"symbol": "AAA"},
-                    headers={"Origin": origin})
+    r = client.post("/api/watchlist", json={"symbol": "AAA"}, headers={"Origin": origin})
 
     assert r.status_code != 500, f"{origin} produced a 500"
     assert r.status_code < 500
@@ -290,8 +311,17 @@ def test_malformed_origin_never_500s(client, origin):
 
 def test_canonical_origin_is_total_and_fails_closed():
     import server
-    for raw in ["https://x:notaport", "https://x:65536", "ftp://x",
-                "https://u:p@x", "https://", "https://[bad", "", "null"]:
+
+    for raw in [
+        "https://x:notaport",
+        "https://x:65536",
+        "ftp://x",
+        "https://u:p@x",
+        "https://",
+        "https://[bad",
+        "",
+        "null",
+    ]:
         assert server._canonical_origin(raw) == "", raw
 
 
@@ -303,13 +333,14 @@ def test_valid_origins_still_canonicalize():
     assert server._canonical_origin("http://x.test:8080") == "http://x.test:8080"
 
 
-@pytest.mark.parametrize("origin", [
-    "https://x:notaport",
-    "https://x:65536",
-])
-def test_cookie_authenticated_malformed_origin_is_controlled_refusal(
-    client, origin
-):
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://x:notaport",
+        "https://x:65536",
+    ],
+)
+def test_cookie_authenticated_malformed_origin_is_controlled_refusal(client, origin):
     """The exact original failure sequence, end to end through the real ASGI
     middleware: a session cookie is PRESENT, so the CSRF guard must actually
     validate the Origin (a cookieless request carries no ambient authority and
@@ -332,6 +363,7 @@ def test_cookie_authenticated_malformed_origin_is_controlled_refusal(
 
 # ─── PR105-SEC-02: declared Content-Type ──────────────────────────────────────
 
+
 def test_body_without_content_type_is_rejected(client):
     """The exact bypass: raw JSON bytes, no declared media type."""
     r = client.post("/api/watchlist", content=b'{"symbol":"AAA"}')
@@ -339,18 +371,22 @@ def test_body_without_content_type_is_rejected(client):
     assert r.status_code == 415, r.status_code
 
 
-@pytest.mark.parametrize("ctype", ["text/plain", "application/x-www-form-urlencoded",
-                                   "multipart/form-data", "application/xml"])
+@pytest.mark.parametrize(
+    "ctype",
+    ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", "application/xml"],
+)
 def test_non_json_content_types_are_rejected(client, ctype):
-    r = client.post("/api/watchlist", content=b'{"symbol":"AAA"}',
-                    headers={"Content-Type": ctype})
+    r = client.post("/api/watchlist", content=b'{"symbol":"AAA"}', headers={"Content-Type": ctype})
 
     assert r.status_code == 415
 
 
 def test_json_with_charset_parameter_is_accepted(client):
-    r = client.post("/api/watchlist", content=b'{"symbol":"AAA"}',
-                    headers={"Content-Type": "application/json;charset=UTF-8"})
+    r = client.post(
+        "/api/watchlist",
+        content=b'{"symbol":"AAA"}',
+        headers={"Content-Type": "application/json;charset=UTF-8"},
+    )
 
     assert r.status_code != 415
 
@@ -364,25 +400,37 @@ def test_bodyless_mutation_is_not_content_type_gated(client):
 
 # ─── PR105-SEC-02b: duplicate singleton headers ───────────────────────────────
 
+
 def _raw_post(client, headers: list[tuple[bytes, bytes]], body: bytes = b'{"symbol":"AAA"}'):
     """httpx keeps duplicate headers when given a list of tuples."""
-    return client.post("/api/watchlist", content=body,
-                       headers=[(k.decode(), v.decode()) for k, v in headers])
+    return client.post(
+        "/api/watchlist", content=body, headers=[(k.decode(), v.decode()) for k, v in headers]
+    )
 
 
 def test_duplicate_conflicting_origin_is_refused(client):
-    r = _raw_post(client, [(b"content-type", b"application/json"),
-                           (b"origin", b"https://a.test"),
-                           (b"origin", b"https://b.test")])
+    r = _raw_post(
+        client,
+        [
+            (b"content-type", b"application/json"),
+            (b"origin", b"https://a.test"),
+            (b"origin", b"https://b.test"),
+        ],
+    )
 
     assert r.status_code == 400
     assert "ambiguous" in r.text.lower()
 
 
 def test_duplicate_matching_origin_is_not_ambiguous(client):
-    r = _raw_post(client, [(b"content-type", b"application/json"),
-                           (b"origin", b"https://a.test"),
-                           (b"origin", b"https://a.test")])
+    r = _raw_post(
+        client,
+        [
+            (b"content-type", b"application/json"),
+            (b"origin", b"https://a.test"),
+            (b"origin", b"https://a.test"),
+        ],
+    )
 
     assert r.status_code != 400 or "ambiguous" not in r.text.lower()
 
@@ -391,9 +439,14 @@ def test_duplicate_conflicting_content_type_is_refused(client):
     # An Origin is included deliberately: tests/conftest.py::_browser_like_origin
     # rebuilds `headers` as a dict when Origin is absent, which would collapse the
     # duplicate before it ever reached the middleware under test.
-    r = _raw_post(client, [(b"origin", b"https://a.test"),
-                           (b"content-type", b"application/json"),
-                           (b"content-type", b"text/plain")])
+    r = _raw_post(
+        client,
+        [
+            (b"origin", b"https://a.test"),
+            (b"content-type", b"application/json"),
+            (b"content-type", b"text/plain"),
+        ],
+    )
 
     assert r.status_code == 400
     assert "ambiguous" in r.text.lower()
@@ -419,10 +472,12 @@ def test_raw_header_helper_tolerates_a_broken_scope():
 
 # ─── exemptions must survive ──────────────────────────────────────────────────
 
+
 def test_webhook_without_browser_origin_is_not_csrf_refused(client):
     """The billing webhook carries its own HMAC auth and no cookie."""
-    r = client.post("/api/billing/webhook", content=b"{}",
-                    headers={"Content-Type": "application/json"})
+    r = client.post(
+        "/api/billing/webhook", content=b"{}", headers={"Content-Type": "application/json"}
+    )
 
     assert r.status_code != 403, "webhook must not be CSRF-refused"
 
@@ -441,6 +496,7 @@ def test_cookieless_request_is_not_csrf_refused(client):
 
 
 # ─── PR105-RUN-01 executable harness tests (setup + daily chain) ──────────────
+
 
 def test_setup_rejects_existing_venv_314(tmp_path):
     """setup.sh must reject a venv whose python reports 3.14 when .python-version
