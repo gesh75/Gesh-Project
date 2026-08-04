@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import price_source  # locked yf.download adapter (thread-safety)
+from run_manifest import atomic_write_json
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
 # Long-running uvicorn + yfinance + sqlite + robin_stocks tends to leak FDs
@@ -2230,9 +2231,9 @@ def _save_engine_result(key: str, value) -> None:
             data = dict(_load_engine_results())
             data[key] = value
             data[f"{key}_ran_at"] = _dt.now(_tz.utc).isoformat()
-            tmp = ENGINE_RESULTS.with_name(ENGINE_RESULTS.name + ".tmp")
-            tmp.write_text(_json.dumps(_sanitize(data), default=str))
-            tmp.replace(ENGINE_RESULTS)
+            # The daily chain writes this file too, so every writer must use a
+            # unique sibling temp file before the atomic replace.
+            atomic_write_json(ENGINE_RESULTS, _sanitize(data))
     except Exception as _e:
         print(f"⚠  engine-result cache write failed for {key}: {_e}")
 
