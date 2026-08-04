@@ -371,6 +371,7 @@ def test_route_llm_error_is_500_not_leak(monkeypatch):
     r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     assert r.status_code == 500
     assert "sk-secret" not in r.text  # _server_error hides internals
+    assert "AAPL" not in server._ticker_card_flight  # failed flights do not live forever
 
 
 def test_route_rejects_anonymous_when_wall_on(monkeypatch):
@@ -405,6 +406,7 @@ def test_route_unknown_ticker_is_404_no_spend(monkeypatch):
     r = c.post("/api/analyze-ticker", json={"symbol": "ZZZZ9"})
     assert r.status_code == 404
     assert spent["llm"] is False
+    assert "ZZZZ9" not in server._ticker_card_flight  # no-cache miss cannot leak a lock
 
 
 def test_route_caches_repeat_symbol(monkeypatch):
@@ -514,3 +516,4 @@ def test_concurrent_same_symbol_spends_one_llm_call(monkeypatch):
     r1, r2 = asyncio.run(_go())
     assert r1["data"]["symbol"] == "AAPL" and r2["data"]["symbol"] == "AAPL"
     assert calls["n"] == 1
+    assert "AAPL" not in server._ticker_card_flight
