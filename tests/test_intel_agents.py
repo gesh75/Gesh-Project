@@ -1,4 +1,5 @@
 """Company Intelligence agents — cache skip + per-run caps."""
+
 from __future__ import annotations
 
 import json
@@ -14,6 +15,7 @@ import sec_agent as sa
 @pytest.fixture
 def agent_db(tmp_path, monkeypatch):
     import agent_db
+
     path = tmp_path / "gesh_financial.db"
     monkeypatch.setattr(agent_db, "agent_db_path", lambda: path)
     return path
@@ -36,11 +38,24 @@ def test_sec_skips_already_analyzed_filing(agent_db, monkeypatch):
     conn.close()
 
     monkeypatch.setattr(sa, "_get_cik", lambda s: "0001045810")
-    monkeypatch.setattr(sa, "_fetch_recent_filings", lambda c, f, days_back=7: [{
-        "title": "8-K", "url": url, "date": "2026-07-01", "form": f,
-    }])
-    monkeypatch.setattr(sa, "_analyze_filing", lambda *a, **k: pytest.fail("should not call Claude"))
-    monkeypatch.setattr(sa, "_get_recent_from_db", lambda s, days=7: [{"symbol": "NVDA", "form_type": "8-K"}])
+    monkeypatch.setattr(
+        sa,
+        "_fetch_recent_filings",
+        lambda c, f, days_back=7: [
+            {
+                "title": "8-K",
+                "url": url,
+                "date": "2026-07-01",
+                "form": f,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sa, "_analyze_filing", lambda *a, **k: pytest.fail("should not call Claude")
+    )
+    monkeypatch.setattr(
+        sa, "_get_recent_from_db", lambda s, days=7: [{"symbol": "NVDA", "form_type": "8-K"}]
+    )
 
     out = sa.watch_filings(["NVDA"], days_back=7)
     assert out["new_filings"] == 0
@@ -65,8 +80,11 @@ def test_news_reuses_fresh_db_sentiment(agent_db, monkeypatch):
     conn.close()
 
     monkeypatch.setattr(na, "_fetch_all_news", lambda *a, **k: pytest.fail("should not fetch RSS"))
-    monkeypatch.setattr(na, "analyze_news_sentiment", lambda *a, **k: pytest.fail("should not call Claude"))
+    monkeypatch.setattr(
+        na, "analyze_news_sentiment", lambda *a, **k: pytest.fail("should not call Claude")
+    )
     import regime
+
     monkeypatch.setattr(regime, "get_macro_context", lambda: {"macro_signal": "NEUTRAL"})
 
     out = na.scan_news(["AAPL"])

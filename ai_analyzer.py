@@ -9,6 +9,7 @@ from typing import Any
 import anthropic
 from dotenv import load_dotenv
 
+import llm_contracts
 import llm_gateway
 
 load_dotenv()
@@ -47,7 +48,7 @@ def _create_streaming(client: anthropic.Anthropic, **kwargs: Any) -> Any:
     is also what the SDK requires for requests that may exceed 10 minutes.
 
     Callers keep using the returned Message exactly as before (`.usage`,
-    `.stop_reason`, `.content`), so `_record_usage` / `_extract_tool_input` /
+    `.stop_reason`, `.content`), so `_record_usage` / `llm_contracts.extract_tool_input` /
     the max_tokens truncation guard are all unchanged.
     """
     with client.messages.stream(**kwargs) as stream:
@@ -134,27 +135,17 @@ def _budget_guard(fn: str) -> None:
         )
 
 
-def _extract_tool_input(message: Any, fn_name: str) -> dict[str, Any]:
-    """Return the input dict of the tool_use block in a Claude response.
+def _extract_tool_input(
+    message: Any, fn_name: str, *, expected_tool: str | None = None
+) -> dict[str, Any]:
+    """Thin wrapper around llm_contracts.extract_tool_input.
 
-    The SDK does not guarantee content[0] is the tool_use block: a refusal,
-    a max_tokens cutoff, or a leading text block all break blind indexing
-    (AttributeError → HTTP 500). Iterate the content blocks instead and fail
-    with a clear, structured error if no tool_use block is present.
+    Prefer calling ``llm_contracts.extract_tool_input`` directly with an
+    explicit ``expected_tool``. When ``expected_tool`` is omitted, ``fn_name``
+    is used as both the operation label and the tool name (legacy callers).
     """
-    for block in message.content:
-        if getattr(block, "type", None) == "tool_use":
-            return block.input
-    # No tool_use block — surface why (truncation / refusal) instead of 500.
-    text = next(
-        (getattr(b, "text", "") for b in message.content if getattr(b, "type", None) == "text"),
-        "",
-    )
-    raise ValueError(
-        f"{fn_name}: no tool_use block in response "
-        f"(stop_reason={getattr(message, 'stop_reason', None)!r}). "
-        f"Model returned text instead of calling the tool: {text[:300]!r}"
-    )
+    tool = expected_tool if expected_tool is not None else fn_name
+    return llm_contracts.extract_tool_input(message, expected_tool=tool, operation=fn_name)
 
 
 # ─── Quick Risk Analysis (plain text) ────────────────────────────────────────
@@ -323,6 +314,7 @@ _HOLDING_ANALYSIS_ITEM = {
         "prediction",
         "verdict",
         "analyst_note",
+        "bear_case",
     ],
 }
 
@@ -352,13 +344,13 @@ DEEP_ANALYSIS_SCHEMA = {
                     "action": {"type": "string"},
                     "priority": {"type": "string"},
                     "rationale": {"type": "string"},
-                    # Optional (backward-compatible): set when the recommendation is an
+                    # Nullable (strict-mode): set when the recommendation is an
                     # advisory NEW-name diversification idea from the radar. category
                     # "DIVERSIFICATION" lets the UI group it; symbol names the new ticker.
-                    "category": {"type": "string"},
-                    "symbol": {"type": "string"},
+                    "category": {"type": ["string", "null"]},
+                    "symbol": {"type": ["string", "null"]},
                 },
-                "required": ["action", "priority", "rationale"],
+                "required": ["action", "priority", "rationale", "category", "symbol"],
             },
         },
         "sector_breakdown": {
@@ -499,6 +491,12 @@ def deep_analyze_portfolio(
     # STREAMED (2026-07-27): this is the longest generation in the codebase
     # (~11-12K output tokens) and was timing out against the 240s wall clock on
     # the non-streaming path. See _create_streaming for the full writeup.
+    tool = llm_contracts.strict_tool(
+        "return_portfolio_analysis",
+        "Return the complete deep portfolio analysis.",
+        DEEP_ANALYSIS_SCHEMA,
+    )
+    tool["cache_control"] = {"type": "ephemeral"}
     message = _create_streaming(
         client,
         model=MODEL,
@@ -506,13 +504,7 @@ def deep_analyze_portfolio(
         system=[
             {"type": "text", "text": DEEP_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ],
-        tools=[
-            {
-                "name": "return_portfolio_analysis",
-                "input_schema": DEEP_ANALYSIS_SCHEMA,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        tools=[tool],
         tool_choice={"type": "tool", "name": "return_portfolio_analysis"},
         messages=[
             {
@@ -530,7 +522,11 @@ def deep_analyze_portfolio(
             "deep_analyze_portfolio: tool output truncated at max_tokens — "
             "the JSON is unusable; tighten DEEP_ANALYSIS_SCHEMA or raise max_tokens."
         )
-    result = _extract_tool_input(message, "deep_analyze_portfolio")
+    result = llm_contracts.extract_tool_input(
+        message,
+        expected_tool="return_portfolio_analysis",
+        operation="deep_analyze_portfolio",
+    )
     # Same defensive default as deep_analyze_ticker: bear_case is in the shared
     # per-holding schema, but a model may omit it — every holding card must reach
     # the renderer with the scaffold present, never raise on a missing key.
@@ -589,19 +585,19 @@ def deep_analyze_ticker(
         if current_price is not None
         else ""
     )
+    tool = llm_contracts.strict_tool(
+        "return_ticker_analysis",
+        "Return the complete single-ticker research card.",
+        TICKER_ANALYSIS_SCHEMA,
+    )
+    tool["cache_control"] = {"type": "ephemeral"}
     message = client.messages.create(
         model=MODEL,
         max_tokens=2000,
         system=[
             {"type": "text", "text": TICKER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ],
-        tools=[
-            {
-                "name": "return_ticker_analysis",
-                "input_schema": TICKER_ANALYSIS_SCHEMA,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        tools=[tool],
         tool_choice={"type": "tool", "name": "return_ticker_analysis"},
         messages=[
             {
@@ -619,7 +615,14 @@ def deep_analyze_ticker(
             "deep_analyze_ticker: tool output truncated at max_tokens — "
             "raise max_tokens or tighten TICKER_ANALYSIS_SCHEMA."
         )
-    card = _extract_tool_input(message, "deep_analyze_ticker")
+    card = llm_contracts.extract_tool_input(
+        message,
+        expected_tool="return_ticker_analysis",
+        operation="deep_analyze_ticker",
+    )
+    card = llm_contracts.validate_ticker_card(
+        card, requested_symbol=symbol, current_price=current_price
+    )
     # Defensive default: the schema asks for bear_case but a model can still omit
     # it — never let a missing key surface as a KeyError on the customer surface.
     card.setdefault("bear_case", {"thesis": "", "invalidators": []})
@@ -654,19 +657,19 @@ def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
 
     today = __import__("datetime").date.today().isoformat()
 
+    tool = llm_contracts.strict_tool(
+        "return_screener_picks",
+        "Return the complete screener picks contract.",
+        SCREENER_SCHEMA,
+    )
+    tool["cache_control"] = {"type": "ephemeral"}
     message = client.messages.create(
         model=SCREENER_MODEL,
         max_tokens=6000,
         system=[
             {"type": "text", "text": SCREENER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ],
-        tools=[
-            {
-                "name": "return_screener_picks",
-                "input_schema": SCREENER_SCHEMA,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        tools=[tool],
         tool_choice={"type": "tool", "name": "return_screener_picks"},
         messages=[
             {
@@ -685,4 +688,8 @@ def analyze_screener(candidates: list[dict]) -> dict[str, Any]:
             "analyze_screener: tool output truncated at max_tokens — "
             "the JSON is unusable; tighten SCREENER_SCHEMA or raise max_tokens."
         )
-    return _extract_tool_input(message, "analyze_screener")
+    return llm_contracts.extract_tool_input(
+        message,
+        expected_tool="return_screener_picks",
+        operation="analyze_screener",
+    )

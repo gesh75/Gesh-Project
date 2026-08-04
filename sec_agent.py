@@ -24,6 +24,7 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
+import llm_contracts
 import llm_gateway
 
 load_dotenv()
@@ -228,17 +229,26 @@ def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
                         f"Analyze this {filing['form']} filing for {symbol}.\n"
                         f"Filing title: {filing['title']}\n"
                         f"Filed: {filing['date']}\n\n"
-                        f"Filing content excerpt:\n{text}\n\n"
-                        "Return ONLY valid JSON starting with {{"
+                        f"Filing content excerpt:\n{text}"
                     ),
                 }
             ],
+            tools=[
+                llm_contracts.strict_tool(
+                    "return_sec_filing_analysis",
+                    "Return the complete SEC filing analysis contract.",
+                    llm_contracts.SEC_FILING_SCHEMA,
+                )
+            ],
+            tool_choice={"type": "tool", "name": "return_sec_filing_analysis"},
         )
-        raw = msg.content[0].text
-        # Parse JSON
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw)
-        return json.loads(raw)
+        return llm_contracts.validate_sec_analysis(
+            llm_contracts.extract_tool_input(
+                msg,
+                expected_tool="return_sec_filing_analysis",
+                operation="sec_filing_analysis",
+            )
+        )
     except Exception as e:
         return {"error": str(e), "raw_text": text[:500]}
 

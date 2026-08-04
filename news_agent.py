@@ -30,6 +30,7 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
+import llm_contracts
 import llm_gateway
 
 load_dotenv()
@@ -297,15 +298,31 @@ def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
             messages=[
                 {
                     "role": "user",
-                    "content": f"Analyze these {len(articles)} news articles for {symbol}:\n\n{articles_text}\n\nReturn ONLY valid JSON starting with {{",
+                    "content": (
+                        f"Analyze these {len(articles)} news articles for {symbol}:\n\n"
+                        f"{articles_text}"
+                    ),
                 }
             ],
+            tools=[
+                llm_contracts.strict_tool(
+                    "return_news_sentiment",
+                    "Return the complete news sentiment contract.",
+                    llm_contracts.NEWS_SENTIMENT_SCHEMA,
+                )
+            ],
+            tool_choice={"type": "tool", "name": "return_news_sentiment"},
         )
-        raw = msg.content[0].text
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw)
-        result = json.loads(raw)
-        result["articles"] = _public_articles(articles)  # first 5 articles for display
+        result = llm_contracts.validate_sentiment(
+            llm_contracts.extract_tool_input(
+                msg,
+                expected_tool="return_news_sentiment",
+                operation="news_sentiment",
+            ),
+            symbol=symbol,
+            article_count=len(articles),
+        )
+        result["articles"] = _public_articles(articles)
         return result
     except Exception as e:
         # Keep the fetched headlines even when the model call fails — the cached

@@ -36,8 +36,9 @@ def _clear_ticker_cache():
 
 
 class _ToolBlock:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], name: str = "return_ticker_analysis") -> None:
         self.type = "tool_use"
+        self.name = name
         self.input = payload
 
 
@@ -220,7 +221,9 @@ def test_portfolio_holdings_default_bear_case_when_model_omits_it(monkeypatch):
         "portfolio_verdict": "HOLD",
         "holdings_analysis": [holding_no_bc, {**holding_no_bc, "symbol": "NVDA"}],
     }
-    _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
+    _install_fake_client(
+        monkeypatch, _FakeMessage([_ToolBlock(parsed, name="return_portfolio_analysis")])
+    )
     out = ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}, {"symbol": "NVDA"}]})
     for h in out["holdings_analysis"]:
         assert h["bear_case"] == {"thesis": "", "invalidators": []}
@@ -231,7 +234,9 @@ def test_concise_portfolio_prompt_caps_bear_case(monkeypatch):
     max_tokens with a truncation retry ladder) — the brevity instruction must cap
     bear_case output so the new field can't blow that budget."""
     parsed = {"portfolio_score": 60, "portfolio_verdict": "HOLD", "holdings_analysis": []}
-    sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(parsed)]))
+    sink = _install_fake_client(
+        monkeypatch, _FakeMessage([_ToolBlock(parsed, name="return_portfolio_analysis")])
+    )
     ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]}, concise=True)
     user_msg = sink["messages"][0]["content"]
     assert "bear_case" in user_msg  # concise mode explicitly caps the field

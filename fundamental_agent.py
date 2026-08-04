@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -29,6 +28,7 @@ import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
 
+import llm_contracts
 import llm_gateway
 import price_source  # locked yf.download adapter (thread-safety)
 
@@ -488,6 +488,11 @@ def run_fundamental_scan(
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
+        tool = llm_contracts.strict_tool(
+            "return_fundamental_scan",
+            "Return the complete fundamental scan contract.",
+            llm_contracts.FUNDAMENTAL_SCAN_SCHEMA,
+        )
         msg = client.messages.create(
             model=SONNET_MODEL,
             max_tokens=6000,
@@ -498,22 +503,26 @@ def run_fundamental_scan(
                     "content": (
                         f"Today is {today}. Analyze these {len(top)} stocks and identify the top 15 "
                         f"fundamental improvement opportunities where price has not yet caught up.\n\n"
-                        f"```json\n{json.dumps(top, indent=2)}\n```\n\n"
-                        "Return ONLY valid JSON starting with {{. No apostrophes in strings."
+                        f"```json\n{json.dumps(top, indent=2)}\n```"
                     ),
                 }
             ],
+            tools=[tool],
+            tool_choice={"type": "tool", "name": "return_fundamental_scan"},
         )
-        raw = msg.content[0].text
-        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw)
-
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError:
-            # Try fixing trailing commas
-            fixed = re.sub(r",\s*([}\]])", r"\1", raw)
-            result = json.loads(fixed)
+        result = llm_contracts.extract_tool_input(
+            msg,
+            expected_tool="return_fundamental_scan",
+            operation="fundamental_scan",
+        )
+        # Validate each opportunity; drop invalid rows rather than failing the scan.
+        validated: list[dict] = []
+        for opp in result.get("top_opportunities") or []:
+            try:
+                validated.append(llm_contracts.validate_fundamental_opportunity(opp))
+            except llm_contracts.LLMContractError:
+                continue
+        result["top_opportunities"] = validated
 
         result["stocks_analyzed"] = len(valid)
         result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"

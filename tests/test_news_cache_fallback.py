@@ -14,6 +14,7 @@ Fix under test:
   * /api/news/{symbol} serves the cached articles (source="cache") when every
     live feed comes back empty — and stays fail-soft + allow-listed.
 """
+
 from __future__ import annotations
 
 import json
@@ -61,27 +62,43 @@ def _insert_row(db_path, symbol: str, articles: list[dict], days_ago: float = 0.
     conn.execute(
         "INSERT INTO news_sentiment (symbol, overall_sentiment, sentiment_score,"
         " impact_level, analysis_json, created_at) VALUES (?,?,?,?,?,?)",
-        (symbol, "POSITIVE", 40, "MEDIUM",
-         json.dumps({"article_count": len(articles), "articles": articles}),
-         _sqlite_ts(days_ago)),
+        (
+            symbol,
+            "POSITIVE",
+            40,
+            "MEDIUM",
+            json.dumps({"article_count": len(articles), "articles": articles}),
+            _sqlite_ts(days_ago),
+        ),
     )
     conn.commit()
     conn.close()
 
 
 def _article(title: str = "MSTR adds more bitcoin") -> dict:
-    return {"title": title, "url": "https://example.com/a",
-            "source": "Yahoo Finance", "published": "2026-07-16",
-            "description": "long body text that must never ship"}
+    return {
+        "title": title,
+        "url": "https://example.com/a",
+        "source": "Yahoo Finance",
+        "published": "2026-07-16",
+        "description": "long body text that must never ship",
+    }
 
 
 # ─── news_agent.get_cached_articles ──────────────────────────────────────────
 
+
 def test_cached_articles_are_allow_listed(agent_db):
     _insert_row(agent_db, "MSTR", [_article()])
     rows = news_agent.get_cached_articles("MSTR")
-    assert rows == [{"title": "MSTR adds more bitcoin", "url": "https://example.com/a",
-                     "source": "Yahoo Finance", "published": "2026-07-16"}]
+    assert rows == [
+        {
+            "title": "MSTR adds more bitcoin",
+            "url": "https://example.com/a",
+            "source": "Yahoo Finance",
+            "published": "2026-07-16",
+        }
+    ]
     for r in rows:
         assert set(r) <= _ALLOWED_KEYS
 
@@ -117,25 +134,31 @@ def test_cached_articles_skip_untitled_and_other_symbols(agent_db):
 def test_cached_articles_never_raise(monkeypatch):
     def _boom():
         raise RuntimeError("db down")
+
     monkeypatch.setattr("agent_db.agent_db_path", _boom)
     assert news_agent.get_cached_articles("MSTR") == []
 
 
 # ─── analyze_news_sentiment retains articles on failure paths ────────────────
 
+
 def test_error_path_retains_allow_listed_articles(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
-    class _Boom:
-        def __init__(self, api_key):
-            raise RuntimeError("api down")
-    monkeypatch.setattr(news_agent.anthropic, "Anthropic", _Boom)
+    def _boom(*a, **k):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr("llm_gateway.create_client", _boom)
 
     result = news_agent.analyze_news_sentiment("MSTR", [_article()])
-    assert result["articles"] == [{"title": "MSTR adds more bitcoin",
-                                   "url": "https://example.com/a",
-                                   "source": "Yahoo Finance",
-                                   "published": "2026-07-16"}]
+    assert result["articles"] == [
+        {
+            "title": "MSTR adds more bitcoin",
+            "url": "https://example.com/a",
+            "source": "Yahoo Finance",
+            "published": "2026-07-16",
+        }
+    ]
 
 
 def test_no_key_path_retains_allow_listed_articles(monkeypatch):
@@ -145,6 +168,7 @@ def test_no_key_path_retains_allow_listed_articles(monkeypatch):
 
 
 # ─── /api/news/{symbol} fallback wiring ──────────────────────────────────────
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -167,25 +191,31 @@ def _stub_live_feeds(monkeypatch, items):
 
 def test_api_news_serves_cached_articles_when_live_feeds_empty(client, monkeypatch):
     _stub_live_feeds(monkeypatch, [])
-    monkeypatch.setattr(news_agent, "get_cached_articles",
-                        lambda sym, days=7, limit=8: [_article("Cached headline")],
-                        raising=False)
+    monkeypatch.setattr(
+        news_agent,
+        "get_cached_articles",
+        lambda sym, days=7, limit=8: [_article("Cached headline")],
+        raising=False,
+    )
     r = client.get("/api/news/MSTR")
     assert r.status_code == 200
     body = r.json()
     assert body["source"] == "cache"
     assert [it["title"] for it in body["data"]] == ["Cached headline"]
-    for it in body["data"]:                       # trim allow-list still applies
+    for it in body["data"]:  # trim allow-list still applies
         assert set(it) <= _ALLOWED_KEYS
     assert "description" not in r.text
 
 
 def test_api_news_live_feed_wins_over_cache(client, monkeypatch):
-    _stub_live_feeds(monkeypatch, [{"title": "Live headline", "url": "https://x/a",
-                                    "source": "benzinga", "published": "p"}])
+    _stub_live_feeds(
+        monkeypatch,
+        [{"title": "Live headline", "url": "https://x/a", "source": "benzinga", "published": "p"}],
+    )
 
     def _never(sym, days=7, limit=8):
         raise AssertionError("cache must not be read when a live feed served")
+
     monkeypatch.setattr(news_agent, "get_cached_articles", _never, raising=False)
     r = client.get("/api/news/MSTR")
     assert r.status_code == 200
@@ -199,6 +229,7 @@ def test_api_news_cache_fallback_is_fail_soft(client, monkeypatch):
 
     def _boom(sym, days=7, limit=8):
         raise RuntimeError("db down")
+
     monkeypatch.setattr(news_agent, "get_cached_articles", _boom, raising=False)
     r = client.get("/api/news/MSTR")
     assert r.status_code == 200 and r.json()["data"] == []

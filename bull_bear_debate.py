@@ -19,6 +19,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+import llm_contracts
 import llm_gateway
 
 load_dotenv()
@@ -26,74 +27,6 @@ logger = logging.getLogger(__name__)
 
 _HAIKU = llm_gateway.resolve_model("haiku", default="haiku")
 _SONNET = llm_gateway.resolve_model(os.getenv("CLAUDE_MODEL"), default="sonnet")
-
-# ── Schemas ────────────────────────────────────────────────────────────────────
-
-_CASE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "thesis": {"type": "string", "description": "One-sentence core thesis"},
-        "arguments": {
-            "type": "array",
-            "description": "3-5 supporting arguments, most important first",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "point": {"type": "string"},
-                    "evidence": {"type": "string"},
-                },
-                "required": ["point", "evidence"],
-            },
-        },
-        "price_target": {
-            "type": "number",
-            "description": "12-month price target implied by this case",
-        },
-        "key_risk": {"type": "string", "description": "Biggest risk to this case"},
-        "confidence": {"type": "integer", "description": "Confidence 0-100"},
-    },
-    "required": ["thesis", "arguments", "price_target", "key_risk", "confidence"],
-}
-
-_DECISION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": ["STRONG BUY", "BUY", "HOLD", "SELL", "STRONG SELL"],
-        },
-        "conviction": {"type": "integer", "description": "Conviction 0-100"},
-        "price_target": {
-            "type": "number",
-            "description": "Blended 12-month price target",
-        },
-        "upside_pct": {"type": "number"},
-        "bull_weight": {
-            "type": "integer",
-            "description": "Weight given to bull case 0-100 (100 = fully bullish)",
-        },
-        "rationale": {"type": "string", "description": "2-3 sentence synthesis"},
-        "catalysts": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Top 2-3 catalysts to watch",
-        },
-        "stop_loss_pct": {
-            "type": "number",
-            "description": "Suggested stop-loss % below current price (positive number)",
-        },
-    },
-    "required": [
-        "action",
-        "conviction",
-        "price_target",
-        "upside_pct",
-        "bull_weight",
-        "rationale",
-        "catalysts",
-        "stop_loss_pct",
-    ],
-}
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -108,18 +41,18 @@ def _tool_call(
     schema: dict[str, Any],
 ) -> dict[str, Any]:
     """Single Claude tool-use call; returns the structured JSON dict."""
+    tool = llm_contracts.strict_tool(tool_name, system[:80], schema)
     resp = client.messages.create(
         model=model,
         max_tokens=1024,
         system=system,
         messages=[{"role": "user", "content": user}],
-        tools=[{"name": tool_name, "description": system[:80], "input_schema": schema}],
+        tools=[tool],
         tool_choice={"type": "tool", "name": tool_name},
     )
-    for block in resp.content:
-        if block.type == "tool_use" and block.name == tool_name:
-            return block.input  # type: ignore[return-value]
-    raise ValueError(f"No tool_use block returned for {tool_name}")
+    return llm_contracts.extract_tool_input(
+        resp, expected_tool=tool_name, operation=f"debate_{tool_name}"
+    )
 
 
 def _context_prompt(symbol: str, consensus: dict[str, Any], fundamentals: dict[str, Any]) -> str:
@@ -160,9 +93,9 @@ def run_debate(
     Returns:
         {
             "symbol": str,
-            "bull": {...},          # _CASE_SCHEMA output
-            "bear": {...},          # _CASE_SCHEMA output
-            "decision": {...},      # _DECISION_SCHEMA output
+            "bull": {...},          # DEBATE_CASE_SCHEMA output
+            "bear": {...},          # DEBATE_CASE_SCHEMA output
+            "decision": {...},      # DEBATE_DECISION_SCHEMA output
             "debate_summary": str,  # human-readable one-liner
         }
     """
@@ -171,17 +104,19 @@ def run_debate(
     ctx = _context_prompt(symbol, consensus, fundamentals)
 
     # ── Call 1: Bull case (haiku — cheap) ────────────────────────────────────
-    bull = _tool_call(
-        client,
-        _HAIKU,
-        system="You are an aggressive buy-side analyst. Build the strongest possible BULL case.",
-        user=(
-            f"Build the strongest bull case for {symbol}.\n\n"
-            f"Market context:\n{ctx}\n"
-            f"Focus on catalysts, growth drivers, and why the bears are wrong."
-        ),
-        tool_name="bull_case",
-        schema=_CASE_SCHEMA,
+    bull = llm_contracts.validate_debate_case(
+        _tool_call(
+            client,
+            _HAIKU,
+            system="You are an aggressive buy-side analyst. Build the strongest possible BULL case.",
+            user=(
+                f"Build the strongest bull case for {symbol}.\n\n"
+                f"Market context:\n{ctx}\n"
+                f"Focus on catalysts, growth drivers, and why the bears are wrong."
+            ),
+            tool_name="bull_case",
+            schema=llm_contracts.DEBATE_CASE_SCHEMA,
+        )
     )
     logger.info(
         "Debate [%s] bull: %s (conf=%s%%)",
@@ -191,18 +126,20 @@ def run_debate(
     )
 
     # ── Call 2: Bear case (haiku — cheap) ────────────────────────────────────
-    bear = _tool_call(
-        client,
-        _HAIKU,
-        system="You are a short-seller. Build the strongest possible BEAR case.",
-        user=(
-            f"Build the strongest bear case for {symbol}.\n\n"
-            f"Market context:\n{ctx}\n"
-            f"The bull analyst argues: {bull.get('thesis', '')}\n"
-            f"Dismantle that thesis. Focus on risks, overvaluation, and headwinds."
-        ),
-        tool_name="bear_case",
-        schema=_CASE_SCHEMA,
+    bear = llm_contracts.validate_debate_case(
+        _tool_call(
+            client,
+            _HAIKU,
+            system="You are a short-seller. Build the strongest possible BEAR case.",
+            user=(
+                f"Build the strongest bear case for {symbol}.\n\n"
+                f"Market context:\n{ctx}\n"
+                f"The bull analyst argues: {bull.get('thesis', '')}\n"
+                f"Dismantle that thesis. Focus on risks, overvaluation, and headwinds."
+            ),
+            tool_name="bear_case",
+            schema=llm_contracts.DEBATE_CASE_SCHEMA,
+        )
     )
     logger.info(
         "Debate [%s] bear: %s (conf=%s%%)",
@@ -212,32 +149,34 @@ def run_debate(
     )
 
     # ── Call 3: PM synthesis (sonnet — full reasoning) ────────────────────────
-    decision = _tool_call(
-        client,
-        _SONNET,
-        system=(
-            "You are a disciplined portfolio manager. You have heard both sides of the debate. "
-            "Your job is to weigh the evidence and make a clear, executable decision. "
-            "Be specific about price targets, conviction, and risk management."
-        ),
-        user=(
-            f"You must decide on {symbol}. Here is the full debate:\n\n"
-            f"Market context:\n{ctx}\n"
-            f"BULL CASE (conf={bull.get('confidence')}%):\n"
-            f"  Thesis: {bull.get('thesis')}\n"
-            f"  Arguments: {json.dumps(bull.get('arguments', []))}\n"
-            f"  Bull target: ${bull.get('price_target')}\n"
-            f"  Bull key risk: {bull.get('key_risk')}\n\n"
-            f"BEAR CASE (conf={bear.get('confidence')}%):\n"
-            f"  Thesis: {bear.get('thesis')}\n"
-            f"  Arguments: {json.dumps(bear.get('arguments', []))}\n"
-            f"  Bear target: ${bear.get('price_target')}\n"
-            f"  Bear key risk: {bear.get('key_risk')}\n\n"
-            f"Current price: ${fundamentals.get('current_price', 'unknown')}\n"
-            f"Make your final portfolio decision."
-        ),
-        tool_name="pm_decision",
-        schema=_DECISION_SCHEMA,
+    decision = llm_contracts.validate_debate_decision(
+        _tool_call(
+            client,
+            _SONNET,
+            system=(
+                "You are a disciplined portfolio manager. You have heard both sides of the debate. "
+                "Your job is to weigh the evidence and make a clear, executable decision. "
+                "Be specific about price targets, conviction, and risk management."
+            ),
+            user=(
+                f"You must decide on {symbol}. Here is the full debate:\n\n"
+                f"Market context:\n{ctx}\n"
+                f"BULL CASE (conf={bull.get('confidence')}%):\n"
+                f"  Thesis: {bull.get('thesis')}\n"
+                f"  Arguments: {json.dumps(bull.get('arguments', []))}\n"
+                f"  Bull target: ${bull.get('price_target')}\n"
+                f"  Bull key risk: {bull.get('key_risk')}\n\n"
+                f"BEAR CASE (conf={bear.get('confidence')}%):\n"
+                f"  Thesis: {bear.get('thesis')}\n"
+                f"  Arguments: {json.dumps(bear.get('arguments', []))}\n"
+                f"  Bear target: ${bear.get('price_target')}\n"
+                f"  Bear key risk: {bear.get('key_risk')}\n\n"
+                f"Current price: ${fundamentals.get('current_price', 'unknown')}\n"
+                f"Make your final portfolio decision."
+            ),
+            tool_name="pm_decision",
+            schema=llm_contracts.DEBATE_DECISION_SCHEMA,
+        )
     )
     logger.info(
         "Debate [%s] PM decision: %s conv=%s%%",

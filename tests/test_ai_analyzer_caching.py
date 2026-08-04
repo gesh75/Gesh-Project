@@ -36,8 +36,9 @@ class _TextBlock:
 class _ToolBlock:
     """Mimics a tool_use content block (carries parsed `.input`)."""
 
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.type = "tool_use"  # _extract_tool_input() now iterates for type=="tool_use"
+    def __init__(self, payload: dict[str, Any], name: str = "return_portfolio_analysis") -> None:
+        self.type = "tool_use"
+        self.name = name
         self.input = payload
 
 
@@ -142,7 +143,7 @@ def test_analyze_portfolio_caches_system_prompt(monkeypatch: pytest.MonkeyPatch)
 
 def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = {"portfolio_score": 72, "portfolio_verdict": "balanced"}
-    response = _FakeMessage([_ToolBlock(parsed)])
+    response = _FakeMessage([_ToolBlock(parsed, name="return_portfolio_analysis")])
     sink = _install_fake_client(monkeypatch, response)
 
     result = ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]})
@@ -152,8 +153,9 @@ def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPa
     assert sink["system"][0]["text"] == ai_analyzer.DEEP_SYSTEM_PROMPT
     # ...and the large static tool schema is also cache-tagged.
     assert sink["tools"][-1]["cache_control"]["type"] == "ephemeral"
-    # Schema content is unchanged (no behavior change).
-    assert sink["tools"][0]["input_schema"] is ai_analyzer.DEEP_ANALYSIS_SCHEMA
+    # Strict-mode tool: deepcopy schema with additionalProperties=false everywhere.
+    assert sink["tools"][0]["strict"] is True
+    assert sink["tools"][0]["input_schema"]["additionalProperties"] is False
 
     # (b) parsed tool output is returned verbatim.
     assert result == parsed
@@ -164,7 +166,7 @@ def test_deep_analyze_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPa
 
 def test_analyze_screener_caches_system_and_tool_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = {"screen_summary": "ok", "market_bias": "neutral", "top_sectors": [], "picks": []}
-    response = _FakeMessage([_ToolBlock(parsed)])
+    response = _FakeMessage([_ToolBlock(parsed, name="return_screener_picks")])
     sink = _install_fake_client(monkeypatch, response)
 
     result = ai_analyzer.analyze_screener([{"symbol": "NVDA"}])
@@ -173,7 +175,8 @@ def test_analyze_screener_caches_system_and_tool_schema(monkeypatch: pytest.Monk
     assert _has_ephemeral_cache(sink["system"]), sink["system"]
     assert sink["system"][0]["text"] == ai_analyzer.SCREENER_SYSTEM_PROMPT
     assert sink["tools"][-1]["cache_control"]["type"] == "ephemeral"
-    assert sink["tools"][0]["input_schema"] is ai_analyzer.SCREENER_SCHEMA
+    assert sink["tools"][0]["strict"] is True
+    assert sink["tools"][0]["input_schema"]["additionalProperties"] is False
 
     # (b) parsed result preserved.
     assert result == parsed
