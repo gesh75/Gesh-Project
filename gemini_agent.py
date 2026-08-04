@@ -36,6 +36,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+import llm_contracts
+
 load_dotenv()
 
 # ─── Config ──────────────────────────────────────────────────────────────────
@@ -207,7 +209,12 @@ def gemini_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
     Returns same schema as news_agent.analyze_news_sentiment()
     """
     if not articles:
-        return {"symbol": symbol, "overall_sentiment": "NEUTRAL", "sentiment_score": 0, "article_count": 0}
+        # Honesty rule: never fabricate NEUTRAL/0 when there is no evidence.
+        # Mirror news_agent.analyze_news_sentiment, which this is a drop-in for,
+        # so _save_sentiment / consensus correctly treat it as UNAVAILABLE.
+        return llm_contracts.unavailable_news_result(
+            symbol=symbol, reason="no_articles", articles=[]
+        )
 
     articles_text = "\n\n".join(
         f"[{i+1}] {a.get('title','')}\nSource: {a.get('source','')} | {a.get('published','')}\n{a.get('description','')[:400]}"
@@ -245,14 +252,13 @@ Scoring: +100=extremely bullish, 0=neutral, -100=extremely bearish."""
         result["scored_by"] = "gemini-flash"
         return result
     except Exception as exc:
-        return {
-            "symbol":            symbol,
-            "overall_sentiment": "NEUTRAL",
-            "sentiment_score":   0,
-            "article_count":     len(articles),
-            "error":             str(exc),
-            "scored_by":         "gemini-flash",
-        }
+        # A provider failure is not neutral news — return the honest UNAVAILABLE
+        # envelope (null sentiment/score) rather than a fabricated flat reading.
+        result = llm_contracts.unavailable_news_result(
+            symbol=symbol, reason=f"gemini_error: {exc}", articles=list(articles[:5])
+        )
+        result["scored_by"] = "gemini-flash"
+        return result
 
 
 # ─── Second Opinion (Pro — matches Claude Sonnet depth) ──────────────────────

@@ -214,7 +214,9 @@ def ollama_news_sentiment(
         model = FAST_MODEL
 
     if not headlines:
-        return {"available": True, "score": 0, "signal": "NEUTRAL", "reason": "no headlines"}
+        # No headlines is not neutral sentiment — do not fabricate score 0 /
+        # NEUTRAL. Report unavailable so callers can ABSTAIN rather than vote.
+        return {"available": False, "symbol": symbol, "reason": "no headlines"}
 
     headlines_text = "\n".join(f"- {h}" for h in headlines[:10])  # cap at 10
 
@@ -243,13 +245,12 @@ def ollama_news_sentiment(
                 "headlines_scored": len(headlines),
                 "as_of":     datetime.now(timezone.utc).isoformat() + "Z",
             }
-        # Fallback if JSON parse fails
+        # JSON parse failure is not a NEUTRAL reading — surface it as unavailable
+        # (with the raw response for debugging) instead of a fabricated score 0.
         return {
-            "available": True,
+            "available": False,
             "model":     model,
             "symbol":    symbol,
-            "score":     0,
-            "signal":    "NEUTRAL",
             "reason":    "parse_error",
             "raw":       response[:200],
         }
