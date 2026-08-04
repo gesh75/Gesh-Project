@@ -30,7 +30,7 @@ _Last updated: 2026-07-09_
 - 3 CRITICAL / 11 HIGH remediated; API-key auth, fail-closed risk gate, generic 500s.
 
 ## Done — daily chain refresh (2026-07-09 09:30 EEST)
-- `run_daily_analysis.sh` **CHAIN DONE** fail=0 in 492s; snapshot fresh via MCP ($37,151).
+- `run_daily_analysis.sh` **CHAIN DONE** fail=0 in 492s; snapshot fresh via MCP.
 - Regime step hit None ADX/RSI TypeError → fixed in `1c4b55a`; re-run engines on next schedule.
 - `com.gesh.main` restarted on `a3ab8e3`/`1c4b55a`; PR #26 merged on GitHub.
 
