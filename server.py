@@ -393,6 +393,8 @@ _HEAVY_PREFIXES = (
     # Keep the entire surface in the heavy bucket; negative quote caching below
     # prevents repeated misses, while this bounds cold/concurrent amplification.
     "/api/mybook",
+    # Performs bounded outbound macro-data refreshes on a serve-cache miss.
+    "/api/long-term-macro",
 )
 
 
@@ -3639,25 +3641,28 @@ def screener_cached():
 # Visible surface for Proposal 1 long-term (1-3y) sentiment bias features.
 # Two layers: long_term_macro caches the raw upstream fetches (6h/24h files); the
 # serve-side cache below lets /cached repaint INSTANTLY from memory without
-# re-entering the module, while the live route always recomputes + refreshes it.
+# re-entering the module, while the live route refreshes it only after expiry.
 _LTM_TTL_SEC = 900  # 15-min serve cache
 _ltm_cache: dict[str, tuple[float, dict]] = {}
-_ltm_lock = threading.Lock()
+_ltm_lock = threading.Lock()  # also provides single-flight around refreshes
 
 
 def _ltm_compute() -> dict:
-    """Compute the overlay (module-cached upstream) and refresh the serve cache."""
+    """Compute the overlay once and refresh the serve cache."""
     from long_term_macro import get_long_term_macro_sentiment
 
-    data = _sanitize(get_long_term_macro_sentiment())
     with _ltm_lock:
+        hit = _ltm_cache.get("v")
+        if hit and (time.monotonic() - hit[0]) < _LTM_TTL_SEC:
+            return hit[1]
+        data = _sanitize(get_long_term_macro_sentiment())
         _ltm_cache["v"] = (time.monotonic(), data)
-    return data
+        return data
 
 
 @app.get("/api/long-term-macro")
 def long_term_macro():
-    """Live compute — always refreshes the serve cache."""
+    """Serve the combined overlay, refreshing at most once per TTL."""
     try:
         return {"status": "ok", "data": _ltm_compute()}
     except Exception as e:
@@ -3666,16 +3671,20 @@ def long_term_macro():
 
 @app.get("/api/long-term-macro/cached")
 def long_term_macro_cached():
-    """Instant paint from the serve cache; computes once on a cold/expired entry."""
+    """Serve only a fresh combined-cache entry; never perform outbound work."""
     try:
         with _ltm_lock:
             hit = _ltm_cache.get("v")
         cached = bool(hit and (time.monotonic() - hit[0]) < _LTM_TTL_SEC)
-        data = hit[1] if cached else _ltm_compute()
-        out = {"status": "ok", "data": data, "cached": cached}
+        if not cached:
+            raise HTTPException(status_code=503, detail="Long-term macro cache is not available")
+        data = hit[1]
+        out = {"status": "ok", "data": data, "cached": True}
         if isinstance(data, dict) and data.get("fetched_at"):
             out["ran_at"] = data["fetched_at"]
         return out
+    except HTTPException:
+        raise
     except Exception as e:
         raise _server_error(e)
 
@@ -6426,6 +6435,7 @@ async def api_explainability(symbol: str):
         from consensus import run_consensus_holding
         from explainability import build_transparency_report
         from price_source import unauthenticated_rh_fallback
+
         # Customer-controlled tickers may use public market-data fallbacks, but
         # must never generate traffic authenticated as the broker-account owner.
         with unauthenticated_rh_fallback():
