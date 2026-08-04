@@ -12,11 +12,43 @@ No network. Reads a temp SQLite paper_outcomes table.
 from __future__ import annotations
 
 import sqlite3
+import sys
+import threading
+import time
+import types
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 import proof_page
+
+
+def test_spy_cache_refresh_is_single_flight_and_time_bounded(monkeypatch):
+    calls = []
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            assert symbol == "SPY"
+
+        def history(self, **kwargs):
+            calls.append(kwargs)
+            time.sleep(0.02)
+            raise TimeoutError
+
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(Ticker=FakeTicker))
+    proof_page._SPY_CACHE.clear()
+
+    start = threading.Barrier(8)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(
+            lambda _: (start.wait(), proof_page._spy_return_since("2026-05-21"))[1],
+            range(8),
+        ))
+
+    assert results == [None] * 8
+    assert len(calls) == 1
+    assert calls[0]["timeout"] == proof_page._SPY_REQUEST_TIMEOUT_S
 
 
 def _make_db(tmp_path: Path, outcomes: list[dict]) -> str:
