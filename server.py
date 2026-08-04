@@ -573,6 +573,13 @@ async def lifespan(app):
     except Exception as e:
         print(f"⚠  Auth failed: {e} — serving cached snapshot data")
     yield
+    # Drain the mybook analysis pool so in-flight Claude jobs finish (or are
+    # cancelled) on shutdown instead of being killed mid-call and leaving threads
+    # that block a clean interpreter exit. Best-effort — never block teardown.
+    try:
+        _mybook_executor.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
     try:
         logout()
     except Exception:
@@ -1842,7 +1849,10 @@ async def billing_webhook(request: Request):
     except Exception:
         payload = {}
     try:
-        result = billing.handle_webhook(raw, sig, payload)
+        # handle_webhook does synchronous SQLite provisioning + a Resend HTTP call;
+        # offload it so a slow webhook can't freeze the event loop (which would raise
+        # Lemon Squeezy retry pressure and duplicate-delivery risk).
+        result = await asyncio.to_thread(billing.handle_webhook, raw, sig, payload)
         return JSONResponse(content=result)
     except PermissionError:
         return JSONResponse(status_code=401, content={"ok": False, "detail": "bad signature"})
@@ -5971,7 +5981,8 @@ async def gemini_second_opinion_endpoint(symbol: str, request: Request):
             if c.isprintable() or c in "\n\t"
         )[:2000]
         verdict = "".join(c for c in str(body.get("verdict", "")) if c.isprintable())[:64]
-        result = gemini_second_opinion(symbol.upper(), analysis, verdict)
+        # Gemini call is a blocking HTTP request — offload so it can't stall the loop.
+        result = await asyncio.to_thread(gemini_second_opinion, symbol.upper(), analysis, verdict)
         return {"status": "ok", "data": _sanitize(result)}
     except Exception as e:
         raise _server_error(e)
@@ -6076,7 +6087,9 @@ async def consolidation_zone_batch(request: Request):
         _interval = body.get("interval", "5m")
         _period = body.get("period", "1d")
         _validate_timeframe(_interval, _period)
-        result = scan_consolidations(
+        # Downloads OHLCV for every symbol — offload off the event loop.
+        result = await asyncio.to_thread(
+            scan_consolidations,
             symbols,
             interval=_interval,
             period=_period,
@@ -6256,8 +6269,13 @@ async def trading_dry_run(request: Request):
             take_profit=body.get("take_profit"),
             rationale=body.get("rationale"),
         )
-        payload = _resolved_payload()
-        verdict = risk_gate_evaluate(intent, payload)
+
+        def _work():
+            # RH payload build + SQLite-backed gate — offload off the event loop.
+            payload = _resolved_payload()
+            return risk_gate_evaluate(intent, payload)
+
+        verdict = await asyncio.to_thread(_work)
         return {"status": "ok", "data": verdict.to_dict()}
     except KeyError as e:
         raise HTTPException(status_code=400, detail=f"Missing field: {e}")
@@ -6374,64 +6392,72 @@ async def trading_simulate_session(request: Request):
             body = {}
         use_cached = bool((body or {}).get("use_cached", True))
         only = {(s or "").upper() for s in (body or {}).get("symbols") or []}
-        payload = _resolved_payload()
-        holdings = payload.get("holdings", [])
-        if only:
-            holdings = [h for h in holdings if (h.get("symbol") or "").upper() in only]
 
-        from trading.config import load_risk_config
+        def _run() -> dict:
+            # The full consensus→gate→execute loop over every holding is blocking
+            # (RH payload build, per-symbol engines + yfinance, SQLite gate +
+            # execution). Offload it so this owner batch endpoint cannot freeze the
+            # single event loop and stall concurrent dashboard polls / mybook 202s.
+            payload = _resolved_payload()
+            holdings = payload.get("holdings", [])
+            if only:
+                holdings = [h for h in holdings if (h.get("symbol") or "").upper() in only]
 
-        cfg = load_risk_config()
-        results: list[dict] = []
-        cap_hit = False
-        cap_reason = ""
+            from trading.config import load_risk_config
 
-        for h in holdings:
-            sym = (h.get("symbol") or "").upper()
-            if not sym:
-                continue
-            if cap_hit:
-                results.append(
-                    {
-                        "symbol": sym,
-                        "skipped": True,
-                        "reason": cap_reason or "Daily order cap already reached",
-                    }
-                )
-                continue
-            try:
-                consensus_row = _resolve_consensus_row(sym, payload, use_cached=use_cached)
-                intent = from_consensus(consensus_row, max_position_pct=cfg.max_position_pct)
-                verdict = risk_gate_evaluate(intent, payload)
-                result = execution_place(intent, verdict, payload)
-                vd = verdict.to_dict()
-                results.append(
-                    {
-                        "symbol": sym,
-                        "cached": use_cached and _cached_consensus_row(sym) is not None,
-                        "consensus_verdict": consensus_row.get("verdict"),
-                        "intent": intent.to_dict(),
-                        "verdict": vd,
-                        "order": result.to_dict(),
-                    }
-                )
-                reason = vd.get("reason") or ""
-                if not vd.get("approved") and "Daily order cap" in reason:
-                    cap_hit = True
-                    cap_reason = reason
-            except Exception as exc:
-                results.append({"symbol": sym, "error": str(exc)})
+            cfg = load_risk_config()
+            results: list[dict] = []
+            cap_hit = False
+            cap_reason = ""
 
-        return _sanitize(
-            {
-                "status": "ok",
-                "count": len(results),
-                "cap_reached": cap_hit,
-                "cap_reason": cap_reason or None,
-                "use_cached": use_cached,
-                "results": results,
-            }
-        )
+            for h in holdings:
+                sym = (h.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                if cap_hit:
+                    results.append(
+                        {
+                            "symbol": sym,
+                            "skipped": True,
+                            "reason": cap_reason or "Daily order cap already reached",
+                        }
+                    )
+                    continue
+                try:
+                    consensus_row = _resolve_consensus_row(sym, payload, use_cached=use_cached)
+                    intent = from_consensus(consensus_row, max_position_pct=cfg.max_position_pct)
+                    verdict = risk_gate_evaluate(intent, payload)
+                    result = execution_place(intent, verdict, payload)
+                    vd = verdict.to_dict()
+                    results.append(
+                        {
+                            "symbol": sym,
+                            "cached": use_cached and _cached_consensus_row(sym) is not None,
+                            "consensus_verdict": consensus_row.get("verdict"),
+                            "intent": intent.to_dict(),
+                            "verdict": vd,
+                            "order": result.to_dict(),
+                        }
+                    )
+                    reason = vd.get("reason") or ""
+                    if not vd.get("approved") and "Daily order cap" in reason:
+                        cap_hit = True
+                        cap_reason = reason
+                except Exception as exc:
+                    results.append({"symbol": sym, "error": str(exc)})
+
+            return _sanitize(
+                {
+                    "status": "ok",
+                    "count": len(results),
+                    "cap_reached": cap_hit,
+                    "cap_reason": cap_reason or None,
+                    "use_cached": use_cached,
+                    "results": results,
+                }
+            )
+
+        return await asyncio.to_thread(_run)
     except Exception as e:
         raise _server_error(e)
 
