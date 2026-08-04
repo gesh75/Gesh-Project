@@ -2390,6 +2390,26 @@ def _is_real_observation(h: dict) -> bool:
     )
 
 
+def _engine_holdings(payload: dict) -> tuple[list[dict], list[str]]:
+    """Split payload holdings into engine-usable observations and degraded ones.
+
+    A degraded-snapshot 'zombie' (stale non-zero equity + current_price=0 — the
+    documented 2026-07 RH-session failure) poisons Kelly share sizing and the
+    consensus Kelly node, which read `current_price` directly. The ECG path
+    already filters these via `_is_real_observation`; this applies the SAME
+    predicate at the price-dependent engine boundary (Kelly, consensus) so a
+    corrupt row is excluded from the math and reported in `degraded_holdings`
+    instead of silently skewing results. Monte Carlo is intentionally NOT filtered
+    here — it weights by `equity` and fetches its own price history, never reading
+    `current_price`."""
+    holdings = payload.get("holdings") or []
+    valid = [h for h in holdings if _is_real_observation(h)]
+    degraded = [
+        str(h.get("symbol", "")) for h in holdings if not _is_real_observation(h)
+    ]
+    return valid, degraded
+
+
 def _maybe_log_snapshot(holdings: list[dict]) -> None:
     """Rate-limited equity snapshot + live cache write. Skips if last write < interval ago."""
     global _last_snapshot_at
@@ -2423,6 +2443,17 @@ def _maybe_log_snapshot(holdings: list[dict]) -> None:
 _chart_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 _chart_cache_lock = threading.Lock()
 CHART_TTL_SEC = 30
+
+
+def _chart_cache_put(key: tuple[str, str], now: float, result: dict) -> None:
+    """Store a chart result and evict expired entries so the cache stays bounded
+    by the (symbol, period) pairs queried within the last CHART_TTL_SEC window —
+    without this it grows for every distinct symbol/range for the process's life."""
+    with _chart_cache_lock:
+        _chart_cache[key] = (now, result)
+        for k in [k for k, (ts, _) in _chart_cache.items()
+                  if (now - ts) >= CHART_TTL_SEC]:
+            del _chart_cache[k]
 
 # Per-ticker analyze GETs (regime/fundamentals/analyst/news) cache. Watchlist
 # chips make repeat clicks on the same symbol the common pattern, and every miss
@@ -2461,8 +2492,16 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
     # unverified (GESH-8).
     if isinstance(resp, dict) and "price" not in resp:  # skip tiny price-only blobs
         resp.setdefault("as_of", _dt.now(_tz.utc).isoformat())
+    now = time.monotonic()
     with _ticker_get_lock:
-        _ticker_get_cache[(bucket, sym)] = (time.monotonic(), resp)
+        _ticker_get_cache[(bucket, sym)] = (now, resp)
+        # Evict expired entries on write so this cache can't grow past the set of
+        # (bucket, symbol) pairs queried within the last TTL window — otherwise a
+        # user cycling Analyze tabs across many tickers leaks entries for the life
+        # of the always-on process.
+        for k in [k for k, (ts, _) in _ticker_get_cache.items()
+                  if (now - ts) >= TICKER_GET_TTL_SEC]:
+            del _ticker_get_cache[k]
     return resp
 
 
@@ -2989,10 +3028,20 @@ def run_deep_analysis():
         payload = _resolved_payload()
         offline = bool(payload.get("offline"))
         eq = payload["equity_summary"]
-        prev = eq.get("adjusted_equity_previous_close", 0)
-        curr = eq.get("portfolio_equity", 0)
-        eq["day_change"] = round(curr - prev, 2)
-        eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0, 2)
+        # Honest degrade: when the prior close is missing/non-positive, report the
+        # day change as unavailable rather than writing 0/0% (which renders as a
+        # flat market). Mirrors _attach_account_day_change and /api/portfolio.
+        prev = _positive_finite(eq.get("adjusted_equity_previous_close"))
+        curr = eq.get("portfolio_equity")
+        if prev is None or curr is None:
+            eq["day_change"] = None
+            eq["day_change_pct"] = None
+            eq["day_change_available"] = False
+        else:
+            _amount = float(curr) - prev
+            eq["day_change"] = round(_amount, 2)
+            eq["day_change_pct"] = round(_amount / prev * 100, 2)
+            eq["day_change_available"] = True
 
         symbols = [h["symbol"] for h in payload["holdings"]]
 
@@ -3045,6 +3094,9 @@ def run_deep_analysis():
 def monte_carlo():
     try:
         payload = _resolved_payload()
+        # Monte Carlo weights positions by `equity` and fetches its OWN price
+        # history per symbol — it never reads `current_price`, so the price<=0
+        # 'zombie' filter used by Kelly/consensus does not apply here.
         holdings = payload["holdings"]
         eq_sum = payload["equity_summary"]
         result = run_monte_carlo(holdings, eq_sum)
@@ -3321,7 +3373,7 @@ def run_screener():
 def kelly_endpoint():
     try:
         payload = _resolved_payload()
-        holdings = payload["holdings"]
+        holdings, degraded = _engine_holdings(payload)
         total_equity = payload["equity_summary"].get("portfolio_equity", 0)
         symbols = [h["symbol"] for h in holdings]
         analyst_data = get_analyst_targets(symbols)
@@ -3356,6 +3408,8 @@ def kelly_endpoint():
         resp = {"status": "ok", "data": _jsonable(result), "total_equity": total_equity}
         if payload.get("offline"):
             resp["offline"] = True
+        if degraded:
+            resp["degraded_holdings"] = degraded
         _save_engine_result("kelly", resp)
         return resp
     except Exception as e:
@@ -3447,8 +3501,7 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
                     "last_timestamp": None,
                     "source": None,
                 }
-                with _chart_cache_lock:
-                    _chart_cache[key] = (now, result)
+                _chart_cache_put(key, now, result)
                 return {**result, "requested_range": str(requested)}
         else:
             raw = price_source.yf_download(
@@ -3486,8 +3539,7 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
             "source": source,
             "data_as_of": _dt.now(_tz.utc).isoformat(),
         }
-        with _chart_cache_lock:
-            _chart_cache[key] = (now, result)
+        _chart_cache_put(key, now, result)
         return {**result, "requested_range": str(requested)}
     except HTTPException:
         raise
@@ -3502,10 +3554,12 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
 def consensus_endpoint():
     try:
         payload = _resolved_payload()
-        holdings = payload["holdings"]
+        holdings, degraded = _engine_holdings(payload)
         total_equity = payload["equity_summary"].get("portfolio_equity", 0)
         result = run_consensus_portfolio(holdings, total_equity)
         resp = {"status": "ok", "data": result}
+        if degraded:
+            resp["degraded_holdings"] = degraded
         _save_engine_result("consensus", resp)
         return resp
     except Exception as e:
@@ -4584,6 +4638,16 @@ async def analyze_ticker_endpoint(request: Request):
     except Exception as e:
         _release_customer_quota(reservation)
         raise _server_error(e)
+    finally:
+        # Release the per-symbol flight lock when no build is holding it and no
+        # card was cached. The 404 (unknown ticker) / 422 (suspect price) / error
+        # paths never call _ticker_card_store, so without this a probed invalid or
+        # cold symbol leaks an asyncio.Lock forever — an unbounded dict on the
+        # always-on server. Guarded by _ticker_card_lock, same as the store hook.
+        with _ticker_card_lock:
+            lk = _ticker_card_flight.get(sym)
+            if lk is not None and not lk.locked() and sym not in _ticker_card_cache:
+                del _ticker_card_flight[sym]
 
 
 # ─── Customer book — "Analyze MY portfolio" (v2 of the customer surface) ─────
