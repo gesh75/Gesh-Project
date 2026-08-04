@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,14 +93,35 @@ _DDL_STATEMENTS = [
 ]
 
 
+# Schema is created once per distinct DB path, not on every connection. Keying by
+# path (rather than a single process-global flag) keeps per-test DB isolation
+# working while eliminating the redundant DDL that ran on EVERY log/read call —
+# real lock contention + latency on the VirtioFS/FUSE fallback under /api/trades
+# polling. CREATE IF NOT EXISTS remains idempotent, so a first connection to any
+# new path still initialises it.
+_schema_lock = threading.Lock()
+_initialized_paths: set[str] = set()
+
+
+def _ensure_schema(con: sqlite3.Connection, path) -> None:
+    key = str(path)
+    if key in _initialized_paths:
+        return
+    with _schema_lock:
+        if key in _initialized_paths:
+            return
+        for stmt in _DDL_STATEMENTS:
+            con.execute(stmt)
+        con.commit()
+        _initialized_paths.add(key)
+
+
 @contextmanager
 def _conn():
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     try:
-        for stmt in _DDL_STATEMENTS:
-            con.execute(stmt)
-        con.commit()
+        _ensure_schema(con, DB_PATH)
         yield con
         con.commit()
     finally:
