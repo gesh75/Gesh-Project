@@ -9,7 +9,8 @@
 #   4/5 run_paper_gate2.py      — paper session + 8-gate audit chain (non-fatal)
 #   5/5 gen_report2.py          — template-fill HTML report (<1s)
 #
-# Logs to /tmp/gesh_fullchain.log. Exit 0 = clean run, 1 = a fatal step failed.
+# Logs to a private .logs/gesh_fullchain.log in the repo. Exit 0 = clean run,
+# 1 = a fatal step failed.
 # Safe to re-run any time (lock prevents overlap; later steps just regenerate).
 #
 # Sleep/wake note: launchd coalesces a 10:30 StartCalendarInterval missed during
@@ -18,6 +19,9 @@
 # is the intended recovery path; the report timestamp shows the actual run time.
 
 set -u
+# The chain emits brokerage positions and proposed trades. Keep every file it
+# creates private by default, especially its combined stdout/stderr log.
+umask 077
 
 # ── Improvement #3 (2026-07-10): prevent host idle-sleep from freezing a run
 # mid-chain while it holds the lock (which lock-skips the next launchd fire).
@@ -68,7 +72,12 @@ if [ ! -r "$GP/.python-version" ] || [ -z "$VENV_MM" ] || [ "$VENV_MM" != "$DECL
   echo "recreate the venv (do not run setup automatically)"
   exit 1
 fi
-LOG=/tmp/gesh_fullchain.log
+LOG_DIR="$GP/.logs"
+if ! mkdir -p "$LOG_DIR" || ! chmod 700 "$LOG_DIR"; then
+    echo "FATAL: cannot create private log directory $LOG_DIR" >&2
+    exit 1
+fi
+LOG="$LOG_DIR/gesh_fullchain.log"
 LOCK=/tmp/gesh_daily_chain.lock
 
 # ── Improvement #2 (2026-07-10): Telegram alert on every FATAL path.
@@ -223,13 +232,13 @@ fi
 
 # ── 2/5 engines (fatal — everything downstream needs engine_results.json)
 step "2/5 run_engines2"
-"$PY" run_engines2.py || { echo "FATAL: engines failed"; tg_alert "FATAL step 2/5: run_engines2 failed — see /tmp/gesh_fullchain.log"; exit 1; }
+"$PY" run_engines2.py || { echo "FATAL: engines failed"; tg_alert "FATAL step 2/5: run_engines2 failed — see $LOG"; exit 1; }
 
 # ── 3/5 AI analysis + DB save (fatal — the report needs ai_result; stopping
 # here keeps yesterday's good gesh_report.html in place instead of overwriting
 # it with empty AI sections)
 step "3/5 run_ai2"
-"$PY" run_ai2.py || { echo "FATAL: run_ai2 failed — keeping previous report"; tg_alert "FATAL step 3/5: run_ai2 failed — previous report kept, see /tmp/gesh_fullchain.log"; exit 1; }
+"$PY" run_ai2.py || { echo "FATAL: run_ai2 failed — keeping previous report"; tg_alert "FATAL step 3/5: run_ai2 failed — previous report kept, see $LOG"; exit 1; }
 
 # ── 4/5 paper session + risk-gate audit chain (non-fatal by design; a degraded
 # run is research-only — skipped here, and run_paper_gate2's own entry guard
@@ -282,5 +291,5 @@ fi
 
 echo ""
 echo "### CHAIN DONE — $(date '+%Y-%m-%d %H:%M:%S %Z') (total $(($(date +%s)-T0))s, fail=$FAIL degraded=$DEGRADED)"
-[ "$FAIL" -ne 0 ] && tg_alert "chain finished with fail=1 (report generation or asserts failed) — see /tmp/gesh_fullchain.log"
+[ "$FAIL" -ne 0 ] && tg_alert "chain finished with fail=1 (report generation or asserts failed) — see $LOG"
 exit "$FAIL"
