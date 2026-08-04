@@ -299,8 +299,8 @@ def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
     )
 
     try:
-        client = llm_gateway.create_client()
-        msg = client.messages.create(
+        msg = llm_gateway.get_gateway().create(
+            operation="news_sentiment",
             model=HAIKU_MODEL,
             max_tokens=1200,
             system=NEWS_PROMPT.format(symbol=symbol),
@@ -338,8 +338,18 @@ def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
             "source_count": len(articles),
         }
         return result
-    except Exception:
+    except (
+        llm_gateway.LLMUnavailableError,
+        llm_gateway.LLMRefusalError,
+        llm_gateway.LLMTruncatedError,
+        llm_gateway.LLMBudgetExceededError,
+        llm_gateway.LLMConfigurationError,
+        llm_contracts.LLMContractError,
+        Exception,
+    ):
         # Keep headlines for the Recent News card; never fabricate NEUTRAL/0.
+        # Typed LLM errors and contract failures map to the same UNAVAILABLE
+        # envelope — never leak exception text into the result.
         return llm_contracts.unavailable_news_result(
             symbol=symbol,
             reason="provider_or_contract_failure",

@@ -142,8 +142,13 @@ def test_cached_articles_never_raise(monkeypatch):
 # ─── analyze_news_sentiment retains articles on failure paths ────────────────
 
 
-def test_error_path_retains_allow_listed_articles(monkeypatch):
+def test_error_path_retains_allow_listed_articles(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
+    monkeypatch.setenv("LLM_USAGE_DB", str(tmp_path / "llm_usage.db"))
+    import llm_gateway
+
+    llm_gateway.reset_gateway()
 
     def _boom(*a, **k):
         raise RuntimeError("api down")

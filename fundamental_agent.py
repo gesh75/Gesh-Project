@@ -489,7 +489,6 @@ def run_fundamental_scan(
         _save_fundamental_scan(result)
         return result
 
-    client = llm_gateway.create_client()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
@@ -498,7 +497,8 @@ def run_fundamental_scan(
             "Return the complete fundamental scan contract.",
             llm_contracts.FUNDAMENTAL_SCAN_SCHEMA,
         )
-        msg = client.messages.create(
+        msg = llm_gateway.get_gateway().create(
+            operation="fundamental_scan",
             model=SONNET_MODEL,
             max_tokens=6000,
             system=FUNDAMENTAL_PROMPT,
@@ -535,8 +535,24 @@ def run_fundamental_scan(
         _save_fundamental_scan(result)
         return result
 
-    except Exception as e:
-        result = _finalize_fundamental_result({"error": str(e)}, valid)
+    except (
+        llm_gateway.LLMUnavailableError,
+        llm_gateway.LLMRefusalError,
+        llm_gateway.LLMTruncatedError,
+        llm_gateway.LLMBudgetExceededError,
+        llm_gateway.LLMConfigurationError,
+        llm_contracts.LLMContractError,
+    ):
+        result = _finalize_fundamental_result(
+            {"error": "AI provider temporarily unavailable"}, valid
+        )
+        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        _save_fundamental_scan(result)
+        return result
+    except Exception:
+        result = _finalize_fundamental_result(
+            {"error": "AI provider temporarily unavailable"}, valid
+        )
         result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
         _save_fundamental_scan(result)
         return result

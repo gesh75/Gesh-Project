@@ -35,8 +35,13 @@ def test_untrusted_source_prompt_serializes_data_and_sets_non_instruction_policy
     assert "UNTRUSTED_NEWS_ARTICLES_JSON:" in prompt
 
 
-def test_provider_failure_is_unavailable_retains_articles(monkeypatch):
+def test_provider_failure_is_unavailable_retains_articles(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
+    monkeypatch.setenv("LLM_USAGE_DB", str(tmp_path / "llm_usage.db"))
+    import llm_gateway
+
+    llm_gateway.reset_gateway()
 
     def _boom(*_a, **_k):
         raise RuntimeError("api down")
@@ -64,8 +69,13 @@ def test_no_api_key_with_articles_is_unavailable(monkeypatch):
     assert result["articles"]
 
 
-def test_adversarial_title_serialized_under_policy_in_claude_prompt(monkeypatch):
+def test_adversarial_title_serialized_under_policy_in_claude_prompt(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
+    monkeypatch.setenv("LLM_USAGE_DB", str(tmp_path / "llm_usage.db"))
+    import llm_gateway
+
+    llm_gateway.reset_gateway()
     captured: dict[str, Any] = {}
 
     class _FakeMessages:
@@ -141,10 +151,14 @@ def test_save_sentiment_skips_unavailable(monkeypatch, tmp_path):
     assert n == 1
 
 
-def test_sec_analyze_failure_is_unavailable(monkeypatch):
+def test_sec_analyze_failure_is_unavailable(monkeypatch, tmp_path):
+    import llm_gateway
     import sec_agent as sa
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
+    monkeypatch.setenv("LLM_USAGE_DB", str(tmp_path / "llm_usage.db"))
+    llm_gateway.reset_gateway()
     monkeypatch.setattr(
         "llm_gateway.create_client",
         lambda: (_ for _ in ()).throw(RuntimeError("down")),
@@ -160,10 +174,14 @@ def test_sec_analyze_failure_is_unavailable(monkeypatch):
     assert result["urgency"] == "UNKNOWN"
 
 
-def test_sec_uses_untrusted_source_prompt(monkeypatch):
+def test_sec_uses_untrusted_source_prompt(monkeypatch, tmp_path):
+    import llm_gateway
     import sec_agent as sa
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
+    monkeypatch.setenv("LLM_USAGE_DB", str(tmp_path / "llm_usage.db"))
+    llm_gateway.reset_gateway()
     captured: dict[str, Any] = {}
 
     class _FakeMessages:

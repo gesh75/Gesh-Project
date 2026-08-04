@@ -160,11 +160,47 @@ def _server_error(exc: Exception) -> HTTPException:
         # clean 503 (frontend renders this as "Offline") instead of a 500 + traceback.
         logger.warning("Robinhood offline: %s", exc)
         return HTTPException(status_code=503, detail="Broker data temporarily unavailable")
+
+    # Typed LLM outcomes — fixed safe copy only; never echo exception args.
+    try:
+        import llm_contracts
+        import llm_gateway
+
+        if isinstance(exc, (llm_gateway.LLMRefusalError, llm_contracts.LLMContractError)):
+            logger.warning("LLM contract/refusal: kind=%s", type(exc).__name__)
+            return HTTPException(
+                status_code=422,
+                detail="AI research could not be completed for this request",
+            )
+        if isinstance(exc, llm_gateway.LLMTruncatedError):
+            logger.warning("LLM truncated: kind=%s", type(exc).__name__)
+            return HTTPException(
+                status_code=503,
+                detail="AI response exceeded its configured output limit",
+            )
+        if isinstance(
+            exc,
+            (llm_gateway.LLMUnavailableError, llm_gateway.LLMBudgetExceededError),
+        ):
+            logger.warning("LLM unavailable: kind=%s", type(exc).__name__)
+            return HTTPException(
+                status_code=503,
+                detail="AI provider temporarily unavailable",
+            )
+        if isinstance(exc, llm_gateway.LLMConfigurationError):
+            logger.warning("LLM configuration: kind=%s", type(exc).__name__)
+            return HTTPException(
+                status_code=503,
+                detail="AI provider temporarily unavailable",
+            )
+    except ImportError:
+        pass
+
     upstream = _upstream_unavailable_error(exc)
     if upstream is not None:
-        logger.warning("Upstream unavailable: %s", exc)
+        logger.warning("Upstream unavailable: kind=%s", type(exc).__name__)
         return upstream
-    logger.exception("Unhandled server error: %s", exc)
+    logger.exception("Unhandled server error: kind=%s", type(exc).__name__)
     return HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -5039,6 +5075,13 @@ def usage_page(request: Request, days: int = 30):
             f"<td style='padding:6px 12px;color:#666'>{e(str(r['last_at'])[:16])}</td></tr>"
             for r in rows)
         live_llm = sum(r["count"] for r in rows if r["event"] in ("ticker_card", "book_analysis"))
+        # Provider-side spend/telemetry (owner-only; never on customer routes).
+        import llm_gateway
+
+        try:
+            llm_provider = llm_gateway.daily_usage_summary(days=days)
+        except Exception:
+            llm_provider = {"attempt_count": 0, "total_estimated_spend_usd": 0.0, "error": "unavailable"}
         # Job Health — launchd jobs print their JSON summary only to /tmp logs, so a
         # failing/misconfigured job is invisible without this (Grok review 2026-07-17).
         import job_health
@@ -5063,6 +5106,7 @@ def usage_page(request: Request, days: int = 30):
                 f"<td style='padding:6px 12px;color:{color};font-weight:700'>{e(status)}</td>"
                 f"<td style='padding:6px 12px;color:#666'>{e(str(ran_at)[:16]) if ran_at else 'never'}</td>"
                 f"<td style='padding:6px 12px;font-family:monospace;font-size:12px'>{summary_html}</td></tr>")
+        provider_html = e(_json.dumps(llm_provider), quote=False)
         return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>GESH — Usage</title><style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:900px;
 margin:32px auto;padding:0 20px;color:#111}}table{{border-collapse:collapse;width:100%}}
@@ -5074,6 +5118,8 @@ window <a href='/usage?days=7'>7d</a> · <a href='/usage?days=30'>30d</a> · <a 
 <h2>Job Health</h2>
 <table><tr><th>JOB</th><th>STATUS</th><th>LAST RUN (UTC)</th><th>LAST SUMMARY</th></tr>
 {''.join(job_rows)}</table>
+<h2>LLM Provider</h2>
+<pre style='background:#f6f6f6;padding:12px;overflow:auto;font-size:12px'>{provider_html}</pre>
 <h2>Usage</h2>
 <table><tr><th>EMAIL</th><th>TIER</th><th>EVENT</th><th>COUNT</th><th>LAST</th></tr>
 {body or "<tr><td colspan='5' style='padding:16px;color:#888'><em>No usage recorded yet.</em></td></tr>"}</table>
@@ -5094,8 +5140,23 @@ def usage_summary_endpoint(request: Request, days: int = 30):
     if not auth_users.is_owner(email):
         raise HTTPException(status_code=403, detail="Owner-only view")
     try:
-        return {"status": "ok", "days": max(1, min(days, 365)),
-                "data": auth_users.usage_summary(days=max(1, min(days, 365)))}
+        days_n = max(1, min(days, 365))
+        import llm_gateway
+
+        try:
+            llm_provider = llm_gateway.daily_usage_summary(days=days_n)
+        except Exception:
+            llm_provider = {
+                "attempt_count": 0,
+                "total_estimated_spend_usd": 0.0,
+                "error": "unavailable",
+            }
+        return {
+            "status": "ok",
+            "days": days_n,
+            "data": auth_users.usage_summary(days=days_n),
+            "llm_provider": llm_provider,
+        }
     except Exception as e:
         raise _server_error(e)
 

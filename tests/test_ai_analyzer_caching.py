@@ -17,6 +17,7 @@ We assert two independent things per analyzer:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -43,8 +44,16 @@ class _ToolBlock:
 
 
 class _FakeMessage:
-    def __init__(self, content: list[Any]) -> None:
+    def __init__(self, content: list[Any], stop_reason: str | None = "end_turn") -> None:
         self.content = content
+        self.stop_reason = stop_reason
+        self.usage = SimpleNamespace(
+            input_tokens=0,
+            output_tokens=0,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        self._request_id = "req_test"
 
 
 class _FakeStreamContext:
@@ -75,9 +84,8 @@ class _FakeMessages:
         return self._response
 
     def stream(self, **kwargs: Any) -> _FakeStreamContext:
-        # ai_analyzer._create_streaming() drives deep_analyze_portfolio through
-        # client.messages.stream(...).get_final_message() (2026-07-27, dodges a
-        # wall-clock timeout on long generations) — mirror create()'s capture.
+        # Gateway.stream() drives deep_analyze_portfolio through
+        # client.messages.stream(...).get_final_message().
         self._sink.clear()
         self._sink.update(kwargs)
         return _FakeStreamContext(self._response)
@@ -91,12 +99,20 @@ class _FakeClient:
 def _install_fake_client(
     monkeypatch: pytest.MonkeyPatch,
     response: _FakeMessage,
+    tmp_path: Any | None = None,
 ) -> dict[str, Any]:
     """Patch the Anthropic constructor; return the dict that records kwargs."""
+    import tempfile
+    from pathlib import Path
+
     import llm_gateway
 
     sink: dict[str, Any] = {}
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-used")
+    monkeypatch.setenv("LLM_DAILY_BUDGET_USD", "0")
+    db = Path(tmp_path) / "llm_usage.db" if tmp_path is not None else Path(tempfile.mkdtemp()) / "llm_usage.db"
+    monkeypatch.setenv("LLM_USAGE_DB", str(db))
+    llm_gateway.reset_gateway()
     monkeypatch.setattr(
         llm_gateway.anthropic,
         "Anthropic",

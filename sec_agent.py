@@ -212,8 +212,8 @@ def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
     )
 
     try:
-        client = llm_gateway.create_client()
-        msg = client.messages.create(
+        msg = llm_gateway.get_gateway().create(
+            operation="sec_filing",
             model=HAIKU_MODEL,  # fast + cheap for filing parsing
             max_tokens=1500,
             system=SEC_ANALYSIS_PROMPT,
@@ -244,7 +244,15 @@ def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
         )
         result["availability"] = "AVAILABLE"
         return result
-    except Exception:
+    except (
+        llm_gateway.LLMUnavailableError,
+        llm_gateway.LLMRefusalError,
+        llm_gateway.LLMTruncatedError,
+        llm_gateway.LLMBudgetExceededError,
+        llm_gateway.LLMConfigurationError,
+        llm_contracts.LLMContractError,
+        Exception,
+    ):
         return {
             "availability": "UNAVAILABLE",
             "unavailable_reason": "provider_or_contract_failure",

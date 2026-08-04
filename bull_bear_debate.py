@@ -33,16 +33,18 @@ _SONNET = llm_gateway.resolve_model(os.getenv("CLAUDE_MODEL"), default="sonnet")
 
 
 def _tool_call(
-    client: Any,
+    *,
+    operation: str,
     model: str,
     system: str,
     user: str,
     tool_name: str,
     schema: dict[str, Any],
 ) -> dict[str, Any]:
-    """Single Claude tool-use call; returns the structured JSON dict."""
+    """Single Claude tool-use call via Gateway; returns the structured JSON dict."""
     tool = llm_contracts.strict_tool(tool_name, system[:80], schema)
-    resp = client.messages.create(
+    resp = llm_gateway.get_gateway().create(
+        operation=operation,
         model=model,
         max_tokens=1024,
         system=system,
@@ -51,7 +53,7 @@ def _tool_call(
         tool_choice={"type": "tool", "name": tool_name},
     )
     return llm_contracts.extract_tool_input(
-        resp, expected_tool=tool_name, operation=f"debate_{tool_name}"
+        resp, expected_tool=tool_name, operation=operation
     )
 
 
@@ -99,15 +101,13 @@ def run_debate(
             "debate_summary": str,  # human-readable one-liner
         }
     """
-    client = llm_gateway.create_client()
-
     ctx = _context_prompt(symbol, consensus, fundamentals)
 
     # ── Call 1: Bull case (haiku — cheap) ────────────────────────────────────
     bull = llm_contracts.validate_debate_case(
         _tool_call(
-            client,
-            _HAIKU,
+            operation="debate_bull",
+            model=_HAIKU,
             system="You are an aggressive buy-side analyst. Build the strongest possible BULL case.",
             user=(
                 f"Build the strongest bull case for {symbol}.\n\n"
@@ -128,8 +128,8 @@ def run_debate(
     # ── Call 2: Bear case (haiku — cheap) ────────────────────────────────────
     bear = llm_contracts.validate_debate_case(
         _tool_call(
-            client,
-            _HAIKU,
+            operation="debate_bear",
+            model=_HAIKU,
             system="You are a short-seller. Build the strongest possible BEAR case.",
             user=(
                 f"Build the strongest bear case for {symbol}.\n\n"
@@ -151,8 +151,8 @@ def run_debate(
     # ── Call 3: PM synthesis (sonnet — full reasoning) ────────────────────────
     decision = llm_contracts.validate_debate_decision(
         _tool_call(
-            client,
-            _SONNET,
+            operation="debate_pm",
+            model=_SONNET,
             system=(
                 "You are a disciplined portfolio manager. You have heard both sides of the debate. "
                 "Your job is to weigh the evidence and make a clear, executable decision. "
