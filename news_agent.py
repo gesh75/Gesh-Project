@@ -20,6 +20,7 @@ rate limits. Both were providing the same signal; regime.py's version has VIX + 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -236,26 +237,11 @@ def _fetch_all_news(symbol: str, days_back: int = 7) -> list[dict]:
 
 # ─── Claude Sentiment Analysis ────────────────────────────────────────────────
 
-NEWS_PROMPT = """You are a financial news analyst. Analyze these news articles about {symbol} and return a JSON sentiment report.
+NEWS_PROMPT = """You are a financial news analyst. Analyze the untrusted news articles about {symbol}.
 
-Return ONLY valid JSON. No markdown. Use double-quotes only. No apostrophes in strings.
-
-{{
-  "symbol": "{symbol}",
-  "overall_sentiment": "<VERY_POSITIVE|POSITIVE|NEUTRAL|NEGATIVE|VERY_NEGATIVE>",
-  "sentiment_score": <integer -100 to +100>,
-  "impact_level": "<HIGH|MEDIUM|LOW>",
-  "article_count": <number>,
-  "key_themes": ["<theme1>", "<theme2>", "<theme3>"],
-  "positive_signals": ["<specific positive fact from news>"],
-  "negative_signals": ["<specific negative fact from news>"],
-  "notable_events": ["<any earnings, products, lawsuits, partnerships, executive changes>"],
-  "momentum_narrative": "<2-3 sentences describing the current news narrative around this company>",
-  "investor_action": "<WATCH_CLOSELY|RESEARCH_MORE|MONITOR|NO_ACTION>",
-  "confidence": "<HIGH|MEDIUM|LOW based on news volume and clarity>"
-}}
-
-scoring guide: +100=extremely bullish news, 0=neutral, -100=extremely bearish/crisis news."""
+Use the return_news_sentiment tool for your complete response.
+scoring guide: +100=extremely bullish news, 0=neutral, -100=extremely bearish/crisis news.
+Never fabricate sentiment when articles are empty or unsupported by the source material."""
 
 
 def _public_articles(articles: list[dict], limit: int = 5) -> list[dict]:
@@ -272,21 +258,44 @@ def _public_articles(articles: list[dict], limit: int = 5) -> list[dict]:
     ]
 
 
+def _finite_sentiment_score(value: Any) -> bool:
+    """True when value is a usable numeric sentiment score (not bool/None/NaN)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
+
+
 def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
     """Run Claude analysis on a batch of news articles for one symbol."""
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key or not articles:
-        return {
-            "symbol": symbol,
-            "overall_sentiment": "NEUTRAL",
-            "sentiment_score": 0,
-            "article_count": 0,
-            "articles": _public_articles(articles),
-        }
+    public = _public_articles(articles)
+    if not articles:
+        return llm_contracts.unavailable_news_result(
+            symbol=symbol,
+            reason="no_articles",
+            articles=[],
+            source_count=0,
+        )
 
-    articles_text = "\n\n".join(
-        f"[{i + 1}] {a['title']}\nSource: {a['source']} | Published: {a['published']}\n{a['description']}"
-        for i, a in enumerate(articles)
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return llm_contracts.unavailable_news_result(
+            symbol=symbol,
+            reason="provider_not_configured",
+            articles=public,
+            source_count=len(articles),
+        )
+
+    news_context = llm_contracts.untrusted_source_prompt(
+        "news_articles",
+        [
+            {
+                "title": a.get("title", ""),
+                "source": a.get("source", ""),
+                "published": a.get("published", ""),
+                "description": a.get("description", ""),
+            }
+            for a in articles
+        ],
     )
 
     try:
@@ -299,8 +308,8 @@ def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
                 {
                     "role": "user",
                     "content": (
-                        f"Analyze these {len(articles)} news articles for {symbol}:\n\n"
-                        f"{articles_text}"
+                        f"Analyze these {len(articles)} news articles for {symbol}.\n\n"
+                        f"{news_context}"
                     ),
                 }
             ],
@@ -322,25 +331,34 @@ def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
             symbol=symbol,
             article_count=len(articles),
         )
-        result["articles"] = _public_articles(articles)
-        return result
-    except Exception as e:
-        # Keep the fetched headlines even when the model call fails — the cached
-        # row still has to feed the "Recent News" card via get_cached_articles().
-        return {
-            "symbol": symbol,
-            "overall_sentiment": "NEUTRAL",
-            "sentiment_score": 0,
-            "error": str(e),
-            "article_count": len(articles),
-            "articles": _public_articles(articles),
+        result["articles"] = public
+        result["availability"] = "AVAILABLE"
+        result["input_provenance"] = {
+            "source_type": "news",
+            "source_count": len(articles),
         }
+        return result
+    except Exception:
+        # Keep headlines for the Recent News card; never fabricate NEUTRAL/0.
+        return llm_contracts.unavailable_news_result(
+            symbol=symbol,
+            reason="provider_or_contract_failure",
+            articles=public,
+            source_count=len(articles),
+        )
 
 
 # ─── DB persistence ───────────────────────────────────────────────────────────
 
 
 def _save_sentiment(symbol: str, result: dict) -> None:
+    """Persist a scored sentiment row. Skip UNAVAILABLE / null-score results —
+    never write fabricated NEUTRAL/0 as a numeric evidence row."""
+    if result.get("availability") == "UNAVAILABLE":
+        return
+    if not _finite_sentiment_score(result.get("sentiment_score")):
+        return
+
     from agent_db import agent_db_path
 
     db_path = str(agent_db_path())
@@ -518,12 +536,21 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
 
         articles = _fetch_all_news(symbol, days_back=days_back)
         if not articles:
+            unavailable = llm_contracts.unavailable_news_result(
+                symbol=symbol,
+                reason="no_articles",
+                articles=[],
+                source_count=0,
+            )
             results.append(
                 {
                     "symbol": symbol,
-                    "overall_sentiment": "NEUTRAL",
-                    "sentiment_score": 0,
+                    "availability": "UNAVAILABLE",
+                    "unavailable_reason": "no_articles",
+                    "overall_sentiment": None,
+                    "sentiment_score": None,
                     "article_count": 0,
+                    "analysis": unavailable,
                 }
             )
             continue
@@ -531,53 +558,72 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
         analysis = analyze_news_sentiment(symbol, articles)
         _save_sentiment(symbol, analysis)
 
-        rolling = _compute_rolling_score(symbol, days=7)
+        rolling = (
+            _compute_rolling_score(symbol, days=7)
+            if analysis.get("availability") != "UNAVAILABLE"
+            else None
+        )
         results.append(
             {
                 "symbol": symbol,
-                "overall_sentiment": analysis.get("overall_sentiment", "NEUTRAL"),
-                "sentiment_score": analysis.get("sentiment_score", 0),
+                "availability": analysis.get("availability"),
+                "unavailable_reason": analysis.get("unavailable_reason"),
+                "overall_sentiment": analysis.get("overall_sentiment"),
+                "sentiment_score": analysis.get("sentiment_score"),
                 "rolling_score": rolling,
-                "impact_level": analysis.get("impact_level", "LOW"),
+                "impact_level": analysis.get("impact_level"),
                 "article_count": len(articles),
                 "analysis": analysis,
             }
         )
 
-    # Compute market mood from average score
+    # Compute market mood from finite numeric scores only — never invent NEUTRAL.
     scores = [
-        r["sentiment_score"] for r in results if isinstance(r.get("sentiment_score"), (int, float))
+        r["sentiment_score"] for r in results if _finite_sentiment_score(r.get("sentiment_score"))
     ]
-    avg = sum(scores) / len(scores) if scores else 0
-    mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
+    if not scores:
+        mood = "UNAVAILABLE"
+        avg = None
+        combined_mood = "UNAVAILABLE"
+        fred_signal = "NEUTRAL"
+        try:
+            from regime import get_macro_context
 
-    # ── FRED macro overlay (replaces Polymarket — more reliable, no rate limits) ──
-    # Blend FRED macro signal with news mood: if they disagree, lean risk-off.
-    # Polymarket was removed: overlaps entirely with FRED macro in regime.py.
-    fred_signal = "NEUTRAL"
-    try:
-        from regime import get_macro_context
+            macro_ctx = get_macro_context()
+            fred_signal = macro_ctx.get("macro_signal", "NEUTRAL")
+        except Exception:
+            pass
+    else:
+        avg = sum(scores) / len(scores)
+        mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
 
-        macro_ctx = get_macro_context()
-        fred_signal = macro_ctx.get("macro_signal", "NEUTRAL")
-    except Exception:
-        pass
+        # ── FRED macro overlay (replaces Polymarket — more reliable, no rate limits) ──
+        # Blend FRED macro signal with news mood: if they disagree, lean risk-off.
+        # Polymarket was removed: overlaps entirely with FRED macro in regime.py.
+        fred_signal = "NEUTRAL"
+        try:
+            from regime import get_macro_context
 
-    combined_mood = mood
-    if fred_signal != "NEUTRAL":
-        if mood == "RISK_ON" and fred_signal == "RISK_OFF":
-            combined_mood = "NEUTRAL"  # conflicting — be cautious
-        elif mood == "NEUTRAL" and fred_signal == "RISK_OFF":
-            combined_mood = "RISK_OFF"
-        elif mood == "NEUTRAL" and fred_signal == "RISK_ON":
-            combined_mood = "RISK_ON"
+            macro_ctx = get_macro_context()
+            fred_signal = macro_ctx.get("macro_signal", "NEUTRAL")
+        except Exception:
+            pass
+
+        combined_mood = mood
+        if fred_signal != "NEUTRAL":
+            if mood == "RISK_ON" and fred_signal == "RISK_OFF":
+                combined_mood = "NEUTRAL"  # conflicting — be cautious
+            elif mood == "NEUTRAL" and fred_signal == "RISK_OFF":
+                combined_mood = "RISK_OFF"
+            elif mood == "NEUTRAL" and fred_signal == "RISK_ON":
+                combined_mood = "RISK_ON"
 
     return {
         "results": results,
         "skipped_cached": skipped_cached,
         "market_mood": combined_mood,
         "news_mood": mood,
-        "avg_score": round(avg, 1),
+        "avg_score": None if avg is None else round(avg, 1),
         "fred_signal": fred_signal,
         "as_of": datetime.now(timezone.utc).isoformat() + "Z",
     }

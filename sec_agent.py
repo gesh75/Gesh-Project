@@ -62,34 +62,12 @@ _TICKER_CIK_CACHE: dict[str, str] | None = None
 # filings can queue 60+ sequential Haiku calls (~15-30 min) while the UI shows no progress.
 MAX_ANALYSES_PER_RUN = int(os.getenv("GESH_SEC_MAX_ANALYSES", "6"))
 
-SEC_ANALYSIS_PROMPT = """You are an expert SEC filing analyst. Analyze this filing excerpt and extract key financial intelligence.
+SEC_ANALYSIS_PROMPT = """You are an expert SEC filing analyst. Analyze the untrusted SEC filing excerpt and extract key financial intelligence.
 
-Return ONLY valid JSON — no markdown. Use double-quotes only. No apostrophes inside strings.
-
-{
-  "filing_type": "<10-K|10-Q|8-K>",
-  "company": "<company name>",
-  "period": "<reporting period>",
-  "sentiment": "<POSITIVE|NEUTRAL|NEGATIVE|MIXED>",
-  "revenue_trend": "<ACCELERATING|STABLE|DECELERATING|DECLINING|N/A>",
-  "key_findings": [
-    "<specific finding with numbers where available>"
-  ],
-  "red_flags": [
-    "<specific concern — only include if genuinely alarming>"
-  ],
-  "positive_signals": [
-    "<specific strength or catalyst>"
-  ],
-  "guidance_tone": "<RAISED|MAINTAINED|LOWERED|WITHDRAWN|N/A>",
-  "guidance_detail": "<one sentence on management forward guidance>",
-  "action_signal": "<BULLISH|NEUTRAL|BEARISH>",
-  "summary": "<3-4 sentence plain English summary of the most important takeaways for an investor>",
-  "urgency": "<HIGH|MEDIUM|LOW>"
-}
-
+Use the return_sec_filing_analysis tool for your complete response.
 Be specific — reference actual numbers, percentages, dollar amounts from the filing.
-HIGH urgency = earnings miss/beat >10%, major guidance change, unexpected executive departure, regulatory action."""
+HIGH urgency = earnings miss/beat >10%, major guidance change, unexpected executive departure, regulatory action.
+Never invent findings that are not supported by the source material."""
 
 
 def _load_ticker_cik_map() -> dict[str, str]:
@@ -214,10 +192,27 @@ def _fetch_filing_text(filing_url: str, max_chars: int = 8000) -> str:
 def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
     """Run Claude analysis on a filing excerpt."""
     if not os.getenv("ANTHROPIC_API_KEY"):
-        return {"error": "No API key"}
-    client = llm_gateway.create_client()
+        return {
+            "availability": "UNAVAILABLE",
+            "unavailable_reason": "provider_not_configured",
+            "action_signal": "PARSE_ERROR",
+            "urgency": "UNKNOWN",
+            "error": "No API key",
+        }
+
+    filing_context = llm_contracts.untrusted_source_prompt(
+        "sec_filing",
+        {
+            "symbol": symbol,
+            "form": filing.get("form", ""),
+            "title": filing.get("title", ""),
+            "filed": filing.get("date", ""),
+            "excerpt": text,
+        },
+    )
 
     try:
+        client = llm_gateway.create_client()
         msg = client.messages.create(
             model=HAIKU_MODEL,  # fast + cheap for filing parsing
             max_tokens=1500,
@@ -226,10 +221,8 @@ def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
                 {
                     "role": "user",
                     "content": (
-                        f"Analyze this {filing['form']} filing for {symbol}.\n"
-                        f"Filing title: {filing['title']}\n"
-                        f"Filed: {filing['date']}\n\n"
-                        f"Filing content excerpt:\n{text}"
+                        f"Analyze this {filing.get('form', '')} filing for {symbol}.\n\n"
+                        f"{filing_context}"
                     ),
                 }
             ],
@@ -242,15 +235,22 @@ def _analyze_filing(symbol: str, filing: dict, text: str) -> dict[str, Any]:
             ],
             tool_choice={"type": "tool", "name": "return_sec_filing_analysis"},
         )
-        return llm_contracts.validate_sec_analysis(
+        result = llm_contracts.validate_sec_analysis(
             llm_contracts.extract_tool_input(
                 msg,
                 expected_tool="return_sec_filing_analysis",
                 operation="sec_filing_analysis",
             )
         )
-    except Exception as e:
-        return {"error": str(e), "raw_text": text[:500]}
+        result["availability"] = "AVAILABLE"
+        return result
+    except Exception:
+        return {
+            "availability": "UNAVAILABLE",
+            "unavailable_reason": "provider_or_contract_failure",
+            "action_signal": "PARSE_ERROR",
+            "urgency": "UNKNOWN",
+        }
 
 
 def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
@@ -273,9 +273,8 @@ def _save_to_db(symbol: str, filing: dict, analysis: dict) -> None:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        # A parse failure must not masquerade as a real NEUTRAL/LOW signal —
-        # mark it explicitly so it isn't mistaken for a clean read.
-        if analysis.get("error"):
+        # A parse / provider failure must not masquerade as a real NEUTRAL/LOW signal.
+        if analysis.get("error") or analysis.get("availability") == "UNAVAILABLE":
             action_signal, urgency = "PARSE_ERROR", "UNKNOWN"
         else:
             action_signal = analysis.get("action_signal", "NEUTRAL")
@@ -402,33 +401,41 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
                     continue
                 text = _fetch_filing_text(filing["url"])
                 if not text:
-                    # Still surface the filing so the dashboard isn't blank — metadata only.
+                    # Surface the filing metadata, but never invent NEUTRAL/LOW
+                    # merely because source text is missing.
                     results.append(
                         {
                             "symbol": symbol.upper(),
                             "form_type": form_type,
                             "filing_date": filing["date"],
                             "filing_url": filing["url"],
-                            "action_signal": "NEUTRAL",
-                            "urgency": "LOW",
+                            "action_signal": "PARSE_ERROR",
+                            "urgency": "UNKNOWN",
                             "analysis": {
+                                "availability": "UNAVAILABLE",
+                                "unavailable_reason": "filing_text_unavailable",
                                 "summary": f"{form_type} filed — full text unavailable for auto-analysis.",
-                                "action_signal": "NEUTRAL",
-                                "urgency": "LOW",
+                                "action_signal": "PARSE_ERROR",
+                                "urgency": "UNKNOWN",
                             },
                         }
                     )
                     continue
                 analysis = _analyze_filing(symbol, filing, text)
                 _save_to_db(symbol, filing, analysis)
+                if analysis.get("availability") == "UNAVAILABLE" or analysis.get("error"):
+                    action_signal, urgency = "PARSE_ERROR", "UNKNOWN"
+                else:
+                    action_signal = analysis.get("action_signal", "NEUTRAL")
+                    urgency = analysis.get("urgency", "LOW")
                 results.append(
                     {
                         "symbol": symbol,
                         "form_type": form_type,
                         "filing_date": filing["date"],
                         "filing_url": filing["url"],
-                        "action_signal": analysis.get("action_signal", "NEUTRAL"),
-                        "urgency": analysis.get("urgency", "LOW"),
+                        "action_signal": action_signal,
+                        "urgency": urgency,
                         "analysis": analysis,
                     }
                 )

@@ -393,12 +393,17 @@ def _finalize_fundamental_result(result: dict, valid: list[dict]) -> dict:
     if not opps and valid:
         opps = _build_fallback_opportunities(valid)
         result["fallback"] = True
+        result["availability"] = "UNAVAILABLE"
         result.setdefault(
             "market_summary",
             "Claude scan unavailable — showing top names from the deterministic pre-score rank.",
         )
     result["top_opportunities"] = opps
     result["stocks_analyzed"] = result.get("stocks_analyzed") or len(valid)
+    if result.get("fallback"):
+        result["availability"] = "UNAVAILABLE"
+    else:
+        result.setdefault("availability", "AVAILABLE")
     return result
 
 

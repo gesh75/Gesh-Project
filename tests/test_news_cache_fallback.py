@@ -151,6 +151,10 @@ def test_error_path_retains_allow_listed_articles(monkeypatch):
     monkeypatch.setattr("llm_gateway.create_client", _boom)
 
     result = news_agent.analyze_news_sentiment("MSTR", [_article()])
+    assert result["availability"] == "UNAVAILABLE"
+    assert result["unavailable_reason"] == "provider_or_contract_failure"
+    assert result["sentiment_score"] is None
+    assert result["overall_sentiment"] is None
     assert result["articles"] == [
         {
             "title": "MSTR adds more bitcoin",
@@ -164,7 +168,12 @@ def test_error_path_retains_allow_listed_articles(monkeypatch):
 def test_no_key_path_retains_allow_listed_articles(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     result = news_agent.analyze_news_sentiment("MSTR", [_article()])
+    assert result["availability"] == "UNAVAILABLE"
+    assert result["unavailable_reason"] == "provider_not_configured"
+    assert result["sentiment_score"] is None
+    assert result["overall_sentiment"] is None
     assert result["articles"] and set(result["articles"][0]) <= _ALLOWED_KEYS
+    assert result["article_count"] == 1
 
 
 # ─── /api/news/{symbol} fallback wiring ──────────────────────────────────────

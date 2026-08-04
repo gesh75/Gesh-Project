@@ -10,6 +10,7 @@ the protection is replaced here with something STRICTER for this shape: the payl
 are ALLOW-LISTED. A future change that starts returning a sentiment score, an owner
 position, or any other field fails this test rather than silently shipping.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -34,6 +35,7 @@ def client(monkeypatch):
 
 def _stub_news(monkeypatch, items):
     import news_agent
+
     monkeypatch.setattr(news_agent, "_fetch_alpaca_news", lambda s: items, raising=False)
     monkeypatch.setattr(news_agent, "_fetch_all_news", lambda s: [], raising=False)
 
@@ -41,22 +43,41 @@ def _stub_news(monkeypatch, items):
 def test_public_price_targets_survive_unmasked(client, monkeypatch):
     """The whole point of the exemption: a PUBLIC analyst PT must reach the customer
     as a real number, not '$•••'."""
-    _stub_news(monkeypatch, [{"title": "Morgan Stanley raises TSLA price target to $290",
-                              "url": "https://example.com/a", "source": "benzinga",
-                              "published": "2026-07-15"}])
+    _stub_news(
+        monkeypatch,
+        [
+            {
+                "title": "Morgan Stanley raises TSLA price target to $290",
+                "url": "https://example.com/a",
+                "source": "benzinga",
+                "published": "2026-07-15",
+            }
+        ],
+    )
     r = client.get("/api/news/TSLA")
     assert r.status_code == 200
     body = r.json()
-    assert "•••" not in r.text                       # not redacted
-    assert "$290" in body["data"][0]["title"]        # the real public number survives
+    assert "•••" not in r.text  # not redacted
+    assert "$290" in body["data"][0]["title"]  # the real public number survives
 
 
 def test_payload_keys_are_allow_listed(client, monkeypatch):
     """Shape guard replacing the masking sweep: only the four public headline fields
     may ship. Anything else (a sentiment score, an owner field) fails here."""
-    _stub_news(monkeypatch, [{"title": "T", "url": "u", "source": "s", "published": "p",
-                              # fields the upstream feed may carry that must NOT ship:
-                              "sentiment_score": -42, "owner_position_usd": 12345}])
+    _stub_news(
+        monkeypatch,
+        [
+            {
+                "title": "T",
+                "url": "u",
+                "source": "s",
+                "published": "p",
+                # fields the upstream feed may carry that must NOT ship:
+                "sentiment_score": -42,
+                "owner_position_usd": 12345,
+            }
+        ],
+    )
     r = client.get("/api/news/TSLA")
     assert r.status_code == 200
     for item in r.json()["data"]:
@@ -70,8 +91,9 @@ def test_exemption_prefix_does_not_leak_to_owner_news_routes():
     `/api/agents/news/history` (prefix matching is `path == p or startswith(p + '/')`)."""
     assert "/api/news" in server._MASK_EXEMPT_PREFIXES
     for owner_path in ("/api/agents/news/history", "/api/agents/news"):
-        assert not any(owner_path == p or owner_path.startswith(p + "/")
-                       for p in server._MASK_EXEMPT_PREFIXES), owner_path
+        assert not any(
+            owner_path == p or owner_path.startswith(p + "/") for p in server._MASK_EXEMPT_PREFIXES
+        ), owner_path
 
 
 def test_empty_news_is_clean_empty_list(client, monkeypatch):
@@ -91,32 +113,43 @@ _ALLOWED_SENTIMENT_KEYS = {"score", "mood", "article_count", "as_of"}
 
 
 def _one_item():
-    return [{"title": "T", "url": "https://example.com/a",
-             "source": "s", "published": "p"}]
+    return [{"title": "T", "url": "https://example.com/a", "source": "s", "published": "p"}]
 
 
 def test_sentiment_chip_block_ships_from_cache_allow_listed(client, monkeypatch):
     import news_agent
+
     _stub_news(monkeypatch, _one_item())
     monkeypatch.setattr(
-        news_agent, "_fresh_sentiment",
-        lambda sym: {"symbol": sym, "overall_sentiment": "POSITIVE",
-                     "sentiment_score": 42, "article_count": 6,
-                     "as_of": "2026-07-16 10:30:00", "cached": True},
-        raising=False)
+        news_agent,
+        "_fresh_sentiment",
+        lambda sym: {
+            "symbol": sym,
+            "overall_sentiment": "POSITIVE",
+            "sentiment_score": 42,
+            "article_count": 6,
+            "as_of": "2026-07-16 10:30:00",
+            "cached": True,
+        },
+        raising=False,
+    )
     r = client.get("/api/news/TSLA")
     assert r.status_code == 200
     s = r.json().get("sentiment")
-    assert s == {"score": 42, "mood": "POSITIVE", "article_count": 6,
-                 "as_of": "2026-07-16 10:30:00"}
+    assert s == {
+        "score": 42,
+        "mood": "POSITIVE",
+        "article_count": 6,
+        "as_of": "2026-07-16 10:30:00",
+    }
     assert set(s) <= _ALLOWED_SENTIMENT_KEYS
 
 
 def test_sentiment_block_absent_without_cached_row(client, monkeypatch):
     import news_agent
+
     _stub_news(monkeypatch, _one_item())
-    monkeypatch.setattr(news_agent, "_fresh_sentiment", lambda sym: None,
-                        raising=False)
+    monkeypatch.setattr(news_agent, "_fresh_sentiment", lambda sym: None, raising=False)
     r = client.get("/api/news/TSLA")
     assert r.status_code == 200 and "sentiment" not in r.json()
 
@@ -125,13 +158,20 @@ def test_zero_article_sentiment_never_ships(client, monkeypatch):
     """article_count=0 rows are fabricated-by-definition — the block must not ship."""
     import news_agent
     import server as _server
+
     _stub_news(monkeypatch, _one_item())
     monkeypatch.setattr(
-        news_agent, "_fresh_sentiment",
-        lambda sym: {"overall_sentiment": "NEUTRAL", "sentiment_score": 0,
-                     "article_count": 0, "as_of": "2026-07-16 10:30:00"},
-        raising=False)
-    _server._ticker_get_cache.clear()          # bust the 5-min TTL cache
+        news_agent,
+        "_fresh_sentiment",
+        lambda sym: {
+            "overall_sentiment": "NEUTRAL",
+            "sentiment_score": 0,
+            "article_count": 0,
+            "as_of": "2026-07-16 10:30:00",
+        },
+        raising=False,
+    )
+    _server._ticker_get_cache.clear()  # bust the 5-min TTL cache
     r = client.get("/api/news/TSLA")
     assert r.status_code == 200 and "sentiment" not in r.json()
 
@@ -139,12 +179,14 @@ def test_zero_article_sentiment_never_ships(client, monkeypatch):
 def test_sentiment_lookup_failure_is_fail_soft(client, monkeypatch):
     import news_agent
     import server as _server
+
     _stub_news(monkeypatch, _one_item())
 
     def _boom(sym):
         raise RuntimeError("db down")
+
     monkeypatch.setattr(news_agent, "_fresh_sentiment", _boom, raising=False)
     _server._ticker_get_cache.clear()
     r = client.get("/api/news/TSLA")
     assert r.status_code == 200 and "sentiment" not in r.json()
-    assert r.json()["data"]                    # headlines still served
+    assert r.json()["data"]  # headlines still served
