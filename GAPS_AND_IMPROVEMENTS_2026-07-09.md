@@ -121,25 +121,26 @@ GESH is a sophisticated, production-leaning AI financial observability + paper-t
 - Onboarding sweep exists but manual elements remain.
 - No clear hosted SaaS path or packaging for self-host customers.
 - Win-rate proof (tracker) is gold — must be 100% trustworthy.
-- LLM costs can spike without tight gates + caching.
+- LLM costs can spike without tight gates + caching. **Addressed (2026-08):** gateway reservations + `LLM_DAILY_BUDGET_USD`, prompt `cache_control`, Haiku routing, owner `llm_provider` dashboard — see [`docs/LLM_OPERATIONS.md`](docs/LLM_OPERATIONS.md). Remaining open gap: financial-outcome evaluation / eval harness (verdict quality vs realized returns).
 
 **Improvements:**
 - Clean Android: keep single clean /android/ (source only), ignore builds, integrate or archive.
 - Full end-to-end autonomy gate validation + public (sanitized) scorecard.
-- Prompt caching + Haiku routing + cost dashboard.
+- ~~Prompt caching + Haiku routing + cost dashboard.~~ **Addressed (2026-08)** — [`docs/LLM_OPERATIONS.md`](docs/LLM_OPERATIONS.md).
 - Self-serve onboarding + magic links fully wired + tested.
 - Commercial docs: pricing page, feature matrix, "why trust the signals" one-pager.
 - Consider web PWA first before heavy native.
 
 ### 7. LLM / AI Surface
 - Multi-model good (Sonnet deep, Haiku batch, Gemini, Ollama).
-- Gaps: limited prompt caching, no systematic eval harness for verdict quality vs outcomes, model routing not always optimal, debate engine cost.
+- **Addressed (2026-08):** prompt caching (`cache_control`), canonical model routing (`llm_gateway.resolve_model`), strict tool/semantic contracts (`llm_contracts`), provider telemetry (`llm_calls` + owner `/usage`), adversarial fixture regression gate — see [`docs/LLM_OPERATIONS.md`](docs/LLM_OPERATIONS.md).
+- **Still open:** no systematic **financial-outcome evaluation / eval harness** for verdict quality vs realized returns; debate engine cost remains a cost-ops concern.
 - Consensus node learning exists but maturity?
 
 **Improvements:**
-- Implement cache_control on large prompts.
-- Add eval harness (backtest alignment of consensus vs realized).
-- Budget per-customer + owner dashboards.
+- ~~Implement cache_control on large prompts.~~ **Addressed (2026-08).**
+- Add eval harness (backtest alignment of consensus vs realized). **Still open.**
+- ~~Budget per-customer + owner dashboards.~~ **Addressed (2026-08)** — customer quotas + owner `llm_provider` summary.
 - A/B or shadow mode for new nodes/weights.
 
 ### 8. Code Quality & Tooling
@@ -179,7 +180,7 @@ GESH is a sophisticated, production-leaning AI financial observability + paper-t
 - Docker + health + metrics.
 - Retry/circuit everywhere critical paths.
 - Structured logging + centralized log tailing.
-- Prompt caching + cost telemetry.
+- ~~Prompt caching + cost telemetry.~~ **Addressed (2026-08)** — [`docs/LLM_OPERATIONS.md`](docs/LLM_OPERATIONS.md).
 
 **Phase 3: Product Polish + Scale**
 - Android cleanup + minimal viable app or PWA.

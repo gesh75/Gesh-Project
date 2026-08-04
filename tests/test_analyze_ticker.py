@@ -420,6 +420,33 @@ def test_prompt_grounds_current_price(monkeypatch):
     assert "fair_value.current" in user_msg
 
 
+def test_ticker_card_wrong_grounded_price_is_not_cached(monkeypatch):
+    """A card whose fair_value.current drifts from the grounded quote must fail closed."""
+    import json
+    from pathlib import Path
+
+    from llm_contracts import LLMContractError
+
+    fixtures = Path(__file__).resolve().parent / "fixtures" / "llm"
+    bad = json.loads((fixtures / "ticker_card_invalid_price.json").read_text())
+    _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(bad)]))
+    with pytest.raises(LLMContractError, match="fair_value.current .* does not match"):
+        ai_analyzer.deep_analyze_ticker("AAPL", current_price=195.0)
+
+
+def test_ticker_card_valid_fixture_passes_grounded_price(monkeypatch):
+    """The valid AAPL fixture clears validate_ticker_card when grounded at 195.0."""
+    import json
+    from pathlib import Path
+
+    fixtures = Path(__file__).resolve().parent / "fixtures" / "llm"
+    good = json.loads((fixtures / "ticker_card_valid.json").read_text())
+    _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(good)]))
+    out = ai_analyzer.deep_analyze_ticker("AAPL", current_price=195.0)
+    assert out["symbol"] == "AAPL"
+    assert out["fair_value"]["current"] == 195.0
+
+
 # ── inspection fixes 2026-07-08: cache eviction + single-flight dedup ─────────
 
 

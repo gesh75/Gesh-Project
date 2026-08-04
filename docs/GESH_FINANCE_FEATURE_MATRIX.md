@@ -90,10 +90,11 @@
 | Deep portfolio analysis | ✅ Complete | [ai_analyzer.py](file:///Users/georgigaydarov/Projects/gesh-project/ai_analyzer.py) deep_analyze_portfolio() | Essential | Essential | None |
 | Single-ticker research card | ✅ Complete | [server.py](file:///Users/georgigaydarov/Projects/gesh-project/server.py) L2477-2559, analyze_ticker_endpoint() | Essential | Essential | None |
 | Gemini second opinion | ✅ Complete | [gemini_agent.py](file:///Users/georgigaydarov/Projects/gesh-project/gemini_agent.py) | Medium | Medium | None |
-| LLM usage tracking | ✅ Complete | llm_usage.jsonl, _record_usage(), _spent_today_usd() | Essential | Essential | None |
-| Daily budget cap | ✅ Complete | LLM_DAILY_BUDGET_USD env var | Essential | Essential | None |
+| LLM usage tracking | ✅ Complete | `llm_gateway` SQLite `llm_calls` + owner `/usage` / `/api/usage/summary` → `llm_provider` (not jsonl/`_record_usage`) — see [LLM_OPERATIONS.md](LLM_OPERATIONS.md) | Essential | Essential | None |
+| Daily budget cap | ✅ Complete | Gateway reservations before each attempt; `LLM_DAILY_BUDGET_USD` (unknown-cost retained on failed streams) | Essential | Essential | None |
 | Customer usage quotas | ✅ Complete | Per-customer rate limiting + usage logging | Essential | Essential | None |
-| Hallucination safeguards | ⚠ Partially | Structured prompts with forced-tool JSON; no output validation | **High** | **High** | Add output validation against data |
+| Hallucination safeguards | ✅ Complete | Strict tools + semantic validators in `llm_contracts.py` (ticker price grounding, sentiment/SEC/debate ranges); adversarial fixtures under `tests/fixtures/llm/` | **High** | **High** | None |
+| Unavailable evidence semantics | ✅ Complete | News/SEC/mood return `availability: UNAVAILABLE` — never fabricate NEUTRAL/0; prompt-injection source boundary via `untrusted_source_prompt` | **High** | **High** | None |
 | AI provenance stamping | ✅ Complete | generated_at, model, price_source, suspect flag | Medium | Medium | None |
 | Screener analysis | ✅ Complete | analyze_screener() with Haiku (cost-routed) | Medium | Medium | None |
 | Bull/Bear debate | ✅ Complete | [bull_bear_debate.py](file:///Users/georgigaydarov/Projects/gesh-project/bull_bear_debate.py) — Haiku ×2 + Sonnet ×1 | Medium | Medium | None |
