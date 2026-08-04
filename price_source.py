@@ -36,6 +36,7 @@ import os
 import pickle  # noqa: S403  # nosec B403 — loads only the user's own RH session file (fixed 0600 path)
 import threading
 import time
+from collections import OrderedDict
 
 import pandas as pd
 
@@ -77,8 +78,10 @@ def frame_source(frame) -> str | None:
 # rate-limit risk. Only period-based (start/end is None) frames are cached — those
 # are stable intraday; live/ranged queries are never cached. Returns a copy so
 # callers can't mutate the shared frame.
-_YF_CACHE: dict[tuple, tuple[float, "pd.DataFrame"]] = {}
+_YF_CACHE: OrderedDict[tuple, tuple[float, "pd.DataFrame"]] = OrderedDict()
 _YF_CACHE_TTL_S = float(os.getenv("YF_CACHE_TTL_S", "600"))
+_YF_CACHE_MAX_ENTRIES = max(1, int(os.getenv("YF_CACHE_MAX_ENTRIES", "128")))
+_YF_CACHE_LOCK = threading.Lock()
 
 # yfinance.download() is NOT thread-safe: it resets and fills the module-global
 # yfinance.shared._DFS, and its completion check is `while len(shared._DFS) <
@@ -508,16 +511,28 @@ def yf_download(
     if cacheable:
         sym_key = tuple(symbols) if isinstance(symbols, (list, tuple)) else symbols
         key = (sym_key, period, interval, auto_adjust)
-        hit = _YF_CACHE.get(key)
-        if hit is not None and (time.time() - hit[0]) <= _YF_CACHE_TTL_S:
-            return hit[1].copy()
+        now = time.time()
+        with _YF_CACHE_LOCK:
+            # Sweep every lookup so one-off expired symbols cannot remain resident.
+            expired = [k for k, (created, _) in _YF_CACHE.items()
+                       if (now - created) > _YF_CACHE_TTL_S]
+            for stale_key in expired:
+                _YF_CACHE.pop(stale_key, None)
+            hit = _YF_CACHE.get(key)
+            if hit is not None:
+                _YF_CACHE.move_to_end(key)
+                return hit[1].copy()
 
     raw = _yf_download_uncached(
         symbols, period=period, start=start, end=end, interval=interval,
         auto_adjust=auto_adjust, progress=progress, **kwargs,
     )
     if cacheable and key is not None and _usable_rows(raw) > 0:
-        _YF_CACHE[key] = (time.time(), raw.copy())
+        with _YF_CACHE_LOCK:
+            _YF_CACHE[key] = (time.time(), raw.copy())
+            _YF_CACHE.move_to_end(key)
+            while len(_YF_CACHE) > _YF_CACHE_MAX_ENTRIES:
+                _YF_CACHE.popitem(last=False)
     return raw
 
 
