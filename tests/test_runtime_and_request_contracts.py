@@ -182,6 +182,15 @@ def test_daily_chain_fails_clearly_when_the_interpreter_is_missing():
     assert "exit 1" in following, "missing interpreter must abort the chain"
 
 
+def test_daily_chain_log_rotation_uses_an_unpredictable_temp_file():
+    """A fixed .tmp path in the shared /tmp directory permits a local attacker
+    to redirect log rotation through a pre-created symlink."""
+    sh = (REPO / "run_daily_analysis.sh").read_text()
+
+    assert 'mktemp "${LOG}.tmp.XXXXXX"' in sh
+    assert '> "$LOG.tmp"' not in sh
+
+
 def test_setup_creates_the_declared_runtime_and_rejects_others():
     sh = (REPO / "setup.sh").read_text()
 
