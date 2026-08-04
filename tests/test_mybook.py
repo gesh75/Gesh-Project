@@ -517,6 +517,70 @@ def test_ticker_card_quota_blocks_live(client, monkeypatch, au):
     assert calls["n"] == 1
 
 
+def test_ticker_card_quota_reservation_is_atomic_across_symbols(client, monkeypatch, au):
+    """Different-symbol requests must contend on the durable customer quota,
+    not only on the endpoint's per-symbol, process-local single-flight locks."""
+    import concurrent.futures
+    import time
+
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    monkeypatch.setenv("QUOTA_DAILY_TICKER_CARD", "1")
+    monkeypatch.setattr(
+        server,
+        "_latest_close_meta",
+        lambda _sym: (100.0, {"source": "test", "substituted": False}),
+    )
+    monkeypatch.setattr(server, "_price_quality", lambda *_args: (False, ""))
+    calls = {"n": 0}
+
+    def _card(sym, current_price=None, regime_context=None):
+        calls["n"] += 1
+        time.sleep(0.05)
+        return {"symbol": sym, "scores": {}}
+
+    monkeypatch.setattr(server, "deep_analyze_ticker", _card, raising=True)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    def request(symbol):
+        return c.post("/api/analyze-ticker", json={"symbol": symbol}).status_code
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        statuses = list(executor.map(request, ("AAPL", "MSFT", "NVDA", "AMD", "META")))
+
+    assert statuses.count(200) == 1
+    assert statuses.count(429) == 4
+    assert calls["n"] == 1
+    assert au.usage_count_24h("cust@x.com", "ticker_card") == 1
+
+
+def test_ticker_card_releases_reservation_when_pre_spend_validation_fails(
+    client, monkeypatch, au
+):
+    """A no-data request costs no quota and must not strand its reserved slot."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    monkeypatch.setenv("QUOTA_DAILY_TICKER_CARD", "1")
+    monkeypatch.setattr(
+        server,
+        "_latest_close_meta",
+        lambda sym: (None, {}) if sym == "BAD" else (
+            100.0, {"source": "test", "substituted": False}
+        ),
+    )
+    monkeypatch.setattr(server, "_price_quality", lambda *_args: (False, ""))
+    monkeypatch.setattr(
+        server,
+        "deep_analyze_ticker",
+        lambda sym, *_args, **_kwargs: {"symbol": sym, "scores": {}},
+    )
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    assert c.post("/api/analyze-ticker", json={"symbol": "BAD"}).status_code == 404
+    assert c.post("/api/analyze-ticker", json={"symbol": "AAPL"}).status_code == 200
+    assert au.usage_count_24h("cust@x.com", "ticker_card") == 1
+
+
 def test_desk_tier_multiplies_quota(client, monkeypatch, au):
     """Billing tier scales the cap without env/code changes: base 1 × desk 5 = 5
     live runs allowed; the 6th 429s. Tier comes from users.tier (set on provision

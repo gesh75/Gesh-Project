@@ -4271,6 +4271,47 @@ def _check_customer_quota(email: str | None, event: str) -> None:
         )
 
 
+def _reserve_customer_quota(email: str | None, event: str) -> tuple[str, str] | None:
+    """Atomically claim a capped customer's slot before paid work starts.
+
+    Unlimited and owner calls keep the legacy post-success usage event. Capped
+    calls use the durable reservation as their usage record, so concurrent
+    workers and processes cannot all pass a separate count-before-spend check.
+    """
+    try:
+        limit = _customer_quota_limit(email, event)
+        if limit <= 0:
+            return None
+        user_id = auth_users.resolve_user_id(email or "")
+        if not user_id:
+            raise RuntimeError("quota user identity unavailable")
+        reservation_id = f"{event}:{uuid.uuid4()}"
+        accepted = auth_users.reserve_usage(user_id, event, reservation_id, limit)
+    except Exception:
+        logger.warning("quota reservation unavailable (%s/%s) — denying spend", email, event)
+        raise HTTPException(
+            status_code=503,
+            detail="Usage metering temporarily unavailable — please retry shortly.",
+        )
+    if not accepted:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results "
+            f"remain free; the limit resets on a rolling 24-hour window.",
+        )
+    return user_id, reservation_id
+
+
+def _release_customer_quota(reservation: tuple[str, str] | None) -> None:
+    """Best-effort rollback; a failed rollback remains counted and fails safe."""
+    if reservation is None:
+        return
+    try:
+        auth_users.release_usage(reservation[1], reservation[0])
+    except Exception:
+        logger.warning("quota reservation release failed: %s", reservation[1])
+
+
 # Short-TTL shared cache for the single-ticker AI card. The card is PUBLIC per-ticker
 # research (no per-customer data), so a process-wide cache is correct and stops a hot
 # ticker from re-spending on Claude every request.
@@ -4383,6 +4424,7 @@ async def analyze_ticker_endpoint(request: Request):
     optional LLM_DAILY_BUDGET_USD cap applies inside deep_analyze_ticker; results are
     cached per symbol for _TICKER_CARD_TTL. The blocking Anthropic call is offloaded
     to a thread so the single event loop is never frozen. Body: {"symbol": "AAPL"}."""
+    reservation: tuple[str, str] | None = None
     try:
         body = await request.json()
     except Exception:
@@ -4405,7 +4447,8 @@ async def analyze_ticker_endpoint(request: Request):
                 return {"status": "ok", "data": card, "cached": True}
             # Quota gate sits AFTER the cache re-check (cached hits are free) and
             # BEFORE any spend — a capped user costs nothing, not even the quote.
-            _check_customer_quota(_session_email(request), "ticker_card")
+            email = _session_email(request)
+            reservation = _reserve_customer_quota(email, "ticker_card")
             # Ground the valuation on a REAL quote: no price = unknown ticker / data
             # outage → 404 rather than let the model fabricate a price and card.
             price, pmeta = await asyncio.to_thread(_latest_close_meta, sym)
@@ -4454,11 +4497,27 @@ async def analyze_ticker_endpoint(request: Request):
                 # −18.1%" for the same symbol off the same snapshot (audit BUG-03).
                 card["reconciliation"] = _reconcile_card(sym, card)
             _ticker_card_store(sym, card)
-            auth_users.log_usage(_session_email(request), "ticker_card", sym)
+            if reservation is None:
+                auth_users.log_usage(email, "ticker_card", sym)
+            else:
+                user_id, reservation_id = reservation
+                # Paid work has happened: never release this slot, even if the
+                # cosmetic reserved→completed transition temporarily fails.
+                reservation = None
+                try:
+                    completed = auth_users.complete_usage(reservation_id, user_id)
+                except Exception:
+                    completed = False
+                if not completed:
+                    logger.warning(
+                        "ticker-card quota reservation completion failed: %s", reservation_id
+                    )
             return {"status": "ok", "data": card, "cached": False}
     except HTTPException:
+        _release_customer_quota(reservation)
         raise
     except Exception as e:
+        _release_customer_quota(reservation)
         raise _server_error(e)
 
 
