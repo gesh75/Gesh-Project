@@ -11,6 +11,7 @@ Values may contain '=' (only the first '=' splits key/value).
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -42,7 +43,14 @@ def main(pairs: list[str]) -> int:
     for k, v in updates.items():
         if k not in seen:
             out.append(f"{k}={v}\n")
-    env.write_text("".join(out))
+    contents = "".join(out)
+    try:
+        fd = os.open(env, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        env.write_text(contents)
+    else:
+        with os.fdopen(fd, "w") as file:
+            file.write(contents)
     print("set:", ", ".join(sorted(updates)))
     return 0
 
