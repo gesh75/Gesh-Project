@@ -14,6 +14,7 @@ Three contracts locked here:
   3. run_weekly_digest._close_for prices via price_cache and NEVER drags
      server into the process (subprocess-verified, clean sys.modules).
 """
+
 from __future__ import annotations
 
 import os
@@ -33,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 # ── 1. the standalone cache ───────────────────────────────────────────────────
 
+
 def test_cached_close_fetches_once_within_ttl(monkeypatch):
     calls: list[str] = []
 
@@ -46,13 +48,26 @@ def test_cached_close_fetches_once_within_ttl(monkeypatch):
     assert calls == ["NVDA"], "second call must be served from the cache"
 
 
-def test_cached_close_none_is_not_cached(monkeypatch):
-    """A data outage (None) must not stick for the TTL — next call retries."""
+def test_cached_close_none_uses_short_negative_ttl(monkeypatch):
+    """Missing tickers do not refetch until the short negative TTL expires."""
+    calls = 0
     results = iter([None, 99.0])
-    monkeypatch.setattr(price_cache, "_latest_close",
-                        lambda sym: next(results), raising=True)
+
+    def fetch(_sym):
+        nonlocal calls
+        calls += 1
+        return next(results)
+
+    monkeypatch.setattr(price_cache, "_latest_close", fetch, raising=True)
     assert price_cache._cached_close("MSTR") is None
+    assert price_cache._cached_close("MSTR") is None
+    assert calls == 1
+    assert price_cache.has_cached_close("MSTR") is True
+    with price_cache._close_lock:
+        ts, price = price_cache._close_cache["MSTR"]
+        price_cache._close_cache["MSTR"] = (ts - price_cache.NEGATIVE_CLOSE_TTL_SEC - 1, price)
     assert price_cache._cached_close("MSTR") == 99.0
+    assert calls == 2
 
 
 def test_cached_close_expired_entry_refetches(monkeypatch):
@@ -76,25 +91,27 @@ def test_has_cached_close_and_clear(monkeypatch):
 
 
 def test_latest_close_is_meta_wrapper(monkeypatch):
-    monkeypatch.setattr(price_cache, "_latest_close_meta",
-                        lambda sym: (123.45, {"source": "yahoo", "substituted": False}),
-                        raising=True)
+    monkeypatch.setattr(
+        price_cache,
+        "_latest_close_meta",
+        lambda sym: (123.45, {"source": "yahoo", "substituted": False}),
+        raising=True,
+    )
     assert price_cache._latest_close("NVDA") == 123.45
 
 
 def test_latest_close_meta_implementation_lives_here(monkeypatch):
     """The moved implementation still reads bars through price_source (same
     VPN-safe RH-fallback path) and reports the frame's real provenance."""
-    frame = price_source._stamp(
-        pd.DataFrame({"Close": np.linspace(100.0, 110.0, 30)}), "robinhood")
-    monkeypatch.setattr(price_source, "yf_download",
-                        lambda *a, **k: frame, raising=True)
+    frame = price_source._stamp(pd.DataFrame({"Close": np.linspace(100.0, 110.0, 30)}), "robinhood")
+    monkeypatch.setattr(price_source, "yf_download", lambda *a, **k: frame, raising=True)
     price, meta = price_cache._latest_close_meta("NVDA")
     assert price == 110.0
     assert meta == {"source": "robinhood", "substituted": False}
 
 
 # ── 2. server back-compat seams ───────────────────────────────────────────────
+
 
 def test_server_cached_close_resolves_patched_latest_close(monkeypatch):
     """The historical seam: tests patch server._latest_close and expect
@@ -104,9 +121,12 @@ def test_server_cached_close_resolves_patched_latest_close(monkeypatch):
 
 
 def test_server_latest_close_resolves_patched_meta(monkeypatch):
-    monkeypatch.setattr(server, "_latest_close_meta",
-                        lambda sym: (55.0, {"source": "yahoo", "substituted": False}),
-                        raising=True)
+    monkeypatch.setattr(
+        server,
+        "_latest_close_meta",
+        lambda sym: (55.0, {"source": "yahoo", "substituted": False}),
+        raising=True,
+    )
     assert server._latest_close("XYZ") == 55.0
 
 
@@ -115,13 +135,17 @@ def test_server_cached_close_stores_into_price_cache(monkeypatch):
     assert server._cached_close("ABC") == 31.0
     assert price_cache.has_cached_close("ABC") is True
     # And the cached value is shared: a direct price_cache read hits, no fetch.
-    monkeypatch.setattr(price_cache, "_latest_close",
-                        lambda sym: (_ for _ in ()).throw(AssertionError("fetched")),
-                        raising=True)
+    monkeypatch.setattr(
+        price_cache,
+        "_latest_close",
+        lambda sym: (_ for _ in ()).throw(AssertionError("fetched")),
+        raising=True,
+    )
     assert price_cache._cached_close("ABC") == 31.0
 
 
 # ── 3. the cron consumer never imports server ─────────────────────────────────
+
 
 def test_weekly_digest_close_for_prices_without_server(tmp_path):
     """run_weekly_digest._close_for used to `from server import _cached_close` —
@@ -139,10 +163,13 @@ def test_weekly_digest_close_for_prices_without_server(tmp_path):
     # Fresh interpreter = conftest's in-process DB-path isolation does NOT apply;
     # point both DB env knobs at throwaways so a future import-time DB touch in
     # run_weekly_digest/auth_users/signal_history can never write real files.
-    env = {**os.environ,
-           "GESH_AUTH_DB": str(tmp_path / "auth.db"),
-           "GESH_DB_PATH": str(tmp_path / "gesh.db")}
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                         text=True, cwd=REPO, env=env, timeout=120)
+    env = {
+        **os.environ,
+        "GESH_AUTH_DB": str(tmp_path / "auth.db"),
+        "GESH_DB_PATH": str(tmp_path / "gesh.db"),
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=REPO, env=env, timeout=120
+    )
     assert out.returncode == 0, out.stderr
     assert "ISOLATED-OK" in out.stdout
