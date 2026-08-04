@@ -1,10 +1,10 @@
 #!/bin/bash
 # MCP-sourced snapshot fetch for the GESH daily chain.
 # Replaces the robin_stocks pickle login (breaks on every RH password change) with the
-# robinhood-trading MCP via `claude -p`. The LLM ONLY fetches raw data -> /tmp/gesh_mcp_raw.json;
+# robinhood-trading MCP via `claude -p`. The LLM ONLY fetches raw data into a private temporary directory;
 # all money math is done deterministically by build_snapshot_from_mcp.py.
 # Exit 0 = fresh live_portfolio_snapshot.json written; non-zero = caller should fall back.
-set -uo pipefail
+set -euo pipefail
 
 # ── launchd environment guard (rule #55 + #56) ────────────────────────────────
 # #55: launchd's PATH omits Homebrew, where the claude CLI lives.
@@ -32,11 +32,14 @@ if [ -z "$ACCT" ]; then
     echo "[mcp] GESH_RH_ACCOUNT not set and not found in $DIR/.env" >&2
     exit 1
 fi
-RAW="/tmp/gesh_mcp_raw.json"
 PY="${GESH_PY:-/usr/bin/python3}"
 
 cd "$DIR" || exit 1
-rm -f "$RAW"
+umask 077
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gesh-mcp.XXXXXXXX")"
+trap 'rm -rf -- "$WORK_DIR"' EXIT HUP INT TERM
+RAW="$WORK_DIR/raw.json"
+LOG="$WORK_DIR/fetch.log"
 
 PROMPT="Use the robinhood-trading MCP to fetch account ${ACCT} and write ONE JSON file to ${RAW} with the Write tool. Steps:
 1) get_portfolio(account_number=\"${ACCT}\")
@@ -48,12 +51,12 @@ Use the raw values exactly as the tools return them (do not round or recompute).
 
 "$CLAUDE" -p "$PROMPT" \
   --allowedTools "mcp__robinhood-trading" "Write" \
-  --permission-mode acceptEdits >/tmp/gesh_mcp_fetch.log 2>&1
+  --permission-mode acceptEdits >"$LOG" 2>&1
 
 if [ ! -f "$RAW" ]; then
   echo "[fetch_snapshot_mcp] no raw dump produced (MCP unavailable / token expired)"
   exit 1
 fi
 
-"$PY" "$DIR/build_snapshot_from_mcp.py" || { echo "[fetch_snapshot_mcp] build step failed"; exit 1; }
+"$PY" "$DIR/build_snapshot_from_mcp.py" "$RAW" || { echo "[fetch_snapshot_mcp] build step failed"; exit 1; }
 exit 0
