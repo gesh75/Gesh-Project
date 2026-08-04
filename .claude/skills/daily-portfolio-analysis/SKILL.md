@@ -2,7 +2,7 @@
 name: daily-portfolio-analysis
 description: >
   Runs the full GESH Financial daily portfolio analysis for Georgi's Robinhood
-  account via the deterministic host chain (run_daily_analysis.sh): live
+  account via the deterministic sandboxed chain (run_daily_analysis.sh): live
   snapshot, all engines, Claude deep analysis, paper/risk-gate audit, and the
   HTML report. Use whenever the user says "run analysis", "daily analysis",
   "check my portfolio", "what should I do today", or "run the GESH report".
@@ -15,7 +15,15 @@ ALL computation is scripted. Your job is: **run the chain → verify → narrate
 Do NOT re-run engines in a REPL, hand-edit `gesh_report.html`, or hand-write SQL
 — those manual paths took 30–60 min and produced degraded, divergent output.
 
-**Project path:** `/Users/georgigaydarov/Projects/gesh-project`
+## Step 0 — Execution boundary
+
+Run the chain only in the agent's sandbox and only from the checkout that was
+reviewed for the current task. Never switch to a host checkout, invoke host
+Python, or read host `.env`, session, token, or portfolio database files. This
+also applies to scheduled invocations. If sandbox data access is unavailable,
+report the limitation and stop rather than weakening this boundary.
+
+**Project path:** the current sandbox checkout (`git rev-parse --show-toplevel`)
 **Orchestrator:** `run_daily_analysis.sh` (~3–6 min, logs to `/tmp/gesh_fullchain.log`)
 **Also scheduled:** launchd `com.gesh.daily-analysis` runs it 10:30 ET weekdays —
 check the log first; today's run may already exist.
@@ -24,14 +32,15 @@ check the log first; today's run may already exist.
 
 ```bash
 tail -40 /tmp/gesh_fullchain.log   # CHAIN DONE with today's date + fail=0 → skip to Step 2
-bash /Users/georgigaydarov/Projects/gesh-project/run_daily_analysis.sh
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+cd "$PROJECT_ROOT"
+bash ./run_daily_analysis.sh
 echo "exit=$?"; tail -25 /tmp/gesh_fullchain.log
 ```
 
-The chain is host-only (sandbox yfinance gets 401 crumb storms — see project
-CLAUDE.md) and self-asserting: snapshot freshness ≤30 min, report ≥60KB, DB row
-written. `fail=1` / `FATAL` → report the failing step + log excerpt and STOP; do
-not improvise an analysis from stale DB data.
+The sandboxed chain is self-asserting: snapshot freshness ≤30 min, report
+≥60KB, DB row written. `fail=1` / `FATAL` → report the failing step + log
+excerpt and STOP; do not improvise an analysis from stale DB data.
 
 What each step produces:
 
@@ -47,7 +56,7 @@ What each step produces:
 
 ```python
 import json
-eng = json.load(open('/Users/georgigaydarov/Projects/gesh-project/engine_results.json'))
+eng = json.load(open('engine_results.json'))
 ```
 
 Sanity: `ai_result.portfolio_score` non-zero; `vol_models` not all-identical;
