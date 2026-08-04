@@ -227,7 +227,12 @@ def pre_market_scan() -> None:
 
     logger.info("pre_market_scan: scanning %d symbols: %s", len(symbols), symbols)
 
-    _CANDIDATES.clear()
+    # Build into a local dict and swap atomically AFTER the loop. Clearing
+    # _CANDIDATES up front meant a crash mid-scan (each iteration runs consensus +
+    # yfinance, the likely failure point) left the 09:35 window with an empty book
+    # until the next scan. Now the previous candidates survive until a full,
+    # successful scan replaces them.
+    new_candidates: dict[str, tuple[TradeIntent | None, dict]] = {}
     for sym in symbols:
         try:
             row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
@@ -244,7 +249,7 @@ def pre_market_scan() -> None:
                         sym, raw_score, cfg.min_entry_score,
                     )
                     continue
-                _CANDIDATES[sym] = (intent, row)
+                new_candidates[sym] = (intent, row)
                 logger.info(
                     "  ✓ %s → %s conf=%.2f raw=%.2f verdict=%s",
                     sym, intent.action, intent.confidence, raw_score, row.get("verdict"),
@@ -252,6 +257,9 @@ def pre_market_scan() -> None:
         except Exception as e:
             logger.warning("  ✗ %s failed: %s", sym, e)
 
+    # Atomic swap: only replace the live candidate book once the scan finished.
+    _CANDIDATES.clear()
+    _CANDIDATES.update(new_candidates)
     _persist_candidates()
     logger.info(
         "pre_market_scan: complete — %d actionable candidates stored",
