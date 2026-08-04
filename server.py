@@ -309,6 +309,9 @@ _BULK_HEADER_WORDS = {
     "AVGCOST",
     "TOTAL",
 }
+_BULK_BODY_MAX_BYTES = 65_536
+_BULK_MAX_LINES = 200
+_BULK_MAX_INVALID = 100
 
 
 def _parse_pos_float(tok: str | None) -> float | None:
@@ -329,10 +332,14 @@ def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
     raises). Symbols are uppercased and de-duplicated (first occurrence wins).
     Returns ``(items, invalid)`` where each item is
     ``{"symbol", "shares"|None, "avg_cost"|None}``."""
+    lines = (text or "").splitlines()
+    if len(lines) > _BULK_MAX_LINES:
+        raise HTTPException(status_code=413, detail="Too many bulk-import lines")
+
     items: list[dict] = []
     invalid: list[str] = []
     seen: set[str] = set()
-    for raw in (text or "").splitlines():
+    for raw in lines:
         line = raw.strip()
         if not line:
             continue
@@ -341,7 +348,8 @@ def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
             continue
         sym = parts[0].strip().upper()
         if sym in _BULK_HEADER_WORDS or not _SYMBOL_RE.match(sym):
-            invalid.append(line[:40])
+            if len(invalid) < _BULK_MAX_INVALID:
+                invalid.append(line[:40])
             continue
         if sym in seen:
             continue
@@ -5212,10 +5220,7 @@ async def mybook_bulk(request: Request):
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _read_json_capped(request, _BULK_BODY_MAX_BYTES)
     text = (body or {}).get("text") or ""
     syms = (body or {}).get("symbols")
     if not text and isinstance(syms, list):
