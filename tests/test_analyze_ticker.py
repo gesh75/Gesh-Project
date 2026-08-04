@@ -260,10 +260,21 @@ def test_concise_portfolio_prompt_caps_bear_case(monkeypatch):
 # ─── Route: POST /api/analyze-ticker ─────────────────────────────────────────
 
 
+def _ensure_quota_customer(email: str = "cust@x.com") -> None:
+    """Atomic ticker-card quota resolves email → user_id before spend. Route tests
+    that only monkeypatch the session cookie must still seed a real auth row, or
+    reservation fails closed with 503 (the CI regression this helper closes)."""
+    au = server.auth_users
+    au.init_auth_db()
+    if not au.resolve_user_id(email):
+        au.create_user(email, "test-password")
+
+
 def _customer_client(monkeypatch, card=None, boom=None, price=195.0):
     """A TestClient with the auth wall ON and the session bound to a CUSTOMER
     (non-owner) email, with the live-price fetch and deep_analyze_ticker stubbed
     (no network, no LLM)."""
+    _ensure_quota_customer("cust@x.com")
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)

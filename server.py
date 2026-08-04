@@ -4297,7 +4297,7 @@ def _reserve_customer_quota(email: str | None, event: str) -> tuple[str, str] | 
         raise HTTPException(
             status_code=429,
             detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results "
-                   f"remain free; the limit resets on a rolling 24-hour window.",
+            f"remain free; the limit resets on a rolling 24-hour window.",
         )
     return user_id, reservation_id
 
@@ -4509,8 +4509,9 @@ async def analyze_ticker_endpoint(request: Request):
                 except Exception:
                     completed = False
                 if not completed:
-                    logger.warning("ticker-card quota reservation completion failed: %s",
-                                   reservation_id)
+                    logger.warning(
+                        "ticker-card quota reservation completion failed: %s", reservation_id
+                    )
             return {"status": "ok", "data": card, "cached": False}
     except HTTPException:
         _release_customer_quota(reservation)
