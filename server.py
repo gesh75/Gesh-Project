@@ -4997,8 +4997,8 @@ def _run_book_engines(payload: dict) -> dict:
     (verdict + fair-value gap) feed run_kelly_analysis exactly like the owner
     pipeline does (/api/kelly builds the same map from the latest analysis run) —
     without them Kelly sizes verdict-blind."""
-    # Cap the DETAILED analysis first; its regime + analyst enrichment then runs only
-    # over the analyzed names (the yfinance pulls scale with symbol count too).
+    # Cap only the expensive detailed AI analysis and regime enrichment. Kelly
+    # still sizes the full book and therefore receives analyst data for all names.
     holdings = payload["holdings"]
     coverage = {
         "analyzed": min(len(holdings), _BOOK_ANALYSIS_MAX_HOLDINGS),
@@ -5039,6 +5039,7 @@ def _run_book_engines(payload: dict) -> dict:
         }
         truncated = {"analyzed": len(top), "total": len(holdings)}
     analyzed_symbols = [h["symbol"] for h in analysis_payload["holdings"]]
+    all_symbols = [h["symbol"] for h in holdings]
     regime_context = None
     try:
         regime_context = detect_regimes(analyzed_symbols).get("regime_summary")
@@ -5061,7 +5062,10 @@ def _run_book_engines(payload: dict) -> dict:
     except Exception as e:
         mc = {"error": f"monte carlo unavailable: {type(e).__name__}"}
     try:
-        analyst = get_analyst_targets(analyzed_symbols) or {}
+        # Kelly sizes the full book, so its scalable market-data enrichment must
+        # cover the full book too.  AI verdicts intentionally remain limited to
+        # the holdings sent through the capped deep-analysis request.
+        analyst = get_analyst_targets(all_symbols) or {}
         upside = {
             s: {"upside_pct": analyst[s].get("upside_pct")}
             for s in analyst

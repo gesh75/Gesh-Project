@@ -2836,7 +2836,7 @@ async function mybookAnalyze(){
           <span class="da-holding vrd" style="${daVerdictStyle(a.portfolio_verdict)}">${daEsc(a.portfolio_verdict||'—')}</span>
           <span style="font-size:13px;color:var(--muted)">${daEsc(a.portfolio_type||'')}</span></div>
         ${buildRow('AI portfolio score (opinion)', a.portfolio_score!=null?a.portfolio_score+' / 100':'—')}${buildRow('AI risk opinion', a.risk_score!=null?a.risk_score+' / 100':'—')}${buildRow('Diversification', a.diversification_score!=null?a.diversification_score+' / 100':'—')}
-        ${a.holdings_truncated?`<div style="font-size:12px;color:var(--muted);margin-top:10px">ℹ️ Detailed AI cards cover your ${daEsc(a.holdings_truncated.analyzed)} largest holdings; all ${daEsc(a.holdings_truncated.total)} feed the risk &amp; Kelly math.</div>`:''}
+        ${a.holdings_truncated?`<div style="font-size:12px;color:var(--muted);margin-top:10px">ℹ️ Detailed AI cards and AI valuation adjustments cover your ${daEsc(a.holdings_truncated.analyzed)} largest holdings; all ${daEsc(a.holdings_truncated.total)} receive market-data inputs and feed the risk &amp; Kelly math.</div>`:''}
         ${a.market_context?buildLeadFold(a.market_context):''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">

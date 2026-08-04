@@ -276,6 +276,32 @@ def test_large_book_uses_concise_deep_analysis(monkeypatch):
     assert captured.get("concise") is True
 
 
+def test_large_book_kelly_enrichment_covers_every_holding(monkeypatch):
+    """The full-book Kelly run must not receive only top-card analyst data."""
+    import server
+
+    _fake_engines(server, monkeypatch)
+    analyst_symbols = []
+    kelly_upside = {}
+
+    def _analyst(symbols):
+        analyst_symbols.extend(symbols)
+        return {symbol: {"upside_pct": 5.0} for symbol in symbols}
+
+    def _kelly(holdings, total_equity, upside, ai_verdicts):
+        kelly_upside.update(upside)
+        return {"ok": 1}
+
+    monkeypatch.setattr(server, "get_analyst_targets", _analyst, raising=True)
+    monkeypatch.setattr(server, "run_kelly_analysis", _kelly, raising=True)
+
+    server._run_book_engines(_book_payload(33))
+
+    expected = [f"S{i}" for i in range(33)]
+    assert analyst_symbols == expected
+    assert list(kelly_upside) == expected
+
+
 # ─── error classifier must not crash on a cause-less exception ─────────────────
 
 
