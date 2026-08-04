@@ -240,8 +240,8 @@ python -m trading.autopilot --job pre_market_scan
 
 Open **http://localhost:9000** for the dashboard.
 
-> **Product improvements:** See `GAPS_AND_IMPROVEMENTS_2026-07-09.md` for the
-> repository-level engineering review and prioritized roadmap.
+> **Product improvements:** See `GAPS_AND_IMPROVEMENTS_2026-08-04.md` for the
+> current prioritized gaps roadmap (historical: `GAPS_AND_IMPROVEMENTS_2026-07-09.md`).
 
 > **Production operations:** See `OPS_LAYER.md` for public-safe reliability and
 > deployment guidance. Environment-specific runbooks and runtime state are kept

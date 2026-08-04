@@ -68,7 +68,7 @@ def _client_order_id(intent: TradeIntent) -> str:
         (intent.generated_at or "")[:16],   # YYYY-MM-DDTHH:MM — minute granularity
         f"{intent.target_position_pct or 0:.6f}",
     ])
-    return "gesh-" + hashlib.sha1(seed.encode()).hexdigest()[:16]
+    return "gesh-" + hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
 def _paper_position(symbol: str) -> dict[str, float] | None:

@@ -1419,6 +1419,7 @@ padding:11px;font-weight:700;font-size:14px;cursor:pointer}
 <label>Password</label><input name=password type=password autocomplete=current-password required>
 <button type=submit>Sign in</button><div class=err id=e></div>
 <div class=sub style="margin-top:16px">Subscribed but no password? <a href="#" id=ml style="color:#00d4ff">Email me a sign-in link</a></div>
+<div class=sub style="margin-top:12px;line-height:1.4">Signing in sets an HttpOnly session cookie (SameSite=Lax) so we can keep you logged in. See <a href="/privacy" style="color:#00d4ff">Privacy Policy</a>.</div>
 <div class=err id=m style="color:#00e87a"></div></form>
 <script>document.getElementById('f').addEventListener('submit',async function(ev){ev.preventDefault();
 var r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -1433,9 +1434,23 @@ document.getElementById('m').textContent='If that email has access, a sign-in li
 </script></body></html>"""
 
 
+# Process start time for public health probes (no PII / no filesystem paths).
+_PROCESS_STARTED_AT = time.time()
+
+
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "auth": auth_users.auth_enabled()}
+    """Liveness probe — public, secret-free. Expand carefully; never add DB paths,
+    account identifiers, or portfolio figures here."""
+    build = (os.getenv("GESH_BUILD_SHA") or "").strip() or None
+    payload = {
+        "status": "ok",
+        "auth": auth_users.auth_enabled(),
+        "uptime_seconds": int(max(0, time.time() - _PROCESS_STARTED_AT)),
+    }
+    if build:
+        payload["build"] = build[:40]
+    return payload
 
 
 @app.get("/api/me")
