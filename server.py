@@ -388,6 +388,7 @@ _HEAVY_PREFIXES = (
     "/api/momentum/",
     "/api/levels/",
     "/api/earnings/",
+    "/api/explainability/",
     # Customer-book analysis = regime + Monte Carlo + Kelly + one Claude call.
     # Book CRUD (/api/mybook without /analyze) stays in the normal bucket.
     "/api/mybook/analyze",
@@ -6415,14 +6416,18 @@ async def api_benchmarks(period: str = "1mo", request: Request = None):  # noqa:
 @app.get("/api/explainability/{symbol}")
 async def api_explainability(symbol: str):
     """Plain-English explanation of consensus verdict for a symbol."""
+    symbol = _safe_symbol(symbol)
     try:
         from consensus import run_consensus_holding
         from explainability import build_transparency_report
-
-        consensus = run_consensus_holding(symbol.upper())
+        from price_source import unauthenticated_rh_fallback
+        # Customer-controlled tickers may use public market-data fallbacks, but
+        # must never generate traffic authenticated as the broker-account owner.
+        with unauthenticated_rh_fallback():
+            consensus = run_consensus_holding(symbol)
         regime_str = consensus.get("regime", "NEUTRAL")
-        report = build_transparency_report(symbol.upper(), consensus, regime=regime_str)
-        return _sanitize({"status": "ok", "symbol": symbol.upper(), **report})
+        report = build_transparency_report(symbol, consensus, regime=regime_str)
+        return _sanitize({"status": "ok", "symbol": symbol, **report})
     except Exception as e:
         raise _server_error(e)
 
