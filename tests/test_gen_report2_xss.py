@@ -4,7 +4,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -23,12 +22,11 @@ def test_generated_report_escapes_engine_and_ai_content(tmp_path):
             "portfolio_risks": [{"severity": "High", "text": payload}],
         },
         "monte_carlo": {
-            "buckets": [{"label": "</script><script>window.pwned=true</script>",
-                         "pct": 1, "center": 1000}]
+            "buckets": [
+                {"label": "</script><script>window.pwned=true</script>", "pct": 1, "center": 1000}
+            ]
         },
-        "yield_data": {
-            "tiers": {"tier1": [{"name": payload, "apy": 4, "risk": payload}]}
-        },
+        "yield_data": {"tiers": {"tier1": [{"name": payload, "apy": 4, "risk": payload}]}},
     }
     source = tmp_path / "engine_results.json"
     output = tmp_path / "report.html"
@@ -37,11 +35,15 @@ def test_generated_report_escapes_engine_and_ai_content(tmp_path):
     env = os.environ.copy()
     env.update(GESH_ENGINE_RESULTS=str(source), GESH_REPORT_OUTPUT=str(output))
     subprocess.run(
-        [sys.executable, "gen_report2.py"], cwd=ROOT, env=env, check=True,
-        capture_output=True, text=True,
+        [sys.executable, "gen_report2.py"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
     )
 
     report = output.read_text()
     assert payload not in report
     assert "&lt;script&gt;window.pwned=true&lt;/script&gt;" in report
-    assert r'\u003c/script\u003e\u003cscript\u003ewindow.pwned=true' in report
+    assert r"\u003c/script\u003e\u003cscript\u003ewindow.pwned=true" in report
