@@ -63,3 +63,25 @@ def test_ttl_expiry_refetches(monkeypatch):
     ps.yf_download("XYZ", period="90d")
     ps.yf_download("XYZ", period="90d")
     assert calls["n"] == 2
+
+
+def test_expired_one_off_entries_are_swept(monkeypatch):
+    monkeypatch.setattr(ps, "_yf_download_uncached",
+                        lambda symbols, **k: pd.DataFrame({"Close": np.arange(10.0)}))
+    monkeypatch.setattr(ps, "_YF_CACHE_TTL_S", 0.0)
+    ps.yf_download("OLD", period="90d")
+    ps.yf_download("NEW", period="90d")
+    assert len(ps._YF_CACHE) == 1
+    assert next(iter(ps._YF_CACHE))[0] == "NEW"
+
+
+def test_cache_evicts_least_recently_used_entry(monkeypatch):
+    monkeypatch.setattr(ps, "_yf_download_uncached",
+                        lambda symbols, **k: pd.DataFrame({"Close": np.arange(10.0)}))
+    monkeypatch.setattr(ps, "_YF_CACHE_MAX_ENTRIES", 2)
+    ps.yf_download("FIRST", period="90d")
+    ps.yf_download("SECOND", period="90d")
+    ps.yf_download("FIRST", period="90d")  # make FIRST most recently used
+    ps.yf_download("THIRD", period="90d")
+    symbols = {key[0] for key in ps._YF_CACHE}
+    assert symbols == {"FIRST", "THIRD"}
