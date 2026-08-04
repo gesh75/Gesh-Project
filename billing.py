@@ -343,9 +343,14 @@ def provision(email: str, tier: str | None, customer_id: str | None,
     delivery RELIABLE (H5): a failed send leaves the flag unset so the LS retry (or
     /auth/request-link) re-sends; revoke clears it so a churned user who re-subscribes is
     re-onboarded. Unknown products never reach here (tier is required, H3)."""
-    created = auth_users.create_magic_link_user(email, tier=tier)
-    auth_users.set_billing(email, tier=tier, customer_id=customer_id,
-                           sub_id=sub_id, status="active", event_at=event_at or None)
+    created = auth_users.provision_magic_link_user(
+        email,
+        tier=tier,
+        customer_id=customer_id,
+        sub_id=sub_id,
+        status="active",
+        event_at=event_at or None,
+    )
     owed = (auth_users.get_user(email) or {}).get("welcome_emailed_at") is None
     emailed = False
     if owed:
