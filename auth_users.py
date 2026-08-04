@@ -1287,6 +1287,61 @@ def create_magic_link_user(email: str, tier: str | None = None) -> bool:
     return True
 
 
+def provision_magic_link_user(
+    email: str,
+    *,
+    tier: str | None,
+    customer_id: str | None,
+    sub_id: str | None,
+    status: str,
+    event_at: str | None = None,
+) -> bool:
+    """Atomically create/reactivate a subscriber and bind its billing identity.
+
+    Taking the write lock before reading prevents concurrent webhook workers from both
+    creating active users and only later racing on the unique subscription-id index. If
+    that constraint rejects this account, the entire activation/insert is rolled back.
+    Returns True when a new row was created.
+    """
+    em = _norm(email)
+    if not em:
+        raise ValueError("email required")
+
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute("SELECT 1 FROM users WHERE email=?", (em,)).fetchone()
+        created = row is None
+        if created:
+            user_id = _new_user_id()
+            con.execute(
+                "INSERT INTO users "
+                "(user_id, email, password_hash, is_active, created_at) VALUES (?,?,?,1,?)",
+                (
+                    user_id,
+                    em,
+                    hash_password(secrets.token_urlsafe(24)),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            _claim_owner_marker(con, em, user_id)
+
+        sets = ["is_active=1"]
+        params: list[Any] = []
+        for col, val in (
+            ("tier", tier),
+            ("billing_customer_id", customer_id),
+            ("billing_sub_id", sub_id),
+            ("billing_status", status),
+            ("billing_event_at", event_at),
+        ):
+            if val is not None:
+                sets.append(f"{col}=?")
+                params.append(val)
+        params.append(em)
+        con.execute(f"UPDATE users SET {', '.join(sets)} WHERE email=?", params)
+        return created
+
+
 def set_welcome_emailed(email: str, ts: str | None) -> None:
     """Stamp (or clear with None) when the onboarding magic-link email was delivered."""
     with _conn() as con:

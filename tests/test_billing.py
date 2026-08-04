@@ -11,6 +11,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Generator
 
@@ -530,6 +533,40 @@ def test_billing_sub_id_is_unique_across_accounts():
     au.create_magic_link_user("c@example.com")               # no tier, no sub_id
     au.create_magic_link_user("d@example.com")
     assert au.get_user("c@example.com") and au.get_user("d@example.com")
+
+
+def test_concurrent_provision_does_not_leave_active_loser():
+    """A duplicate-subscription race must roll back the losing account completely."""
+    start = threading.Barrier(2)
+
+    def provision(email: str):
+        start.wait()
+        return billing.provision(email, "trader", "cust_race", "sub_race")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(provision, "race-a@example.com"),
+            pool.submit(provision, "race-b@example.com"),
+        ]
+
+    results, errors = [], []
+    for future in futures:
+        try:
+            results.append(future.result())
+        except sqlite3.IntegrityError as exc:
+            errors.append(exc)
+
+    assert len(results) == 1
+    assert len(errors) == 1
+    users = [
+        au.get_user("race-a@example.com"),
+        au.get_user("race-b@example.com"),
+    ]
+    assert sum(user is not None for user in users) == 1
+    winner = next(user for user in users if user is not None)
+    assert winner["is_active"] == 1
+    assert winner["tier"] == "trader"
+    assert winner["billing_sub_id"] == "sub_race"
 
 
 # ── at-rest hardening: gesh_auth.db is owner-only ─────────────────────────────
