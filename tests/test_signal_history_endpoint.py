@@ -22,6 +22,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    au.create_user("cust@x.com", "test-password")
+    au.add_watch("cust@x.com", "NVDA")
+    au.add_watch("cust@x.com", "ZZZZ9")
     monkeypatch.setattr(sh, "DB_PATH", tmp_path / "sig.db")
     c = TestClient(server.app, raise_server_exceptions=False)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
@@ -48,6 +51,19 @@ def test_history_endpoint_requires_session(client, monkeypatch):
     server, c = client
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
     assert c.get("/api/signals/history/NVDA").status_code in (401, 403)
+
+
+def test_history_endpoint_rejects_another_customers_symbol(client):
+    server, c = client
+    server.auth_users.create_user("other@x.com", "test-password")
+    server.auth_users.add_watch("other@x.com", "ALICEONLY")
+    sh.record_snapshots([{"symbol": "ALICEONLY", "verdict": "BUY", "score": 0.4,
+                          "confidence": 80}], date="2026-07-15")
+
+    r = c.get("/api/signals/history/ALICEONLY")
+
+    assert r.status_code == 403
+    assert "history" not in r.text
 
 
 def test_history_endpoint_is_cached(client, monkeypatch):

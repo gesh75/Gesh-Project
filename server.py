@@ -3735,12 +3735,25 @@ def news_symbol(symbol: str):
 
 
 @app.get("/api/signals/history/{symbol}", dependencies=[Depends(require_customer_or_owner)])
-def signals_history(symbol: str):
+def signals_history(symbol: str, request: Request):
     """30-day consensus verdict/score series for the card sparkline (feature 3).
     Mechanical read of signal_history — no LLM, no quota. Session-gated (same
-    require_customer_or_owner as the ticker card) since it is customer-facing;
-    empty history is a normal answer, never a 500."""
+    require_customer_or_owner as the ticker card) since it is customer-facing.
+    Customers may only read symbols in their own watchlist or book; owners retain
+    access to the shared history. Empty history for an entitled symbol is a normal
+    answer, never a 500."""
     sym = _safe_symbol(symbol)
+    if auth_users.auth_enabled():
+        email = _session_email(request)
+        if not email:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not auth_users.is_owner(email):
+            own_symbols = set(auth_users.get_watch(email))
+            own_symbols.update(position["symbol"] for position in auth_users.get_positions(email))
+            if sym not in own_symbols:
+                raise HTTPException(
+                    status_code=403, detail="Symbol is not in your watchlist or book"
+                )
     cached = _ticker_get_cached("sighist", sym)
     if cached:
         return cached
