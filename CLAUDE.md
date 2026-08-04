@@ -202,7 +202,7 @@ prompt += "\n" + cz_report["summary"]
 ---
 
 ## Continuous Improvement
-See the living `GAPS_AND_IMPROVEMENTS_2026-07-09.md` (created by deep Grok analysis 2026-07-09). It ranks gaps and contains the prioritized roadmap to make GESH the best product. Update it after major milestones.
+See the living `GAPS_AND_IMPROVEMENTS_2026-08-04.md` (current prioritized roadmap). Historical deep review: `GAPS_AND_IMPROVEMENTS_2026-07-09.md`. Update the living file after major milestones.
 
 ## Agent harness model (Grok / Cursor)
 

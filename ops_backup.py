@@ -6,26 +6,38 @@ against concurrent writers), runs PRAGMA integrity_check on each copy, keeps
 RETENTION_DAYS of history, and prunes older copies. Exits non-zero if any
 backup or integrity check fails so launchd/job logs surface the failure.
 
+Paths (2026-08-04): no hardcoded /Users. Override with:
+  GESH_HOME          — this product repo root (default: directory of this file)
+  GESH_TRADING_HOME  — trading sibling root (default: ../gesh-project-trading)
+
 Restore drill (documented, run manually):
     sqlite3 backups/nightly/<file>  "PRAGMA integrity_check;"
     cp backups/nightly/<file> <original-name>.restored  # then point the app at it
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-HOME = Path("/Users/georgigaydarov/Projects")
+_BASE = Path(os.getenv("GESH_HOME", Path(__file__).resolve().parent))
+_TRADING = Path(
+    os.getenv(
+        "GESH_TRADING_HOME",
+        str(_BASE.parent / "gesh-project-trading"),
+    )
+)
+
 TARGETS = [
-    HOME / "gesh-project" / "gesh_financial.db",
-    HOME / "gesh-project" / "gesh_auth.db",
-    HOME / "gesh-project" / "gesh.db",
-    HOME / "gesh-project-trading" / "gesh_financial.db",
-    HOME / "gesh-project-trading" / "gesh.db",
-    HOME / "gesh-project-trading" / "crypto_financial.db",
+    _BASE / "gesh_financial.db",
+    _BASE / "gesh_auth.db",
+    _BASE / "gesh.db",
+    _TRADING / "gesh_financial.db",
+    _TRADING / "gesh.db",
+    _TRADING / "crypto_financial.db",
 ]
 RETENTION_DAYS = 14
 
@@ -40,12 +52,16 @@ def backup_one(src: Path, dest_dir: Path, stamp: str) -> bool:
         d = sqlite3.connect(dest)
         s.backup(d)
         ok = d.execute("PRAGMA integrity_check").fetchone()[0]
-        d.close(); s.close()
+        d.close()
+        s.close()
         dest.chmod(0o600)
         if ok != "ok":
             print(f"[backup] FAIL integrity: {src} -> {dest}: {ok}")
             return False
-        print(f"[backup] ok: {src.parent.name}/{src.name} -> {dest.name} ({dest.stat().st_size:,} bytes)")
+        print(
+            f"[backup] ok: {src.parent.name}/{src.name} -> {dest.name} "
+            f"({dest.stat().st_size:,} bytes)"
+        )
         return True
     except Exception as e:
         print(f"[backup] FAIL {src}: {e}")

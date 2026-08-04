@@ -1,5 +1,6 @@
 # GESH Financial — Deep Analysis, Gaps & Improvements
 **Date:** 2026-07-09 (Grok deep review — smarter than prior Opus passes)  
+**Living update:** See **`GAPS_AND_IMPROVEMENTS_2026-08-04.md`** for current priorities (this file is historical).
 **Scope:** All gesh* local repos + git history + remote branches (via local fetch) + key code/docs/audits/CI/tests.  
 **Goal:** Make this the **best-in-class** personal + commercial AI trading intelligence product.
 

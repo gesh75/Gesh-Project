@@ -161,11 +161,48 @@ jobs:
 
       - name: Run offline money-logic unit tests
         run: |
-          # Whole-repo coverage (config in pyproject.toml [tool.coverage.run]) so gaps in
-          # untested app modules are VISIBLE in the CI log instead of hidden behind a
-          # 4-module allowlist. No --cov-fail-under yet — this establishes the real
-          # baseline first; a floor can be added once the number is known.
-          pytest tests/ -q --cov=. --cov-report=term-missing --cov-fail-under=45
+          # Whole-repo coverage (config in pyproject.toml [tool.coverage.run]).
+          # Floor matches [tool.coverage.report] fail_under=55 (raised from the
+          # earlier soft 45 baseline once the suite cleared that bar).
+          pytest tests/ -q --cov=. --cov-report=term-missing --cov-fail-under=55
+
+  # Secret-free supply-chain + static security scan. Does not replace the leak
+  # sweep; catches dependency CVEs and high-confidence Bandit findings early.
+  security:
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install security tooling
+        run: pip install pip-audit bandit
+      - name: pip-audit (lockfile, skip private git dep)
+        run: |
+          set -euo pipefail
+          # gesh-core is a private git URL — pip-audit cannot fetch it without a
+          # PAT. Audit everything else from the reviewed lock; core stays gated
+          # by the credential-scoped install in the test job.
+          grep -v '^gesh-core @' requirements.lock > ci-audit.lock
+          # Soft-fail first wave: report CVEs without blocking merge until the
+          # dependency triage backlog is cleared. Bandit (below) remains hard.
+          pip-audit -r ci-audit.lock --progress-spinner off || {
+            echo "::warning::pip-audit reported vulnerabilities — see log; not failing the gate yet"
+            exit 0
+          }
+      - name: bandit (high severity / high confidence only)
+        run: |
+          # -lll = HIGH severity only; -iii = HIGH confidence only — avoids
+          # failing the gate on noisy medium findings while the codebase is
+          # retro-cleaned. Expand later.
+          bandit -r . \
+            --exclude ./tests,./venv,./.venv,./_archive,./android,./android\ 2,./android\ 3,./career-ops,./memory-bank \
+            -lll -iii
 
   # Separate REQUIRED gate for customer data-isolation (Codex 4th-pass P1): the
   # leak sweep + XSS-wiring guard run in-process against a deterministic seeded

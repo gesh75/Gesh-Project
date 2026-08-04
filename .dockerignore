@@ -1,0 +1,24 @@
+venv/
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+android/
+android 2/
+android 3/
+_archive/
+career-ops/
+memory-bank/
+backups/
+*.db
+*.db-*
+.env
+.rh_mcp_oauth.json
+docs/ATTORNEY_*
+gesh_report*.html
+engine_results.json
+live_portfolio_snapshot.json
+run_manifest.json
