@@ -79,14 +79,14 @@ Drive each row via a real **test-card** purchase + the LS subscription side-pane
 
 ### ✅ Phase 1 RESULTS — validated 2026-06-30 (real LS test-mode webhooks)
 
-Store `geshpro.lemonsqueezy.com` · variant `1852694` ($49/mo "GESH Access") · subscriber
-`georgy75@gmail.com` (LS sub `2302135`, order `#4210281`).
+Validated with a sanitized Lemon Squeezy test-mode account. Store, subscriber, variant,
+subscription, and order identifiers are intentionally omitted.
 
 | # | Event | Outcome | ✅ |
 |---|-------|---------|----|
 | 1 | `subscription_created` | provisioned `is_active=1 tier=observer`, Resend email sent (`emailed:true`) | ✅ |
 | 2/3 | renewal / payment-failed | **fixed** in `13cee2f` — keep tier/access (see below) | ✅ |
-| 4/5 | `subscription_cancelled` | `is_active=1`, `billing_status=cancelled` (access to 30 Jul) | ✅ |
+| 4/5 | `subscription_cancelled` | `is_active=1`, `billing_status=cancelled` (access to period end) | ✅ |
 | 6 | `subscription_expired` | `is_active=0`, `billing_status=expired` (revoked) | ✅ |
 | 7 | duplicate delivery | deduped → `action=duplicate` | ✅ |
 | 8 | email-down | dead-letter + `billing.py sweep-onboarding` recovers | ✅ |
