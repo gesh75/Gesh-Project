@@ -4,6 +4,7 @@ get_performance_returns used to fire 5 separate history() HTTP calls per symbol
 (7d/1m/3m/1y/ytd). The fix fetches 1y ONCE and slices — these tests pin the
 slicing math offline on a synthetic frame.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -88,9 +89,7 @@ def test_get_all_market_data_uses_single_ticker_instance_per_symbol(monkeypatch)
             self.insider_transactions = pd.DataFrame(
                 [{"Transaction": "Purchase", "Shares": 10, "Value": 1000, "Date": "2026-07-01"}]
             )
-            self.institutional_holders = pd.DataFrame(
-                [{"Holder": "Fund A", "% Out": 0.12}]
-            )
+            self.institutional_holders = pd.DataFrame([{"Holder": "Fund A", "% Out": 0.12}])
 
         def history(self, **_kw):
             return _hist()
@@ -99,5 +98,40 @@ def test_get_all_market_data_uses_single_ticker_instance_per_symbol(monkeypatch)
     out = market_data.get_all_market_data(["NVDA", "AAPL"])
     assert created.count("NVDA") == 1
     assert created.count("AAPL") == 1
-    assert set(out.keys()) == {"analyst_targets", "performance", "insider_trades", "ownership", "as_of"}
+    assert set(out.keys()) == {
+        "analyst_targets",
+        "performance",
+        "insider_trades",
+        "ownership",
+        "as_of",
+    }
     assert out["analyst_targets"]["NVDA"]["recommendation"] == "Buy"
+
+
+def test_get_all_market_data_malformed_insider_preserves_other_sections(monkeypatch):
+    class _FakeTicker:
+        info = {
+            "currentPrice": 100.0,
+            "targetMeanPrice": 110.0,
+            "institutionsPercentHeld": 0.6,
+            "heldPercentInsiders": 0.1,
+        }
+        insider_transactions = pd.DataFrame(
+            [{"Transaction": "Purchase", "Shares": "not-a-number", "Value": 1000}]
+        )
+        institutional_holders = pd.DataFrame([{"Holder": "Fund A", "% Out": 0.12}])
+
+        def __init__(self, _sym):
+            pass
+
+        def history(self, **_kw):
+            return _hist()
+
+    monkeypatch.setattr(market_data.yf, "Ticker", _FakeTicker)
+
+    out = market_data.get_all_market_data(["NVDA"])
+
+    assert out["analyst_targets"]["NVDA"]["target_mean"] == 110.0
+    assert out["performance"]["NVDA"]["7d"] is not None
+    assert out["insider_trades"]["NVDA"] == []
+    assert out["ownership"]["NVDA"]["institution_pct"] == 60.0
