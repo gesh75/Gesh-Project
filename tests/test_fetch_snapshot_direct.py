@@ -17,14 +17,17 @@ Everything is offline: `_req` is monkeypatched in every test that would touch
 the network, and TOKEN_FILE is redirected to tmp_path by an autouse fixture so
 the owner's real .rh_mcp_oauth.json is never read, written or chmod'ed.
 """
+
 from __future__ import annotations
 
 import ast
 import importlib
+import json
 import os
 import re
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -131,8 +134,7 @@ def _no_network(*a, **k):  # pragma: no cover - only runs if a test regresses
 
 
 def test_access_token_uses_unexpired_cached_token_without_network(monkeypatch):
-    fsd._save_tokens({"client_id": "c", "access_token": "cached",
-                      "expires_at": time.time() + 3600})
+    fsd._save_tokens({"client_id": "c", "access_token": "cached", "expires_at": time.time() + 3600})
     monkeypatch.setattr(fsd, "_req", _no_network)
     assert fsd._access_token() == "cached"
 
@@ -151,10 +153,12 @@ def test_access_token_expired_without_refresh_token_exits():
 
 def test_access_token_refreshes_and_preserves_identity(monkeypatch):
     """A refresh response often omits refresh_token/client_id — both must persist."""
-    fsd._save_tokens({"client_id": "c", "refresh_token": "r",
-                      "access_token": "old", "expires_at": 0})
+    fsd._save_tokens(
+        {"client_id": "c", "refresh_token": "r", "access_token": "old", "expires_at": 0}
+    )
     monkeypatch.setattr(
-        fsd, "_req",
+        fsd,
+        "_req",
         lambda *a, **k: (200, {}, {"access_token": "fresh", "expires_in": 3600}),
     )
     assert fsd._access_token() == "fresh"
@@ -254,20 +258,27 @@ def test_notify_initialized_sends_no_id(monkeypatch):
 # ── 6. Mcp.tool payload extraction ───────────────────────────────────────────
 def test_tool_prefers_structured_content(monkeypatch):
     monkeypatch.setattr(
-        fsd, "_req",
-        lambda *a, **k: (200, {}, {"result": {
-            "structuredContent": {"from": "structured"},
-            "content": [{"type": "text", "text": '{"from": "text"}'}],
-        }}),
+        fsd,
+        "_req",
+        lambda *a, **k: (
+            200,
+            {},
+            {
+                "result": {
+                    "structuredContent": {"from": "structured"},
+                    "content": [{"type": "text", "text": '{"from": "text"}'}],
+                }
+            },
+        ),
     )
     assert fsd.Mcp("tok").tool("t", {}) == {"from": "structured"}
 
 
 def test_tool_falls_back_to_text_block_json(monkeypatch):
     monkeypatch.setattr(
-        fsd, "_req",
-        lambda *a, **k: (200, {}, {"result": {
-            "content": [{"type": "text", "text": '{"ok": 1}'}]}}),
+        fsd,
+        "_req",
+        lambda *a, **k: (200, {}, {"result": {"content": [{"type": "text", "text": '{"ok": 1}'}]}}),
     )
     assert fsd.Mcp("tok").tool("t", {}) == {"ok": 1}
 
@@ -275,20 +286,29 @@ def test_tool_falls_back_to_text_block_json(monkeypatch):
 def test_tool_skips_non_json_text_blocks(monkeypatch):
     """A leading prose block must not abort extraction of a later JSON block."""
     monkeypatch.setattr(
-        fsd, "_req",
-        lambda *a, **k: (200, {}, {"result": {"content": [
-            {"type": "text", "text": "here you go:"},
-            {"type": "text", "text": '{"ok": 2}'},
-        ]}}),
+        fsd,
+        "_req",
+        lambda *a, **k: (
+            200,
+            {},
+            {
+                "result": {
+                    "content": [
+                        {"type": "text", "text": "here you go:"},
+                        {"type": "text", "text": '{"ok": 2}'},
+                    ]
+                }
+            },
+        ),
     )
     assert fsd.Mcp("tok").tool("t", {}) == {"ok": 2}
 
 
 def test_tool_without_any_json_payload_raises(monkeypatch):
     monkeypatch.setattr(
-        fsd, "_req",
-        lambda *a, **k: (200, {}, {"result": {"content": [
-            {"type": "image", "data": "..."}]}}),
+        fsd,
+        "_req",
+        lambda *a, **k: (200, {}, {"result": {"content": [{"type": "image", "data": "..."}]}}),
     )
     with pytest.raises(RuntimeError, match="no JSON payload"):
         fsd.Mcp("tok").tool("t", {})
@@ -334,3 +354,44 @@ def test_account_number_is_never_hardcoded_in_tracked_code():
         assert not re.search(r"GESH_RH_ACCOUNT[:=][-]?\s*[\"']?\d{6,}", src), (
             f"{name} appears to hardcode an account number as a fallback default"
         )
+
+
+def test_fetch_raw_dump_is_private_and_removed_after_builder(monkeypatch, tmp_path):
+    """Brokerage data is readable only by this process and survives no build."""
+
+    class FakeMcp:
+        def __init__(self, token):
+            pass
+
+        def call(self, method, params):
+            return {}
+
+        def notify_initialized(self):
+            pass
+
+        def tool(self, name, arguments):
+            if name == "get_portfolio":
+                return {"data": {"cash": "123.45"}}
+            if name == "get_equity_positions":
+                return {"data": {"positions": [{"symbol": "FAKE"}]}}
+            return {"data": {"results": [{"symbol": "FAKE"}]}}
+
+    observed = {}
+
+    def fake_run(command, *, cwd):
+        raw_path = Path(command[2])
+        observed["path"] = raw_path
+        observed["mode"] = raw_path.stat().st_mode & 0o777
+        observed["data"] = json.loads(raw_path.read_text())
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(fsd, "_access_token", lambda: "fake-token")
+    monkeypatch.setattr(fsd, "Mcp", FakeMcp)
+    monkeypatch.setattr(fsd.subprocess, "run", fake_run)
+    monkeypatch.setattr(fsd.tempfile, "tempdir", str(tmp_path))
+
+    fsd.fetch()
+
+    assert observed["mode"] == 0o600
+    assert observed["data"]["fetched_account"] == "TEST_ACCOUNT_0000"
+    assert not observed["path"].exists()
