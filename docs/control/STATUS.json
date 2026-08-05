@@ -1,0 +1,11 @@
+{
+  "project": "GESH Financial",
+  "repository": "gesh75/Gesh-Project",
+  "main_sha": "511bde3",
+  "status": "IN PROGRESS",
+  "next_exact_action": "Read-only production verification; no restart/deploy without owner. Freeze remains.",
+  "binding_constraint": "2026-08-01 public-finance freeze + Network Change Assurance Review pivot",
+  "tracker_url": "https://app.notion.com/p/369ff39485008128bbb2ede901dd332a",
+  "repo_dashboard": "https://gesh75.github.io/Gesh-Project/",
+  "last_verified": "2026-08-05"
+}
