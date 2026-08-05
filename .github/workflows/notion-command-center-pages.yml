@@ -1,0 +1,33 @@
+name: Deploy Notion Command Center Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/notion-command-center/**"
+      - ".github/workflows/notion-command-center-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-notion-command-center
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/notion-command-center
+      - id: deployment
+        uses: actions/deploy-pages@v4
