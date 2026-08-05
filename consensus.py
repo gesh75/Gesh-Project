@@ -269,7 +269,13 @@ def node_fundamentals(
         if obb_data is None:
             from fundamentals_openbb import get_fundamentals_openbb
             obb_data = get_fundamentals_openbb(symbol)
-        if obb_data is not None:
+        # The holding-level prefetch uses an empty mapping to mean "OpenBB was
+        # attempted but unavailable." Only treat the response as usable for
+        # this node when it contains a metric that can produce a fundamentals
+        # vote; otherwise preserve the documented yfinance fallback.
+        if obb_data and (
+            obb_data.get("rev_growth") is not None or obb_data.get("pe") is not None
+        ):
             rev_growth = obb_data.get("rev_growth")
             pe         = obb_data.get("pe")
             profit_m   = obb_data.get("profit_margin")
