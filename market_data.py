@@ -365,7 +365,7 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
         "performance":     performance,
         "insider_trades":  insider_trades,
         "ownership":       ownership,
-        "as_of":           datetime.now(timezone.utc).isoformat() + "Z",
+        "as_of":           datetime.now(timezone.utc).isoformat(),
     }
 
 

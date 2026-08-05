@@ -458,7 +458,7 @@ def watch_filings(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
         "new_filings": new_count,
         "skipped_cached": skipped_cached,
         "results": display,
-        "as_of": datetime.now(timezone.utc).isoformat() + "Z",
+        "as_of": datetime.now(timezone.utc).isoformat(),
     }
 
 

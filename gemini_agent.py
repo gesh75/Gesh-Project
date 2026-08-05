@@ -95,7 +95,7 @@ def get_gemini_status() -> dict[str, Any]:
         "pro_model":      GEMINI_PRO_MODEL,
         "key_configured": bool(_GEMINI_KEY),
         "sdk_installed":  False,
-        "as_of":          datetime.now(timezone.utc).isoformat() + "Z",
+        "as_of":          datetime.now(timezone.utc).isoformat(),
     }
 
     if not _GEMINI_KEY:
@@ -314,7 +314,7 @@ def gemini_second_opinion(
             "agreement_level": parsed.get("agreement_level", "UNKNOWN"),
             "gemini_stance":   parsed.get("gemini_stance", "NEUTRAL"),
             "type":            "gemini_contrarian_review",
-            "as_of":           datetime.now(timezone.utc).isoformat() + "Z",
+            "as_of":           datetime.now(timezone.utc).isoformat(),
         }
     except Exception as exc:
         return {
@@ -381,7 +381,7 @@ def gemini_market_commentary(
             "market_stance": parsed.get("market_stance", "NEUTRAL"),
             "top_themes":    parsed.get("top_themes", []),
             "action_bias":   parsed.get("action_bias", "HOLD"),
-            "as_of":         datetime.now(timezone.utc).isoformat() + "Z",
+            "as_of":         datetime.now(timezone.utc).isoformat(),
         }
     except Exception as exc:
         return {
@@ -435,7 +435,7 @@ def gemini_quick_analysis(portfolio_summary: str) -> dict[str, Any]:
             "model":     GEMINI_FLASH_MODEL,
             "analysis":  response,
             "type":      "gemini_quick_commentary",
-            "as_of":     datetime.now(timezone.utc).isoformat() + "Z",
+            "as_of":     datetime.now(timezone.utc).isoformat(),
         }
     except Exception as exc:
         return {

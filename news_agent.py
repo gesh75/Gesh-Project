@@ -635,7 +635,7 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
         "news_mood": mood,
         "avg_score": None if avg is None else round(avg, 1),
         "fred_signal": fred_signal,
-        "as_of": datetime.now(timezone.utc).isoformat() + "Z",
+        "as_of": datetime.now(timezone.utc).isoformat(),
     }
 
 

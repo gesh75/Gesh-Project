@@ -485,7 +485,7 @@ def run_fundamental_scan(
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         result = _finalize_fundamental_result({"error": "No ANTHROPIC_API_KEY"}, valid)
-        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        result["as_of"] = datetime.now(timezone.utc).isoformat()
         _save_fundamental_scan(result)
         return result
 
@@ -530,7 +530,7 @@ def run_fundamental_scan(
         result["top_opportunities"] = validated
 
         result["stocks_analyzed"] = len(valid)
-        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        result["as_of"] = datetime.now(timezone.utc).isoformat()
         result = _finalize_fundamental_result(result, valid)
         _save_fundamental_scan(result)
         return result
@@ -546,13 +546,13 @@ def run_fundamental_scan(
         result = _finalize_fundamental_result(
             {"error": "AI provider temporarily unavailable"}, valid
         )
-        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        result["as_of"] = datetime.now(timezone.utc).isoformat()
         _save_fundamental_scan(result)
         return result
     except Exception:
         result = _finalize_fundamental_result(
             {"error": "AI provider temporarily unavailable"}, valid
         )
-        result["as_of"] = datetime.now(timezone.utc).isoformat() + "Z"
+        result["as_of"] = datetime.now(timezone.utc).isoformat()
         _save_fundamental_scan(result)
         return result

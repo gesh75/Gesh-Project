@@ -3276,8 +3276,7 @@ def run_screener():
             "candidates_screened": len(candidates),
             "as_of": __import__("datetime")
             .datetime.now(__import__("datetime").timezone.utc)
-            .isoformat()
-            + "Z",
+            .isoformat(),
         }
         _save_engine_result("screener", resp)
         return resp

@@ -192,7 +192,7 @@ def detect_fft_cycles(symbol: str, lookback_days: int = LOOKBACK_DAYS, prices: n
             "phase_label":     phase_label,
             "detail":          detail,
             "n_candles":       n,
-            "as_of":           datetime.now(timezone.utc).isoformat() + "Z",
+            "as_of":           datetime.now(timezone.utc).isoformat(),
         }
 
     except Exception as e:
@@ -248,6 +248,6 @@ def batch_fft_cycles(symbols: list[str]) -> dict[str, Any]:
         cycles[sym] = detect_fft_cycles(sym)
     return {
         "cycles":  cycles,
-        "as_of":   datetime.now(timezone.utc).isoformat() + "Z",
+        "as_of":   datetime.now(timezone.utc).isoformat(),
         "symbols": symbols,
     }
