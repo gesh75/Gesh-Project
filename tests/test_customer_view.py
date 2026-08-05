@@ -135,7 +135,9 @@ def test_cached_results_accept_owner_api_key_when_auth_is_disabled(monkeypatch):
     assert response.json() == {"cached": False}
 
 
-@pytest.mark.parametrize("path", ["/report", "/invest", "/invest/data", "/progress", "/watch"])
+@pytest.mark.parametrize(
+    "path", ["/report", "/invest", "/invest/data", "/progress", "/watch", "/track-record"]
+)
 def test_owner_only_views_refused_for_customers(monkeypatch, client, path):
     _as(monkeypatch, "customer@example.com")
     r = client.get(path)

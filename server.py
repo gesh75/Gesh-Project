@@ -634,8 +634,8 @@ async def _auth_gate_middleware(request: Request, call_next):
 # are refused outright for customers.
 
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
-# /watch is the INTERNAL cockpit (raw paper P&L, provisional win rate) — owner only.
-_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage")
+# Raw proof and cockpit pages expose paper sizing and P&L — owner only.
+_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage", "/track-record")
 # Customer research endpoints whose bodies carry NO owner dollars — single-ticker AI
 # research cards (public per-share fair value / price forecasts, not the owner's book).
 # Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
@@ -1898,11 +1898,10 @@ async def billing_webhook(request: Request):
         raise _server_error(exc)
 
 
-# ─── Public pages: signal-accuracy proof + legal (no auth required) ───────────
+# ─── Signal-accuracy proof + public legal pages ──────────────────────────────
 @app.get("/track-record", response_class=HTMLResponse)
 def track_record_page():
-    """Public signal-accuracy proof page — renders live closed-trade stats from
-    the tracker (honest 'day X of 180, N/30 closed' until the gate is met)."""
+    """Owner-only proof page rendering raw closed-trade stats from the tracker."""
     try:
         import proof_page
 
