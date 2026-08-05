@@ -48,12 +48,12 @@ TOKEN_TTL_SECONDS = int(os.getenv("GESH_AUTH_TTL", "604800"))   # 7 days
 COOKIE_NAME = "gesh_session"
 _PBKDF2_ROUNDS = 200_000
 
-# Paths reachable without a session (login flow, public proof/legal pages, health).
+# Paths reachable without a session (login flow, public legal pages, health).
 PUBLIC_PREFIXES = (
     "/login", "/auth/login", "/auth/logout", "/auth/magic", "/auth/request-link", "/static/",
     # /privacy is public by necessity: a policy behind a login wall is not a
     # published policy — people must be able to read it BEFORE creating an account.
-    "/track-record", "/terms", "/disclaimer", "/privacy", "/healthz", "/favicon.ico",
+    "/terms", "/disclaimer", "/privacy", "/healthz", "/favicon.ico",
     # Congress-Watch: public informational page + its public-data API (STOCK Act
     # disclosures — no owner/customer data, no execution). The shareable acquisition magnet.
     "/congress-watch", "/api/congress",

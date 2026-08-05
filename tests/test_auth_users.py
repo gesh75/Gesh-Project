@@ -193,12 +193,13 @@ class TestGate:
         assert au.auth_enabled() is True
 
     def test_public_paths_allowed(self):
-        for p in ("/login", "/auth/login", "/track-record", "/terms", "/disclaimer", "/healthz"):
+        for p in ("/login", "/auth/login", "/terms", "/disclaimer", "/healthz"):
             assert au.is_public_path(p) is True
 
     def test_protected_paths_not_public(self):
         assert au.is_public_path("/") is False
         assert au.is_public_path("/api/portfolio") is False
+        assert au.is_public_path("/track-record") is False
 
     def test_public_prefix_respects_path_boundary(self):
         # '/api/congress' must expose itself and sub-paths…
