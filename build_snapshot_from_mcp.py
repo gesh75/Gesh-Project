@@ -20,13 +20,14 @@ the RH MCP's buying_power.buying_power. The MCP exposes no Gold margin figure, s
 buying_power_leveraged is kept == deployable (sizing can never inflate on margin).
 """
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).parent
-RAW = Path("/tmp/gesh_mcp_raw.json")
+RAW = Path(os.environ.get("GESH_MCP_RAW", "/tmp/gesh_mcp_raw.json"))
 OUTPUT = BASE_DIR / "live_portfolio_snapshot.json"
 
 

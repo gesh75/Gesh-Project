@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import ast
 import importlib
+import json
 import os
 import re
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -334,3 +336,44 @@ def test_account_number_is_never_hardcoded_in_tracked_code():
         assert not re.search(r"GESH_RH_ACCOUNT[:=][-]?\s*[\"']?\d{6,}", src), (
             f"{name} appears to hardcode an account number as a fallback default"
         )
+
+
+def test_fetch_raw_dump_is_private_and_removed_after_builder(monkeypatch, tmp_path):
+    """Brokerage data is readable only by this process and survives no build."""
+
+    class FakeMcp:
+        def __init__(self, token):
+            pass
+
+        def call(self, method, params):
+            return {}
+
+        def notify_initialized(self):
+            pass
+
+        def tool(self, name, arguments):
+            if name == "get_portfolio":
+                return {"data": {"cash": "123.45"}}
+            if name == "get_equity_positions":
+                return {"data": {"positions": [{"symbol": "FAKE"}]}}
+            return {"data": {"results": [{"symbol": "FAKE"}]}}
+
+    observed = {}
+
+    def fake_run(command, *, cwd, env):
+        raw_path = Path(env["GESH_MCP_RAW"])
+        observed["path"] = raw_path
+        observed["mode"] = raw_path.stat().st_mode & 0o777
+        observed["data"] = json.loads(raw_path.read_text())
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(fsd, "_access_token", lambda: "fake-token")
+    monkeypatch.setattr(fsd, "Mcp", FakeMcp)
+    monkeypatch.setattr(fsd.subprocess, "run", fake_run)
+    monkeypatch.setattr(fsd.tempfile, "tempdir", str(tmp_path))
+
+    fsd.fetch()
+
+    assert observed["mode"] == 0o600
+    assert observed["data"]["fetched_account"] == "TEST_ACCOUNT_0000"
+    assert not observed["path"].exists()

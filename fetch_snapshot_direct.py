@@ -5,8 +5,8 @@ fetch_snapshot_direct.py — LLM-free snapshot fetch for the GESH daily chain.
 Replaces the `claude -p` MCP courier (fetch_snapshot_mcp.sh) with a direct,
 deterministic MCP client: OAuth (PKCE + dynamic client registration) against
 Robinhood's agent MCP, then three tool calls (get_portfolio,
-get_equity_positions, get_equity_quotes). Writes /tmp/gesh_mcp_raw.json in the
-EXACT schema build_snapshot_from_mcp.py consumes, then runs that builder.
+get_equity_positions, get_equity_quotes). Writes a short-lived private raw dump
+in the EXACT schema build_snapshot_from_mcp.py consumes, then runs that builder.
 
 Why: the claude-CLI path dies with the Claude subscription (OAuth lives in the
 CLI's Keychain entry). This client owns its own tokens (.rh_mcp_oauth.json,
@@ -28,6 +28,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -35,7 +36,6 @@ import webbrowser
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
-RAW = Path("/tmp/gesh_mcp_raw.json")
 TOKEN_FILE = BASE_DIR / ".rh_mcp_oauth.json"
 BUILDER = BASE_DIR / "build_snapshot_from_mcp.py"
 
@@ -298,13 +298,18 @@ def fetch() -> None:
         "positions": positions.get("data", {}).get("positions", []),
         "quotes": quotes.get("data", {}).get("results", []),
     }
-    RAW.write_text(json.dumps(raw))
-    print(f"[direct] raw dump: {len(raw['positions'])} positions, "
-          f"{len(raw['quotes'])} quotes -> {RAW}")
+    with tempfile.TemporaryDirectory(prefix="gesh-mcp-") as raw_dir:
+        raw_path = Path(raw_dir) / "snapshot.json"
+        raw_path.write_text(json.dumps(raw))
+        raw_path.chmod(0o600)
+        print(f"[direct] raw dump: {len(raw['positions'])} positions, "
+              f"{len(raw['quotes'])} quotes -> private temporary file")
 
-    r = subprocess.run([sys.executable, str(BUILDER)], cwd=BASE_DIR)
-    if r.returncode != 0:
-        raise SystemExit("[direct] build_snapshot_from_mcp.py failed")
+        env = os.environ.copy()
+        env["GESH_MCP_RAW"] = str(raw_path)
+        r = subprocess.run([sys.executable, str(BUILDER)], cwd=BASE_DIR, env=env)
+        if r.returncode != 0:
+            raise SystemExit("[direct] build_snapshot_from_mcp.py failed")
     print("[direct] snapshot built OK")
 
 
