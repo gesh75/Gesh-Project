@@ -13,10 +13,11 @@ Usage:
     python3 scripts/ls_webhook_smoketest.py subscription_expired  # revoke path
     python3 scripts/ls_webhook_smoketest.py --url https://pay.example.com/api/billing/webhook
 
-Exit code 0 only on a 2xx that the handler reports as ok/provisioned/duplicate.
+Exit code 0 only on a 2xx that performs the action expected for the event.
 This is a DEV tool — it uses a dummy buyer email and the test signing secret; never
 run it against a live store secret.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -28,11 +29,25 @@ import sys
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
 
 import requests
+
+_EXPECTED_ACTIONS = {
+    "subscription_created": "provision",
+    "subscription_resumed": "provision",
+    "subscription_unpaused": "provision",
+    "subscription_payment_success": "provision",
+    "order_created": "provision",
+    "subscription_updated": "provision",
+    "subscription_expired": "revoke",
+    "subscription_cancelled": "mark",
+    "subscription_paused": "mark",
+    "subscription_payment_failed": "mark",
+}
 
 
 def _payload(event: str, email: str, sub_id: str, variant_id: str) -> dict:
@@ -57,8 +72,12 @@ def _payload(event: str, email: str, sub_id: str, variant_id: str) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("event", nargs="?", default="subscription_created",
-                    help="LS event_name (default: subscription_created)")
+    ap.add_argument(
+        "event",
+        nargs="?",
+        default="subscription_created",
+        help="LS event_name (default: subscription_created)",
+    )
     ap.add_argument("--url", default="http://localhost:9000/api/billing/webhook")
     ap.add_argument("--email", default="smoketest@example.com")
     ap.add_argument("--sub-id", default="sub_smoke_1")
@@ -66,8 +85,11 @@ def main() -> int:
 
     secret = os.getenv("BILLING_WEBHOOK_SECRET", "").encode()
     if not secret:
-        print("ERROR: BILLING_WEBHOOK_SECRET is unset — the handler will fail-close (401). "
-              "Set a test-mode secret in .env first.", file=sys.stderr)
+        print(
+            "ERROR: BILLING_WEBHOOK_SECRET is unset — the handler will fail-close (401). "
+            "Set a test-mode secret in .env first.",
+            file=sys.stderr,
+        )
         return 2
 
     variant = os.getenv("LS_VARIANT_OBSERVER", "test_variant_id")
@@ -76,7 +98,8 @@ def main() -> int:
 
     try:
         resp = requests.post(
-            args.url, data=body,
+            args.url,
+            data=body,
             headers={"Content-Type": "application/json", "X-Signature": sig},
             timeout=20,
         )
@@ -85,18 +108,21 @@ def main() -> int:
         return 2
 
     print(f"HTTP {resp.status_code}  {resp.text[:300]}")
+    expected_action = _EXPECTED_ACTIONS.get(args.event)
     ok = False
     try:
         data = resp.json()
-        ok = bool(data.get("ok")) and data.get("action") in {
-            "provision", "revoke", "mark", "duplicate", "ignored", "noop"}
+        ok = bool(data.get("ok")) and data.get("action") == expected_action
     except ValueError:
         pass
     if 200 <= resp.status_code < 300 and ok:
-        print(f"✓ webhook accepted ({args.event})")
+        print(f"✓ {expected_action} ({args.event})")
         return 0
-    print("✗ webhook did not succeed — check signature secret, server logs, and .env wiring",
-          file=sys.stderr)
+    print(
+        f"✗ webhook did not perform expected action {expected_action!r} — "
+        "check signature secret, server logs, and .env wiring",
+        file=sys.stderr,
+    )
     return 1
 
 
