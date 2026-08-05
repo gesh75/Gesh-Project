@@ -139,6 +139,27 @@ def test_ecg_uses_oldest_to_newest_changes(monkeypatch):
     assert "Streak=3" in detail
 
 
+# ─── Fundamentals provider fallback regression ───────────────────────────────
+
+def test_fundamentals_empty_prefetch_falls_back_to_yfinance(monkeypatch):
+    """A failed OpenBB prefetch sentinel must not suppress yfinance data."""
+    monkeypatch.setattr(
+        consensus,
+        "_get_ticker_info",
+        lambda _symbol: {
+            "forwardPE": 15.0,
+            "revenueGrowth": 0.20,
+            "profitMargins": 0.25,
+            "earningsGrowth": 0.12,
+        },
+    )
+
+    vote, detail = consensus.node_fundamentals("TEST", obb_data={})
+
+    assert vote == consensus.VOTE_BULLISH
+    assert detail.startswith("[yf]")
+
+
 # ─── verdict thresholds ───────────────────────────────────────────────────────
 
 def test_strong_buy_all_bullish(monkeypatch):
