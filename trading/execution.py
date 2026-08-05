@@ -19,17 +19,18 @@ Usage:
 """
 
 from __future__ import annotations
+
 import hashlib
 import logging
 import sqlite3
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+from .alerts import alert_order_fill, alert_rejection
 from .config import RiskConfig, load_risk_config
 from .contract import TradeIntent
 from .risk_gate import GateVerdict
-from .state import deactivate_stops, log_order, paper_open_positions, record_stop
-from .alerts import alert_order_fill, alert_rejection
+from .state import active_stops, deactivate_stops, log_order, paper_open_positions, record_stop
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ Mode = Literal["paper", "live", "backtest"]
 @dataclass
 class OrderResult:
     ok: bool
-    status: str                  # SIMULATED | SUBMITTED | FILLED | REJECTED | ERROR | DUPLICATE
+    status: str  # SIMULATED | SUBMITTED | FILLED | REJECTED | ERROR | DUPLICATE
     mode: Mode
     client_order_id: str
     order_row_id: int | None
@@ -57,17 +58,20 @@ class OrderResult:
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _client_order_id(intent: TradeIntent) -> str:
     # Deterministic over (symbol, action, minute-bucket, target_pct) so an HTTP
     # retry of the SAME logical order collides on the UNIQUE index and is rejected
     # as a duplicate. intent_uuid is intentionally excluded — it is regenerated per
     # TradeIntent and would defeat retry idempotency.
-    seed = "|".join([
-        intent.symbol,
-        intent.action,
-        (intent.generated_at or "")[:16],   # YYYY-MM-DDTHH:MM — minute granularity
-        f"{intent.target_position_pct or 0:.6f}",
-    ])
+    seed = "|".join(
+        [
+            intent.symbol,
+            intent.action,
+            (intent.generated_at or "")[:16],  # YYYY-MM-DDTHH:MM — minute granularity
+            f"{intent.target_position_pct or 0:.6f}",
+        ]
+    )
     return "gesh-" + hashlib.sha1(seed.encode()).hexdigest()[:16]
 
 
@@ -156,6 +160,7 @@ def _estimate_qty(
 
 # ─── Main entry ───────────────────────────────────────────────────────────────
 
+
 def place(
     intent: TradeIntent,
     verdict: GateVerdict,
@@ -172,38 +177,61 @@ def place(
     if not verdict.approved:
         # Persist a REJECTED order row so the audit chain is unbroken.
         row_id = _safe_log(
-            intent_id=verdict.intent_id, decision_id=verdict.decision_id,
+            intent_id=verdict.intent_id,
+            decision_id=verdict.decision_id,
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, status="REJECTED",
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price,
+            client_order_id=coid,
+            status="REJECTED",
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
             error=verdict.reason,
             response={"gates": verdict.gates},
         )
-        alert_rejection(intent.symbol, intent.action, verdict.reason or "", verdict.gates, intent.confidence)
+        alert_rejection(
+            intent.symbol, intent.action, verdict.reason or "", verdict.gates, intent.confidence
+        )
         return OrderResult(
-            ok=False, status="REJECTED",
+            ok=False,
+            status="REJECTED",
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, order_row_id=row_id,
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price, fill_price=None, fill_qty=None,
+            client_order_id=coid,
+            order_row_id=row_id,
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
+            fill_price=None,
+            fill_qty=None,
             error=verdict.reason,
         )
 
     if intent.action == "HOLD":
         row_id = _safe_log(
-            intent_id=verdict.intent_id, decision_id=verdict.decision_id,
+            intent_id=verdict.intent_id,
+            decision_id=verdict.decision_id,
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, status="SIMULATED",
-            symbol=intent.symbol, action="HOLD", qty=0.0, target_price=price,
+            client_order_id=coid,
+            status="SIMULATED",
+            symbol=intent.symbol,
+            action="HOLD",
+            qty=0.0,
+            target_price=price,
             response={"note": "HOLD — no order placed"},
         )
         return OrderResult(
-            ok=True, status="SIMULATED",
+            ok=True,
+            status="SIMULATED",
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, order_row_id=row_id,
-            symbol=intent.symbol, action="HOLD",
-            qty=0.0, target_price=price, fill_price=None, fill_qty=None,
+            client_order_id=coid,
+            order_row_id=row_id,
+            symbol=intent.symbol,
+            action="HOLD",
+            qty=0.0,
+            target_price=price,
+            fill_price=None,
+            fill_qty=None,
         )
 
     # A priced BUY/SELL needs a reference price. Symbols neither held nor in the
@@ -212,19 +240,30 @@ def place(
     if price is None or qty is None:
         err = f"no reference price for {intent.symbol} (not in holdings/watchlist)"
         row_id = _safe_log(
-            intent_id=verdict.intent_id, decision_id=verdict.decision_id,
+            intent_id=verdict.intent_id,
+            decision_id=verdict.decision_id,
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, status="ERROR",
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price, error=err,
+            client_order_id=coid,
+            status="ERROR",
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
+            error=err,
             response={"note": "missing reference price — order not placed"},
         )
         return OrderResult(
-            ok=False, status="ERROR",
+            ok=False,
+            status="ERROR",
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, order_row_id=row_id,
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price, fill_price=None, fill_qty=None,
+            client_order_id=coid,
+            order_row_id=row_id,
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
+            fill_price=None,
+            fill_qty=None,
             error=err,
         )
 
@@ -239,19 +278,29 @@ def place(
             "(target allocation already met) — skipped, no fill"
         )
         row_id = _safe_log(
-            intent_id=verdict.intent_id, decision_id=verdict.decision_id,
+            intent_id=verdict.intent_id,
+            decision_id=verdict.decision_id,
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, status="SKIPPED",
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price,
+            client_order_id=coid,
+            status="SKIPPED",
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
             response={"note": skip_note},
         )
         return OrderResult(
-            ok=False, status="SKIPPED",
+            ok=False,
+            status="SKIPPED",
             mode="paper" if cfg.paper_mode else "live",
-            client_order_id=coid, order_row_id=row_id,
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price, fill_price=None, fill_qty=None,
+            client_order_id=coid,
+            order_row_id=row_id,
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
+            fill_price=None,
+            fill_qty=None,
             error=skip_note,
         )
 
@@ -263,20 +312,44 @@ def place(
         SLIP = 0.001
         fill_price = round(price * (1 + SLIP) if intent.action == "BUY" else price * (1 - SLIP), 4)
         row_id = _safe_log(
-            intent_id=verdict.intent_id, decision_id=verdict.decision_id,
-            mode="paper", client_order_id=coid, status="SIMULATED",
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price, fill_price=fill_price, fill_qty=qty,
-            response={"note": f"paper-mode fill with 0.10% slippage (last={price} fill={fill_price})"},
+            intent_id=verdict.intent_id,
+            decision_id=verdict.decision_id,
+            mode="paper",
+            client_order_id=coid,
+            status="SIMULATED",
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
+            fill_price=fill_price,
+            fill_qty=qty,
+            response={
+                "note": f"paper-mode fill with 0.10% slippage (last={price} fill={fill_price})"
+            },
         )
         _sync_paper_stop(intent, fill_price, row_id)
-        alert_order_fill(intent.symbol, intent.action, qty, fill_price, "paper", "SIMULATED",
-                         intent.confidence, intent.rationale)
+        alert_order_fill(
+            intent.symbol,
+            intent.action,
+            qty,
+            fill_price,
+            "paper",
+            "SIMULATED",
+            intent.confidence,
+            intent.rationale,
+        )
         return OrderResult(
-            ok=True, status="SIMULATED", mode="paper",
-            client_order_id=coid, order_row_id=row_id,
-            symbol=intent.symbol, action=intent.action,
-            qty=qty, target_price=price, fill_price=fill_price, fill_qty=qty,
+            ok=True,
+            status="SIMULATED",
+            mode="paper",
+            client_order_id=coid,
+            order_row_id=row_id,
+            symbol=intent.symbol,
+            action=intent.action,
+            qty=qty,
+            target_price=price,
+            fill_price=fill_price,
+            fill_qty=qty,
         )
 
     # ─── LIVE MODE ─── (intentionally not implemented yet)
@@ -299,20 +372,26 @@ def _sync_paper_stop(intent: TradeIntent, fill_price: float, order_row_id: int |
     try:
         if intent.action == "BUY":
             from risk_bands import exit_bands
+
             bands = exit_bands("MEDIUM")
             stop_price = intent.stop_loss or round(
-                fill_price * (1 - bands["stop_loss_pct"] / 100), 4)
+                fill_price * (1 - bands["stop_loss_pct"] / 100), 4
+            )
             tp_price = intent.take_profit or round(
-                fill_price * (1 + bands["take_profit_pct"] / 100), 4)
+                fill_price * (1 + bands["take_profit_pct"] / 100), 4
+            )
             record_stop(
-                symbol=intent.symbol, entry_price=fill_price,
-                stop_price=stop_price, take_profit_price=tp_price,
-                volatility_tier="MEDIUM", order_row_id=order_row_id,
+                symbol=intent.symbol,
+                entry_price=fill_price,
+                stop_price=stop_price,
+                take_profit_price=tp_price,
+                volatility_tier="MEDIUM",
+                order_row_id=order_row_id,
             )
         elif intent.action == "SELL":
             pos = paper_open_positions().get(intent.symbol)
             if not pos:
-                deactivate_stops(intent.symbol)          # full close → retire the stop
+                deactivate_stops(intent.symbol)  # full close → retire the stop
             else:
                 # Partial SELL (trim): the position remains but its stop was anchored to
                 # the ORIGINAL fill. Re-anchor it to the REMAINING position's avg cost so
@@ -322,17 +401,36 @@ def _sync_paper_stop(intent: TradeIntent, fill_price: float, order_row_id: int |
                 # an add-then-trim. Intent-provided levels still win over the computed bands.
                 entry = float(pos.get("avg_cost") or 0)
                 if entry > 0:
+                    existing = active_stops().get(intent.symbol)
                     from risk_bands import exit_bands
-                    bands = exit_bands("MEDIUM")
+
+                    volatility_tier = (
+                        existing.get("volatility_tier") if existing else None
+                    ) or "MEDIUM"
+                    bands = exit_bands(volatility_tier)
+                    old_entry = float(existing.get("entry_price") or 0) if existing else 0
+                    old_stop = float(existing.get("stop_price") or 0) if existing else 0
+                    old_tp = float(existing.get("take_profit_price") or 0) if existing else 0
                     stop_price = intent.stop_loss or round(
-                        entry * (1 - bands["stop_loss_pct"] / 100), 4)
+                        entry * old_stop / old_entry
+                        if old_entry > 0 and old_stop > 0
+                        else entry * (1 - bands["stop_loss_pct"] / 100),
+                        4,
+                    )
                     tp_price = intent.take_profit or round(
-                        entry * (1 + bands["take_profit_pct"] / 100), 4)
+                        entry * old_tp / old_entry
+                        if old_entry > 0 and old_tp > 0
+                        else entry * (1 + bands["take_profit_pct"] / 100),
+                        4,
+                    )
                     deactivate_stops(intent.symbol)
                     record_stop(
-                        symbol=intent.symbol, entry_price=entry,
-                        stop_price=stop_price, take_profit_price=tp_price,
-                        volatility_tier="MEDIUM", order_row_id=order_row_id,
+                        symbol=intent.symbol,
+                        entry_price=entry,
+                        stop_price=stop_price,
+                        take_profit_price=tp_price,
+                        volatility_tier=volatility_tier,
+                        order_row_id=order_row_id,
                     )
     except Exception as e:  # noqa: BLE001
         logger.warning("paper stop sync failed for %s: %s", intent.symbol, e)

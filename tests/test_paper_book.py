@@ -7,6 +7,7 @@ collapsed to qty=0/SKIPPED, and no paper position could ever close.
 
 All DB writes go to a sandboxed temp file (trading repo rule #39).
 """
+
 from __future__ import annotations
 
 import types
@@ -28,10 +29,17 @@ def sandbox_db(tmp_path, monkeypatch):
 
 def _fill(st, sym: str, action: str, qty: float, price: float, status: str = "SIMULATED"):
     st.log_order(
-        intent_id=1, decision_id=None, mode="paper",
-        client_order_id=f"t-{sym}-{action}-{qty}-{price}-{status}", status=status,
-        symbol=sym, action=action, qty=qty, target_price=price,
-        fill_price=price, fill_qty=qty,
+        intent_id=1,
+        decision_id=None,
+        mode="paper",
+        client_order_id=f"t-{sym}-{action}-{qty}-{price}-{status}",
+        status=status,
+        symbol=sym,
+        action=action,
+        qty=qty,
+        target_price=price,
+        fill_price=price,
+        fill_qty=qty,
     )
 
 
@@ -44,6 +52,7 @@ def _snap(equity: float, watch_sym: str, watch_price: float) -> dict:
 
 
 # ─── paper_open_positions ─────────────────────────────────────────────────────
+
 
 def test_paper_open_positions_nets_buys_and_sells(sandbox_db):
     _fill(sandbox_db, "HOOD", "BUY", 10.0, 100.0)
@@ -67,6 +76,7 @@ def test_rejected_skipped_and_error_rows_create_no_position(sandbox_db):
 
 
 # ─── _estimate_qty must read the paper book in paper mode ─────────────────────
+
 
 def test_paper_sell_sizes_from_paper_book_not_real_holdings(sandbox_db):
     _fill(sandbox_db, "HOOD", "BUY", 5.0, 100.0)
@@ -100,9 +110,15 @@ def test_live_mode_still_sizes_from_real_holdings(sandbox_db):
 
 # ─── stop persistence ─────────────────────────────────────────────────────────
 
+
 def test_record_and_deactivate_stops(sandbox_db):
-    sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0,
-                           take_profit_price=108.0, volatility_tier="MEDIUM")
+    sandbox_db.record_stop(
+        symbol="HOOD",
+        entry_price=100.0,
+        stop_price=95.0,
+        take_profit_price=108.0,
+        volatility_tier="MEDIUM",
+    )
     stops = sandbox_db.active_stops()
     assert stops["HOOD"]["stop_price"] == pytest.approx(95.0)
     sandbox_db.deactivate_stops("HOOD")
@@ -140,29 +156,52 @@ def test_full_paper_close_retires_the_stop(sandbox_db, monkeypatch):
 
 # ─── stop re-anchor on partial SELL (audit HIGH fix) ──────────────────────────
 
+
 def test_partial_sell_reanchors_stop_to_remaining_avg_cost(sandbox_db):
     """A partial SELL (trim) must re-anchor the paper stop to the REMAINING position's
     avg cost — not leave the original BUY-time stop stale, and not retire it while shares
     remain. Regression for the audit HIGH: '_sync_paper_stop only retired on full close'."""
-    _fill(sandbox_db, "HOOD", "BUY", 10.0, 100.0)          # 10 @ $100
+    _fill(sandbox_db, "HOOD", "BUY", 10.0, 100.0)  # 10 @ $100
     sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
-    _fill(sandbox_db, "HOOD", "SELL", 4.0, 110.0)          # trim → 6 @ $100 avg still open
+    _fill(sandbox_db, "HOOD", "SELL", 4.0, 110.0)  # trim → 6 @ $100 avg still open
 
     sell = types.SimpleNamespace(action="SELL", symbol="HOOD", stop_loss=None, take_profit=None)
     execution._sync_paper_stop(sell, 110.0, None)
 
     stops = sandbox_db.active_stops()
-    assert "HOOD" in stops                                 # NOT retired — position still open
-    assert stops["HOOD"]["entry_price"] == 100.0           # avg cost, NOT the $110 sell price
-    assert stops["HOOD"]["stop_price"] == 95.0             # 100 * (1 - 5%) base band
+    assert "HOOD" in stops  # NOT retired — position still open
+    assert stops["HOOD"]["entry_price"] == 100.0  # avg cost, NOT the $110 sell price
+    assert stops["HOOD"]["stop_price"] == 95.0  # 100 * (1 - 5%) base band
+
+
+def test_partial_sell_preserves_existing_custom_stop_configuration(sandbox_db):
+    """A trim must not silently widen a custom or low-volatility stop."""
+    _fill(sandbox_db, "HOOD", "BUY", 10.0, 100.0)
+    sandbox_db.record_stop(
+        symbol="HOOD",
+        entry_price=100.0,
+        stop_price=97.0,
+        take_profit_price=104.8,
+        volatility_tier="LOW",
+    )
+    _fill(sandbox_db, "HOOD", "SELL", 4.0, 110.0)
+
+    sell = types.SimpleNamespace(action="SELL", symbol="HOOD", stop_loss=None, take_profit=None)
+    execution._sync_paper_stop(sell, 110.0, None)
+
+    stop = sandbox_db.active_stops()["HOOD"]
+    assert stop["entry_price"] == pytest.approx(100.0)
+    assert stop["stop_price"] == pytest.approx(97.0)
+    assert stop["take_profit_price"] == pytest.approx(104.8)
+    assert stop["volatility_tier"] == "LOW"
 
 
 def test_full_close_retires_stop(sandbox_db):
     """A full close (no shares remain) still retires the stop — unchanged behavior."""
     _fill(sandbox_db, "HOOD", "BUY", 10.0, 100.0)
     sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
-    _fill(sandbox_db, "HOOD", "SELL", 10.0, 110.0)         # full close
+    _fill(sandbox_db, "HOOD", "SELL", 10.0, 110.0)  # full close
 
     sell = types.SimpleNamespace(action="SELL", symbol="HOOD", stop_loss=None, take_profit=None)
     execution._sync_paper_stop(sell, 110.0, None)
-    assert "HOOD" not in sandbox_db.active_stops()         # retired
+    assert "HOOD" not in sandbox_db.active_stops()  # retired
