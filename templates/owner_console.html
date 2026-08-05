@@ -1318,7 +1318,7 @@ async function runMainDebate(){
       `<div style="font-size:18px;font-weight:600;color:${aCol}">$${_fmt(dec.price_target,2)}</div>` +
       `<div style="font-size:11px;opacity:.6">${dec.upside_pct>=0?'+':''}${_fmt(dec.upside_pct,1)}% target</div>` +
       `<div style="font-size:11px;opacity:.5">Stop −${_fmt(dec.stop_loss_pct,1)}%</div></div></div>` +
-      (()=>{const bw=Math.max(0,Math.min(100,Number(dec.bull_weight)||50));return `<div class="verdict-balance"><div class="vb-bull" style="width:${bw}%"></div><div class="vb-bear" style="width:${100-bw}%"></div></div><div class="vb-legend"><span style="color:var(--green)">🐂 Bull ${bw}%</span><span style="color:var(--red)">Bear ${100-bw}% 🐻</span></div>`;})();
+      (()=>{const bw=Math.max(0,Math.min(100,Number(dec.bull_weight??50)));return `<div class="verdict-balance"><div class="vb-bull" style="width:${bw}%"></div><div class="vb-bear" style="width:${100-bw}%"></div></div><div class="vb-legend"><span style="color:var(--green)">🐂 Bull ${bw}%</span><span style="color:var(--red)">Bear ${100-bw}% 🐻</span></div>`;})();
     const bullConf=Math.max(0,Math.min(100,Number(bull.confidence)||0));
     const bearConf=Math.max(0,Math.min(100,Number(bear.confidence)||0));
     document.getElementById('main-debate-bull').innerHTML=
