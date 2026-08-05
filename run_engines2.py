@@ -309,12 +309,14 @@ except Exception as e:
 # ── 6. Alpha benchmarks ───────────────────────────────────────────────────────
 print(f"\n{_t()} [6/8] Running alpha benchmarks...")
 try:
+    from alpha_reporting import format_alpha_percent
     from benchmarks import batch_alpha
     # batch_alpha takes list of ticker strings
     alpha_table = batch_alpha(symbols)
     results['alpha_table'] = alpha_table
     for a in (alpha_table or [])[:3]:
-        print(f"  {a.get('symbol') or a.get('ticker')}: vs_market_1m={a.get('vs_market_pct',0):+.1f}%")
+        print(f"  {a.get('symbol') or a.get('ticker')}: "
+              f"vs_market_1m={format_alpha_percent(a.get('vs_market_pct'))}")
 except Exception as e:
     print(f"  ERROR: {e}")
     traceback.print_exc()

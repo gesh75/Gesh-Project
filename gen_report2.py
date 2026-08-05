@@ -3,9 +3,10 @@
 import json
 import os
 from datetime import datetime, timezone
-from html import escape as _esc   # the report body f-string is bound to `html`, so alias
+from html import escape as _esc  # the report body f-string is bound to `html`, so alias
 from pathlib import Path
 
+from alpha_reporting import alpha_value_color, format_alpha_percent
 from run_manifest import report_output_path
 
 BASE = Path(__file__).parent
@@ -526,16 +527,16 @@ for sym in kelly_syms:
 alpha_rows = ''
 for a in (alpha_table or []):
     sym     = a.get('symbol') or a.get('ticker','?')
-    vs_mkt  = a.get('vs_market_pct', 0) or 0
-    vs_sec  = a.get('vs_sector_pct', 0) or 0
-    ret_1m  = a.get('stock_return_pct', 0) or 0
-    col_mkt = '#00e87a' if vs_mkt >= 0 else '#ff3c5a'
-    col_sec = '#00e87a' if vs_sec >= 0 else '#ff3c5a'
+    vs_mkt  = a.get('vs_market_pct')
+    vs_sec  = a.get('vs_sector_pct')
+    ret_1m  = a.get('stock_return_pct')
+    col_mkt = alpha_value_color(vs_mkt)
+    col_sec = alpha_value_color(vs_sec)
     alpha_rows += f'''<tr>
       <td>{sym}</td>
-      <td style="color:{col_mkt}">{vs_mkt:+.1f}%</td>
-      <td style="color:{col_sec}">{vs_sec:+.1f}%</td>
-      <td style="color:#aaa">{ret_1m:+.1f}%</td>
+      <td style="color:{col_mkt}">{format_alpha_percent(vs_mkt)}</td>
+      <td style="color:{col_sec}">{format_alpha_percent(vs_sec)}</td>
+      <td style="color:#aaa">{format_alpha_percent(ret_1m)}</td>
     </tr>'''
 
 # ─── Tax harvest ──────────────────────────────────────────────────────────────
