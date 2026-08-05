@@ -260,7 +260,11 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
     def fetch_for_symbol(sym: str) -> tuple[str, dict[str, Any], dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
         try:
             ticker = yf.Ticker(sym)
+        except Exception:
+            return sym, {}, {}, [], {}
 
+        info = None
+        try:
             info = ticker.info
             current = _safe(info.get("currentPrice") or info.get("regularMarketPrice"))
             mean = _safe(info.get("targetMeanPrice"))
@@ -282,7 +286,10 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
                 "reco_cls": reco_meta["cls"],
                 "upside_pct": upside,
             }
+        except Exception:
+            an = {}
 
+        try:
             hist = ticker.history(period="1y", auto_adjust=True)
             pe = {
                 "7d": _ret_from_hist(hist, 7),
@@ -291,7 +298,10 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
                 "1y": _ret_from_hist(hist, 365),
                 "ytd": _ytd_from_hist(hist),
             }
+        except Exception:
+            pe = {}
 
+        try:
             df = ticker.insider_transactions
             ins: list[dict[str, Any]] = []
             if df is not None and not df.empty:
@@ -323,7 +333,12 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
                         "date": dt,
                         "is_buy": is_buy,
                     })
+        except Exception:
+            ins = []
 
+        try:
+            if info is None:
+                raise ValueError("ticker info unavailable")
             inst_pct = _safe(info.get("institutionsPercentHeld"), 0) or 0
             insider_pct = _safe(info.get("heldPercentInsiders"), 0) or 0
             inst_pct = round(inst_pct * 100, 1)
@@ -349,9 +364,9 @@ def get_all_market_data(symbols: list[str]) -> dict[str, Any]:
                 "retail_pct": retail_pct,
                 "top_holders": top,
             }
-            return sym, an, pe, ins, own
         except Exception:
-            return sym, {}, {}, [], {}
+            own = {}
+        return sym, an, pe, ins, own
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(symbols) or 1, 10)) as executor:
         for sym, an, pe, ins, own in executor.map(fetch_for_symbol, symbols):
