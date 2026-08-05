@@ -22,3 +22,31 @@ gesh_report*.html
 engine_results.json
 live_portfolio_snapshot.json
 run_manifest.json
+# Credentials & live financial data — mirror .gitignore because Docker does not consult it
+.rh_session/
+*.session
+gesh_live_cache.json
+portfolio_live.json
+gesh_daily_log.json
+gesh_analysis_data.json
+latest_analysis.json
+last_analysis_snapshot.json
+last_action_plan.json
+gesh_auth.secret
+.logs/
+
+# Additional local runtime/cache artifacts from .gitignore
+.macro_cache.json
+.sentiment_cache.json
+.fear_greed_cache.json
+.margin_debt_cache.json
+llm_usage.jsonl
+.scratch/
+_to_delete/
+*.pre-v2.bak.manifest.json
+*.bak-*
+*.bak
+*.bak_*
+*.orig
+*.corrupt.*
+.fuse_hidden*
