@@ -267,6 +267,7 @@ def _customer_client(monkeypatch, card=None, boom=None, price=195.0):
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: "cust@x.com")
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
+    monkeypatch.setattr(server, "_consume_customer_quota", lambda email, event: None)
     # Patch the seam the handler ACTUALLY calls: /api/analyze-ticker resolves its
     # grounding quote via _latest_close_meta (Codex #6 added the provenance tuple),
     # and _latest_close is now only a thin wrapper over it. Stubbing the wrapper left
@@ -360,6 +361,22 @@ def test_route_llm_error_is_500_not_leak(monkeypatch):
     r = c.post("/api/analyze-ticker", json={"symbol": "AAPL"})
     assert r.status_code == 500
     assert "sk-secret" not in r.text  # _server_error hides internals
+
+
+def test_route_consumes_quota_before_post_spend_failure(monkeypatch):
+    """A failed provider/contract result must not become an unmetered paid attempt."""
+    calls = []
+    c = _customer_client(monkeypatch, boom=RuntimeError("invalid model response"))
+    monkeypatch.setattr(
+        server,
+        "_consume_customer_quota",
+        lambda email, event: calls.append((email, event)),
+    )
+
+    r = c.post("/api/analyze-ticker", json={"symbol": "BRK.B"})
+
+    assert r.status_code == 500
+    assert calls == [("cust@x.com", "ticker_card")]
 
 
 def test_route_rejects_anonymous_when_wall_on(monkeypatch):

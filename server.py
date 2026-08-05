@@ -4257,6 +4257,40 @@ def _check_customer_quota(email: str | None, event: str) -> None:
         )
 
 
+def _consume_customer_quota(email: str | None, event: str) -> None:
+    """Atomically consume a paid-request slot before starting provider work.
+
+    A completed reservation deliberately remains chargeable when the provider or
+    a post-response contract check fails: the external LLM spend has already been
+    authorized for this attempt. Owners and other unlimited callers remain exempt.
+    """
+    try:
+        limit = _customer_quota_limit(email, event)
+        if limit <= 0:
+            return
+        user_id = auth_users.resolve_user_id(email or "")
+        if not user_id:
+            raise RuntimeError("active customer account could not be resolved")
+        reservation_id = f"{event}:{uuid.uuid4()}"
+        if not auth_users.reserve_usage(user_id, event, reservation_id, limit):
+            raise HTTPException(
+                status_code=429,
+                detail=f"Daily AI analysis limit reached ({limit}/24h) — cached results "
+                f"remain free; the limit resets on a rolling 24-hour window.",
+            )
+        if not auth_users.complete_usage(reservation_id, user_id):
+            raise RuntimeError("usage reservation could not be completed")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning(
+            "quota reservation unavailable (%s/%s) — denying spend (fail-closed)", email, event
+        )
+        raise HTTPException(
+            status_code=503, detail="Usage metering temporarily unavailable — please retry shortly."
+        )
+
+
 # Short-TTL shared cache for the single-ticker AI card. The card is PUBLIC per-ticker
 # research (no per-customer data), so a process-wide cache is correct and stops a hot
 # ticker from re-spending on Claude every request.
@@ -4406,6 +4440,10 @@ async def analyze_ticker_endpoint(request: Request):
                     detail=f"Price rejected as unreliable — {reason}. "
                     "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).",
                 )
+            # Debit atomically at the last pre-provider boundary. The completed
+            # reservation still counts if Claude or strict response validation
+            # fails after tokens have been spent.
+            _consume_customer_quota(_session_email(request), "ticker_card")
             card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
             # Warn-only default: mark the DECISION output when the grounding quote is
             # cross-source-suspect — the card was built on this price, so the user must see it.
@@ -4440,7 +4478,6 @@ async def analyze_ticker_endpoint(request: Request):
                 # −18.1%" for the same symbol off the same snapshot (audit BUG-03).
                 card["reconciliation"] = _reconcile_card(sym, card)
             _ticker_card_store(sym, card)
-            auth_users.log_usage(_session_email(request), "ticker_card", sym)
             return {"status": "ok", "data": card, "cached": False}
     except HTTPException:
         raise
