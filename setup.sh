@@ -61,7 +61,9 @@ echo "✅ Dependencies installed"
 
 # .env setup
 if [ ! -f ".env" ]; then
-  cp .env.example .env
+  # Credentials are added below, so never create this file with the template's
+  # typically world-readable permissions.
+  install -m 600 .env.example .env
   echo ""
   echo "⚠️  ACTION REQUIRED:"
   echo "   Edit .env and fill in your own credentials:"
@@ -75,6 +77,8 @@ if [ ! -f ".env" ]; then
   echo ""
   read -p "   Press Enter after editing .env to continue..." _
 else
+  # Also repair permissions from setup runs made before secure creation.
+  chmod 600 .env
   echo "✅ .env already exists"
 fi
 

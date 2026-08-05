@@ -545,6 +545,32 @@ def test_setup_accepts_existing_venv_312(tmp_path):
     assert proc.returncode == 0
 
 
+def test_setup_creates_env_with_owner_only_permissions(tmp_path):
+    """setup.sh must not expose the credentials subsequently written to .env."""
+    h = _create_setup_harness(tmp_path, declared="3.12", venv_version="3.12")
+    (tmp_path / ".env").unlink()
+    env_example = tmp_path / ".env.example"
+    env_example.write_text("ROBINHOOD_USER=your_robinhood_email@example.com\n")
+    env_example.chmod(0o644)
+    setup_script = tmp_path / "setup.sh"
+    shutil.copy(REPO / "setup.sh", setup_script)
+    setup_script.chmod(0o755)
+
+    env = os.environ.copy()
+    env["PATH"] = str(h["fakebin"]) + ":" + env.get("PATH", "")
+
+    subprocess.run(
+        ["bash", str(setup_script)],
+        cwd=tmp_path,
+        env=env,
+        input="\n",
+        capture_output=True,
+        text=True,
+    )
+
+    assert (tmp_path / ".env").stat().st_mode & 0o777 == 0o600
+
+
 def test_run_daily_rejects_fake_venv_314_before_lock(tmp_path):
     """A temp copy of run_daily_analysis.sh must reject a 3.14 venv (rc 1) before
     it reaches any lock/mkdir step. The fake mkdir (first in PATH) writes a
