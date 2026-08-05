@@ -19,6 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+import llm_gateway
 import price_source  # locked yf.download adapter (thread-safety)
 
 # ─── FD-leak safety net: raise per-process file descriptor limit ──────────────
@@ -4837,7 +4838,10 @@ def _deep_analyze_for_book(
             # same FV convention Kelly recomputes on read.
             return fair_value.canonicalize_analysis(analysis)
         except RuntimeError as e:
-            if "truncated" in str(e).lower() and cap != caps[-1]:
+            is_truncated = isinstance(e, llm_gateway.LLMTruncatedError) or (
+                "truncated" in str(e).lower()
+            )
+            if is_truncated and cap != caps[-1]:
                 logger.warning(
                     "mybook deep analysis truncated at %d holdings — retrying smaller",
                     cap,

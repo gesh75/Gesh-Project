@@ -75,9 +75,10 @@ def test_stale_generation_cannot_publish_over_newer_job(au) -> None:
     assert au.start_mybook_job(user_id, new_id, "fp-new", "book_analysis", 10)["accepted"]
     assert au.finish_mybook_job(user_id, new_id, "fp-new", "done", result={"generation": "new"})
 
-    assert au.finish_mybook_job(
-        user_id, old_id, "fp-old", "done", result={"generation": "old"}
-    ) is False
+    assert (
+        au.finish_mybook_job(user_id, old_id, "fp-old", "done", result={"generation": "old"})
+        is False
+    )
     assert au.get_latest_mybook_job(user_id)["result"] == {"generation": "new"}
 
 
@@ -129,6 +130,33 @@ def test_large_book_gives_llm_full_book_summary_and_explicit_coverage(
     assert len(seen["all_holdings_summary"]) == 10
     assert seen["book_meta"]["portfolio_scope_source"] == "all_holdings_summary"
     assert result["detailed_coverage"] == {"analyzed": 8, "total": 10}
+
+
+def test_deep_analyze_for_book_typed_truncation_retries_smaller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import llm_gateway
+    import server
+
+    holdings = [{"symbol": f"S{i}", "equity": 100 - i} for i in range(8)]
+    payload = {"holdings": holdings}
+    truncated = {"analyzed": len(holdings)}
+    attempted_caps: list[int] = []
+
+    def deep(analysis_payload, **kwargs):
+        attempted_caps.append(len(analysis_payload["holdings"]))
+        if len(attempted_caps) == 1:
+            raise llm_gateway.LLMTruncatedError("AI response exceeded its configured output limit")
+        return {"holdings_analysis": []}
+
+    monkeypatch.setattr(server, "deep_analyze_portfolio", deep)
+    monkeypatch.setattr(server.fair_value, "canonicalize_analysis", lambda result: result)
+
+    result = server._deep_analyze_for_book(payload, None, truncated)
+
+    assert result == {"holdings_analysis": []}
+    assert attempted_caps == [8, 6]
+    assert truncated["analyzed"] == 6
 
 
 # ── [CLAUDE V5 2026-07-19] reservation transitions are tenant-scoped ────────────
