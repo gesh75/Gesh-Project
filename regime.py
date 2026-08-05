@@ -27,15 +27,15 @@ Feature (v2): FRED Macro Layer
 from __future__ import annotations
 
 import json
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
 import yfinance as yf
-import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 
+import price_source  # Yahoo primary, Robinhood fallback (price_source.py)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 LOOKBACK_DAYS = 200    # calendar days of history to fetch
@@ -350,11 +350,14 @@ def detect_regimes(symbols: list[str]) -> dict[str, Any]:
             series = raw[col]
             # A 1-symbol request still yields (field, ticker) MultiIndex columns
             # (both yfinance and the RH fallback's multi-symbol path) — select
-            # the ticker column when present, else squeeze the 1-col frame.
+            # the ticker column when present. A multi-symbol response may be
+            # partial, so never substitute another ticker when sym is absent.
             # The old single-symbol branch returned a (n,1) 2-D array here,
             # which kept every ADX/BB op array-shaped until float() exploded.
             if hasattr(series, "columns"):
-                series = series[sym] if sym in series.columns else series.squeeze()
+                if sym not in series.columns:
+                    return np.array([])
+                series = series[sym]
             return series.dropna().values.astype(float)
         except Exception:
             return np.array([])
