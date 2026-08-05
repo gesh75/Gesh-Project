@@ -3226,6 +3226,8 @@ def regime_endpoint(force_live: bool = False, request: Request = None):  # noqa:
         ran = eng.get("regime_ran_at")
     except Exception:
         pass
+    if not isinstance(cached, dict):
+        cached = None
 
     if not force_live and cached and cached.get("regimes") and ran:
         try:
