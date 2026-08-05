@@ -8,6 +8,7 @@ CONFIRMED once the new verdict has persisted ``persistence_days`` consecutive
 snapshots — day-to-day whiplash is the #1 credibility complaint against
 score-based competitors, so raw one-day flips are never surfaced.
 """
+
 from __future__ import annotations
 
 import logging
@@ -84,15 +85,18 @@ def record_snapshots(rows: list[dict], date: str | None = None) -> int:
             verdict = str(r.get("verdict") or "").strip()
             if not sym or not verdict:
                 continue
+            try:
+                score = float(r["score"]) if r.get("score") is not None else None
+                confidence = float(r["confidence"]) if r.get("confidence") is not None else None
+            except (TypeError, ValueError):
+                continue
             con.execute(
                 "INSERT INTO signal_history (symbol, date, verdict, score, confidence) "
                 "VALUES (?,?,?,?,?) ON CONFLICT(symbol, date) DO UPDATE SET "
                 "verdict=excluded.verdict, score=excluded.score, "
                 "confidence=excluded.confidence",
-                (sym, day,
-                 verdict,
-                 float(r["score"]) if r.get("score") is not None else None,
-                 float(r["confidence"]) if r.get("confidence") is not None else None))
+                (sym, day, verdict, score, confidence),
+            )
             written += 1
     return written
 
@@ -102,7 +106,8 @@ def get_history(symbol: str, days: int = 30) -> list[dict]:
         rows = con.execute(
             "SELECT date, verdict, score, confidence FROM signal_history "
             "WHERE symbol=? ORDER BY date DESC LIMIT ?",
-            (symbol.upper().strip(), max(1, days))).fetchall()
+            (symbol.upper().strip(), max(1, days)),
+        ).fetchall()
     return [dict(r) for r in reversed(rows)]
 
 
@@ -117,15 +122,19 @@ def detect_confirmed_flips(symbols: list[str], persistence_days: int = 2) -> lis
         streak = hist[-persistence_days:]
         new_verdict = streak[0]["verdict"]
         if any(h["verdict"] != new_verdict for h in streak):
-            continue                      # streak not uniform → not confirmed
+            continue  # streak not uniform → not confirmed
         prior = hist[-(persistence_days + 1)]
         if prior["verdict"] == new_verdict:
-            continue                      # no change at the streak boundary
-        flips.append({"symbol": sym.upper().strip(),
-                      "prior_verdict": prior["verdict"],
-                      "new_verdict": new_verdict,
-                      "score": streak[-1]["score"],
-                      "confirmed_since": streak[0]["date"]})
+            continue  # no change at the streak boundary
+        flips.append(
+            {
+                "symbol": sym.upper().strip(),
+                "prior_verdict": prior["verdict"],
+                "new_verdict": new_verdict,
+                "score": streak[-1]["score"],
+                "confirmed_since": streak[0]["date"],
+            }
+        )
     return flips
 
 
@@ -145,8 +154,15 @@ def record_confirmed_flips(symbols: list[str], persistence_days: int = 2) -> lis
                 "INSERT OR IGNORE INTO signal_flips "
                 "(symbol, prior_verdict, new_verdict, confirmed_date, score, created_at) "
                 "VALUES (?,?,?,?,?,?)",
-                (f["symbol"], f["prior_verdict"], f["new_verdict"],
-                 f["confirmed_since"], f["score"], now))
+                (
+                    f["symbol"],
+                    f["prior_verdict"],
+                    f["new_verdict"],
+                    f["confirmed_since"],
+                    f["score"],
+                    now,
+                ),
+            )
             if cur.rowcount:
                 new.append(f)
     return new
@@ -165,8 +181,16 @@ def flips_since(symbols: list[str], since_date: str) -> list[dict]:
         rows = con.execute(
             "SELECT symbol, prior_verdict, new_verdict, confirmed_date, score "
             "FROM signal_flips WHERE confirmed_date >= ? ORDER BY confirmed_date, symbol",
-            (since_date,)).fetchall()
-    return [{"symbol": r["symbol"], "prior_verdict": r["prior_verdict"],
-             "new_verdict": r["new_verdict"], "confirmed_since": r["confirmed_date"],
-             "score": r["score"]}
-            for r in rows if r["symbol"] in want]
+            (since_date,),
+        ).fetchall()
+    return [
+        {
+            "symbol": r["symbol"],
+            "prior_verdict": r["prior_verdict"],
+            "new_verdict": r["new_verdict"],
+            "confirmed_since": r["confirmed_date"],
+            "score": r["score"],
+        }
+        for r in rows
+        if r["symbol"] in want
+    ]

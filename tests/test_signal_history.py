@@ -4,6 +4,7 @@ The flip detector implements the anti-flapping rule from the 2026-07 product
 research (Danelfin's #1 Trustpilot complaint is day-to-day rating whiplash):
 a verdict change only counts once it has persisted N consecutive snapshots.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -64,6 +65,24 @@ def test_flip_detector_ignores_symbols_with_short_history():
 
 
 def test_bad_rows_skipped_not_fatal():
-    n = sh.record_snapshots([_row("NVDA", "BUY"), {"symbol": "", "verdict": "X"},
-                             {"no": "symbol"}], date="2026-07-15")
+    n = sh.record_snapshots(
+        [_row("NVDA", "BUY"), {"symbol": "", "verdict": "X"}, {"no": "symbol"}], date="2026-07-15"
+    )
     assert n == 1
+
+
+@pytest.mark.parametrize("field", ["score", "confidence"])
+@pytest.mark.parametrize("value", ["not-a-number", object()])
+def test_record_snapshots_malformed_numeric_skips_row(field, value):
+    malformed = _row("BAD", "BUY")
+    malformed[field] = value
+
+    n = sh.record_snapshots(
+        [_row("NVDA", "BUY"), malformed, _row("AAPL", "HOLD")],
+        date="2026-07-15",
+    )
+
+    assert n == 2
+    assert sh.get_history("BAD") == []
+    assert sh.get_history("NVDA")[0]["verdict"] == "BUY"
+    assert sh.get_history("AAPL")[0]["verdict"] == "HOLD"
