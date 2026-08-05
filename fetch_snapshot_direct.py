@@ -5,8 +5,8 @@ fetch_snapshot_direct.py — LLM-free snapshot fetch for the GESH daily chain.
 Replaces the `claude -p` MCP courier (fetch_snapshot_mcp.sh) with a direct,
 deterministic MCP client: OAuth (PKCE + dynamic client registration) against
 Robinhood's agent MCP, then three tool calls (get_portfolio,
-get_equity_positions, get_equity_quotes). Writes /tmp/gesh_mcp_raw.json in the
-EXACT schema build_snapshot_from_mcp.py consumes, then runs that builder.
+get_equity_positions, get_equity_quotes). Writes a short-lived private raw dump
+in the EXACT schema build_snapshot_from_mcp.py consumes, then runs that builder.
 
 Why: the claude-CLI path dies with the Claude subscription (OAuth lives in the
 CLI's Keychain entry). This client owns its own tokens (.rh_mcp_oauth.json,
@@ -18,6 +18,7 @@ Daily use (exit 0 = live_portfolio_snapshot.json written; non-zero = caller
 falls back to fetch_snapshot_mcp.sh / legacy pickle):
     python3 fetch_snapshot_direct.py
 """
+
 from __future__ import annotations
 
 import base64
@@ -28,6 +29,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -35,7 +37,6 @@ import webbrowser
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
-RAW = Path("/tmp/gesh_mcp_raw.json")
 TOKEN_FILE = BASE_DIR / ".rh_mcp_oauth.json"
 BUILDER = BASE_DIR / "build_snapshot_from_mcp.py"
 
@@ -44,6 +45,7 @@ REGISTER_URL = "https://agent.robinhood.com/oauth/trading/register"
 AUTH_URL = "https://robinhood.com/oauth"
 TOKEN_URL = "https://api.robinhood.com/oauth2/token/"
 SCOPE = "internal"
+
 
 def _account_number() -> str:
     """
@@ -67,7 +69,8 @@ def _account_number() -> str:
     if not acct:
         raise SystemExit(
             "[direct] GESH_RH_ACCOUNT not set — export it, or add "
-            f"GESH_RH_ACCOUNT=... to {BASE_DIR / '.env'} (gitignored)")
+            f"GESH_RH_ACCOUNT=... to {BASE_DIR / '.env'} (gitignored)"
+        )
     return acct
 
 
@@ -77,8 +80,14 @@ UA = {"User-Agent": "gesh-snapshot-direct/1.0"}
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
-def _req(url: str, *, data: dict | None = None, headers: dict | None = None,
-         form: bool = False, timeout: int = 30) -> tuple[int, dict, dict]:
+def _req(
+    url: str,
+    *,
+    data: dict | None = None,
+    headers: dict | None = None,
+    form: bool = False,
+    timeout: int = 30,
+) -> tuple[int, dict, dict]:
     """Minimal urllib POST/GET. Returns (status, headers, parsed_json_or_{})."""
     hdrs = dict(UA)
     hdrs.update(headers or {})
@@ -131,14 +140,17 @@ def _load_tokens() -> dict:
 
 
 def _register_client(redirect_uri: str) -> dict:
-    status, _, body = _req(REGISTER_URL, data={
-        "client_name": "gesh-snapshot-direct",
-        "redirect_uris": [redirect_uri],
-        "grant_types": ["authorization_code", "refresh_token"],
-        "response_types": ["code"],
-        "token_endpoint_auth_method": "none",
-        "scope": SCOPE,
-    })
+    status, _, body = _req(
+        REGISTER_URL,
+        data={
+            "client_name": "gesh-snapshot-direct",
+            "redirect_uris": [redirect_uri],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+            "scope": SCOPE,
+        },
+    )
     if status not in (200, 201) or not body.get("client_id"):
         raise SystemExit(f"[direct] dynamic client registration failed: HTTP {status} {body}")
     return body
@@ -147,6 +159,7 @@ def _register_client(redirect_uri: str) -> dict:
 def _auth_flow() -> None:
     """One-time interactive flow: register (fresh), browser login, callback."""
     import socket
+
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
@@ -154,13 +167,16 @@ def _auth_flow() -> None:
     redirect_uri = f"http://127.0.0.1:{port}/callback"
     client_id = _register_client(redirect_uri)["client_id"]
     verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    )
     state = secrets.token_urlsafe(16)
-    url = (f"{AUTH_URL}?response_type=code&client_id={client_id}"
-           f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
-           f"&code_challenge={challenge}&code_challenge_method=S256"
-           f"&scope={SCOPE}&state={state}")
+    url = (
+        f"{AUTH_URL}?response_type=code&client_id={client_id}"
+        f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
+        f"&code_challenge={challenge}&code_challenge_method=S256"
+        f"&scope={SCOPE}&state={state}"
+    )
 
     got: dict = {}
 
@@ -182,8 +198,10 @@ def _auth_flow() -> None:
 
     srv = http.server.HTTPServer(("127.0.0.1", port), Handler)
     srv.timeout = 300
-    print(f"[direct] opening browser for Robinhood login…\n  {url}\n"
-          f"  (waiting up to 5 min on {redirect_uri})")
+    print(
+        f"[direct] opening browser for Robinhood login…\n  {url}\n"
+        f"  (waiting up to 5 min on {redirect_uri})"
+    )
     webbrowser.open(url)
     deadline = time.time() + 300
     while "code" not in got and time.time() < deadline:
@@ -191,13 +209,17 @@ def _auth_flow() -> None:
     if "code" not in got:
         raise SystemExit("[direct] no auth code received within 5 minutes — aborting")
 
-    status, _, body = _req(TOKEN_URL, form=True, data={
-        "grant_type": "authorization_code",
-        "code": got["code"],
-        "redirect_uri": redirect_uri,
-        "client_id": client_id,
-        "code_verifier": verifier,
-    })
+    status, _, body = _req(
+        TOKEN_URL,
+        form=True,
+        data={
+            "grant_type": "authorization_code",
+            "code": got["code"],
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": verifier,
+        },
+    )
     if status != 200 or not body.get("access_token"):
         raise SystemExit(f"[direct] code exchange failed: HTTP {status} {body}")
     body["client_id"] = client_id
@@ -208,16 +230,22 @@ def _auth_flow() -> None:
 def _access_token() -> str:
     t = _load_tokens()
     if not t.get("client_id"):
-        raise SystemExit("[direct] not authenticated — run: python3 fetch_snapshot_direct.py --auth")
+        raise SystemExit(
+            "[direct] not authenticated — run: python3 fetch_snapshot_direct.py --auth"
+        )
     if t.get("access_token") and time.time() < t.get("expires_at", 0):
         return t["access_token"]
     if not t.get("refresh_token"):
         raise SystemExit("[direct] token expired and no refresh_token — re-run --auth")
-    status, _, body = _req(TOKEN_URL, form=True, data={
-        "grant_type": "refresh_token",
-        "refresh_token": t["refresh_token"],
-        "client_id": t["client_id"],
-    })
+    status, _, body = _req(
+        TOKEN_URL,
+        form=True,
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": t["refresh_token"],
+            "client_id": t["client_id"],
+        },
+    )
     if status != 200 or not body.get("access_token"):
         raise SystemExit(f"[direct] refresh failed (HTTP {status}) — re-run --auth")
     body.setdefault("refresh_token", t["refresh_token"])
@@ -242,9 +270,15 @@ class Mcp:
         if self.session:
             hdrs["Mcp-Session-Id"] = self.session
         status, resp_headers, body = _req(
-            MCP_URL, headers=hdrs,
-            data={"jsonrpc": "2.0", "id": self._id, "method": method,
-                  **({"params": params} if params is not None else {})})
+            MCP_URL,
+            headers=hdrs,
+            data={
+                "jsonrpc": "2.0",
+                "id": self._id,
+                "method": method,
+                **({"params": params} if params is not None else {}),
+            },
+        )
         if status == 401:
             raise SystemExit("[direct] 401 from MCP (token rejected) — re-run --auth")
         if status >= 400:
@@ -268,29 +302,40 @@ class Mcp:
         raise RuntimeError(f"[direct] tool {name}: no JSON payload in {json.dumps(result)[:300]}")
 
     def notify_initialized(self) -> None:
-        hdrs = {"Accept": "application/json, text/event-stream",
-                "Authorization": f"Bearer {self.token}"}
+        hdrs = {
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {self.token}",
+        }
         if self.session:
             hdrs["Mcp-Session-Id"] = self.session
-        _req(MCP_URL, headers=hdrs,
-             data={"jsonrpc": "2.0", "method": "notifications/initialized"})
+        _req(MCP_URL, headers=hdrs, data={"jsonrpc": "2.0", "method": "notifications/initialized"})
 
 
 def fetch() -> None:
     token = _access_token()
     mcp = Mcp(token)
-    mcp.call("initialize", {
-        "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": {},
-        "clientInfo": {"name": "gesh-snapshot-direct", "version": "1.0"},
-    })
+    mcp.call(
+        "initialize",
+        {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "gesh-snapshot-direct", "version": "1.0"},
+        },
+    )
     mcp.notify_initialized()
 
     portfolio = mcp.tool("get_portfolio", {"account_number": ACCT})
     positions = mcp.tool("get_equity_positions", {"account_number": ACCT})
-    symbols = [p.get("symbol") for p in positions.get("data", {}).get("positions", [])
-               if isinstance(p, dict) and p.get("symbol")]
-    quotes = mcp.tool("get_equity_quotes", {"symbols": symbols}) if symbols else {"data": {"results": []}}
+    symbols = [
+        p.get("symbol")
+        for p in positions.get("data", {}).get("positions", [])
+        if isinstance(p, dict) and p.get("symbol")
+    ]
+    quotes = (
+        mcp.tool("get_equity_quotes", {"symbols": symbols})
+        if symbols
+        else {"data": {"results": []}}
+    )
 
     raw = {
         "fetched_account": ACCT,
@@ -298,13 +343,20 @@ def fetch() -> None:
         "positions": positions.get("data", {}).get("positions", []),
         "quotes": quotes.get("data", {}).get("results", []),
     }
-    RAW.write_text(json.dumps(raw))
-    print(f"[direct] raw dump: {len(raw['positions'])} positions, "
-          f"{len(raw['quotes'])} quotes -> {RAW}")
-
-    r = subprocess.run([sys.executable, str(BUILDER)], cwd=BASE_DIR)
-    if r.returncode != 0:
-        raise SystemExit("[direct] build_snapshot_from_mcp.py failed")
+    with tempfile.TemporaryDirectory(prefix="gesh-mcp-") as raw_dir:
+        raw_path = Path(raw_dir) / "snapshot.json"
+        raw_path.write_text(json.dumps(raw))
+        raw_path.chmod(0o600)
+        print(
+            f"[direct] raw dump: {len(raw['positions'])} positions, "
+            f"{len(raw['quotes'])} quotes -> private temporary file"
+        )
+        r = subprocess.run(
+            [sys.executable, str(BUILDER), str(raw_path)],
+            cwd=BASE_DIR,
+        )
+        if r.returncode != 0:
+            raise SystemExit("[direct] build_snapshot_from_mcp.py failed")
     print("[direct] snapshot built OK")
 
 

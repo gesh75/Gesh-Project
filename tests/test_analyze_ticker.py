@@ -376,6 +376,26 @@ def test_route_llm_error_is_500_not_leak(monkeypatch):
     )  # failed flights do not live forever
 
 
+def test_route_meters_quota_before_post_spend_failure(monkeypatch):
+    """A failed provider/contract result must not become an unmetered paid attempt."""
+    completed = []
+    c = _customer_client(monkeypatch, boom=RuntimeError("invalid model response"))
+    monkeypatch.setenv("QUOTA_DAILY_TICKER_CARD", "25")
+    monkeypatch.setattr(server.auth_users, "is_owner", lambda e: False)
+    monkeypatch.setattr(server.auth_users, "get_tier", lambda e: "observer")
+    monkeypatch.setattr(
+        server.auth_users,
+        "complete_usage",
+        lambda job_id, user_id: completed.append((job_id, user_id)) or True,
+    )
+
+    r = c.post("/api/analyze-ticker", json={"symbol": "BRK.B"})
+
+    assert r.status_code == 500
+    assert len(completed) == 1
+    assert completed[0][0].startswith("ticker_card:")
+
+
 def test_route_rejects_anonymous_when_wall_on(monkeypatch):
     """Never an open LLM-spend surface: wall ON + no session → 401, and the model
     is never invoked (no spend)."""

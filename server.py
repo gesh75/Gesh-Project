@@ -1549,6 +1549,8 @@ async def preferences_set(request: Request):
         body = await request.json()
     except Exception:
         body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "alerts_opt_out" in body:
         auth_users.set_alerts_opt_out(email, bool(body["alerts_opt_out"]))
     if "digest_opt_out" in body:
@@ -1729,8 +1731,8 @@ def pricing_page():
     avoids charging Trader/Desk prices for the same product. Re-introduce tiers once
     per-tier entitlement gating exists (Phase 2). Checkout URL + price from env; no card
     data ever touches this server."""
-    import os as _os
     import html as _h
+    import os as _os
 
     # These come from operator-set env vars and are interpolated into HTML below;
     # escape them (defense-in-depth) so a stray quote in a checkout URL / plan name
@@ -2457,9 +2459,7 @@ def _engine_holdings(payload: dict) -> tuple[list[dict], list[str]]:
     `current_price`."""
     holdings = payload.get("holdings") or []
     valid = [h for h in holdings if _is_real_observation(h)]
-    degraded = [
-        str(h.get("symbol", "")) for h in holdings if not _is_real_observation(h)
-    ]
+    degraded = [str(h.get("symbol", "")) for h in holdings if not _is_real_observation(h)]
     return valid, degraded
 
 
@@ -2504,9 +2504,9 @@ def _chart_cache_put(key: tuple[str, str], now: float, result: dict) -> None:
     without this it grows for every distinct symbol/range for the process's life."""
     with _chart_cache_lock:
         _chart_cache[key] = (now, result)
-        for k in [k for k, (ts, _) in _chart_cache.items()
-                  if (now - ts) >= CHART_TTL_SEC]:
+        for k in [k for k, (ts, _) in _chart_cache.items() if (now - ts) >= CHART_TTL_SEC]:
             del _chart_cache[k]
+
 
 # Per-ticker analyze GETs (regime/fundamentals/analyst/news) cache. Watchlist
 # chips make repeat clicks on the same symbol the common pattern, and every miss
@@ -2552,8 +2552,9 @@ def _ticker_get_store(bucket: str, sym: str, resp: dict) -> dict:
         # (bucket, symbol) pairs queried within the last TTL window — otherwise a
         # user cycling Analyze tabs across many tickers leaks entries for the life
         # of the always-on process.
-        for k in [k for k, (ts, _) in _ticker_get_cache.items()
-                  if (now - ts) >= TICKER_GET_TTL_SEC]:
+        for k in [
+            k for k, (ts, _) in _ticker_get_cache.items() if (now - ts) >= TICKER_GET_TTL_SEC
+        ]:
             del _ticker_get_cache[k]
     return resp
 
@@ -4459,6 +4460,42 @@ def _release_customer_quota(reservation: tuple[str, str] | None) -> None:
         logger.warning("quota reservation release failed: %s", reservation[1])
 
 
+def _consume_customer_quota(email: str | None, event: str) -> None:
+    """Atomically consume a paid-request slot before starting provider work.
+
+    A completed reservation deliberately remains chargeable when the provider or
+    a post-response contract check fails: the external LLM spend has already been
+    authorized for this attempt. Owners and other unlimited callers remain exempt.
+    """
+    reservation = _reserve_customer_quota(email, event)
+    if reservation is None:
+        return
+    user_id, reservation_id = reservation
+    try:
+        completed = auth_users.complete_usage(reservation_id, user_id)
+    except Exception:
+        completed = False
+    if not completed:
+        # Fail closed: do not start paid work with an incomplete meter write.
+        _release_customer_quota(reservation)
+        raise HTTPException(
+            status_code=503, detail="Usage metering temporarily unavailable — please retry shortly."
+        )
+
+
+def _complete_customer_quota(reservation: tuple[str, str] | None) -> None:
+    """Mark a reserved slot completed so later provider failures stay metered."""
+    if reservation is None:
+        return
+    user_id, reservation_id = reservation
+    try:
+        completed = auth_users.complete_usage(reservation_id, user_id)
+    except Exception:
+        completed = False
+    if not completed:
+        logger.warning("ticker-card quota reservation completion failed: %s", reservation_id)
+
+
 # Short-TTL per-user cache for the single-ticker AI card. Although the card content
 # is public per-ticker research, sharing cache metadata across users reveals that
 # another customer recently researched a guessed symbol. Scope both cached cards and
@@ -4639,6 +4676,11 @@ async def analyze_ticker_endpoint(request: Request):
                         detail=f"Price rejected as unreliable — {reason}. "
                         "Strict price-quality mode is on (GESH_REJECT_SUSPECT_PRICES).",
                     )
+                # Debit at the last pre-provider boundary. Once completed, a later
+                # Claude/contract failure remains chargeable (do not release).
+                charged_reservation = reservation
+                reservation = None
+                _complete_customer_quota(charged_reservation)
                 card = await asyncio.to_thread(deep_analyze_ticker, sym, price)
                 # Warn-only default: mark the DECISION output when the grounding quote is
                 # cross-source-suspect — the card was built on this price, so the user must see it.
@@ -4673,21 +4715,8 @@ async def analyze_ticker_endpoint(request: Request):
                     # −18.1%" for the same symbol off the same snapshot (audit BUG-03).
                     card["reconciliation"] = _reconcile_card(sym, card)
                 _ticker_card_store(cache_key, card)
-                if reservation is None:
+                if charged_reservation is None:
                     auth_users.log_usage(email, "ticker_card", sym)
-                else:
-                    user_id, reservation_id = reservation
-                    # Paid work has happened: never release this slot, even if the
-                    # cosmetic reserved→completed transition temporarily fails.
-                    reservation = None
-                    try:
-                        completed = auth_users.complete_usage(reservation_id, user_id)
-                    except Exception:
-                        completed = False
-                    if not completed:
-                        logger.warning(
-                            "ticker-card quota reservation completion failed: %s", reservation_id
-                        )
                 return {"status": "ok", "data": card, "cached": False}
         finally:
             _ticker_card_leave_flight(cache_key, flight)
