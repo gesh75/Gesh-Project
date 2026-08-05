@@ -517,16 +517,17 @@ def yf_download(
     interval: str = "1d",
     auto_adjust: bool = True,
     progress: bool = False,
+    use_cache: bool = True,
     **kwargs: object,
 ) -> pd.DataFrame | None:
     """Cached drop-in for ``yfinance.download`` (Yahoo primary, RH fallback).
 
     Period-based historical frames are memoized for ``_YF_CACHE_TTL_S`` to cut
     redundant Yahoo hits across engines in a single daily-chain run. Ranged
-    (start/end) queries bypass the cache. Only frames with real (non-NaN)
-    Close data are cached.
+    (start/end) queries and calls with ``use_cache=False`` bypass the cache.
+    Only frames with real (non-NaN) Close data are cached.
     """
-    cacheable = start is None and end is None
+    cacheable = use_cache and start is None and end is None
     key = None
     if cacheable:
         sym_key = tuple(symbols) if isinstance(symbols, (list, tuple)) else symbols
