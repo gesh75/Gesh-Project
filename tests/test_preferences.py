@@ -3,6 +3,7 @@ unsubscribe pages (/alerts/unsubscribe, /digest/unsubscribe) promise but that
 did not exist until now (audit finding #3). Wires the existing
 auth_users.set_alerts_opt_out/set_digest_opt_out/get_* helpers behind a
 session-gated pair of routes; only keys present in the POST body change."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,6 +15,7 @@ from starlette.testclient import TestClient
 @pytest.fixture
 def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
+
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
     # [CLAUDE 2026-07-18] immutable-user-ID migration: watchlist/book/tokens now
@@ -28,6 +30,7 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture
 def client(au, monkeypatch):
     import server
+
     monkeypatch.setattr(server.auth_users, "AUTH_DB_PATH", au.AUTH_DB_PATH)
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     return server, TestClient(server.app, raise_server_exceptions=False)
@@ -36,8 +39,9 @@ def client(au, monkeypatch):
 def _as(server, monkeypatch, email):
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: email)
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(server.auth_users, "is_owner",
-                        lambda e: e == "georgy75@gmail.com", raising=False)
+    monkeypatch.setattr(
+        server.auth_users, "is_owner", lambda e: e == "georgy75@gmail.com", raising=False
+    )
 
 
 def test_get_defaults_both_flags_false(client, monkeypatch):
@@ -74,6 +78,18 @@ def test_post_partial_body_only_changes_provided_key(client, monkeypatch, au):
     assert au.get_alerts_opt_out("cust@x.com") is True
 
 
+@pytest.mark.parametrize("body", [None, 1, "alerts_opt_out", ["alerts_opt_out"]])
+def test_post_non_object_json_returns_bad_request(client, monkeypatch, body):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    response = c.post("/api/preferences", json=body)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Request body must be a JSON object"}
+
+
 def test_get_requires_session(client, monkeypatch):
     server, c = client
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: None)
@@ -103,8 +119,8 @@ def test_reenable_via_preferences_after_unsubscribe_link(client, monkeypatch, au
     (sets opt_out True), then flip it back via the new dashboard endpoint."""
     server, c = client
     tok = au.issue_token("cust@x.com", ttl=86400, typ="alerts_unsub")
-    assert c.get(f"/alerts/unsubscribe?token={tok}").status_code == 200   # confirm page only
-    assert au.get_alerts_opt_out("cust@x.com") is False                  # GET never mutates
+    assert c.get(f"/alerts/unsubscribe?token={tok}").status_code == 200  # confirm page only
+    assert au.get_alerts_opt_out("cust@x.com") is False  # GET never mutates
     assert c.post("/alerts/unsubscribe", json={"token": tok}).status_code == 200
     assert au.get_alerts_opt_out("cust@x.com") is True
     _as(server, monkeypatch, "cust@x.com")

@@ -1509,6 +1509,8 @@ async def preferences_set(request: Request):
         body = await request.json()
     except Exception:
         body = {}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "alerts_opt_out" in body:
         auth_users.set_alerts_opt_out(email, bool(body["alerts_opt_out"]))
     if "digest_opt_out" in body:
