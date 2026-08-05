@@ -3425,7 +3425,12 @@ def price_chart(symbol: str, period: str = "1mo", range: str | None = None):  # 
                 return {**result, "requested_range": str(requested)}
         else:
             raw = price_source.yf_download(
-                sym, period=yf_period, interval=interval, auto_adjust=True, progress=False
+                sym,
+                period=yf_period,
+                interval=interval,
+                auto_adjust=True,
+                progress=False,
+                use_cache=False,
             )
             if raw is None or raw.empty:
                 raise HTTPException(status_code=404, detail="No data")
