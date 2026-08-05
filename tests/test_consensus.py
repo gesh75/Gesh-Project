@@ -169,9 +169,35 @@ def test_strong_buy_all_bullish(monkeypatch):
     assert res["verdict"] == "STRONG BUY"
     assert res["verdict_color"] == "green"
     assert res["active_nodes"] == 8     # the 8 controlled nodes voted (Macro + LT_Macro pinned ABSTAIN)
-    # confidence = round(active / len(NODE_WEIGHTS) * 100, 0). NODE_WEIGHTS has 10
-    # entries (the 8 controlled nodes + Macro + LT_Macro), so round(8/10*100) = 80.0.
-    assert res["confidence"] == pytest.approx(80.0)
+    # Macro abstains, so 8 of the 9 votable nodes have data. Display-only LT_Macro
+    # must not depress the confidence denominator.
+    assert res["confidence"] == pytest.approx(89.0)
+
+
+@pytest.mark.parametrize(
+    ("lt_macro_voting", "expected_active"),
+    [(False, 9), (True, 10)],
+)
+def test_confidence_excludes_only_display_only_nodes(
+    monkeypatch, lt_macro_voting, expected_active
+):
+    """All eligible nodes voting must report full confidence in either mode."""
+    _set_votes(monkeypatch, {label: _bull for label in _LABEL_TO_FUNC})
+
+    import long_term_macro
+    import macro_connector
+
+    monkeypatch.setattr(macro_connector, "node_macro", _bull)
+    monkeypatch.setattr(long_term_macro, "node_long_term_macro", _bull)
+    if lt_macro_voting:
+        monkeypatch.setenv("GESH_LT_MACRO_VOTING", "1")
+    else:
+        monkeypatch.delenv("GESH_LT_MACRO_VOTING", raising=False)
+
+    res = _run()
+
+    assert res["active_nodes"] == expected_active
+    assert res["confidence"] == pytest.approx(100.0)
 
 
 def test_buy_band(monkeypatch):
