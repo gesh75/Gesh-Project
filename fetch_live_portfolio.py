@@ -16,6 +16,8 @@ Usage in scheduled tasks:
 
 from __future__ import annotations
 
+# ── Paths ─────────────────────────────────────────────────────────────────────
+import glob as _glob
 import json
 import os
 import sqlite3
@@ -24,9 +26,6 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-# ── Paths ─────────────────────────────────────────────────────────────────────
-import glob as _glob
 
 _GP_CANDIDATES  = _glob.glob('/sessions/*/mnt/gesh-project')
 GP  = Path(_GP_CANDIDATES[0])  if _GP_CANDIDATES  else Path('/sessions/local/mnt/gesh-project')
@@ -46,6 +45,15 @@ MAX_JSON_AGE_MINUTES = 240  # 4 hours
 def _log(msg: str) -> None:
     ts = datetime.now().strftime('%H:%M:%S')
     print(f'[portfolio_loader] {ts} — {msg}', flush=True)
+
+
+def _session_file_is_safe(path: Path) -> bool:
+    """Only trust a session pickle owned by this user and not writable by others."""
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    return st.st_uid == os.getuid() and not (st.st_mode & 0o022)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -97,6 +105,9 @@ def _load_from_robinhood() -> tuple[list, dict, float] | None:
     """Try to authenticate with the copied pickle and fetch live data."""
     if not SESSION_PICKLE.exists():
         _log('No session pickle found — skipping direct Robinhood fetch')
+        return None
+    if not _session_file_is_safe(SESSION_PICKLE):
+        _log('Session pickle has unsafe ownership or permissions — skipping direct Robinhood fetch')
         return None
 
     # Add robin_stocks to path if needed

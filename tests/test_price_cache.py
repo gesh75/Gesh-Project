@@ -70,6 +70,31 @@ def test_cached_close_none_uses_short_negative_ttl(monkeypatch):
     assert calls == 2
 
 
+def test_cached_close_negative_entries_are_bounded_and_expired(monkeypatch):
+    """Unique missing tickers must not grow the process-global cache without bound."""
+    price_cache.clear()
+    monkeypatch.setattr(price_cache, "_latest_close", lambda _sym: None, raising=True)
+
+    for idx in range(price_cache.MAX_NEGATIVE_CLOSE_CACHE_ENTRIES + 25):
+        assert price_cache._cached_close(f"BAD{idx}") is None
+
+    with price_cache._close_lock:
+        none_entries = [
+            sym for sym, (_ts, price) in price_cache._close_cache.items() if price is None
+        ]
+    assert len(none_entries) == price_cache.MAX_NEGATIVE_CLOSE_CACHE_ENTRIES
+
+    with price_cache._close_lock:
+        for sym, (ts, price) in list(price_cache._close_cache.items()):
+            price_cache._close_cache[sym] = (ts - price_cache.NEGATIVE_CLOSE_TTL_SEC - 1, price)
+
+    assert price_cache.has_cached_close(none_entries[-1]) is False
+    assert price_cache._cached_close("FRESHBAD") is None
+    with price_cache._close_lock:
+        assert len(price_cache._close_cache) == 1
+        assert "FRESHBAD" in price_cache._close_cache
+
+
 def test_cached_close_expired_entry_refetches(monkeypatch):
     monkeypatch.setattr(price_cache, "_latest_close", lambda sym: 10.0, raising=True)
     assert price_cache._cached_close("SPY") == 10.0

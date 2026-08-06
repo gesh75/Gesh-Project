@@ -1,0 +1,92 @@
+name: Notion Control Update
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      summary:
+        description: Optional summary override
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  post-control-update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Require NOTION_TOKEN
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        run: |
+          if [ -z "${NOTION_TOKEN}" ]; then
+            echo "NOTION_TOKEN secret not set — skipping Notion sync."
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          else
+            echo "SKIP=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Post Control Updates row
+        if: env.SKIP == '0'
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_CONTROL_UPDATES_DB: ${{ vars.NOTION_CONTROL_UPDATES_DB }}
+          NOTION_PROJECT: ${{ vars.NOTION_PROJECT }}
+          NOTION_RELATED_PROJECT_PAGE: ${{ vars.NOTION_RELATED_PROJECT_PAGE }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          INPUT_SUMMARY: ${{ inputs.summary }}
+          EVENT_NAME: ${{ github.event_name }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          export NOTION_CONTROL_UPDATES_DB="${NOTION_CONTROL_UPDATES_DB:-ee4a034ecb4940cc8cd3452b997e5cd7}"
+          export NOTION_PROJECT="${NOTION_PROJECT:-GESH Financial}"
+          export NOTION_RELATED_PROJECT_PAGE="${NOTION_RELATED_PROJECT_PAGE:-3b3ff394850081598af3e5513202c552}"
+          SHORT="${SHA:0:7}"
+          if [ "$EVENT_NAME" = "push" ]; then
+            SUMMARY="main advanced to ${SHORT}: ${COMMIT_MSG}"
+          else
+            SUMMARY="${INPUT_SUMMARY:-manual workflow_dispatch sync}"
+          fi
+          SUMMARY="$(printf '%s' "$SUMMARY" | head -c 1800)"
+          NAME="CI — ${REPO} @ ${SHORT}"
+          python3 scripts/notion/post_control_update.py \
+            --name "$NAME" \
+            --sha "$SHA" \
+            --summary "$SUMMARY" \
+            --next "Read-only verify; no deploy without owner decision" \
+            --evidence-url "${SERVER_URL}/${REPO}/commit/${SHA}" \
+            --related-project "$NOTION_RELATED_PROJECT_PAGE"
+
+      - name: Sync STATUS.json → Active Projects
+        if: env.SKIP == '0'
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_ACTIVE_PROJECTS_DB: ${{ vars.NOTION_ACTIVE_PROJECTS_DB }}
+          NOTION_PROJECT_NAME: ${{ vars.NOTION_PROJECT_NAME }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          export NOTION_ACTIVE_PROJECTS_DB="${NOTION_ACTIVE_PROJECTS_DB:-fec5d195b038400bb4752d3e88e0b0f5}"
+          export NOTION_PROJECT_NAME="${NOTION_PROJECT_NAME:-GESH Financial}"
+          if [ ! -f docs/control/STATUS.json ]; then
+            echo "No STATUS.json — skip Active Projects sync"
+            exit 0
+          fi
+          python3 - <<PY
+          import json, pathlib, datetime
+          p = pathlib.Path("docs/control/STATUS.json")
+          data = json.loads(p.read_text())
+          data["main_sha"] = "${SHA}"
+          data["last_verified"] = datetime.date.today().isoformat()
+          p.write_text(json.dumps(data, indent=2) + "\n")
+          PY
+          python3 scripts/notion/sync_status.py

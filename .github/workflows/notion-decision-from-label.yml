@@ -1,0 +1,49 @@
+name: Notion Decision from Issue Label
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  create-decision:
+    if: github.event.label.name == 'decision'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create Decisions row when labeled decision
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          DB: ${{ vars.NOTION_DECISIONS_DB }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NOTION_TOKEN:-}" ]; then
+            echo "NOTION_TOKEN missing — skip"
+            exit 0
+          fi
+          export DB="${DB:-ea80e92de4e346a2a72b734d05cc714d}"
+          python3 - <<'PY'
+          import os, sys
+          from pathlib import Path
+          from datetime import date
+          sys.path.insert(0, str(Path("scripts/notion").resolve()))
+          from notion_client import create_page, title, rich, select, url, date_start
+          body = (os.environ.get("ISSUE_BODY") or "Labeled decision on GitHub issue")[:1500]
+          props = {
+              "Name": title(os.environ["ISSUE_TITLE"][:200]),
+              "Domain": select("ops"),
+              "Status": select("proposed"),
+              "Owner": rich("github-label"),
+              "Rationale": rich(body),
+              "GitHub issue": url(os.environ["ISSUE_URL"]),
+              "Date": date_start(date.today().isoformat()),
+          }
+          page = create_page(os.environ["DB"].replace("-", ""), props)
+          print(page.get("url") or page["id"])
+          PY

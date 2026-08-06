@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GESH / Agentic-RH Command Center</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #0f1419; color: #e7ecf3; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 32px 20px; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    .sub { color: #9aa7b8; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    a.card { display: block; padding: 16px; border: 1px solid #2a3441; border-radius: 12px; background: #161c24; color: inherit; text-decoration: none; }
+    a.card:hover { border-color: #5b8def; }
+    .k { font-size: 12px; color: #9aa7b8; text-transform: uppercase; letter-spacing: .04em; }
+    .v { font-size: 16px; margin-top: 6px; font-weight: 600; }
+    .pill { display: inline-block; margin-top: 10px; padding: 2px 8px; border-radius: 999px; background: #1e2a3a; color: #8eb6ff; font-size: 12px; }
+    .note { margin-top: 28px; padding: 14px; border-left: 3px solid #5b8def; background: #121820; color: #c5d0dc; font-size: 14px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Command Center</h1>
+    <p class="sub">GitHub Pages mirror · Notion remains the live lookup · repo <code>docs/control/STATUS.json</code> is engineering truth</p>
+    <div class="grid">
+      <a class="card" href="https://app.notion.com/p/3b3ff394850081829035ef07866d3c37" target="_blank" rel="noopener"><div class="k">Notion</div><div class="v">Live Lookup</div><span class="pill">start</span></a>
+      <a class="card" href="https://app.notion.com/p/fec5d195b038400bb4752d3e88e0b0f5" target="_blank" rel="noopener"><div class="k">Registry</div><div class="v">Active Projects</div><span class="pill">board</span></a>
+      <a class="card" href="https://app.notion.com/p/ee4a034ecb4940cc8cd3452b997e5cd7" target="_blank" rel="noopener"><div class="k">Evidence</div><div class="v">Control Updates</div><span class="pill">form + calendar</span></a>
+      <a class="card" href="https://app.notion.com/p/ea80e92de4e346a2a72b734d05cc714d" target="_blank" rel="noopener"><div class="k">Policy</div><div class="v">Decisions</div><span class="pill">issue/PR URLs</span></a>
+      <a class="card" href="https://app.notion.com/p/564225425d1c416cb0d2058f8f725edc" target="_blank" rel="noopener"><div class="k">O2b</div><div class="v">Soak Sessions</div><span class="pill">8 → 30</span></a>
+      <a class="card" href="https://app.notion.com/p/3a9ff39485008122ac48c7eec32b7703" target="_blank" rel="noopener"><div class="k">Tracker</div><div class="v">Agentic-RH</div><span class="pill">slim</span></a>
+      <a class="card" href="https://app.notion.com/p/369ff39485008128bbb2ede901dd332a" target="_blank" rel="noopener"><div class="k">Tracker</div><div class="v">GESH Financial</div><span class="pill">slim</span></a>
+      <a class="card" href="https://app.notion.com/p/396ff394850081239139db17aa9ba4ad" target="_blank" rel="noopener"><div class="k">Ops</div><div class="v">Briefing Ops</div><span class="pill">daily</span></a>
+      <a class="card" href="https://gesh75.github.io/argus/" target="_blank" rel="noopener"><div class="k">External</div><div class="v">Argus dashboard</div><span class="pill">pages</span></a>
+    </div>
+    <div class="note">
+      <strong>CI sync:</strong> push to <code>main</code> runs <code>notion-control-update.yml</code> → Control Updates row + Active Projects patch.<br />
+      <strong>Local:</strong> <code>NOTION_TOKEN=… python3 scripts/notion/sync_status.py</code><br />
+      <strong>Soak:</strong> <code>python3 scripts/notion/post_soak_session.py --name "…" --counts-o2b --result green</code>
+    </div>
+  </div>
+</body>
+</html>

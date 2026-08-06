@@ -157,7 +157,7 @@ jobs:
         # a file that cannot parse must never merge. PR #133's merge commit
         # shipped a SyntaxError in fetch_snapshot_direct.py under green CI
         # precisely because nothing checked anything outside tests/.
-        run: ruff check --select E9,F63,F7,F82 .
+        run: ruff check --isolated --select E9,F63,F7,F82 .
 
       - name: Run offline money-logic unit tests
         run: |
