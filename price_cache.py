@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 
 # Valuing a book re-reads every symbol, so repeat views must not re-fetch
@@ -25,7 +26,10 @@ CLOSE_TTL_SEC = 300
 # fresh provider calls.  Keep failures much shorter-lived than real prices so a
 # transient provider outage recovers promptly.
 NEGATIVE_CLOSE_TTL_SEC = 60
-_close_cache: dict[str, tuple[float, float | None]] = {}  # sym -> (monotonic_ts, price)
+# Keep the negative cache bounded: customer-supplied one-shot invalid tickers
+# must not remain resident forever after their short TTL expires.
+MAX_NEGATIVE_CLOSE_CACHE_ENTRIES = 512
+_close_cache: OrderedDict[str, tuple[float, float | None]] = OrderedDict()
 # Previous-session close, same TTL/lock. Kept in its OWN map rather than widening
 # the tuple so every existing _close_cache reader keeps working unchanged.
 _prior_cache: dict[str, tuple[float, float]] = {}  # sym -> (monotonic_ts, prior_close)
@@ -34,12 +38,17 @@ _close_lock = threading.Lock()
 
 def has_cached_close(sym: str) -> bool:
     """True when `sym` has an unexpired positive or negative cache entry."""
+    now = time.monotonic()
     with _close_lock:
         hit = _close_cache.get(sym)
-    if not hit:
+        if not hit:
+            return False
+        ttl = CLOSE_TTL_SEC if hit[1] is not None else NEGATIVE_CLOSE_TTL_SEC
+        if (now - hit[0]) < ttl:
+            _close_cache.move_to_end(sym)
+            return True
+        _close_cache.pop(sym, None)
         return False
-    ttl = CLOSE_TTL_SEC if hit[1] is not None else NEGATIVE_CLOSE_TTL_SEC
-    return (time.monotonic() - hit[0]) < ttl
 
 
 def clear() -> None:
@@ -47,6 +56,24 @@ def clear() -> None:
     with _close_lock:
         _close_cache.clear()
         _prior_cache.clear()
+
+
+def _prune_close_cache_locked(now: float) -> None:
+    """Evict stale and excess negative close-cache entries.
+
+    `_close_lock` must be held by the caller.
+    """
+    for cached_sym, (ts, price) in list(_close_cache.items()):
+        ttl = CLOSE_TTL_SEC if price is not None else NEGATIVE_CLOSE_TTL_SEC
+        if (now - ts) >= ttl:
+            _close_cache.pop(cached_sym, None)
+
+    negative_syms = [
+        cached_sym for cached_sym, (_ts, price) in _close_cache.items() if price is None
+    ]
+    excess = len(negative_syms) - MAX_NEGATIVE_CLOSE_CACHE_ENTRIES
+    for cached_sym in negative_syms[: max(0, excess)]:
+        _close_cache.pop(cached_sym, None)
 
 
 def _latest_close_meta(sym: str) -> tuple[float | None, dict]:
@@ -244,11 +271,17 @@ def _cached_close(sym: str, fetch: Callable[[str], float | None] | None = None) 
     on every view while transient data outages still recover quickly."""
     with _close_lock:
         hit = _close_cache.get(sym)
-    if hit:
-        ttl = CLOSE_TTL_SEC if hit[1] is not None else NEGATIVE_CLOSE_TTL_SEC
-        if (time.monotonic() - hit[0]) < ttl:
-            return hit[1]
+        if hit:
+            ttl = CLOSE_TTL_SEC if hit[1] is not None else NEGATIVE_CLOSE_TTL_SEC
+            if (time.monotonic() - hit[0]) < ttl:
+                _close_cache.move_to_end(sym)
+                return hit[1]
+            _close_cache.pop(sym, None)
     price = (fetch or _latest_close)(sym)
     with _close_lock:
-        _close_cache[sym] = (time.monotonic(), price)
+        now = time.monotonic()
+        _prune_close_cache_locked(now)
+        _close_cache[sym] = (now, price)
+        _close_cache.move_to_end(sym)
+        _prune_close_cache_locked(now)
     return price
