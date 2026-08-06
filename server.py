@@ -5094,6 +5094,11 @@ def _book_fingerprint(positions: list[dict]) -> str:
 # books always use concise cards + a retry ladder so we stay under max_tokens and
 # the ~100s Cloudflare tunnel limit (see async mybook_analyze polling).
 _BOOK_ANALYSIS_MAX_HOLDINGS = 8
+# Analyst target lookups currently fan out to one yfinance info request per symbol.
+# Keep MyBook worker runtime bounded by enriching only the same top-weight names
+# that receive detailed AI analysis; Kelly still sizes the full book and treats
+# missing analyst upside as neutral for the remaining holdings.
+_BOOK_ANALYST_ENRICHMENT_MAX_SYMBOLS = _BOOK_ANALYSIS_MAX_HOLDINGS
 _BOOK_ANALYSIS_RETRY_CAPS = (6, 4)
 
 
@@ -5167,8 +5172,9 @@ def _run_book_engines(payload: dict) -> dict:
     (verdict + fair-value gap) feed run_kelly_analysis exactly like the owner
     pipeline does (/api/kelly builds the same map from the latest analysis run) —
     without them Kelly sizes verdict-blind."""
-    # Cap only the expensive detailed AI analysis and regime enrichment. Kelly
-    # still sizes the full book and therefore receives analyst data for all names.
+    # Cap expensive detailed AI, regime, and analyst enrichment. Kelly still
+    # sizes the full book; holdings outside the enrichment cap receive neutral
+    # analyst-upside input instead of triggering unbounded per-symbol network IO.
     holdings = payload["holdings"]
     coverage = {
         "analyzed": min(len(holdings), _BOOK_ANALYSIS_MAX_HOLDINGS),
@@ -5209,7 +5215,7 @@ def _run_book_engines(payload: dict) -> dict:
         }
         truncated = {"analyzed": len(top), "total": len(holdings)}
     analyzed_symbols = [h["symbol"] for h in analysis_payload["holdings"]]
-    all_symbols = [h["symbol"] for h in holdings]
+    analyst_symbols = analyzed_symbols[:_BOOK_ANALYST_ENRICHMENT_MAX_SYMBOLS]
     regime_context = None
     try:
         regime_context = detect_regimes(analyzed_symbols).get("regime_summary")
@@ -5232,10 +5238,10 @@ def _run_book_engines(payload: dict) -> dict:
     except Exception as e:
         mc = {"error": f"monte carlo unavailable: {type(e).__name__}"}
     try:
-        # Kelly sizes the full book, so its scalable market-data enrichment must
-        # cover the full book too.  AI verdicts intentionally remain limited to
-        # the holdings sent through the capped deep-analysis request.
-        analyst = get_analyst_targets(all_symbols) or {}
+        # Kelly sizes the full book, but yfinance analyst targets are sequential
+        # per-symbol network calls. Bound that enrichment to the detailed cards
+        # to avoid large customer books monopolizing the MyBook worker pool.
+        analyst = get_analyst_targets(analyst_symbols) or {}
         upside = {
             s: {"upside_pct": analyst[s].get("upside_pct")}
             for s in analyst

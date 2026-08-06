@@ -276,19 +276,21 @@ def test_large_book_uses_concise_deep_analysis(monkeypatch):
     assert captured.get("concise") is True
 
 
-def test_large_book_kelly_enrichment_covers_every_holding(monkeypatch):
-    """The full-book Kelly run must not receive only top-card analyst data."""
+def test_large_book_kelly_enrichment_is_capped_but_kelly_sizes_full_book(monkeypatch):
+    """Network analyst enrichment is capped while Kelly still sizes all holdings."""
     import server
 
     _fake_engines(server, monkeypatch)
     analyst_symbols = []
     kelly_upside = {}
+    kelly_holding_symbols = []
 
     def _analyst(symbols):
         analyst_symbols.extend(symbols)
         return {symbol: {"upside_pct": 5.0} for symbol in symbols}
 
     def _kelly(holdings, total_equity, upside, ai_verdicts):
+        kelly_holding_symbols.extend(h["symbol"] for h in holdings)
         kelly_upside.update(upside)
         return {"ok": 1}
 
@@ -297,9 +299,11 @@ def test_large_book_kelly_enrichment_covers_every_holding(monkeypatch):
 
     server._run_book_engines(_book_payload(33))
 
-    expected = [f"S{i}" for i in range(33)]
-    assert analyst_symbols == expected
-    assert list(kelly_upside) == expected
+    expected_analyst = [f"S{i}" for i in range(server._BOOK_ANALYST_ENRICHMENT_MAX_SYMBOLS)]
+    expected_full_book = [f"S{i}" for i in range(33)]
+    assert analyst_symbols == expected_analyst
+    assert list(kelly_upside) == expected_analyst
+    assert kelly_holding_symbols == expected_full_book
 
 
 # ─── error classifier must not crash on a cause-less exception ─────────────────
