@@ -314,6 +314,59 @@ def test_tool_without_any_json_payload_raises(monkeypatch):
         fsd.Mcp("tok").tool("t", {})
 
 
+def test_fetch_passes_raw_snapshot_path_to_builder(monkeypatch, tmp_path):
+    """The builder CLI requires RAW_PATH; direct fetch must pass the file it wrote."""
+    raw_path = tmp_path / "gesh_mcp_raw.json"
+    calls = []
+
+    class FakeMcp:
+        def __init__(self, token):
+            self.token = token
+
+        def call(self, method, params=None):
+            calls.append(("call", method, params))
+            return {}
+
+        def notify_initialized(self):
+            calls.append(("notify_initialized",))
+
+        def tool(self, name, arguments):
+            calls.append(("tool", name, arguments))
+            if name == "get_portfolio":
+                return {"data": {"equity": "100.00"}}
+            if name == "get_equity_positions":
+                return {"data": {"positions": [{"symbol": "AAPL"}]}}
+            if name == "get_equity_quotes":
+                return {
+                    "data": {
+                        "results": [{"symbol": "AAPL", "last_trade_price": "10.00"}]
+                    }
+                }
+            raise AssertionError(f"unexpected tool: {name}")
+
+    run_calls = []
+
+    def fake_run(args, cwd):
+        run_calls.append((args, cwd))
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(fsd, "RAW", raw_path)
+    monkeypatch.setattr(fsd, "_access_token", lambda: "token")
+    monkeypatch.setattr(fsd, "Mcp", FakeMcp)
+    monkeypatch.setattr(fsd.subprocess, "run", fake_run)
+
+    fsd.fetch()
+
+    assert raw_path.is_file()
+    assert run_calls == [
+        ([fsd.sys.executable, str(fsd.BUILDER), str(raw_path)], fsd.BASE_DIR)
+    ]
+    assert ("tool", "get_equity_quotes", {"symbols": ["AAPL"]}) in calls
+
 # ── 7. account-number resolution & hygiene ───────────────────────────────────
 REPO_ROOT = MODULE_PATH.parent
 

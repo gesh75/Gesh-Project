@@ -357,6 +357,7 @@ def fetch() -> None:
         )
         if r.returncode != 0:
             raise SystemExit("[direct] build_snapshot_from_mcp.py failed")
+
     print("[direct] snapshot built OK")
 
 
