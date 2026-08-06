@@ -302,7 +302,7 @@ def fetch() -> None:
     print(f"[direct] raw dump: {len(raw['positions'])} positions, "
           f"{len(raw['quotes'])} quotes -> {RAW}")
 
-    r = subprocess.run([sys.executable, str(BUILDER)], cwd=BASE_DIR)
+    r = subprocess.run([sys.executable, str(BUILDER), str(RAW)], cwd=BASE_DIR)
     if r.returncode != 0:
         raise SystemExit("[direct] build_snapshot_from_mcp.py failed")
     print("[direct] snapshot built OK")
