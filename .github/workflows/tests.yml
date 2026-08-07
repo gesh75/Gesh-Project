@@ -40,6 +40,8 @@ on:
   # condition, which reports success — the asymmetry behind the incident noted
   # on the test job below.) Push keeps its filter above; nothing gates on push.
   pull_request:
+  # Manual re-run of main CI without empty commits.
+  workflow_dispatch:
 
 jobs:
   # Fast, secret-free first signal on every PR: lints the test suite and proves
