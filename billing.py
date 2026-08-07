@@ -377,6 +377,26 @@ def revoke(email: str, status: str, event_sub_id: str | None,
         logger.info("billing: ignored stale revoke for %s (event sub=%s current=%s)",
                     email, event_sub_id, stored_sub)
         return {"action": "ignored", "email": email, "reason": "stale_subscription"}
+    if auth_users.is_owner_account(email):
+        # The operator's own subscription lapsing must NEVER lock them out of their own
+        # product — the same reasoning that makes server.py's delete-account route refuse
+        # the owner. (2026-08-03: an expiry for the owner's own sub disabled the owner
+        # account; login then returns the generic "Invalid email or password" because
+        # verify_credentials_constant_time rejects is_active=0.)
+        #
+        # We still record the billing state and ADVANCE the watermark — declining to
+        # revoke must not make the ledger lie, and the H6 reordering fence still applies.
+        # welcome_emailed_at is deliberately NOT cleared here: the owner stays ACTIVE, and
+        # list_owed_onboarding() selects exactly (is_active=1 AND welcome_emailed_at IS
+        # NULL AND tier IS NOT NULL) — clearing it would make the 15-minute
+        # com.gesh.onboarding-sweep re-send the owner a magic link forever.
+        watermark = event_at or datetime.now(timezone.utc).isoformat()
+        auth_users.set_billing(email, status=status, event_at=watermark)
+        logger.warning(
+            "billing: owner subscription ended for %s (status=%s) — access NOT revoked; "
+            "billing state recorded only", email, status,
+        )
+        return {"action": "owner_exempt", "email": email, "status": status}
     auth_users.set_active(email, False)
     # ADVANCE the ordering watermark on revoke, even when the expiry event carried
     # no updated_at. set_billing treats None as "leave unchanged", so a

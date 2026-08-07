@@ -89,3 +89,50 @@ def test_unknown_variant_never_provisions(sandbox, monkeypatch):
     assert out["provisioned"] == []
     assert auth_users.get_user("evil@example.com") is None
     assert out["skipped"][0]["reason"] == "unknown variant"
+
+
+# ── owner revocation fence ────────────────────────────────────────────────────
+# THE recurring-lockout path. /tmp/gesh_billing_reconcile.log, 2026-08-06:
+#   03:30:06 reconcile: revoked georgy75@gmail.com (LS sub 2312547 is expired)
+#   20:30:06 reconcile: revoked georgy75@gmail.com (LS sub 2312547 is expired)
+# The nightly job re-applied the operator's own lapsed subscription and locked them
+# out of their own product — twice in one day, once an hour after a manual re-enable.
+# Fencing billing.revoke() alone is NOT enough: reconcile calls set_active() directly.
+
+def test_reconcile_never_revokes_the_owner(sandbox, monkeypatch):
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "owner@example.com")
+    billing.provision("owner@example.com", "observer", "c1", "2312547")
+    monkeypatch.setattr(br, "fetch_all_subscriptions",
+                        lambda store: [_sub(2312547, "owner@example.com", "expired")])
+
+    out = br.reconcile("421028")
+
+    assert out["revoked"] == [], "owner locked out of their own product by the nightly job"
+    assert auth_users.get_user("owner@example.com")["is_active"] == 1
+    assert "owner@example.com" in out.get("owner_exempt", [])
+
+
+def test_reconcile_records_owner_billing_status_without_revoking(sandbox, monkeypatch):
+    """Declining to revoke must not make the ledger lie."""
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "owner@example.com")
+    billing.provision("owner@example.com", "observer", "c1", "2312547")
+    monkeypatch.setattr(br, "fetch_all_subscriptions",
+                        lambda store: [_sub(2312547, "owner@example.com", "expired")])
+
+    br.reconcile("421028")
+
+    u = auth_users.get_user("owner@example.com")
+    assert u["billing_status"] == "expired" and u["is_active"] == 1
+
+
+def test_reconcile_still_revokes_ordinary_churn(sandbox, monkeypatch):
+    """The fence must be surgical — a real churned subscriber is still revoked."""
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "owner@example.com")
+    billing.provision("churned@example.com", "observer", "c2", "88")
+    monkeypatch.setattr(br, "fetch_all_subscriptions",
+                        lambda store: [_sub(88, "churned@example.com", "expired")])
+
+    out = br.reconcile("421028")
+
+    assert out["revoked"] == ["churned@example.com"]
+    assert auth_users.get_user("churned@example.com")["is_active"] == 0

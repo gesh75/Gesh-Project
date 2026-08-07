@@ -1499,6 +1499,32 @@ def is_owner(email: str | None) -> bool:
     return row is not None
 
 
+def is_owner_account(email: str | None) -> bool:
+    """Owner identity that still holds for a DISABLED account.
+
+    is_owner() deliberately requires is_active=1: it answers "should this SESSION see
+    unmasked owner views?", and a revoked session must not. But a guard whose job is to
+    PREVENT the owner being disabled cannot be built on it — the moment is_active flips
+    to 0 the marker stops resolving and the guard silently stops firing, exactly when it
+    is needed. Same durable-UUID vs configured-email resolution as is_owner(), minus the
+    liveness clause. Use for revocation/deletion fences, never for view permissions.
+    """
+    em = _norm(email or "")
+    if not em:
+        return False
+    if not auth_enabled():
+        return em == _configured_owner_email()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT users.user_id FROM users "
+            "JOIN auth_metadata ON auth_metadata.key=? "
+            "AND auth_metadata.value=users.user_id "
+            "WHERE users.email=?",
+            (_OWNER_METADATA_KEY, em),
+        ).fetchone()
+    return row is not None
+
+
 def consume_magic_token(token: str | None) -> str | None:
     """Single-use validation returning the immutable subject's current email on the
     FIRST valid use and atomically marks the token spent; any later use (or an invalid/
