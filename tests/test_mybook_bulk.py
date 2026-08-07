@@ -297,10 +297,23 @@ def test_large_book_kelly_enrichment_is_capped_but_kelly_sizes_full_book(monkeyp
     monkeypatch.setattr(server, "get_analyst_targets", _analyst, raising=True)
     monkeypatch.setattr(server, "run_kelly_analysis", _kelly, raising=True)
 
-    server._run_book_engines(_book_payload(33))
+    book_size = 33
+    server._run_book_engines(_book_payload(book_size))
 
-    expected_analyst = [f"S{i}" for i in range(server._BOOK_ANALYST_ENRICHMENT_MAX_SYMBOLS)]
-    expected_full_book = [f"S{i}" for i in range(33)]
+    # The enrichment cap keeps the LARGEST-WEIGHT names, not the first N inserted
+    # (server.py: "Cap DETAILED cards to the largest-weight names"). _book_payload
+    # gives S{i} an equity of 100.0 + i, so the largest holdings are the HIGHEST
+    # indices and they arrive weight-descending: S32, S31, ... The original
+    # expectation assumed insertion order, so it could never have matched.
+    expected_analyst = [
+        f"S{i}"
+        for i in range(
+            book_size - 1,
+            book_size - 1 - server._BOOK_ANALYST_ENRICHMENT_MAX_SYMBOLS,
+            -1,
+        )
+    ]
+    expected_full_book = [f"S{i}" for i in range(book_size)]
     assert analyst_symbols == expected_analyst
     assert list(kelly_upside) == expected_analyst
     assert kelly_holding_symbols == expected_full_book
