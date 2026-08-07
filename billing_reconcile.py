@@ -71,7 +71,8 @@ def reconcile(store_id: str | None = None) -> dict[str, Any]:
     subs = fetch_all_subscriptions(store)
 
     summary: dict[str, Any] = {"checked": len(subs), "provisioned": [],
-                               "revoked": [], "tier_fixed": [], "skipped": []}
+                               "revoked": [], "tier_fixed": [], "skipped": [],
+                               "owner_exempt": []}
     for s in subs:
         a = s.get("attributes", {})
         sub_id = str(s.get("id", ""))
@@ -90,6 +91,19 @@ def reconcile(store_id: str | None = None) -> dict[str, Any]:
         account_email = user["email"] if user else email
 
         if status in _ENDED_STATUSES:
+            # The operator's own lapsed subscription must NEVER lock them out of their own
+            # product (same fence as billing.revoke() and server.py's delete-account route).
+            # This path is the one that actually bit: because it calls set_active() directly
+            # rather than going through billing.revoke(), fencing revoke() alone left it open,
+            # and because it calls set_billing() with no event_at the watermark never moved —
+            # so repeated lockouts left no trace beyond this job's own log.
+            if auth_users.is_owner_account(account_email):
+                auth_users.set_billing(account_email, status="expired")
+                summary["owner_exempt"].append(account_email)
+                logger.warning("reconcile: owner %s has an ENDED LS sub %s (%s) — access NOT "
+                               "revoked; billing state recorded only",
+                               account_email, sub_id, status)
+                continue
             # Revoke ONLY the account bound to THIS subscription (never comp'd rows).
             if user and user.get("is_active") and user.get("billing_sub_id") == sub_id:
                 auth_users.set_active(account_email, False)

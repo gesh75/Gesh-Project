@@ -719,3 +719,86 @@ def test_expired_without_timestamp_blocks_reordered_reactivation():
     assert au.get_user("buyer@example.com")["is_active"] == 0, \
         "revoked account resurrected by a reordered stale reactivation"
     assert res["action"] != "provision"
+
+
+# ── owner revocation fence ────────────────────────────────────────────────────
+# A subscription_expired for the OPERATOR'S OWN subscription must never disable the
+# owner account. Regression: on 2026-08-03 the owner's own Lemon Squeezy subscription
+# lapsed and revoke() disabled georgy75@gmail.com, locking the operator out of their
+# own product (login returns the generic "Invalid email or password" because
+# verify_credentials_constant_time rejects is_active=0). server.py's delete-account
+# route already refuses the owner for exactly this reason; revoke() had no such guard.
+
+def test_subscription_expired_never_disables_the_owner(monkeypatch):
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "buyer@example.com")
+    _post("subscription_created")
+    res = _post("subscription_expired", status="expired", sub_id="sub_1")
+
+    assert res["action"] == "owner_exempt", "owner was put through the normal revoke path"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1, "owner locked out of their own product by a billing event"
+    # The ledger must still be truthful — we decline to revoke, we do not pretend
+    # the subscription is alive.
+    assert u["billing_status"] == "expired"
+
+
+def test_owner_exempt_revoke_advances_the_ordering_watermark(monkeypatch):
+    """The watermark still moves, so a REORDERED stale reactivation can't rewrite
+    billing state afterwards (the same H6 fence the normal revoke path relies on)."""
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "buyer@example.com")
+    _post("subscription_created")
+    _post("subscription_expired", status="expired", sub_id="sub_1",
+          updated_at="2026-02-01T00:00:00.000000Z")
+    assert au.get_user("buyer@example.com")["billing_event_at"] == "2026-02-01T00:00:00.000000Z"
+
+
+def test_owner_exempt_revoke_does_not_requeue_the_onboarding_email(monkeypatch):
+    """revoke() clears welcome_emailed_at so a later re-subscribe re-onboards (H5).
+    For the owner that is actively harmful: the account stays ACTIVE, and
+    list_owed_onboarding() selects exactly (is_active=1 AND welcome_emailed_at IS NULL
+    AND tier IS NOT NULL) — so clearing it would make the 15-minute
+    com.gesh.onboarding-sweep re-send the owner a magic link forever."""
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "buyer@example.com")
+    _post("subscription_created")
+    au.set_welcome_emailed("buyer@example.com", "2026-01-01T00:00:00+00:00")
+
+    _post("subscription_expired", status="expired", sub_id="sub_1")
+
+    assert au.get_user("buyer@example.com")["welcome_emailed_at"] is not None
+    owed = [r["email"] for r in au.list_owed_onboarding()]
+    assert "buyer@example.com" not in owed, "owner queued into the 15-min magic-link sweep"
+
+
+def test_owner_fence_holds_when_auth_is_enabled(monkeypatch):
+    """Production runs with GESH_AUTH_ENABLED=1, where owner identity resolves via the
+    durable auth_metadata UUID marker rather than the configured email."""
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "buyer@example.com")
+    au.create_user("buyer@example.com", "pw-not-used-here")   # claims the owner marker
+    monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+
+    res = _post("subscription_expired", status="expired", sub_id="sub_1")
+
+    assert res["action"] == "owner_exempt"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
+def test_owner_fence_still_holds_for_an_already_disabled_owner(monkeypatch):
+    """is_owner() requires is_active=1, so a DISABLED owner stops resolving as the
+    owner — a fence built on it would silently stop firing exactly when it is needed
+    (e.g. re-enable by hand, second expiry event arrives before the next login)."""
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "buyer@example.com")
+    au.create_user("buyer@example.com", "pw-not-used-here")
+    au.set_active("buyer@example.com", False)
+    monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+
+    assert au.is_owner("buyer@example.com") is False          # documents the hole
+    assert au.is_owner_account("buyer@example.com") is True   # fence must not have it
+
+
+def test_non_owner_is_still_revoked(monkeypatch):
+    """The fence must be surgical — ordinary churn still revokes."""
+    monkeypatch.setenv("GESH_OWNER_EMAIL", "someone-else@example.com")
+    _post("subscription_created")
+    res = _post("subscription_expired", status="expired", sub_id="sub_1")
+    assert res["action"] == "revoke"
+    assert au.get_user("buyer@example.com")["is_active"] == 0
