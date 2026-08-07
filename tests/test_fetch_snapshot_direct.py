@@ -314,9 +314,23 @@ def test_tool_without_any_json_payload_raises(monkeypatch):
         fsd.Mcp("tok").tool("t", {})
 
 
-def test_fetch_passes_raw_snapshot_path_to_builder(monkeypatch, tmp_path):
-    """The builder CLI requires RAW_PATH; direct fetch must pass the file it wrote."""
-    raw_path = tmp_path / "gesh_mcp_raw.json"
+def test_fetch_passes_raw_snapshot_path_to_builder(monkeypatch):
+    """The builder CLI requires RAW_PATH; direct fetch must pass the file it wrote.
+
+    This test previously monkeypatched a module-level ``fsd.RAW``. That constant no
+    longer exists: 1322308 hardened ``fetch()`` to write the dump into a private
+    ``TemporaryDirectory`` at mode 600, because the raw payload is the owner's whole
+    portfolio and a fixed path in the repo left it readable on disk between runs.
+    96eeb1a then fixed "pass the path to the builder" a SECOND time against the old
+    pre-hardening code and shipped this test with it; the merge kept main's tempdir
+    implementation (which already passed the path) plus the stale test, so it failed
+    on ``AttributeError: no attribute 'RAW'`` — a duplicate-fix collision, not a
+    regression in the module.
+
+    The directory is destroyed when ``fetch()`` returns, so existence, mode and
+    contents must be captured INSIDE the fake subprocess call. Asserting afterwards
+    would always fail no matter how correct the implementation is.
+    """
     calls = []
 
     class FakeMcp:
@@ -345,26 +359,45 @@ def test_fetch_passes_raw_snapshot_path_to_builder(monkeypatch, tmp_path):
             raise AssertionError(f"unexpected tool: {name}")
 
     run_calls = []
+    seen = {}
 
     def fake_run(args, cwd):
         run_calls.append((args, cwd))
+        # Inspect the raw file WHILE the TemporaryDirectory is still alive.
+        raw_arg = Path(args[-1])
+        seen["is_file"] = raw_arg.is_file()
+        seen["mode"] = raw_arg.stat().st_mode & 0o777
+        seen["payload"] = json.loads(raw_arg.read_text())
 
         class Result:
             returncode = 0
 
         return Result()
 
-    monkeypatch.setattr(fsd, "RAW", raw_path)
     monkeypatch.setattr(fsd, "_access_token", lambda: "token")
     monkeypatch.setattr(fsd, "Mcp", FakeMcp)
     monkeypatch.setattr(fsd.subprocess, "run", fake_run)
 
     fsd.fetch()
 
-    assert raw_path.is_file()
-    assert run_calls == [
-        ([fsd.sys.executable, str(fsd.BUILDER), str(raw_path)], fsd.BASE_DIR)
+    assert len(run_calls) == 1
+    args, cwd = run_calls[0]
+    # The regression this guards: the builder invoked with NO path argument.
+    assert len(args) == 3, f"builder must receive the raw path, got {args!r}"
+    assert args[:2] == [fsd.sys.executable, str(fsd.BUILDER)]
+    assert cwd == fsd.BASE_DIR
+
+    # The file the builder is pointed at must actually exist, hold this run's data,
+    # and stay owner-only — it is the full portfolio in cleartext.
+    assert seen["is_file"]
+    assert seen["mode"] == 0o600
+    assert seen["payload"]["positions"] == [{"symbol": "AAPL"}]
+    assert seen["payload"]["quotes"] == [
+        {"symbol": "AAPL", "last_trade_price": "10.00"}
     ]
+
+    # ...and it must NOT survive the call: a fixed on-disk path is what 1322308 removed.
+    assert not Path(args[-1]).exists()
     assert ("tool", "get_equity_quotes", {"symbols": ["AAPL"]}) in calls
 
 # ── 7. account-number resolution & hygiene ───────────────────────────────────
