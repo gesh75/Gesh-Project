@@ -6,9 +6,9 @@
 # Reproducible install:  pip install -r requirements.lock
 # Regenerate after changing requirements.txt; test-only tooling excluded.
 #
-# gesh-core is the private repo at commit d4e9f46 — "fix(config): strictly
-# validate safety booleans" (PR #8), 2 commits past the ANNOTATED tag v0.6.1
-# (peeled commit f11c460, tag-object 7af8fad). d4e9f46 still declares
+# gesh-core is the private repo at commit 33af748 — v0.8.0, gesh_core.dcf with
+# the practitioner-reviewed DCF methodology (operating NWC, Blume beta +
+# fragility flag, average-ratio base, refusal guards). 33af748 declares
 # __version__ "0.6.1", so the 40-char commit SHA is the only unambiguous
 # identifier for this tree. The commit is pinned so the dependency is explicit
 # and reproducible. CI needs GESH_CORE_PAT to clone it.
@@ -34,7 +34,7 @@ docstring_parser==0.18.0
 fastapi==0.135.3
 fredapi==0.5.2
 frozendict==2.4.7
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@d4e9f467c8fcb1ec952245469f6ac15d16a52075
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@33af7482c01b4950cab82ba5167e47146f048575
 google-auth==2.56.2
 google-genai==1.73.1
 h11==0.16.0
