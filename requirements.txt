@@ -64,4 +64,6 @@ tenacity==9.1.4
 gesh-core @ git+https://github.com/gesh75/gesh-core.git@37c5752606faf5eb0cf9059ad4d021e1679dbabc
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core
-alpaca-py
+# PR105-RUN-02: pinned to match requirements.lock — an unpinned direct dep lets a
+# fresh resolve drift away from the reviewed, tested tree.
+alpaca-py==0.43.5

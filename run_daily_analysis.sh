@@ -38,7 +38,15 @@ GPT="${GESH_TRADING_HOME:-$(dirname "$GP")/gesh-project-trading}"
 # cwd=product root, so point it at the engine repo's gesh_financial.db (the tracker
 # DB) to preserve the pre-extraction sibling-path default.
 export GESH_TRACKER_DB="${GESH_TRACKER_DB:-$GPT/gesh_financial.db}"
-PY="$GP/venv/bin/python3.14"
+# PR105-RUN-01: the repository declares Python 3.12 (.python-version) but this
+# chain hardcoded `python3.14`, which does not exist in a conformant environment —
+# the deterministic daily chain would fail at launch. Use the venv's GENERIC
+# interpreter so the runtime contract has exactly one source of truth.
+PY="$GP/venv/bin/python"
+if [ ! -x "$PY" ]; then
+    echo "FATAL: no interpreter at $PY — run ./setup.sh first (Python 3.12)." >&2
+    exit 1
+fi
 LOG=/tmp/gesh_fullchain.log
 LOCK=/tmp/gesh_daily_chain.lock
 
