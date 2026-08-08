@@ -32,8 +32,10 @@ from dcf_inputs import MIN_PERIODS, DCFInputs
 # ── 1. the relocation itself ─────────────────────────────────────────────────
 
 def test_modules_import_from_the_flat_layout():
-    assert dcf_inputs.__name__ == "dcf_inputs"
-    assert dcf_fair_value.__name__ == "dcf_fair_value"
+    # Shim semantics (post gesh-core v0.8.0 extraction): the flat-layout names
+    # still import, but resolve to the ONE canonical implementation both repos share.
+    assert dcf_inputs.__name__ == "gesh_core.dcf.inputs"
+    assert dcf_fair_value.__name__ == "gesh_core.dcf.fair_value"
 
 
 def test_no_stale_trading_package_references_survive_the_move():

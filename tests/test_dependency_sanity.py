@@ -28,7 +28,7 @@ LOCK = ROOT / "requirements.lock"
 # commit makes the dependency explicit and reproducible. Declared as a LITERAL on
 # purpose — bumping the dependency then requires editing this line, so the change
 # is reviewable in the application repo.
-GESH_CORE_SHA = "d4e9f467c8fcb1ec952245469f6ac15d16a52075"
+GESH_CORE_SHA = "493123938a173d890c63655ea20410501bd8b9f0"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 

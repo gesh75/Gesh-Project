@@ -200,7 +200,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
 </head>
 <body>
 <h1>GESH Financial</h1>
-<p class="subtitle"><span class="live-pulse"></span>Architecture &amp; Commercial Map — Updated 2026-07-09</p>
+<p class="subtitle"><span class="live-pulse"></span>Architecture &amp; Commercial Map — Updated 2026-08-08</p>
 
 <div class="diagram">
 
@@ -247,7 +247,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
     <div class="com-card-label label-addon">PREMIUM ADD-ON</div>
     <div class="com-card-title" style="color:var(--teal)">GESH Crypto</div>
     <div class="com-card-port">Port 9003/crypto · gesh-project-trading</div>
-    <div class="com-card-desc">Crypto-specific signal layer. On-chain data, perpetual funding rates, Deribit options flow, 12-node crypto consensus. Bundled into top plan or sold separately.</div>
+    <div class="com-card-desc">Crypto-specific signal layer. On-chain data, perpetual funding rates, Deribit options flow, 11-node crypto consensus. Bundled into top plan or sold separately.</div>
     <div class="com-card-items">
       <span>15 coins: BTC, ETH, SOL, BNB, AVAX…</span>
       <span>Binance fapi on-chain (funding, OI, CVD)</span>
@@ -261,7 +261,7 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
 
 </div>
 
-<div class="connector"><span class="connector-label">shared 12-node consensus engine + Claude API</span></div>
+<div class="connector"><span class="connector-label">shared consensus lineage + Claude API — :9000 runs 12 nodes, :9003 runs 11 (see note below)</span></div>
 
 <!-- ══════════════════════════════════════════════════════════════════
      PRODUCT LAYER — Port 9000 (what customers pay for)
@@ -399,8 +399,15 @@ h1::after{content:'';display:block;margin:6px auto 0;width:120px;height:2px;
   <div class="layer-label">🧠 INTELLIGENCE LAYER — Shared Core (powers ALL three tools)</div>
   <div class="row" style="margin-bottom:12px">
     <div class="box c-purple w3">
-      <div class="box-title">11-Node Consensus Engine <span class="new-badge">Regime-Conditional Weights</span></div>
+      <div class="box-title">12-Node Consensus Engine <span class="new-badge">Regime-Conditional Weights</span></div>
       <div class="box-body">
+        <strong>Node count, stated precisely (verified against <code>consensus.py</code> 2026-08-08):</strong>
+        this repo's engine computes <strong>12</strong> nodes — Momentum, Trend, Rel.Strength, Fundamentals,
+        Analyst, News, Kelly, ECG, Volume, FFT_Cycle, Macro, <strong>LT_Macro</strong> — of which
+        <strong>10 carry directional weight</strong> (<code>_BASE_WEIGHTS</code>). Kelly is sizing-only and
+        FFT_Cycle is excluded from the vote as spurious in non-stationary series.
+        <strong>This differs from the :9003 engine, which has 11</strong> (no <code>LT_Macro</code>) — the two
+        are not the same engine, so never quote one repo's node count for the other.
         Regime-conditional weights validated via TradingView MCP backtests (SPY, NVDA, HOOD, BTC, DDOG, GS, IONQ).
         Requires ≥4 active nodes. Returns STRONG BUY / BUY / HOLD / SELL / STRONG SELL.
       </div>

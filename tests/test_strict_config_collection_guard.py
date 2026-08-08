@@ -92,7 +92,7 @@ def test_collection_guard_skips_on_pre_pr8_gesh_core(
         spec.loader.exec_module(mod)  # type: ignore[attr-defined]
 
     assert "ConfigError" in str(exc_info.value)
-    assert "d4e9f467" in str(exc_info.value)
+    assert "49312393" in str(exc_info.value)
 
 
 def test_collection_guard_absent_on_correct_gesh_core() -> None:

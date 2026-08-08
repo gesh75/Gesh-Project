@@ -171,7 +171,17 @@ def test_schema_is_money_free_no_portfolio_keys(monkeypatch):
     ai_analyzer.deep_analyze_ticker("AAPL")
     schema = sink["tools"][0]["input_schema"]
     props = schema["properties"]
-    assert {"scores", "fair_value", "prediction", "verdict", "risks", "rewards"} <= set(props)
+    # Wire names went flat 2026-08-07 to fit the strict-tool grammar ceiling;
+    # renest_holding_card restores fair_value/prediction/bear_case for readers.
+    assert {
+        "scores",
+        "fair_value_estimate",
+        "prediction_3m",
+        "prediction_12m",
+        "verdict",
+        "risks",
+        "rewards",
+    } <= set(props)
     for banned in (
         "portfolio_score",
         "holdings_analysis",
@@ -204,16 +214,23 @@ def test_ticker_schema_matches_internal_holding_card(monkeypatch):
 
 
 def test_ticker_schema_includes_bear_case(monkeypatch):
-    """The tool schema must ask the model for a bear_case (thesis + observable
-    invalidators) — this rides the SAME single LLM call, no new spend."""
+    """The tool schema must ask the model for a bear case (thesis + observable
+    invalidators) — this rides the SAME single LLM call, no new spend.
+
+    Asked FLAT on the wire since 2026-08-07 (the nested object cost more compiled
+    strict grammar than the provider allows); the card the caller receives is
+    still nested, which the second half of this test pins.
+    """
     sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(_CARD)]))
-    ai_analyzer.deep_analyze_ticker("AAPL")
-    schema = sink["tools"][0]["input_schema"]
-    props = schema["properties"]
-    assert "bear_case" in props
-    bc_props = props["bear_case"]["properties"]
-    assert bc_props["thesis"]["type"] == "string"
-    assert bc_props["invalidators"]["type"] == "array"
+    card = ai_analyzer.deep_analyze_ticker("AAPL")
+    props = sink["tools"][0]["input_schema"]["properties"]
+
+    assert "bear_thesis" in props and props["bear_thesis"]["type"] == "string"
+    assert "bear_invalidators" in props and props["bear_invalidators"]["type"] == "array"
+    assert "bear_case" not in props, "nested bear_case reintroduced onto the wire"
+
+    # Reader contract: consumers still get the nested shape.
+    assert set(card["bear_case"]) == {"thesis", "invalidators"}
 
 
 def test_deep_analyze_ticker_defaults_bear_case_when_model_omits_it(monkeypatch):
@@ -253,7 +270,7 @@ def test_concise_portfolio_prompt_caps_bear_case(monkeypatch):
     )
     ai_analyzer.deep_analyze_portfolio({"holdings": [{"symbol": "AAPL"}]}, concise=True)
     user_msg = sink["messages"][0]["content"]
-    assert "bear_case" in user_msg  # concise mode explicitly caps the field
+    assert "bear_invalidators" in user_msg  # concise mode explicitly caps the field
     assert "BE CONCISE" in user_msg  # ...inside the existing brevity block
 
 
