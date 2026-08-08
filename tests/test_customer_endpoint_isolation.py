@@ -197,8 +197,19 @@ def test_customer_route_survives_an_empty_portfolio(env, route):
                "watchlist": [], "source": "robinhood_mcp SRC-SENTINEL"}
     c = _client(server, monkeypatch, "customer", payload=payload)
     r = c.get(route)
-    assert r.status_code in (200, 404), f"{route} -> {r.status_code}"
+    # An empty book with zero cash has NO scaling basis. This used to return 200
+    # with a factor of 0.0 — a portfolio that reads as a genuine $0.00 holding,
+    # indistinguishable to a customer from "you own nothing". A zero basis is now
+    # the typed unavailable response.
+    assert r.status_code in (404, 503), f"{route} -> {r.status_code}"
     assert "SRC-SENTINEL" not in r.text
+    if r.status_code == 503:
+        body = r.json()
+        assert body["reason_code"] == "model_scaling_unavailable"
+        assert body["model_scaling_available"] is False
+        blob = json.dumps(body)
+        for zero in ('"equity": 0', '"cash": 0', '"quantity": 0'):
+            assert zero not in blob
 
 
 @pytest.mark.parametrize("route", OWNER_ANALYSIS_ROUTES)

@@ -69,7 +69,21 @@ def client(monkeypatch):
     auth_users.init_auth_db()
     if auth_users.get_user("georgy75@gmail.com") is None:
         auth_users.create_user("georgy75@gmail.com", "owner-test-password")
-    monkeypatch.setattr(server, "_customer_scale_factor", lambda: 0.5)
+    # Scaling is REQUEST-SCOPED: the factor comes from the portfolio this request
+    # resolved, not from a module-level factor. Give the request a real book whose
+    # component basis is 200,000, so the factor is exactly 100,000/200,000 = 0.5
+    # and the arithmetic these tests already assert is unchanged.
+    monkeypatch.setattr(server, "build_data_payload", lambda wl: {
+        "as_of": "2026-07-25T00:00:00+00:00",
+        "holdings": [{"symbol": "NVDA", "quantity": 1000.0, "current_price": 150.0,
+                      "equity": 150_000.0, "portfolio_percentage": 100.0,
+                      "type": "stock"}],
+        "equity_summary": {"portfolio_equity": 200_000.0, "cash": 50_000.0,
+                           "total": 200_000.0,
+                           "adjusted_equity_previous_close": 190_000.0},
+        "watchlist": [],
+    }, raising=True)
+    monkeypatch.setattr(server, "_maybe_log_snapshot", lambda h: None, raising=True)
     return TestClient(server.app, raise_server_exceptions=False)
 
 

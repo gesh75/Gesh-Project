@@ -95,7 +95,9 @@ def test_C_raw_and_normalized_snapshots_give_the_same_basis():
     p.write_text(json.dumps(raw))
     normalized = data_fetcher.load_snapshot_payload(p)
     assert "current_price" in normalized["holdings"][0]
-    assert "price" not in normalized["holdings"][0] or True   # normalizer may keep both
+    # The normalizer's real contract: it EMITS current_price (and carries the raw
+    # `price` through, which is why the basis reader must accept either).
+    assert normalized["holdings"][0]["current_price"] == pytest.approx(PRICE)
     assert server.model_basis_from_payload(raw) == pytest.approx(
         server.model_basis_from_payload(normalized), abs=0.02)
 
@@ -183,16 +185,15 @@ def test_F_zero_basis_is_unavailable_not_a_divide_by_zero():
 
 # ─── CASE G — the real fallback middleware path ──────────────────────────────
 
-def test_G_fallback_route_scales_by_positions_plus_cash(tmp_path, monkeypatch):
-    """A customer-reachable, non-exempt route whose response is NOT the published
-    portfolio shape, so the middleware must fall back to _customer_scale_factor().
+def test_G_fallback_route_scales_by_the_request_basis(tmp_path, monkeypatch):
+    """A customer-reachable, NON-EXEMPT route whose body is not the published shape.
 
-    The factor is NOT mocked: a real raw snapshot file backs it, exercising the
-    whole path from `holdings[].price` to the scaled JSON.
+    Scaling is request-scoped now, so the factor comes from the portfolio THIS
+    request resolved. Nothing is stubbed to a literal factor and the expected
+    value is computed independently of the production helpers.
     """
-    from starlette.testclient import TestClient
-
     import auth_users
+    from starlette.testclient import TestClient
 
     monkeypatch.setattr(auth_users, "AUTH_DB_PATH", tmp_path / "auth.db")
     auth_users.init_auth_db()
@@ -202,25 +203,21 @@ def test_G_fallback_route_scales_by_positions_plus_cash(tmp_path, monkeypatch):
     monkeypatch.setattr(server.auth_users, "is_owner", lambda e: False, raising=False)
     monkeypatch.setattr(server.auth_users, "authenticate_session",
                         lambda tok: "cust@x.com", raising=True)
+    monkeypatch.setattr(server, "_maybe_log_snapshot", lambda h: None, raising=True)
+    monkeypatch.setattr(server, "build_data_payload", lambda wl: {
+        "as_of": "2026-07-25T00:00:00+00:00",
+        "holdings": [{"symbol": "NVDA", "quantity": QTY, "current_price": PRICE,
+                      "equity": POSITIONS, "portfolio_percentage": 100.0,
+                      "type": "stock"}],
+        "equity_summary": {"portfolio_equity": ACCOUNT_EQUITY, "cash": CASH,
+                           "total": ACCOUNT_EQUITY},
+        "watchlist": [],
+    }, raising=True)
 
-    # Back _customer_scale_factor with a REAL raw snapshot on disk.
-    snap_path = tmp_path / "live_portfolio_snapshot.json"
-    snap_path.write_text(json.dumps(_raw_mcp_shaped()))
-    real_basis = server.model_basis_from_payload(_raw_mcp_shaped())
-    assert real_basis == pytest.approx(108_000.0, abs=0.02)
-    monkeypatch.setattr(
-        server, "_customer_scale_factor",
-        lambda: server._model_scale_factor(
-            server.model_basis_from_payload(json.loads(snap_path.read_text()))),
-        raising=True)
+    assert server._MODEL_BOOK_USD == pytest.approx(100_000.0), "fixture assumes the default notional"
+    expected_factor = 100_000.0 / (POSITIONS + CASH)   # independent of production code
+    wrong_factor = 100_000.0 / CASH                    # the old cash-only bug: 5.0
 
-    expected_factor = server._MODEL_BOOK_USD / 108_000.0
-    wrong_factor = server._MODEL_BOOK_USD / CASH          # the cash-only bug: 5.0
-
-    # A customer-reachable, NON-EXEMPT /api/ route carrying a money field, whose
-    # body is NOT the published portfolio shape — so the middleware must fall
-    # back to _customer_scale_factor(). Registered for this test only and removed
-    # afterwards, so the leak sweep's route inventory is unaffected.
     probe_path = "/api/__raw_scaling_probe"
 
     @server.app.get(probe_path)
@@ -232,14 +229,10 @@ def test_G_fallback_route_scales_by_positions_plus_cash(tmp_path, monkeypatch):
         c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
         body = c.get(probe_path).json()
         assert body.get("view") == "model_book", "response did not pass through masking"
-        assert "model_portfolio_id" not in body.get("data", {}), (
-            "probe must not look like the published shape")
+        assert "model_portfolio_id" not in body.get("data", {})
         scaled = body["data"]["equity"]
-        # The mask rounds money to the cent, so compare at that resolution —
-        # tight enough to pin the factor, loose enough not to fight rounding.
         assert scaled == pytest.approx(1_000.0 * expected_factor, abs=0.01)
-        assert scaled != pytest.approx(1_000.0 * wrong_factor, abs=1.0), (
-            "scaled by the cash-only basis")
+        assert scaled != pytest.approx(1_000.0 * wrong_factor, abs=1.0)
     finally:
         server.app.router.routes = [
             r for r in server.app.router.routes

@@ -149,12 +149,33 @@ def _reset_throttled_logs() -> None:
         _throttled_log_last.clear()
 
 
+class ModelScalingUnavailable(Exception):
+    """The request-scoped basis could not be established.
+
+    Deliberately an exception rather than a 0.0 factor: a zero factor produces a
+    successful 200 whose money reads as genuinely zero, which is a lie a customer
+    cannot detect. `reason` is an internal code for logs; the customer-facing
+    body is fixed (see `_model_unavailable_response`)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _server_error(exc: Exception) -> HTTPException:
     """Log the real exception server-side; return a generic 500 so internal
     details (paths, SQL, upstream API bodies) never leak to clients. An
     HTTPException raised intentionally inside a handler passes through unchanged."""
     if isinstance(exc, HTTPException):
         return exc
+    if isinstance(exc, ModelScalingUnavailable):
+        # Not an internal error: the customer model basis could not be
+        # established, which has its own typed 503 contract. Handlers wrap
+        # everything in `except Exception -> _server_error`, so without this the
+        # honest "unavailable" would surface as a 500 and the frontend would show
+        # a crash instead of a retryable state.
+        logger.warning("model scaling unavailable: %s", exc.reason)
+        return HTTPException(status_code=503, detail="model_scaling_unavailable")
     if isinstance(exc, RobinhoodOfflineError):
         # Expected, non-secret condition: the broker session expired. Degrade to a
         # clean 503 (frontend renders this as "Offline") instead of a 500 + traceback.
@@ -368,6 +389,8 @@ import price_cache                      # shared close-price cache (also used by
 import portfolio_valuation              # CANONICAL money arithmetic — see module docstring
 import model_portfolio                  # the ONLY portfolio shape a customer receives
 import verdict_reconciliation           # ONE stance from the mechanical + valuation layers
+from dataclasses import dataclass
+from decimal import Decimal
 from urllib.parse import urlparse as _urlparse   # CSRF same-origin check
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import price_sanity                     # cross-source price quality + strict mode (Codex #3)
@@ -596,60 +619,32 @@ def _redact_prose(text: str) -> str:
 
 
 def _customer_scale_factor() -> float:
-    """Fallback model-book factor, from the on-disk snapshot.
+    """LEGACY / NON-PRODUCTION. Raises if called.
 
-    Used for owner-derived customer routes that are NOT the published portfolio
-    response (which carries its own exact basis — see the middleware). The
-    denominator is the canonical basis (Σ itemised holdings + cash), never a
-    summary field: the raw snapshot FILE stores positions in `portfolio_equity`
-    while the normalized payload stores ACCOUNT equity there, so any code that
-    reads that key without knowing which side of normalization it is on will get
-    it wrong half the time. Reading the holdings avoids the question entirely.
+    This used to be the response-path fallback: it read
+    `live_portfolio_snapshot.json` from disk INSIDE the customer masking
+    middleware, after the handler had already built its answer from a different
+    in-memory payload. Nothing tied the two together — the daily chain can rewrite
+    the file mid-request, a live fetch can differ from the last snapshot, and two
+    concurrent requests could scale against whatever the disk happened to hold —
+    so a response's components and its factor could describe different books.
 
-    Fails CLOSED: an undeterminable basis returns 0.0 so dollars zero out."""
-    try:
-        snap = _json.loads((Path(__file__).parent / "live_portfolio_snapshot.json").read_text())
-        return _model_scale_factor(model_basis_from_payload(snap))
-    except Exception:
-        return 0.0
+    Scaling is now REQUEST-SCOPED (`CustomerModelScalingContext`, bound to
+    `request.state` by the same call that builds the analysis context). The
+    middleware may only use the published response's own component total or that
+    bound basis; there is no third option reading disk.
 
-
-# Raw snapshot writers (build_snapshot_from_mcp.py, fetch_live_snapshot.py) emit
-# `price`; only data_fetcher.load_snapshot_payload() renames it to
-# `current_price`. `_customer_scale_factor()` reads the FILE directly and so
-# never sees that rename — which silently classified every raw holding as
-# unpriced and collapsed the scaling basis to cash alone (on the real snapshot:
-# a factor of 11.17 instead of 2.95, inflating every fallback-route dollar ~3.8x).
-#
-# Normalizing here, at the raw boundary, is deliberate. `canonical_holdings()`
-# is RIGHT to require the normalized `current_price`: a global `price` fallback
-# inside it would also hide a genuine normalization regression on the live path,
-# where `current_price` is the contract.
-_RAW_PRICE_KEYS = ("current_price", "price")
-
-
-def _basis_rows(holdings: list) -> list[dict] | None:
-    """Minimal normalized rows for a basis calculation, or None if unusable.
-
-    Accepts both the raw snapshot shape (`price`) and the normalized payload
-    shape (`current_price`). Source `equity` is carried through only as evidence
-    for canonical_holdings' mismatch check — never as the calculation."""
-    rows: list[dict] = []
-    for h in holdings or []:
-        if not isinstance(h, dict):
-            return None
-        price = next((h[k] for k in _RAW_PRICE_KEYS if h.get(k) is not None), None)
-        qty = h.get("quantity")
-        # Holdings are PRESENT but unusable -> refuse. Falling through to a
-        # cash-only basis would publish a fabricated stock-portfolio factor.
-        if portfolio_valuation.to_decimal(qty) is None:
-            return None
-        price_d = portfolio_valuation.to_decimal(price)
-        if price_d is None or price_d <= 0:
-            return None
-        rows.append({"symbol": h.get("symbol"), "quantity": qty,
-                     "current_price": price, "equity": h.get("equity")})
-    return rows
+    It raises rather than being deleted outright because a large number of test
+    fixtures still `monkeypatch.setattr(server, "_customer_scale_factor", …)`;
+    removing the attribute would break those with an unrelated AttributeError and
+    obscure what they actually assert. Raising keeps the guarantee that matters:
+    any *production* caller — including a future edit to the middleware — fails
+    loudly instead of silently reintroducing a disk-derived factor.
+    Locked by tests/test_request_scoped_scaling.py."""
+    raise RuntimeError(
+        "_customer_scale_factor is legacy and must not be used on a response "
+        "path — customer scaling is request-scoped "
+        "(see CustomerModelScalingContext / bind_customer_model_context)")
 
 
 def model_basis_from_payload(payload: dict) -> float | None:
@@ -772,6 +767,12 @@ def _refusal_response(request: Request, status: int, title: str, body: str = "")
 @app.exception_handler(StarletteHTTPException)
 async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
     """Give browser navigations a page instead of a JSON fragment."""
+    # A handler that could not establish the customer model basis raises through
+    # `_server_error` as a 503 carrying this marker; convert it to the typed
+    # unavailable envelope so the customer contract is identical no matter which
+    # layer detected it.
+    if exc.status_code == 503 and exc.detail == "model_scaling_unavailable":
+        return _model_unavailable_response()
     if _wants_html(request):
         titles = {404: "Page not found", 403: "Not available on your account",
                   401: "Please sign in", 405: "Action not allowed"}
@@ -940,6 +941,89 @@ def _csrf_refusal(request: Request, why: str):
                         content={"detail": "Cross-origin request refused."})
 
 
+def _bind_fallback_scaling(request: Request):
+    """Bind a request-scoped basis for a response whose handler bound none.
+
+    Deliberately NOT a read of `live_portfolio_snapshot.json` by the middleware:
+    it goes through `_resolved_payload()` — the same resolution the handlers use
+    — and caches the result on `request.state`, so one request resolves one
+    portfolio exactly once. Returns None when no usable basis exists, which the
+    caller turns into the typed unavailable response rather than a 0.0 factor.
+
+    FOLLOW-UP (documented, not silently assumed): the routes reaching this branch
+    are cached/historical engine output, the paper-trade log, and per-symbol
+    public research. The historical ones should bind the basis of the dataset
+    that produced them (Category D), and the public per-symbol ones should be
+    proven owner-money-free and exempted (Category A) — at which point this
+    fallback can be deleted. Until each is individually proven, routing them
+    through one request-scoped basis is strictly better than the disk read it
+    replaces, and never fabricates a zero."""
+    try:
+        payload = _resolved_payload()
+    except Exception as exc:  # noqa: BLE001 — offline/unavailable is not a 500
+        logger.warning("fallback scaling basis unavailable: %s", type(exc).__name__)
+        return None
+    try:
+        bind_customer_model_context(request, payload)
+    except ModelScalingUnavailable as exc:
+        logger.warning("fallback scaling basis rejected: %s", exc.reason)
+        return None
+    return request_scaling_context(request)
+
+
+_FINANCIAL_KEY_HINTS = _MONEY_KEYS | _QTY_KEYS | set(_MONEY_LIST_KEYS)
+
+
+def _carries_financial_fields(obj: object) -> bool:
+    """True when the body contains a money or quantity field anywhere.
+
+    An error envelope with no financial content keeps its own status and shape;
+    a body WITH money must be scaled or refused, never passed through."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            lk = str(k).lower()
+            if lk in _FINANCIAL_KEY_HINTS or lk.endswith("_usd") or lk.endswith("_dollars"):
+                return True
+            if _carries_financial_fields(v):
+                return True
+        return False
+    if isinstance(obj, list):
+        return any(_carries_financial_fields(x) for x in obj)
+    return False
+
+
+def _model_unavailable_response() -> JSONResponse:
+    """The honest answer when the model basis cannot be established.
+
+    NOT a 200 with zeros: a zero factor renders as a real $0.00 book, which a
+    customer has no way to distinguish from "you hold nothing". This body
+    carries no money, no quantities, and no owner values at all — the cause is
+    logged, never shipped."""
+    return JSONResponse(
+        status_code=503,
+        headers={"Cache-Control": "no-store"},
+        content={
+            "status": "unavailable",
+            "reason_code": "model_scaling_unavailable",
+            "detail": "Model portfolio data is temporarily unavailable.",
+            "model_scaling_available": False,
+            "data_as_of": None,
+            "retryable": True,
+            "view": "model_book",
+        },
+    )
+
+
+@app.exception_handler(ModelScalingUnavailable)
+async def _model_scaling_unavailable_handler(request: Request, exc: ModelScalingUnavailable):
+    """A route that could not establish its scaling basis answers 503, never 500
+    and never a 200 of zeros. The engine has already been skipped by the raise,
+    so no analysis ran on a book we cannot scale. The cause is logged; the body
+    carries no portfolio values."""
+    logger.warning("model scaling unavailable on %s: %s", request.url.path, exc.reason)
+    return _model_unavailable_response()
+
+
 @app.middleware("http")
 async def _customer_view_middleware(request: Request, call_next):
     if not auth_users.auth_enabled():
@@ -964,17 +1048,42 @@ async def _customer_view_middleware(request: Request, call_next):
     body = b"".join([chunk async for chunk in resp.body_iterator])
     try:
         decoded = _json.loads(body)
-        # A published model-portfolio response states its own component total, so
-        # scale by THAT rather than by a separately-read snapshot: the two can
-        # describe different moments, and only the response's own basis makes
-        # "Σ scaled holdings + scaled cash == the model notional" exact.
+        # FACTOR SELECTION — exactly two sources, both tied to THIS response.
+        # There is deliberately no third option reading the snapshot from disk:
+        # that is what let a response's components and its factor describe
+        # different books.
         factor = None
         if isinstance(decoded, dict):
             data = decoded.get("data")
+            #  (a) the published model portfolio states its own component total
             if (isinstance(data, dict)
                     and data.get("model_portfolio_id") == model_portfolio.MODEL_PORTFOLIO_ID):
                 factor = _model_scale_factor(data.get("calculated_total_equity"))
-        masked = _scale_money(decoded, _customer_scale_factor() if factor is None else factor)
+        if factor is None:
+            #  (b) any other owner-derived response: the basis the handler bound
+            scaling = request_scaling_context(request)
+            if scaling is None:
+                #  (b2) the handler never bound one (it did not build its answer
+                #  from a portfolio context — cached engine results, trade logs,
+                #  per-symbol research). Bind ONE now, WITHIN THIS REQUEST, from
+                #  the same payload-resolution path a handler would use, and
+                #  cache it on request.state. This is still request-scoped: the
+                #  basis cannot come from another request, another tab, or a file
+                #  re-read after some *other* request resolved its portfolio.
+                #  A route that binds its own context in the handler never
+                #  reaches here — for those the handler's book always wins.
+                scaling = _bind_fallback_scaling(request)
+            factor = scaling.factor if scaling is not None else None
+
+        if not factor or factor <= 0:
+            if not _carries_financial_fields(decoded):
+                # An error/status body with no money in it keeps its own contract;
+                # there is nothing to scale and nothing to leak.
+                return JSONResponse(status_code=resp.status_code, content=decoded)
+            logger.warning("customer response has money but no request-scoped basis: %s", path)
+            return _model_unavailable_response()
+
+        masked = _scale_money(decoded, factor)
         if isinstance(masked, dict):
             masked["view"] = "model_book"   # UI/debug tell — customer-scaled response
         return JSONResponse(status_code=resp.status_code, content=masked)
@@ -2225,6 +2334,108 @@ def _resolved_payload(_watchlist=None) -> dict:
         return load_snapshot_payload()   # re-raises RobinhoodOfflineError only if NO snapshot exists
 
 
+# ── request-scoped customer model scaling ────────────────────────────────────
+# THE INVARIANT: for any customer response carrying owner-derived money or
+# quantities, the portfolio that produced the numbers and the portfolio that
+# produced the scaling factor must be THE SAME OBJECT.
+#
+# Previously the middleware re-read `live_portfolio_snapshot.json` after the
+# handler had already computed its answer from a different in-memory payload.
+# Nothing guaranteed the two agreed: the file can be rewritten by the daily chain
+# mid-request, a live fetch can differ from the last snapshot, and two concurrent
+# requests could scale against whatever the disk happened to hold. The result was
+# a response whose components and whose factor described different books.
+#
+# The basis is now bound to `request.state` by the same call that builds the
+# analysis context, from the same raw payload, and the middleware may only use
+# that. There is no disk read on the response path at all.
+
+
+@dataclass(frozen=True)
+class CustomerModelScalingContext:
+    """Immutable scaling basis for ONE request.
+
+    `basis` is the canonical component total (positions + cash) of the exact
+    payload the handler used. `composition_id` fingerprints that composition, so
+    a second bind attempt carrying a different portfolio is detectable rather
+    than silently overwriting the first."""
+
+    basis: Decimal
+    composition_id: str
+    data_as_of: str | None = None
+    freshness_state: str | None = None
+    source_mode: str | None = None
+
+    @property
+    def factor(self) -> float:
+        """model notional / basis. The basis is validated positive at bind time,
+        so this cannot divide by zero or hand back a fail-open 1.0."""
+        return _MODEL_BOOK_USD / float(self.basis)
+
+
+_REQUEST_SCALING_ATTR = "customer_model_scaling_context"
+_REQUEST_CONTEXT_ATTR = "customer_model_context"
+
+
+def bind_customer_model_context(request: Request | None, raw_payload: dict) -> dict:
+    """Build the customer analysis context AND bind its scaling basis to the request.
+
+    Returns the sanitized engine-facing context. Idempotent within a request: a
+    second call returns the identical cached object without re-deriving anything,
+    so no route can accidentally resolve a second (possibly different) portfolio
+    halfway through building one answer.
+
+    Raises ModelScalingUnavailable when the basis cannot be established, so the
+    engine never runs on a book we cannot scale.
+    """
+    state = getattr(request, "state", None) if request is not None else None
+    cached = getattr(state, _REQUEST_CONTEXT_ATTR, None) if state is not None else None
+
+    basis = model_basis_from_payload(raw_payload)
+    if basis is None or basis <= 0:
+        raise ModelScalingUnavailable("basis_unavailable")
+    context = model_portfolio.build_customer_model_context(raw_payload)
+    composition = _composition_id(raw_payload)
+    scaling = CustomerModelScalingContext(
+        basis=Decimal(str(basis)),
+        composition_id=composition,
+        data_as_of=raw_payload.get("as_of"),
+        freshness_state=(raw_payload.get("data_freshness") or {}).get("state"),
+        source_mode="offline" if raw_payload.get("offline") else "live",
+    )
+
+    if cached is not None:
+        prior = getattr(state, _REQUEST_SCALING_ATTR, None)
+        if prior is None or prior.composition_id != scaling.composition_id:
+            # A DIFFERENT portfolio is being bound to a request that already has
+            # one. Overwriting would mean the response mixes two books; refuse.
+            logger.error("conflicting model scaling bind on one request "
+                         "(paths/composition differ) — refusing")
+            raise ModelScalingUnavailable("conflicting_bind")
+        return cached                      # same portfolio: hand back the cache
+
+    if state is not None:
+        setattr(state, _REQUEST_CONTEXT_ATTR, context)
+        setattr(state, _REQUEST_SCALING_ATTR, scaling)
+    return context
+
+
+def _composition_id(payload: dict) -> str:
+    """Stable fingerprint of the portfolio a response was built from."""
+    try:
+        eq = payload.get("equity_summary") or {}
+        rows = _basis_rows(payload.get("holdings") or []) or []
+        return model_portfolio.content_version(rows, eq.get("cash"))
+    except Exception:  # noqa: BLE001 — a fingerprint must never break a request
+        return "vunknown"
+
+
+def request_scaling_context(request: Request | None):
+    """The basis bound to this request, or None if nothing bound one."""
+    state = getattr(request, "state", None) if request is not None else None
+    return getattr(state, _REQUEST_SCALING_ATTR, None) if state is not None else None
+
+
 def _context_payload(request: Request | None) -> dict:
     """Portfolio context for an analysis route, scoped to the caller's role.
 
@@ -2244,7 +2455,9 @@ def _context_payload(request: Request | None) -> dict:
     payload = _resolved_payload()
     if _is_owner_request(request):
         return payload
-    return model_portfolio.build_customer_model_context(payload)
+    # Binds the scaling basis derived from THIS payload to THIS request, so the
+    # middleware scales the answer by the same book that produced it.
+    return bind_customer_model_context(request, payload)
 
 
 def _regime_for_symbols(symbols: list[str], *, offline: bool = False) -> dict:
