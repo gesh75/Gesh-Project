@@ -1,11 +1,26 @@
 {
   "project": "GESH Financial",
   "repository": "gesh75/Gesh-Project",
-  "main_sha": "511bde3",
+  "main_sha": "bbec63feb244700f63d6c12017889b9ba5e8584b",
+  "main_sha_short": "bbec63fe",
+  "main_verified_at": "2026-08-08",
+  "main_verified_by": "git ls-remote https://github.com/gesh75/Gesh-Project.git refs/heads/main",
+  "active_branch": "feat/publish-dcf",
+  "active_branch_sha": "985b0c61",
+  "sibling_repos": {
+    "gesh75/gesh-project-trading": "a08a703a9d7e13bc09bdb16c56bf185027b01f07",
+    "gesh75/gesh-core": "cd71f19e2784b0f58edce804b90eee201dff78cf"
+  },
   "status": "IN PROGRESS",
   "next_exact_action": "Read-only production verification; no restart/deploy without owner. Freeze remains.",
   "binding_constraint": "2026-08-01 public-finance freeze + Network Change Assurance Review pivot",
   "tracker_url": "https://app.notion.com/p/369ff39485008128bbb2ede901dd332a",
   "repo_dashboard": "https://gesh75.github.io/Gesh-Project/",
-  "last_verified": "2026-08-05"
+  "last_verified": "2026-08-08",
+  "notes": [
+    "Supersedes main_sha 511bde3 / last_verified 2026-08-05, which matched no remote.",
+    "Worktree sprawl collapsed 2026-08-08: 11 worktrees -> 3. Remaining: gesh-project (main lane), .worktrees/gesh-track-record-scope-hardening (3 unpushed commits on main, diverged from origin), gesh-project-audit-hardening (1 unpushed commit on fix/audit-p0-p1-pr, push rejected non-fast-forward).",
+    "Both remaining unpushed checkouts are bundled at Projects/_backups/*-unpushed-20260808.bundle pending a rebase decision.",
+    "A live cursor-agent worker holds this directory; treat concurrent writes as expected."
+  ]
 }
