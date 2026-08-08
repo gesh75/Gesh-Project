@@ -54,6 +54,53 @@ def ewma_vol(returns: pd.Series, span: int = 30) -> float:
 
 # ─── GARCH(1,1) ───────────────────────────────────────────────────────────────
 
+#: value returned by garch_vol_detail()[1] when the GARCH fit genuinely ran.
+GARCH_ESTIMATOR = "garch"
+
+
+def garch_vol_detail(returns: pd.Series, scale: float = 100.0) -> tuple[float, str]:
+    """GARCH(1,1) 1-step-ahead σ **and the estimator that actually produced it**.
+
+    Returns ``(daily_sigma, estimator)``. ``estimator`` is ``"garch"`` only when the
+    fit genuinely ran; otherwise it is ``"ewma:<reason>"`` naming which of the four
+    fallback paths was taken — short sample, `arch` not installed, fit failure, or a
+    result outside the plausible band.
+
+    Why the estimator is returned at all (2026-08-07): `garch_vol()` returns a bare
+    float, so no caller could distinguish a real GARCH fit from the EWMA fallback —
+    and `arch` is not installed in either project venv, so in practice EVERY "GARCH"
+    figure this module has produced is EWMA wearing a GARCH label. The number was
+    never wrong; the label was. A mislabelled figure that reaches a report as fact is
+    exactly what the provenance rules (#45/#51/#59) exist to prevent.
+
+    Installing `arch` is a separate decision. This makes the substitution legible
+    either way, which is the part that must not depend on an install.
+    """
+    if len(returns) < 60:
+        return ewma_vol(returns), "ewma:short_sample"
+    try:
+        from arch import arch_model  # type: ignore[import]
+    except ImportError:
+        # Distinguished from a fit failure on purpose: "not installed" is an
+        # environment fact the operator can act on, "fit failed" is a data problem.
+        return ewma_vol(returns), "ewma:no_arch"
+    try:
+        scaled = returns.dropna() * scale
+        am = arch_model(scaled, vol="Garch", p=1, q=1, dist="normal", rescale=False)
+        res = am.fit(disp="off", show_warning=False, options={"maxiter": 200})
+        # 1-step forecast variance (in scaled units²)
+        forecast = res.forecast(horizon=1)
+        var_scaled = float(forecast.variance.iloc[-1, 0])
+        # Convert back to original return units
+        daily_sig = float(np.sqrt(max(var_scaled, 0))) / scale
+    except Exception:
+        return ewma_vol(returns), "ewma:fit_failed"
+    if not 0 < daily_sig < 0.20:
+        # A fitted-but-implausible σ is still not a GARCH answer we can stand behind.
+        return ewma_vol(returns), "ewma:out_of_range"
+    return daily_sig, GARCH_ESTIMATOR
+
+
 def garch_vol(returns: pd.Series, scale: float = 100.0) -> float:
     """
     Fit a GARCH(1,1) model and return the 1-step-ahead conditional volatility.
@@ -67,22 +114,12 @@ def garch_vol(returns: pd.Series, scale: float = 100.0) -> float:
     -------
     Daily σ (NOT annualised) — same units as ewma_vol().
     Falls back to EWMA if arch is not installed or fitting fails.
+
+    Thin wrapper over :func:`garch_vol_detail` kept for existing float callers.
+    Prefer the detail form anywhere the result is REPORTED rather than just consumed
+    numerically — this one cannot tell you which estimator you actually got.
     """
-    if len(returns) < 60:
-        return ewma_vol(returns)
-    try:
-        from arch import arch_model  # type: ignore[import]
-        scaled = returns.dropna() * scale
-        am = arch_model(scaled, vol="Garch", p=1, q=1, dist="normal", rescale=False)
-        res = am.fit(disp="off", show_warning=False, options={"maxiter": 200})
-        # 1-step forecast variance (in scaled units²)
-        forecast = res.forecast(horizon=1)
-        var_scaled = float(forecast.variance.iloc[-1, 0])
-        # Convert back to original return units
-        daily_sig = float(np.sqrt(max(var_scaled, 0))) / scale
-        return daily_sig if 0 < daily_sig < 0.20 else ewma_vol(returns)
-    except (ImportError, Exception):
-        return ewma_vol(returns)
+    return garch_vol_detail(returns, scale)[0]
 
 
 def garch_portfolio_vol(
@@ -135,18 +172,36 @@ def compare_vol_models(
     Useful for the dashboard "Vol Model" debug panel.
     """
     ewma_sig = ewma_vol(returns)
-    garch_sig = garch_vol(returns)
-    diff_bp   = round((garch_sig - ewma_sig) * 10_000, 1)
+    garch_sig, estimator = garch_vol_detail(returns)
+    available = estimator == GARCH_ESTIMATOR
 
-    return {
-        "symbol":          symbol,
-        "ewma_daily_pct":  round(ewma_sig * 100, 3),
-        "garch_daily_pct": round(garch_sig * 100, 3),
-        "ewma_annual_pct": round(ewma_sig * np.sqrt(252) * 100, 2),
-        "garch_annual_pct":round(garch_sig * np.sqrt(252) * 100, 2),
-        "diff_basis_pts":  diff_bp,
-        "preferred":       "GARCH" if abs(diff_bp) > 20 else "EWMA",
+    # When GARCH did not run, garch_sig IS ewma_sig — so the old code reported the
+    # EWMA number under a `garch_daily_pct` key and a difference of exactly 0.0,
+    # which reads as "the two models agree perfectly". They had not been compared at
+    # all. Emit None rather than a figure that cannot mean what its key says.
+    out: dict[str, Any] = {
+        "symbol":           symbol,
+        "ewma_daily_pct":   round(ewma_sig * 100, 3),
+        "ewma_annual_pct":  round(ewma_sig * np.sqrt(252) * 100, 2),
+        "garch_available":  available,
+        "estimator":        estimator,
     }
+    if available:
+        diff_bp = round((garch_sig - ewma_sig) * 10_000, 1)
+        out.update({
+            "garch_daily_pct":  round(garch_sig * 100, 3),
+            "garch_annual_pct": round(garch_sig * np.sqrt(252) * 100, 2),
+            "diff_basis_pts":   diff_bp,
+            "preferred":        "GARCH" if abs(diff_bp) > 20 else "EWMA",
+        })
+    else:
+        out.update({
+            "garch_daily_pct":  None,
+            "garch_annual_pct": None,
+            "diff_basis_pts":   None,
+            "preferred":        f"EWMA (GARCH unavailable: {estimator})",
+        })
+    return out
 
 
 # ─── CLI test ─────────────────────────────────────────────────────────────────
