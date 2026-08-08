@@ -62,7 +62,7 @@
 <header>
   <h1>🎓 GESH Financial — Learning Path</h1>
   <div class="sub">From "what is a portfolio signal" to running the full AI trading-intelligence stack.</div>
-  <div class="meta">Regenerated 2026-07-14 · reflects the 12-node consensus + customer surface + execution tier</div>
+  <div class="meta">Regenerated 2026-07-14 · autonomy-gate section corrected 2026-08-08 · reflects this repo's 12-node consensus (the :9003 engine has 11 — see the architecture diagram) + customer surface + execution tier</div>
 </header>
 
 <div class="legend">
@@ -233,7 +233,12 @@
   <h4>Learn</h4>
   <ul class="learn">
     <li><b>/track-record</b> — the public signal-accuracy proof page (timestamped ledger, all losses visible, SPY benchmark). Never paywalled.</li>
-    <li><b>Autonomy gate</b> for live Alpaca trading: ≥30 closed paper trades · win-rate ≥55% · Sharpe ≥0.5 · max drawdown &lt;10%.</li>
+    <li><b>Autonomy gate</b> for live Alpaca trading — <b>re-spec'd 2026-06-24; the old "≥30 closed · win-rate ≥55%" spec is retired</b>:
+      <b>≥100 closed <em>engine</em> trades</b> (<code>source in (consensus, market_scan)</code>; manual closes never gate) ·
+      expectancy &gt;0 · profit factor ≥1.5 · max drawdown ≤10% · bootstrap Monte-Carlo ≥0.90 · probabilistic Sharpe ≥0.95 ·
+      deflated Sharpe ≥0.95 · agreement rate ≥0.70. <b><code>win_rate</code> is descriptive only and no longer gates.</b>
+      Verified 2026-08-08 via <code>check_autonomy_gate()</code> (rule #26 — never hand-compute):
+      <b>20 / 100</b>, <code>ready = false</code>, max drawdown 26.54%.</li>
     <li><b>Billing</b>: Lemon Squeezy webhook → provision/revoke + set tier; magic-link onboarding.</li>
   </ul>
   <div class="files"><span class="file">proof_page.py</span><span class="file">billing.py</span><span class="file">trading/tracker.py</span></div>

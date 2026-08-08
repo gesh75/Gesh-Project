@@ -6,6 +6,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+import fair_value
 import llm_contracts
 import llm_gateway
 
@@ -126,15 +127,16 @@ _HOLDING_ANALYSIS_ITEM = {
             "required": ["valuation", "growth", "health", "momentum", "dividend"],
         },
         "snowflake_summary": {"type": "string"},
-        "fair_value": {
-            "type": "object",
-            "properties": {
-                "estimate": {"type": "number"},
-                "current": {"type": "number"},
-                "status": {"type": "string"},
-                "pct_diff": {"type": "number"},
-            },
-            "required": ["estimate", "current", "status", "pct_diff"],
+        # WIRE SHAPE ONLY — the model supplies its ESTIMATE and nothing else.
+        # `current` echoed a live price we already hold, `pct_diff` was 100%
+        # recomputed by fair_value.canonicalize_analysis, and `status` is just the
+        # sign of that pct_diff. renest_holding_card() rebuilds the full
+        # {estimate,current,pct_diff,status} object from live data, so every reader
+        # sees the identical nested shape it always has.
+        "fair_value_estimate": {
+            "type": "number",
+            "description": "Your fair-value estimate per share. Do NOT restate the "
+            "current price — it is supplied from live market data.",
         },
         "risks": {
             "type": "array",
@@ -144,47 +146,32 @@ _HOLDING_ANALYSIS_ITEM = {
                 "required": ["text", "severity"],
             },
         },
-        "rewards": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"text": {"type": "string"}},
-                "required": ["text"],
-            },
-        },
-        "prediction": {
-            "type": "object",
-            "properties": {
-                "3m": {"type": "string"},
-                "12m": {"type": "string"},
-                "rationale": {"type": "string"},
-            },
-            "required": ["3m", "12m", "rationale"],
-        },
+        # Flat list of strings on the wire; renest_holding_card() restores the
+        # historical [{"text": ...}] shape the renderers read.
+        "rewards": {"type": "array", "items": {"type": "string"}},
+        # Flat on the wire, re-nested into `prediction: {3m, 12m, rationale}`.
+        "prediction_3m": {"type": "string"},
+        "prediction_12m": {"type": "string"},
+        "prediction_rationale": {"type": "string"},
         "verdict": {"type": "string"},
         "analyst_note": {"type": "string"},
         # Retention feature: the strongest argument AGAINST the verdict, plus
         # concrete conditions that would flip it — steelmanned, never a strawman,
         # and tied to observable numbers/events so it can't degrade into vibes.
-        "bear_case": {
-            "type": "object",
-            "properties": {
-                "thesis": {
-                    "type": "string",
-                    "description": "The single strongest argument AGAINST your verdict, "
-                    "2-3 sentences, grounded in the same data you used — "
-                    "steelman it, do not strawman.",
-                },
-                "invalidators": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "2-4 concrete OBSERVABLE conditions that would flip this "
-                    "verdict, each tied to a number or event, e.g. 'gross "
-                    "margin prints below 70% next quarter' — never vague "
-                    "('sentiment worsens').",
-                },
-            },
-            "required": ["thesis", "invalidators"],
+        # Flat on the wire, re-nested into `bear_case: {thesis, invalidators}`.
+        "bear_thesis": {
+            "type": "string",
+            "description": "The single strongest argument AGAINST your verdict, "
+            "2-3 sentences, grounded in the same data you used — "
+            "steelman it, do not strawman.",
+        },
+        "bear_invalidators": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "2-4 concrete OBSERVABLE conditions that would flip this "
+            "verdict, each tied to a number or event, e.g. 'gross "
+            "margin prints below 70% next quarter' — never vague "
+            "('sentiment worsens').",
         },
     },
     "required": [
@@ -192,15 +179,125 @@ _HOLDING_ANALYSIS_ITEM = {
         "company_type",
         "scores",
         "snowflake_summary",
-        "fair_value",
+        "fair_value_estimate",
         "risks",
         "rewards",
-        "prediction",
+        "prediction_3m",
+        "prediction_12m",
+        "prediction_rationale",
         "verdict",
         "analyst_note",
-        "bear_case",
+        "bear_thesis",
+        "bear_invalidators",
     ],
 }
+
+
+# ── Wire -> stored shape ──────────────────────────────────────────────────────
+#
+# The tool schema above is deliberately FLAT because Anthropic compiles a
+# constrained-decoding grammar for every `strict: True` tool and 400s past an
+# internal size ceiling. The nested shape cost more grammar than the ceiling
+# allowed (measured 2026-08-07: 48 props / 11 object nodes -> rejected).
+#
+# Nothing downstream needs to know that. renest_holding_card() restores the exact
+# historical nested shape, so gen_report2, dashboard.html, owner_console.html,
+# server.py, verdict_reconciliation and the stored analysis history all keep
+# reading `fair_value.pct_diff`, `prediction["3m"]`, `bear_case.thesis` and
+# `rewards[i]["text"]` unchanged. Change the wire freely; keep this contract.
+
+_FV_UNDER = 8.0  # pct_diff at/above which we label "Undervalued"
+_FV_OVER = -8.0  # pct_diff at/below which we label "Overvalued"
+
+
+def _fair_value_status(pct_diff: float) -> str:
+    """Derive the badge label from the canonical pct_diff.
+
+    Previously model prose, which could contradict its own numbers (a card could
+    read 'Undervalued' on a negative pct_diff). gen_report2 colours on
+    `"Over" in status` / `"Under" in status`, so keep those substrings.
+    """
+    if pct_diff >= _FV_UNDER:
+        return "Undervalued"
+    if pct_diff <= _FV_OVER:
+        return "Overvalued"
+    return "Fairly valued"
+
+
+def renest_holding_card(item: Any, current_price: float | None = None) -> dict[str, Any]:
+    """Convert one flat wire card into the nested shape every reader expects.
+
+    Idempotent: an already-nested card (replayed history, a cached result, or a
+    non-strict response that happened to nest) passes through untouched. Never
+    raises — this sits on the analysis write path, so a malformed payload must
+    degrade to "as received", not break the run.
+    """
+    if not isinstance(item, dict):
+        return item
+    out = dict(item)
+
+    # fair_value: model gives the estimate; price/pct/status come from live data.
+    if "fair_value" not in out and "fair_value_estimate" in out:
+        try:
+            estimate = float(out.pop("fair_value_estimate"))
+        except (TypeError, ValueError):
+            estimate = 0.0
+        fv: dict[str, Any] = {"estimate": estimate}
+        if current_price is not None:
+            try:
+                fv["current"] = float(current_price)
+            except (TypeError, ValueError):
+                fv["current"] = 0.0
+        else:
+            fv["current"] = 0.0
+        fv["pct_diff"] = fair_value.canonical_pct_diff(fv)
+        fv["status"] = _fair_value_status(fv["pct_diff"])
+        out["fair_value"] = fv
+
+    # rewards: [str] -> [{"text": str}] (leave already-nested entries alone).
+    rewards = out.get("rewards")
+    if isinstance(rewards, list):
+        out["rewards"] = [{"text": r} if isinstance(r, str) else r for r in rewards]
+
+    if "prediction" not in out:
+        out["prediction"] = {
+            "3m": out.pop("prediction_3m", ""),
+            "12m": out.pop("prediction_12m", ""),
+            "rationale": out.pop("prediction_rationale", ""),
+        }
+    else:
+        for k in ("prediction_3m", "prediction_12m", "prediction_rationale"):
+            out.pop(k, None)
+
+    if "bear_case" not in out:
+        invalidators = out.pop("bear_invalidators", [])
+        out["bear_case"] = {
+            "thesis": out.pop("bear_thesis", ""),
+            "invalidators": invalidators if isinstance(invalidators, list) else [],
+        }
+    else:
+        out.pop("bear_thesis", None)
+        out.pop("bear_invalidators", None)
+
+    return out
+
+
+def renest_analysis(result: Any, prices: dict[str, float] | None = None) -> Any:
+    """Re-nest every holding card in a deep-analysis result. Never raises."""
+    if not isinstance(result, dict):
+        return result
+    cards = result.get("holdings_analysis")
+    if not isinstance(cards, list):
+        return result
+    price_map = {str(k).upper(): v for k, v in (prices or {}).items()}
+    out = dict(result)
+    out["holdings_analysis"] = [
+        renest_holding_card(c, price_map.get(str((c or {}).get("symbol", "")).upper()))
+        if isinstance(c, dict)
+        else c
+        for c in cards
+    ]
+    return out
 
 DEEP_ANALYSIS_SCHEMA = {
     "type": "object",
@@ -228,11 +325,23 @@ DEEP_ANALYSIS_SCHEMA = {
                     "action": {"type": "string"},
                     "priority": {"type": "string"},
                     "rationale": {"type": "string"},
-                    # Nullable (strict-mode): set when the recommendation is an
-                    # advisory NEW-name diversification idea from the radar. category
-                    # "DIVERSIFICATION" lets the UI group it; symbol names the new ticker.
-                    "category": {"type": ["string", "null"]},
-                    "symbol": {"type": ["string", "null"]},
+                    # Set when the recommendation is an advisory NEW-name
+                    # diversification idea from the radar: category "DIVERSIFICATION"
+                    # lets the UI group it, symbol names the new ticker. Empty string
+                    # (not null) when not applicable — a ["string","null"] UNION was
+                    # measurably one of the largest contributors to the compiled strict
+                    # grammar, and dropping the two here was required to get back under
+                    # the provider ceiling. Readers already treat falsy as absent.
+                    "category": {
+                        "type": "string",
+                        "description": "'DIVERSIFICATION' for an advisory new-name idea, "
+                        "otherwise an empty string.",
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Ticker for a DIVERSIFICATION idea, otherwise an "
+                        "empty string.",
+                    },
                 },
                 "required": ["action", "priority", "rationale", "category", "symbol"],
             },
@@ -337,7 +446,7 @@ def deep_analyze_portfolio(
             "\n\nBE CONCISE — this is a fast interactive report on a larger book. "
             "For each holding give at most 2 short risks, 2 short rewards, and "
             "one-line 3M/12M outlooks; a one-sentence snowflake_summary; "
-            "bear_case: a one-sentence thesis and at most 2 invalidators. "
+            "a one-sentence bear_thesis and at most 2 bear_invalidators. "
             "No preamble or repetition."
         )
         if concise
@@ -399,6 +508,17 @@ def deep_analyze_portfolio(
         expected_tool="return_portfolio_analysis",
         operation="deep_analyze_portfolio",
     )
+    # Wire (flat) -> stored (nested). Live prices come from the SNAPSHOT, never the
+    # model: `fair_value.current` used to be the model restating a price we already
+    # had, which is both wasted grammar and a fabrication risk.
+    prices: dict[str, float] = {}
+    for h in sanitized.get("holdings") or []:
+        if isinstance(h, dict) and h.get("symbol") is not None:
+            px = h.get("price", h.get("current_price"))
+            if px is not None:
+                prices[str(h["symbol"]).upper()] = px
+    result = renest_analysis(result, prices)
+
     # Same defensive default as deep_analyze_ticker: bear_case is in the shared
     # per-holding schema, but a model may omit it — every holding card must reach
     # the renderer with the scaffold present, never raise on a missing key.
@@ -424,8 +544,9 @@ SCORING GUIDE (be realistic — avoid clustering all at 50):
 - dividend: 0=no dividend, 60=moderate 2-4% yield, 100=high yield >5% safe payout
 
 Provide 2-4 risks and 1-3 rewards — be specific, reference actual business metrics.
-fair_value.current is the latest share price; fair_value.estimate is your intrinsic
-per-share value. This is single-name research: no portfolio, no position sizing, no
+fair_value_estimate is your intrinsic per-share value. Do NOT restate the current
+price: it is supplied to you from live market data, and the upside percentage and
+valuation label are computed from it. This is single-name research: no portfolio, no position sizing, no
 holder context — refer ONLY to per-share prices and public company figures, never to
 share counts or a holder's dollar amounts."""
 
@@ -485,6 +606,9 @@ def deep_analyze_ticker(
         expected_tool="return_ticker_analysis",
         operation="deep_analyze_ticker",
     )
+    # Re-nest BEFORE validation: validate_ticker_card price-grounds the card against
+    # `fair_value`, which only exists once the flat wire shape is rebuilt.
+    card = renest_holding_card(card, current_price)
     card = llm_contracts.validate_ticker_card(
         card, requested_symbol=symbol, current_price=current_price
     )

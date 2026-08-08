@@ -200,6 +200,64 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+# ── Strict-tool grammar degradation ───────────────────────────────────────────
+#
+# Anthropic compiles a constrained-decoding grammar for every tool carrying
+# `strict: True`, and rejects the request with a 400 when that grammar exceeds an
+# internal size ceiling. The ceiling is a PROVIDER-SIDE limit we do not control:
+# `DEEP_ANALYSIS_SCHEMA` (48 properties / 11 nested objects / depth 5, four
+# unbounded object arrays) sits close enough to it that the same unchanged schema
+# was accepted on 2026-08-05 and 2026-08-06 and rejected on 2026-08-04 and
+# 2026-08-07 — a hard, deterministic-per-request failure that no retry can clear.
+#
+# Dropping `strict` costs only server-side output CONSTRAINT, not the contract:
+# `input_schema` is still sent, so the model still targets the same shape, and
+# `llm_contracts.extract_tool_input` + the field validators still reject anything
+# malformed downstream. Degrading therefore preserves the response contract while
+# turning a fatal 400 into a warning — but it must never be silent, so every
+# degrade logs at WARNING and is counted (rule: a degraded state must say so).
+
+_GRAMMAR_ERROR_MARKERS: Final[tuple[str, ...]] = (
+    "compiled grammar is too large",
+    "reduce the number of strict tools",
+)
+
+#: Count of strict->non-strict degradations this process; surfaced by callers
+#: (and asserted by tests) so a silent, permanent degrade cannot go unnoticed.
+STRICT_DEGRADE_COUNT: int = 0
+
+
+def _is_grammar_too_large(exc: BaseException) -> bool:
+    """True for the provider 400 that rejects an over-large strict-tool grammar."""
+    if not isinstance(exc, anthropic.BadRequestError):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in _GRAMMAR_ERROR_MARKERS)
+
+
+def _without_strict_tools(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    """Copy of ``kwargs`` with ``strict`` removed from every tool.
+
+    Returns ``None`` when there is nothing to degrade, so the caller re-raises
+    the original error instead of silently retrying an identical request.
+    """
+    tools = kwargs.get("tools")
+    if not isinstance(tools, list):
+        return None
+    degraded_tools: list[Any] = []
+    changed = False
+    for tool in tools:
+        if isinstance(tool, dict) and "strict" in tool:
+            relaxed = {k: v for k, v in tool.items() if k != "strict"}
+            degraded_tools.append(relaxed)
+            changed = True
+        else:
+            degraded_tools.append(tool)
+    if not changed:
+        return None
+    return {**kwargs, "tools": degraded_tools}
+
+
 def _retry_after_seconds(exc: BaseException) -> float | None:
     headers = getattr(exc, "response", None)
     if headers is not None:
@@ -601,12 +659,39 @@ class Gateway:
     def daily_usage_summary(self, days: int = 1) -> dict[str, Any]:
         return self._ledger.daily_usage_summary(days=days)
 
-    def _invoke_once(self, *, mode: str, model: str, max_tokens: int, **kwargs: Any) -> Any:
+    def _dispatch(self, *, mode: str, model: str, max_tokens: int, **kwargs: Any) -> Any:
         client = self._client_factory()
         if mode == "stream":
             with client.messages.stream(model=model, max_tokens=max_tokens, **kwargs) as stream:
                 return stream.get_final_message()
         return client.messages.create(model=model, max_tokens=max_tokens, **kwargs)
+
+    def _invoke_once(self, *, mode: str, model: str, max_tokens: int, **kwargs: Any) -> Any:
+        """One provider call, with a single strict-tool grammar fallback.
+
+        Lives here rather than in ``_call``'s retry loop on purpose: the fallback
+        must not consume a transport-retry attempt, and reusing the caller's
+        ``call_id`` keeps ledger settlement attributable to one logical call.
+        """
+        global STRICT_DEGRADE_COUNT
+        try:
+            return self._dispatch(mode=mode, model=model, max_tokens=max_tokens, **kwargs)
+        except Exception as exc:
+            if not _is_grammar_too_large(exc):
+                raise
+            degraded = _without_strict_tools(kwargs)
+            if degraded is None:
+                raise
+            STRICT_DEGRADE_COUNT += 1
+            logger.warning(
+                "STRICT_DEGRADE: provider rejected the compiled strict-tool grammar "
+                "(model=%s); retrying once WITHOUT strict. Output is no longer "
+                "grammar-constrained — llm_contracts validators remain the contract. "
+                "Shrink the tool schema to restore strict mode. (%s)",
+                model,
+                exc,
+            )
+            return self._dispatch(mode=mode, model=model, max_tokens=max_tokens, **degraded)
 
     def _call(
         self, *, mode: str, operation: str, model: str, max_tokens: int, **kwargs: Any

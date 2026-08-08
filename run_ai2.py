@@ -174,7 +174,21 @@ try:
     print(f"{_t()} [ai] Done. Score={ai_result.get('portfolio_score',0)}  Risk={ai_result.get('risk_score',0)}")
     print(f"[ai] Verdict: {ai_result.get('portfolio_verdict','?')}")
 
+    # A strict->non-strict fallback keeps the chain alive but silently relaxes
+    # server-side output constraint, so make it loud and durable rather than
+    # letting a permanent degrade hide behind a green run.
+    _strict_degrades = 0
+    try:
+        import llm_gateway as _lg  # noqa: E402 — already imported by ai_analyzer
+        _strict_degrades = int(getattr(_lg, 'STRICT_DEGRADE_COUNT', 0) or 0)
+    except Exception:
+        pass
+    if _strict_degrades:
+        print(f"[ai] WARNING: strict-tool grammar degraded x{_strict_degrades} — "
+              f"schema exceeds the provider limit; shrink DEEP_ANALYSIS_SCHEMA to restore strict mode")
+
     # Save back to engine_results.json
+    eng['ai_strict_degraded'] = _strict_degrades
     eng['ai_result'] = ai_result
     eng['ai_result_ran_at'] = __import__('datetime').datetime.now(
         __import__('datetime').timezone.utc).isoformat()
