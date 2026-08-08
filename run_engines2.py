@@ -502,6 +502,51 @@ except Exception as e:
     print(f"  consolidation ERROR: {e}")
     results["consolidation_zone"] = {}
 
+
+# ── Deterministic DCF (gesh_core.dcf v0.8.0) — REPORTING ONLY ────────────────
+# Publishes next to the LLM fair-value estimate so the two can be compared;
+# feeds NO sizing, stops, or entries (agentic-rh brief T1/T2, reporting phase).
+# Contract: an unavailable symbol carries error + available:false and NEVER a
+# number — a fair value that survives into a report as fact is the exact
+# failure GESH rules #45/#51/#59 exist to prevent.
+print(f"{_t()} [engines] Deterministic DCF (reporting-only)...")
+dcf_results = {}
+try:
+    from gesh_core.dcf import compute_fair_value
+
+    _dcf_as_of = _utcnow()
+    for h in holdings:
+        _sym = h["symbol"]
+        try:
+            _r = compute_fair_value(_sym)
+            if _r.get("error"):
+                dcf_results[_sym] = {
+                    "available": False, "error": _r["error"], "as_of": _dcf_as_of,
+                }
+            else:
+                dcf_results[_sym] = {
+                    "available": True,
+                    "fair_value": _r["fair_value_per_share"],
+                    "wacc": _r["wacc"],
+                    "terminal_pct_of_ev": _r["terminal_pct_of_ev"],
+                    "beta_sensitivity": _r.get("beta_sensitivity"),
+                    "assumptions": _r.get("assumptions"),
+                    "as_of": _dcf_as_of,
+                }
+        except Exception as _e_sym:  # noqa: BLE001 — per-symbol fail-soft
+            dcf_results[_sym] = {
+                "available": False,
+                "error": f"{type(_e_sym).__name__}: {_e_sym}",
+                "as_of": _dcf_as_of,
+            }
+    _ok = sum(1 for v in dcf_results.values() if v.get("available"))
+    print(f"  dcf: {_ok}/{len(dcf_results)} computed, {len(dcf_results) - _ok} refused (named reasons)")
+except Exception as e:
+    print(f"  dcf ERROR: {e}")
+    dcf_results = {}
+results["dcf"] = dcf_results
+results["dcf_ran_at"] = _utcnow()
+
 # ── Store regime_summary for AI step ─────────────────────────────────────────
 results["regime_summary"] = regime_summary
 
