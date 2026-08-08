@@ -2348,6 +2348,34 @@ function buildStancePanel(rec){
     <table style="margin-top:8px;font-size:13px;border-collapse:collapse">${(rec.components||[]).map(c=>`<tr><td style="padding:3px 10px 3px 0;color:var(--muted);white-space:nowrap">${daEsc(c.layer)}</td><td style="padding:3px 10px 3px 0;font-weight:700">${daEsc(c.reading)}</td><td style="padding:3px 0;color:var(--muted2);font-size:12px">${daEsc(c.means)}</td></tr>`).join('')}</table>
   </div>`;
 }
+// ── Deterministic DCF (reporting-only) — renders beside the AI estimate ─────
+// __dcf: {SYM: {available, fair_value, beta_sensitivity, error, as_of}} from
+// /api/dcf/cached. Loaded lazily; a missing map renders nothing (progressive).
+let __dcf=null,__dcfLoading=null;
+function loadDcf(){
+  if(__dcfLoading) return __dcfLoading;
+  __dcfLoading=fetch('/api/dcf/cached').then(r=>r.json())
+    .then(j=>{__dcf=(j&&j.cached&&j.data)||null;})
+    .catch(()=>{__dcf=null;});
+  return __dcfLoading;
+}
+function buildDcfRow(sym, fv){
+  const d=__dcf&&__dcf[String(sym||'').toUpperCase()];
+  if(!d) return '';
+  const stale=(()=>{try{return (Date.now()-Date.parse(d.as_of))>36*3600*1000;}catch(e){return false;}})();
+  const staleTag=stale?` <span style="opacity:.55">· stale</span>`:'';
+  if(!d.available){
+    // A refusal is the model declining for a NAMED reason — information, not an error.
+    return `<div class="da-dcf" style="margin-top:4px;font-size:11px;color:var(--muted)" title="Deterministic DCF (statement-driven). It declines rather than guess when its method does not apply.">DCF declines: ${daEsc(String(d.error||'').split(' — ')[0])}${staleTag}</div>`;
+  }
+  const cur=fv&&fv.current, dv=d.fair_value;
+  const gap=(cur&&dv)?((dv/cur-1)*100):null;
+  const gc=gap==null?'var(--muted)':gap>5?'var(--green)':gap<-5?'var(--red)':'var(--yellow)';
+  const bs=d.beta_sensitivity||{};
+  const frag=bs.fragile?` <span style="padding:1px 5px;border-radius:3px;background:rgba(255,215,0,.12);color:var(--yellow);font-size:10px" title="This valuation swings ${daEsc(daFmt(bs.swing_pct,1))}% when beta is stressed to 1.0 — it hinges on one regression coefficient. Read the range, not the point.">⚠ hinges on beta</span>`:'';
+  return `<div class="da-dcf" style="margin-top:4px;font-size:12px;color:var(--muted)" title="Deterministic DCF from filed statements (operating NWC, Blume-adjusted beta, multi-year average ratios). Shown next to the AI estimate so the two can disagree in the open. Not investment advice.">DCF model: <span style="color:${gc};font-weight:700">$${daFmt(dv,2)}${gap!=null?` (${gap>0?'+':''}${daFmt(gap,0)}%)`:''}</span>${frag}${staleTag}</div>`;
+}
+
 function buildAICard(h,opts){
   const withSpark=!!(opts&&opts.spark);   // sparkline slot: single-ticker Analyze flow only
   const sc=h.scores||{}, fv=h.fair_value||{};
@@ -2370,6 +2398,7 @@ function buildAICard(h,opts){
         </div>
         <div class="da-fv" style="color:${fvColor};border-color:${fvColor}">
           FV $${daFmt(fv.estimate,2)} <span style="opacity:.7">${daEsc(fvv?fvv.label:'')} ${daEsc(fvPct)}</span>
+          ${buildDcfRow(h.symbol, fv)}
         </div>
       </div>
       ${withSpark?'<div class="sig-spark-slot"></div>':''}
@@ -2768,6 +2797,7 @@ async function accountDelete(){
 // is about request volume, not job integrity.
 let _mybookAnalyzeInFlight=false;
 async function mybookAnalyze(){
+  loadDcf();  // fire early; awaited before cards render below
   const box=document.getElementById('mybook-results'); if(!box) return;
   if(_mybookAnalyzeInFlight) return;
   _mybookAnalyzeInFlight=true;
@@ -2830,6 +2860,7 @@ async function mybookAnalyze(){
       const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
       return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;
     }).join('');
+    await loadDcf();  // DCF rows render only if the map is here before the cards
     box.innerHTML=`
       <div class="card" style="margin-bottom:16px"><div style="${T}">🧠 Portfolio Verdict</div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
