@@ -737,7 +737,8 @@ document.getElementById('m').textContent='If that email has access, a sign-in li
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "auth": auth_users.auth_enabled()}
+    return {"status": "ok", "auth": auth_users.auth_enabled(),
+            "deletion": auth_users.deletion_readiness()}
 
 
 @app.get("/api/me")
@@ -1120,6 +1121,7 @@ async def billing_webhook(request: Request):
     auth_users account. Public (in PUBLIC_PREFIXES) because it carries its own HMAC auth."""
     raw = await _read_limited_body(request, WEBHOOK_MAX_BYTES)
     sig = request.headers.get("X-Signature")
+    event_name_header = request.headers.get("X-Event-Name")
     try:
         payload = _json.loads(raw)
         if not isinstance(payload, dict):
@@ -1127,7 +1129,10 @@ async def billing_webhook(request: Request):
     except Exception:
         payload = {}
     try:
-        result = billing.handle_webhook(raw, sig, payload)
+        # X-Event-Name is required to match meta.event_name AFTER signature
+        # verification (a header/body mismatch is a tampering signal). The parse
+        # above is advisory; handle_webhook re-verifies the signature first.
+        result = billing.handle_webhook(raw, sig, payload, event_name_header=event_name_header)
         return JSONResponse(content=result)
     except PermissionError:
         return JSONResponse(status_code=401, content={"ok": False, "detail": "bad signature"})
@@ -1210,6 +1215,32 @@ def terms_page():
     return legal_pages.render_terms_html()
 
 
+def _reject_cross_site_write(request: Request) -> None:
+    """CSRF defence for destructive cookie-authenticated routes.
+
+    The session cookie is already SameSite=Lax, which blocks the classic
+    cross-site form POST. This is defence-in-depth on top of that: a state-changing
+    request must look same-origin. Modern browsers send `Sec-Fetch-Site`; when
+    present it must be same-origin/same-site/none. When absent (older client), fall
+    back to an Origin-host check. A cross-site Origin is rejected outright.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site:
+        if site not in ("same-origin", "same-site", "none"):
+            raise HTTPException(status_code=403, detail="Cross-site request rejected")
+        return
+    origin = request.headers.get("origin")
+    if origin:
+        try:
+            from urllib.parse import urlsplit
+            if urlsplit(origin).hostname not in (request.url.hostname, None):
+                raise HTTPException(status_code=403, detail="Cross-site request rejected")
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001 — a malformed Origin is treated as hostile
+            raise HTTPException(status_code=403, detail="Cross-site request rejected")
+
+
 @app.get("/api/account/export")
 def account_export(request: Request):
     """Data-subject ACCESS/PORTABILITY right (Privacy Policy §8).
@@ -1245,6 +1276,18 @@ async def account_delete(request: Request):
     their own product. If a live subscription exists we say so: deleting here
     does NOT cancel Lemon Squeezy, and letting someone keep paying for an
     account that no longer exists would be indefensible."""
+    _reject_cross_site_write(request)          # CSRF defence on a destructive route
+    # MIXED-VERSION SAFETY (adjudicated 2026-07-23): an OLD instance/worker that
+    # predates the saga ignores the tombstone table and will RESURRECT an erased
+    # account (reproduced against f7e8790). Deletion therefore stays disabled until
+    # the operator sets GESH_DELETION_SAGA_ENABLED, which they do only AFTER
+    # confirming every serving instance reports the new generation at /healthz.
+    # Merging with the flag off leaves the whole feature inert.
+    if not auth_users.deletion_saga_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Account deletion is temporarily unavailable. Please contact "
+                   "support to request erasure of your data.")
     email = _session_email(request)
     if not email:
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1261,7 +1304,41 @@ async def account_delete(request: Request):
             detail='Confirmation required — send {"confirm": "DELETE"} to erase your account.')
     try:
         sub_id, sub_status = auth_users.billing_subscription_status(email)
-        report = auth_users.delete_user_data(email)
+        # Cancel-then-erase saga (2026-07-23). Replaces the bare purge: it writes a
+        # durable tombstone BEFORE deleting rows, so a delayed renewal webhook can no
+        # longer recreate the account. `cancel_fn=None` = no provider call is made
+        # here yet (see deletion_saga docstring); the tombstone + ordering are the
+        # part that fixes the resurrection defect.
+        import billing_cancel
+        import deletion_saga
+        # Production adapter: an account WITH a remote subscription must have a
+        # confirmed cancellation (or confirmed absence) before anything is erased.
+        try:
+            saga_result = deletion_saga.run(email, cancel_fn=billing_cancel.cancel)
+        except deletion_saga.ProviderRetryableError:
+            # Transient / unknown remote outcome. Nothing was erased; the saga is
+            # durable and will be resumed. 202 = accepted-and-pending, not failure.
+            raise HTTPException(
+                status_code=202,
+                detail="Deletion started. Your subscription cancellation is still "
+                       "being confirmed with our payment provider; your data will be "
+                       "removed once it completes.")
+        except deletion_saga.ProviderUnknownOutcome:
+            raise HTTPException(
+                status_code=202,
+                detail="Deletion started. We are confirming your subscription "
+                       "cancellation with our payment provider before removing data.")
+        except deletion_saga.ProviderPermanentError:
+            # Fail CLOSED: nothing erased, saga parked for operator review. The
+            # message deliberately reveals no provider or configuration detail.
+            logger.error("account delete: cancellation failed permanently for a "
+                         "subscribed account — parked for manual review")
+            raise HTTPException(
+                status_code=409,
+                detail="We could not cancel your active subscription automatically, "
+                       "so nothing has been deleted yet. Our team has been notified "
+                       "and will complete your request.")
+        report = {"deleted": True, "counts": saga_result.get("counts", {})}
         notice = ""
         if sub_id and (sub_status or "").lower() in ("active", "past_due", "paused"):
             notice = ("Your account data is deleted, but your subscription is billed by "

@@ -204,6 +204,23 @@ _BACKUP_MANIFEST_VERSION = 1
 _OWNER_METADATA_KEY = "owner_user_id"
 _OWNER_INITIALIZED_KEY = "owner_marker_initialized"
 
+class TombstoneUnavailableError(RuntimeError):
+    """The tombstone table could not be consulted.
+
+    Callers must NOT create or reactivate an account when this is raised — an
+    unverifiable erasure state has to block the write, never permit it.
+    """
+
+
+class TombstonedIdentityError(RuntimeError):
+    """Raised when an erased identity would be recreated automatically.
+
+    Terminal, NOT retryable: the caller (billing webhook) must convert this into a
+    success/no-op so the provider stops redelivering, while the account stays erased.
+    """
+
+
+
 _CORE_DDL = (
     """
     CREATE TABLE IF NOT EXISTS users (
@@ -227,6 +244,83 @@ _CORE_DDL = (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )
+    """,
+)
+
+_SAGA_DDL = (
+    # ── Deletion/billing saga (additive migration, 2026-07-23) ──────────────────
+    # Why: delete_user_data() drops the `users` row outright, freeing the unique
+    # billing_sub_id index. The next Lemon Squeezy renewal then found no account,
+    # provisioned a NEW one and emailed a magic link — silently undoing an erasure
+    # request. The tombstone is durable memory that OUTLIVES the deleted row.
+    #
+    # Data minimisation: NO clear-text email, no portfolio, no credentials, no
+    # webhook payloads. `email_digest` is a keyed HMAC (identity_digest) so a
+    # returning identity can be recognised without storing who it was.
+    """
+    CREATE TABLE IF NOT EXISTS account_tombstones (
+        email_digest   TEXT PRIMARY KEY,     -- keyed HMAC of the normalized email
+        user_id        TEXT NOT NULL,        -- former internal UUID (audit correlation)
+        sub_digest     TEXT,                 -- keyed HMAC of the provider sub id (NOT raw)
+        key_version    INTEGER NOT NULL DEFAULT 1,
+        reason         TEXT NOT NULL DEFAULT 'user_request',
+        saga_id        TEXT,                 -- audit correlation to deletion_sagas
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        created_at     TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_account_tombstones_sub_digest
+        ON account_tombstones(sub_digest)
+    """,
+    # Post-tombstone billing remediation. A signed, billable event can still arrive
+    # for an ERASED identity (a subscription the deletion never cancelled, or that
+    # LS reactivated). The webhook durably records the need to cancel it and ACKs;
+    # the recovery runner performs the provider call OUTSIDE any webhook transaction.
+    # Separate from deletion_sagas so a COMPLETED erasure is never moved backwards.
+    """
+    CREATE TABLE IF NOT EXISTS billing_remediations (
+        remediation_id TEXT PRIMARY KEY,
+        email_digest   TEXT NOT NULL,
+        sub_id         TEXT,                 -- raw ONLY until cancellation completes
+        sub_digest     TEXT,                 -- keyed digest retained after scrub
+        state          TEXT NOT NULL,        -- pending | completed | manual_review
+        attempts       INTEGER NOT NULL DEFAULT 0,
+        last_error     TEXT,
+        next_attempt_at TEXT,
+        version        INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        completed_at   TEXT
+    )
+    """,
+    # At most one open remediation per (identity, subscription).
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_billing_remediations_open
+        ON billing_remediations(email_digest, sub_id) WHERE completed_at IS NULL
+    """,
+    # Saga state. Persisted BEFORE any provider call so a crash is resumable.
+    # `last_error` holds a CLASSIFICATION string only — never a provider payload.
+    """
+    CREATE TABLE IF NOT EXISTS deletion_sagas (
+        saga_id        TEXT PRIMARY KEY,
+        user_id        TEXT NOT NULL,
+        email_digest   TEXT NOT NULL,
+        state          TEXT NOT NULL,
+        resume_state   TEXT,
+        billing_sub_id TEXT,
+        attempts       INTEGER NOT NULL DEFAULT 0,
+        last_error     TEXT,
+        version        INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        completed_at   TEXT
+    )
+    """,
+    # One active saga per user — concurrent duplicate requests converge, not race.
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_deletion_sagas_active
+        ON deletion_sagas(user_id) WHERE completed_at IS NULL
     """,
 )
 
@@ -858,6 +952,31 @@ def _ensure_core_schema(con: sqlite3.Connection) -> None:
         con.execute(statement)
 
 
+_SAGA_SCHEMA_DONE: set[str] = set()
+
+
+def _ensure_saga_schema(con: sqlite3.Connection) -> None:
+    """Create the deletion-saga tables on EXISTING databases, not just fresh ones.
+
+    CRITICAL (2026-07-23): `_migrate_to_user_ids` short-circuits on
+    `_schema_v2_ready(con)`, so `_ensure_core_schema` never runs against an
+    already-migrated production database. Adding the tables to _CORE_DDL alone
+    therefore created them ONLY on a brand-new DB — verified empirically: on a
+    pre-saga DB `account_tombstones` was absent, `is_tombstoned()` silently
+    returned False (guard disabled → resurrection still possible) and
+    `write_tombstone()` raised OperationalError (deletion broken).
+
+    Runs on every connection; the per-path flag only avoids repeat cost, so
+    correctness never depends on it (CREATE TABLE IF NOT EXISTS is idempotent).
+    """
+    key = str(AUTH_DB_PATH)
+    if key in _SAGA_SCHEMA_DONE:
+        return
+    for statement in _SAGA_DDL:
+        con.execute(statement)
+    _SAGA_SCHEMA_DONE.add(key)
+
+
 def _create_child_table(con: sqlite3.Connection, table: str, target: str) -> None:
     con.execute(_CHILD_TABLE_DDL[table].format(table=target))
 
@@ -1129,6 +1248,7 @@ def _conn() -> Iterator[sqlite3.Connection]:
         con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
         con.execute("PRAGMA foreign_keys = ON")
         _migrate_to_user_ids(con)
+        _ensure_saga_schema(con)
         _harden_db_perms()
         yield con
         con.commit()
@@ -1276,6 +1396,20 @@ def create_magic_link_user(email: str, tier: str | None = None) -> bool:
     em = _norm(email)
     if not em:
         raise ValueError("email required")
+    # ERASURE GUARD (2026-07-23) — checked FIRST, before the reactivate branch.
+    # Without it, a delayed renewal webhook for a deleted account found no user,
+    # fell through to create, and resurrected the account AND emailed a magic link
+    # to someone who had asked to be erased.
+    #
+    # It must PRECEDE get_user(), not follow it: if the saga crashed between writing
+    # the tombstone and purging the rows, the user row still EXISTS, so a guard
+    # placed after get_user() takes the REACTIVATE branch and silently restores
+    # access to an account already marked erased. (Caught by scenario 15.)
+    # Re-registration after erasure is a REVIEWED path, never automatic; callers
+    # treat TombstonedIdentityError as a terminal no-op, not a retry.
+    if is_tombstoned(em):
+        raise TombstonedIdentityError(
+            "account was erased at the user's request; automatic recreation refused")
     if get_user(em):
         set_active(em, True)
         if tier:
@@ -1493,6 +1627,17 @@ def authenticate_session(token: str | None) -> str | None:
         return None
     u = get_user_by_id(user_id)
     if not u or not u["is_active"]:
+        return None
+    # TOMBSTONE GATE (2026-07-23). Deletion writes the tombstone in one transaction
+    # and purges the user row in the next, so between those commits the row is still
+    # active and a session would otherwise authenticate. Any NEW request that begins
+    # after the tombstone commit must be denied — the protective boundary is the
+    # tombstone, not the (later) row deletion. Fails CLOSED: if the tombstone table
+    # cannot be read, deny rather than grant.
+    try:
+        if is_tombstoned(u["email"]):
+            return None
+    except TombstoneUnavailableError:
         return None
     return str(u["email"])
 
@@ -2228,3 +2373,291 @@ def billing_subscription_status(email: str) -> tuple[str | None, str | None]:
             "SELECT billing_sub_id, billing_status FROM users WHERE email=?", (_norm(email),)
         ).fetchone()
     return (row["billing_sub_id"], row["billing_status"]) if row else (None, None)
+
+
+# ─── Deletion/billing saga persistence (2026-07-23) ────────────────────────────
+# Durable memory that survives the deletion of the `users` row. See _CORE_DDL for
+# the schema rationale and the data-minimisation contract.
+
+SAGA_REQUESTED = "requested"
+SAGA_CANCELLATION_PENDING = "cancellation_pending"
+SAGA_CANCELLATION_CONFIRMED = "cancellation_confirmed"
+SAGA_TOMBSTONE_PENDING = "tombstone_pending"
+SAGA_TOMBSTONED = "tombstoned"
+SAGA_COMPLETED = "completed"
+SAGA_RETRYABLE_FAILURE = "retryable_failure"
+SAGA_MANUAL_REVIEW = "manual_review"
+
+
+# Domain separation: a tombstone digest must never collide with any other HMAC use
+# of the same key (session tokens, etc.). Bump the suffix only on a breaking change.
+_DIGEST_DOMAIN_V1 = b"gesh-tombstone-v1"
+_DIGEST_KEY_VERSION = 1
+
+
+def _digest_keys() -> list[bytes]:
+    """Keys to check a digest against, NEWEST FIRST.
+
+    Rotation: set GESH_TOMBSTONE_KEYS to a comma-separated list (newest first) and
+    KEEP the retired key in the list, so tombstones written under it stay visible.
+    Dropping an old key deliberately makes its tombstones invisible — that is a
+    resurrection hazard, proven by test_key_rotation_dropping_old_key_hides_tombstone.
+    Falls back to the app secret when unset. Fails closed when the secret is
+    unavailable and the wall is on (via _secret()).
+    """
+    raw = os.getenv("GESH_TOMBSTONE_KEYS", "").strip()
+    if raw:
+        keys = [k.strip().encode() for k in raw.split(",") if k.strip()]
+        if keys:
+            return keys
+    return [_secret()]
+
+
+DEPLOYMENT_GENERATION = "saga-tombstone-v1"
+
+
+def deletion_saga_enabled() -> bool:
+    """Deletion runs ONLY when the operator has explicitly enabled it — AFTER
+    confirming every serving instance/worker reports DEPLOYMENT_GENERATION at
+    /healthz. Default OFF so merging this code cannot start erasing while an old,
+    tombstone-unaware instance is still up (it would resurrect erased accounts —
+    reproduced against f7e8790)."""
+    return os.getenv("GESH_DELETION_SAGA_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def deletion_readiness() -> dict[str, object]:
+    """Health payload: is this instance tombstone-aware, and is deletion enabled?"""
+    return {"generation": DEPLOYMENT_GENERATION,
+            "tombstone_aware": True,
+            "deletion_enabled": deletion_saga_enabled()}
+
+
+def identity_digest(email: str, key: bytes | None = None) -> str:
+    """Keyed, domain-separated HMAC of a normalized email.
+
+    Keyed (not a bare hash) so a leaked tombstone table cannot be dictionary-attacked
+    back to an address list. Uses the SAME canonical normalization (_norm) as the rest
+    of the account system. `key=None` uses the newest configured key.
+    """
+    k = key if key is not None else _digest_keys()[0]
+    return hmac.new(k, _DIGEST_DOMAIN_V1 + b":" + _norm(email).encode("utf-8"),
+                    hashlib.sha256).hexdigest()
+
+
+def _sub_digest(sub_id: str | None, key: bytes | None = None) -> str | None:
+    if not sub_id:
+        return None
+    k = key if key is not None else _digest_keys()[0]
+    return hmac.new(k, _DIGEST_DOMAIN_V1 + b":sub:" + str(sub_id).encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def is_tombstoned(email: str) -> bool:
+    """Has this identity been erased? Consulted before ANY account (re)creation.
+
+    Checks every configured key version so a key rotation does not silently unhide
+    an erased identity.
+    """
+    try:
+        digs = [identity_digest(email, k) for k in _digest_keys()]
+        placeholders = ",".join("?" for _ in digs)
+        with _conn() as con:
+            row = con.execute(
+                f"SELECT 1 FROM account_tombstones WHERE email_digest IN ({placeholders})",
+                digs,
+            ).fetchone()
+        return row is not None
+    except TombstoneUnavailableError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # FAIL CLOSED. Returning False here silently disabled the resurrection
+        # guard: on a pre-saga database the table was missing, every check said
+        # "not tombstoned", and erased accounts could be recreated. An
+        # unanswerable question about erasure must stop the caller, not wave it
+        # through — billing.provision converts this into a refusal, not a create.
+        raise TombstoneUnavailableError(str(type(exc).__name__)) from exc
+
+
+def tombstone_for_sub_id(sub_id: str | None) -> dict[str, Any] | None:
+    """Tombstone matching a provider subscription id, by KEYED DIGEST (no raw id
+    is stored). The webhook often knows only the subscription id, so stale-
+    reactivation defence keys on both identity and sub."""
+    if not sub_id:
+        return None
+    digs = [d for d in (_sub_digest(sub_id, k) for k in _digest_keys()) if d]
+    if not digs:
+        return None
+    placeholders = ",".join("?" for _ in digs)
+    with _conn() as con:
+        row = con.execute(
+            f"SELECT * FROM account_tombstones WHERE sub_digest IN ({placeholders})", digs
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def write_tombstone(email: str, user_id: str, *, billing_sub_id: str | None,
+                    saga_id: str | None, reason: str = "user_request") -> None:
+    """Record the erasure. Idempotent — replay keeps the FIRST record.
+
+    Stores keyed DIGESTS only: no clear-text email, no raw provider subscription id.
+    """
+    with _conn() as con:
+        con.execute(
+            "INSERT OR IGNORE INTO account_tombstones "
+            "(email_digest,user_id,sub_digest,key_version,reason,saga_id,schema_version,created_at) "
+            "VALUES (?,?,?,?,?,?,1,?)",
+            (identity_digest(email), user_id, _sub_digest(billing_sub_id),
+             _DIGEST_KEY_VERSION, reason, saga_id,
+             datetime.now(timezone.utc).isoformat()),
+        )
+
+
+# ─── Post-tombstone billing remediation ────────────────────────────────────────
+
+REMEDIATION_PENDING = "pending"
+REMEDIATION_COMPLETED = "completed"
+REMEDIATION_MANUAL_REVIEW = "manual_review"
+
+
+def record_billing_remediation(email: str, sub_id: str | None) -> dict[str, Any]:
+    """Durably record that a still-billable subscription for an ERASED identity must
+    be cancelled. Idempotent per (identity, sub). Returns the row.
+
+    Called from the webhook path; the raw sub_id is retained ONLY until the recovery
+    runner cancels it, then scrubbed (scrub_completed_remediation)."""
+    if not sub_id:
+        return {"recorded": False}
+    now = datetime.now(timezone.utc).isoformat()
+    ed = identity_digest(email)
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT * FROM billing_remediations "
+            "WHERE email_digest=? AND sub_id=? AND completed_at IS NULL",
+            (ed, sub_id),
+        ).fetchone()
+        if existing:
+            return {"recorded": False, "remediation": dict(existing)}
+        rid = str(uuid.uuid4())
+        con.execute(
+            "INSERT INTO billing_remediations "
+            "(remediation_id,email_digest,sub_id,sub_digest,state,attempts,version,"
+            " next_attempt_at,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,0,0,?,?,?)",
+            (rid, ed, sub_id, _sub_digest(sub_id), REMEDIATION_PENDING, now, now, now),
+        )
+        row = con.execute("SELECT * FROM billing_remediations WHERE remediation_id=?",
+                          (rid,)).fetchone()
+        return {"recorded": True, "remediation": dict(row)}
+
+
+def pending_remediations(now_iso: str | None = None) -> list[dict[str, Any]]:
+    """Remediations due for a cancellation attempt (bounded backoff via next_attempt_at)."""
+    now = now_iso or datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM billing_remediations "
+            "WHERE state=? AND completed_at IS NULL "
+            "AND (next_attempt_at IS NULL OR next_attempt_at<=?) "
+            "ORDER BY created_at",
+            (REMEDIATION_PENDING, now),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def advance_remediation(remediation_id: str, expected_version: int, state: str, *,
+                        last_error: str | None = None, next_attempt_at: str | None = None,
+                        completed: bool = False, scrub_sub: bool = False) -> dict | None:
+    """Compare-and-set transition for a remediation. Optionally scrubs the raw sub_id."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        cur = con.execute(
+            "UPDATE billing_remediations SET state=?, last_error=?, "
+            "next_attempt_at=?, attempts=attempts+1, version=version+1, updated_at=?, "
+            "sub_id=CASE WHEN ? THEN NULL ELSE sub_id END, "
+            "completed_at=CASE WHEN ? THEN ? ELSE completed_at END "
+            "WHERE remediation_id=? AND version=?",
+            (state, last_error, next_attempt_at, now, 1 if scrub_sub else 0,
+             1 if completed else 0, now, remediation_id, expected_version),
+        )
+        if cur.rowcount != 1:
+            return None
+        row = con.execute("SELECT * FROM billing_remediations WHERE remediation_id=?",
+                          (remediation_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def start_deletion_saga(user_id: str, email: str, billing_sub_id: str | None) -> dict[str, Any]:
+    """Claim the single active saga for this user, or return the existing one.
+
+    Concurrency safety comes from ux_deletion_sagas_active (a partial UNIQUE index
+    on user_id WHERE completed_at IS NULL) inside BEGIN IMMEDIATE — not from an
+    in-process lock, so it holds across processes and restarts.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        existing = con.execute(
+            "SELECT * FROM deletion_sagas WHERE user_id=? AND completed_at IS NULL",
+            (user_id,),
+        ).fetchone()
+        if existing:
+            return {"created": False, "saga": dict(existing)}
+        saga_id = str(uuid.uuid4())
+        con.execute(
+            "INSERT INTO deletion_sagas "
+            "(saga_id,user_id,email_digest,state,resume_state,billing_sub_id,"
+            " attempts,version,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,0,0,?,?)",
+            (saga_id, user_id, identity_digest(email), SAGA_REQUESTED, SAGA_REQUESTED,
+             billing_sub_id, now, now),
+        )
+        row = con.execute("SELECT * FROM deletion_sagas WHERE saga_id=?", (saga_id,)).fetchone()
+        return {"created": True, "saga": dict(row)}
+
+
+def advance_saga(saga_id: str, expected_version: int, new_state: str, *,
+                 resume_state: str | None = None, last_error: str | None = None,
+                 completed: bool = False) -> dict[str, Any] | None:
+    """Compare-and-set transition. Returns the new row, or None if the CAS lost.
+
+    A lost CAS means another worker advanced the saga — the caller must re-read
+    rather than overwrite, which is what makes concurrent duplicates converge.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("BEGIN IMMEDIATE")
+        cur = con.execute(
+            "UPDATE deletion_sagas SET state=?, resume_state=COALESCE(?,resume_state), "
+            "last_error=?, attempts=attempts+1, version=version+1, updated_at=?, "
+            "completed_at=CASE WHEN ? THEN ? ELSE completed_at END, "
+            # Scrub the raw provider subscription id once the saga completes — it is
+            # only needed while cancellation/reconciliation may run. Data minimisation
+            # (Gate 8): completed audit rows must carry no raw provider identifier.
+            "billing_sub_id=CASE WHEN ? THEN NULL ELSE billing_sub_id END "
+            "WHERE saga_id=? AND version=?",
+            (new_state, resume_state, last_error, now, 1 if completed else 0, now,
+             1 if completed else 0, saga_id, expected_version),
+        )
+        if cur.rowcount != 1:
+            return None
+        row = con.execute("SELECT * FROM deletion_sagas WHERE saga_id=?", (saga_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_saga(saga_id: str) -> dict[str, Any] | None:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM deletion_sagas WHERE saga_id=?", (saga_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def resumable_sagas() -> list[dict[str, Any]]:
+    """Unfinished sagas — the crash-recovery work list."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM deletion_sagas WHERE completed_at IS NULL "
+            "AND state NOT IN (?,?) ORDER BY created_at",
+            (SAGA_MANUAL_REVIEW, SAGA_COMPLETED),
+        ).fetchall()
+    return [dict(r) for r in rows]

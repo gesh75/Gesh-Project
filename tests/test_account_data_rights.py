@@ -33,6 +33,9 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # middleware intercepts before our handler depends on TEST ORDER unless it is
     # set explicitly here. Same convention as tests/test_auth_users.py:29.
     monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
+    # Deletion is behind a default-OFF mixed-version safety flag; these tests
+    # exercise the endpoint's behaviour once the operator has enabled it.
+    monkeypatch.setenv("GESH_DELETION_SAGA_ENABLED", "1")
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
     _au.create_user("cust@x.com", "pw")
@@ -187,22 +190,33 @@ def test_delete_endpoint_purges_when_confirmed(au, monkeypatch):
     assert auth_users.resolve_user_id("cust@x.com") is None
 
 
-def test_delete_warns_when_an_active_subscription_would_keep_billing(au, monkeypatch):
-    """Deleting the account does NOT cancel Lemon Squeezy. Staying silent here
-    would let someone keep paying for an account that no longer exists."""
-    import auth_users
+def test_delete_with_active_subscription_fails_closed_instead_of_warning(au, monkeypatch):
+    """CONTRACT CHANGE (2026-07-23, deletion saga).
+
+    Previously this endpoint erased the account and merely *warned* that Lemon
+    Squeezy was still billing. That left a real person paying for an account that
+    no longer existed. The saga now REFUSES to erase a subscribed account unless
+    cancellation is confirmed (or the subscription is confirmed absent).
+
+    With no reachable provider the request fails closed: nothing is deleted, the
+    saga is parked, and the response carries no provider/config detail."""
     import server
 
     _seed(au, "cust@x.com")
-    with auth_users._conn() as con:
+    with au._conn() as con:
         con.execute("UPDATE users SET billing_sub_id='sub_123', billing_status='active' "
                     "WHERE email='cust@x.com'")
     monkeypatch.setattr(server, "_session_email", lambda *_a, **_k: "cust@x.com")
+    monkeypatch.delenv("LEMON_SQUEEZY_API_KEY", raising=False)
 
     r = TestClient(server.app).post("/api/account/delete", json={"confirm": "DELETE"})
 
-    assert r.status_code == 200
-    assert "subscription" in r.json().get("notice", "").lower()
+    assert r.status_code in (202, 409), "must not 200-and-erase a billed account"
+    assert au.resolve_user_id("cust@x.com") is not None, "nothing may be erased"
+    assert au.is_tombstoned("cust@x.com") is False
+    body = r.json().get("detail", "")
+    for leak in ("LEMON_SQUEEZY", "api.lemonsqueezy", "Traceback", "sub_123"):
+        assert leak not in body, f"response leaks {leak}"
 
 
 def test_owner_account_cannot_delete_itself_through_this_endpoint(au, monkeypatch):

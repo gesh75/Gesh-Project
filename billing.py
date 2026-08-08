@@ -341,8 +341,46 @@ def provision(email: str, tier: str | None, customer_id: str | None,
     owed one (welcome_emailed_at IS NULL). The NULL-driven flag makes onboarding
     delivery RELIABLE (H5): a failed send leaves the flag unset so the LS retry (or
     /auth/request-link) re-sends; revoke clears it so a churned user who re-subscribes is
-    re-onboarded. Unknown products never reach here (tier is required, H3)."""
-    created = auth_users.create_magic_link_user(email, tier=tier)
+    re-onboarded. Unknown products never reach here (tier is required, H3).
+
+    ERASURE GUARD (2026-07-23): a delayed renewal for a DELETED account used to land
+    here, find no user, create one and email a magic link — undoing the erasure. Both
+    the identity digest and the subscription id are checked, because a webhook often
+    knows only the sub id (the email may be absent or since changed). Returns a
+    terminal no-op so the provider stops redelivering; it must NOT raise
+    RetryableError, or the webhook endpoint goes permanently red."""
+    try:
+        erased = auth_users.is_tombstoned(email) or bool(auth_users.tombstone_for_sub_id(sub_id))
+    except auth_users.TombstoneUnavailableError:
+        # Cannot prove the identity was NOT erased -> refuse to create. Terminal
+        # no-op (not RetryableError): a 503 loop would only redeliver a webhook we
+        # still could not safely answer, and would redden the endpoint.
+        logger.error("billing: tombstone check unavailable (sub=%s) — refusing creation", sub_id)
+        return {"action": "refused_tombstone_unavailable", "email": email, "tier": tier,
+                "created": False, "owed_email": False, "emailed": False}
+    if erased:
+        # Local recreation is refused — but a billable event for an erased identity
+        # means the subscription is still LIVE and must be cancelled, or the person
+        # keeps being charged for an account that no longer exists. Durably record a
+        # remediation; the recovery runner performs the provider cancellation OUTSIDE
+        # any webhook transaction. Recording is idempotent and never raises so the
+        # webhook can safely ACK (200) once the intent is persisted.
+        remediated = _record_remediation_or_retry(email, sub_id)
+        logger.warning("billing: refused to recreate erased account (sub=%s) — tombstoned; "
+                       "remediation_recorded=%s", sub_id, remediated)
+        return {"action": "refused_tombstoned", "email": email, "tier": tier,
+                "created": False, "owed_email": False, "emailed": False,
+                "remediation_recorded": remediated}
+    try:
+        created = auth_users.create_magic_link_user(email, tier=tier)
+    except auth_users.TombstonedIdentityError:
+        # Race: tombstone landed between the pre-check and the insert. Same no-op,
+        # and the subscription still needs cancelling.
+        remediated = _record_remediation_or_retry(email, sub_id)
+        logger.warning("billing: recreation refused at insert (sub=%s) — tombstoned", sub_id)
+        return {"action": "refused_tombstoned", "email": email, "tier": tier,
+                "created": False, "owed_email": False, "emailed": False,
+                "remediation_recorded": remediated}
     auth_users.set_billing(email, tier=tier, customer_id=customer_id,
                            sub_id=sub_id, status="active", event_at=event_at or None)
     owed = (auth_users.get_user(email) or {}).get("welcome_emailed_at") is None
@@ -444,6 +482,20 @@ def _apply_email_change(ev: dict[str, Any], user: dict | None) -> tuple[str, dic
     return user["email"], user                 # can't merge; keep operating on the sub's row
 
 
+def _record_remediation_or_retry(email: str, sub_id: str | None) -> bool:
+    """Durably record the intent to cancel a still-live subscription for an erased
+    identity. If recording FAILS, raise RetryableError so the webhook returns 503
+    and Lemon Squeezy re-delivers — rather than ACKing 200 with no remediation,
+    which would permanently suppress the replay AND leave the subscription billing
+    forever (confirmed defect, 2026-07-23). Recording is idempotent, so the retry
+    is safe."""
+    try:
+        return auth_users.record_billing_remediation(email, sub_id).get("recorded", False)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("billing: remediation record failed (sub=%s) — forcing retry", sub_id)
+        raise RetryableError("could not durably record billing remediation") from exc
+
+
 def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     """Translate a parsed event into an auth_users action (no dedup concerns here)."""
     name = ev["event"]
@@ -462,6 +514,25 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
                      or (name == "subscription_updated"
                          and ev["status"] in ("active", "on_trial", "paid")))
     tier = ev["tier"]
+    # POST-TOMBSTONE billable event (before ANY variant/retry logic): a signed,
+    # billable event for an ERASED identity must NOT 503-loop (the variant-less
+    # invoice path would) and must NOT recreate. Record a remediation to cancel the
+    # still-live subscription and ACK terminally. Checked here, not only in
+    # provision(), because payment_success/invoice events are variant-less and would
+    # otherwise raise RetryableError below before provision() is ever reached.
+    if is_activation:
+        try:
+            erased = (auth_users.is_tombstoned(ev["email"])
+                      or bool(auth_users.tombstone_for_sub_id(ev["sub_id"])))
+        except auth_users.TombstoneUnavailableError:
+            erased = True     # cannot prove not-erased -> do not recreate
+        if erased:
+            remediated = _record_remediation_or_retry(ev["email"], ev["sub_id"])
+            logger.warning("billing: billable event %s for erased identity (sub=%s) — "
+                           "remediation_recorded=%s", name, ev["sub_id"], remediated)
+            return {"action": "refused_tombstoned", "email": ev["email"],
+                    "created": False, "owed_email": False, "emailed": False,
+                    "remediation_recorded": remediated}
     # subscription_payment_success (an invoice) carries no variant, so a RENEWAL would map to
     # tier=None and be wrongly refused. When the event resolves to a known ACTIVE account, keep
     # the tier already on it. This never ESCALATES (H3 holds): the fallback only re-grants a tier
@@ -528,7 +599,8 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     return {"action": "ignored", "event": name}
 
 
-def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dict[str, Any]:
+def handle_webhook(raw_body: bytes, signature: str | None, payload: dict,
+                   event_name_header: str | None = None) -> dict[str, Any]:
     """Verify → claim (dedup outbox) → parse → dispatch → complete. Raises only what the
     caller can map to HTTP: PermissionError=401, ValueError=400, RetryableError=503.
 
@@ -544,6 +616,12 @@ def handle_webhook(raw_body: bytes, signature: str | None, payload: dict) -> dic
         raise PermissionError("invalid webhook signature")
 
     name = (payload.get("meta") or {}).get("event_name", "")
+    # AFTER signature verification: a supplied X-Event-Name must match the signed
+    # body's meta.event_name. They are both inside the HMAC'd payload/headers of a
+    # genuine delivery; a mismatch means someone altered one, so reject rather than
+    # trust either. (Only enforced when the header is present — LS always sends it.)
+    if event_name_header is not None and event_name_header != name:
+        raise ValueError("X-Event-Name does not match meta.event_name")
 
     # Env-gated raw-payload capture (debug tool, OFF unless BILLING_CAPTURE_DIR is
     # set): signature-verified deliveries only, so the dump can't be attacker-fed.
