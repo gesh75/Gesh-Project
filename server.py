@@ -3673,6 +3673,16 @@ def consensus_cached():
     return _cached_response("consensus")
 
 
+@app.get("/api/dcf/cached", dependencies=[Depends(require_customer_or_owner)])
+def dcf_cached():
+    """Deterministic DCF per symbol (gesh_core.dcf, published by run_engines2).
+
+    Reporting-only. Refused symbols carry {available:false, error} and never a
+    number; the card renders those refusals as information, not failures.
+    """
+    return _cached_response("dcf")
+
+
 # ── Unified unknown / unavailable-symbol contract (GATE 2) ───────────────────
 # Per-symbol engines never emit a fabricated success for a symbol with no data.
 # Two explicit shapes, and only two:

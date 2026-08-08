@@ -225,6 +225,7 @@ COVERED: dict[str, str] = {
     "/api/chart/{symbol}": "/api/chart/NVDA?period=1mo",
     "/api/deep-analysis/cached": "/api/deep-analysis/cached",
     "/api/consensus/cached": "/api/consensus/cached",
+    "/api/dcf/cached": "/api/dcf/cached",
     "/api/consensus/{symbol}": "/api/consensus/NVDA",
     "/api/kelly/cached": "/api/kelly/cached",
     "/api/monte-carlo/cached": "/api/monte-carlo/cached",
