@@ -222,6 +222,9 @@ def _fake_engines(server, monkeypatch):
     monkeypatch.setattr(server, "run_monte_carlo", lambda h, e, **k: {"ok": 1}, raising=True)
     monkeypatch.setattr(server, "run_kelly_analysis", lambda *a, **k: {"ok": 1}, raising=True)
     monkeypatch.setattr(server, "get_analyst_targets", lambda s: {}, raising=True)
+    # Radar screens a live universe — stubbed here, contract-tested in
+    # test_mybook_radar.py.
+    monkeypatch.setattr(server, "_run_book_radar", lambda h, t: {"ok": 1}, raising=True)
     return captured
 
 
