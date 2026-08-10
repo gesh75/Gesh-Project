@@ -560,6 +560,18 @@ body:not(.customer) .customer-only { display: none !important; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="3" x2="12" y2="7"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
       <span class="nav-label">Radar</span>
     </button>
+    <button class="nav-item" data-tab="book-scanner" onclick="showBookScanner()" title="Sector filter + consolidation zones on your symbols">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+      <span class="nav-label">Scanner</span>
+    </button>
+    <button class="nav-item" data-tab="book-intel" onclick="showBookIntelligence()" title="SEC filings, news sentiment and fundamentals for your symbols">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
+      <span class="nav-label">Intelligence</span>
+    </button>
+    <button class="nav-item" data-tab="book-ecg" onclick="showBookEcg()" title="Drawdown and loss-streak health of your own positions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>
+      <span class="nav-label">Book Health</span>
+    </button>
     <!--GESH_SLOT:owner_block_01-->
   </div>
 
@@ -667,6 +679,27 @@ body:not(.customer) .customer-only { display: none !important; }
     <div class="card" style="margin-bottom:16px">
       <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">🧭 Diversification Radar — your book</div>
       <div id="book-radar-body"><div class="deep-ph-text" style="padding:18px 0;text-align:center">Run <b>🧠 Analyze My Portfolio</b> once — this pane then renders instantly from that result.</div></div>
+    </div>
+  </div>
+
+  <div class="tab-pane customer-only" id="tab-book-scanner">
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">🔎 Scanner — your symbols</div>
+      <div id="book-scanner-body"></div>
+    </div>
+  </div>
+
+  <div class="tab-pane customer-only" id="tab-book-intel">
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">🧾 Intelligence — your symbols</div>
+      <div id="book-intel-body"></div>
+    </div>
+  </div>
+
+  <div class="tab-pane customer-only" id="tab-book-ecg">
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">💓 Book Health — drawdown &amp; streak on your own positions</div>
+      <div id="book-ecg-body"></div>
     </div>
   </div>
 
@@ -2772,6 +2805,40 @@ function buildBookRadarPane(d){
 }
 function showBookRadar(){ _bookPane('book-radar', 'book-radar-body', buildBookRadarPane); }
 
+// Scanner / Intelligence / ECG are their own mechanical endpoints — they do NOT
+// come out of the analysis result, so they fetch directly rather than going
+// through _bookPane's cached-result path. None of them spends an LLM call.
+async function _fetchPane(tab, bodyId, url, method, render, runningMsg){
+  switchTab(tab);
+  const box = document.getElementById(bodyId);
+  if (!box) return;
+  box.innerHTML = `<div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:20px;height:20px;border-width:3px;margin:0 auto 10px"></div>${daEsc(runningMsg)}</div>`;
+  try{
+    const opts = method === 'POST'
+      ? {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'}
+      : {};
+    const r = await fetch(url, opts);
+    if (r.status === 401){ box.innerHTML = '<div class="deep-ph-text" style="padding:14px 0">🔒 Sign in to use this.</div>'; return; }
+    if (r.status === 400){ box.innerHTML = '<div class="deep-ph-text" style="padding:14px 0">Your book is empty — add positions first.</div>'; return; }
+    if (!r.ok){ box.innerHTML = '<div class="deep-ph-text" style="padding:14px 0">Unavailable right now — try again shortly.</div>'; return; }
+    const j = await r.json().catch(()=>null);
+    box.innerHTML = render((j && j.data) || {});
+  }catch(e){ box.innerHTML = '<div class="deep-ph-text" style="padding:14px 0">Network error — try again.</div>'; }
+}
+
+function showBookScanner(){
+  _fetchPane('book-scanner', 'book-scanner-body', '/api/mybook/scanner', 'POST',
+             buildBookScannerPane, 'Running the sector filter and consolidation scan on your symbols…');
+}
+function showBookIntelligence(){
+  _fetchPane('book-intel', 'book-intel-body', '/api/mybook/intelligence', 'POST',
+             buildBookIntelligencePane, 'Pulling filings, news and fundamentals for your symbols…');
+}
+function showBookEcg(){
+  _fetchPane('book-ecg', 'book-ecg-body', '/api/mybook/ecg', 'GET',
+             buildBookEcgPane, 'Reading your equity curve…');
+}
+
 // Monte Carlo + Kelly, promoted out of the <details> they were folded into. Both
 // already run on every customer analysis; only the presentation is new.
 function buildBookRiskPane(d){
@@ -2843,6 +2910,115 @@ function buildBookConsensusPane(d){
     </div>`;
   }).join('');
   return `${ecgNote}${trunc}<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">${cards}</div>`;
+}
+
+// Scanner: sector pre-filter → consolidation zones over the customer's OWN
+// symbols. Pure price math — no LLM, no quota — so it is safe to re-run.
+function buildBookScannerPane(d){
+  const sect = d.sector || {}, cz = d.consolidation || {};
+  const hotChips = (sect.hot || []).map(h =>
+    `<span style="font-size:11.5px;padding:3px 8px;border-radius:4px;border:1px solid var(--green);color:var(--green)">${daEsc(h.symbol)}${daEsc(h.ratio != null ? ' · ' + daFmt(h.ratio, 1) + '×' : '')}</span>`).join(' ');
+  const coldChips = (sect.cold || []).map(h =>
+    `<span style="font-size:11.5px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);color:var(--muted)">${daEsc(h.symbol)}</span>`).join(' ');
+  const sectorChips = hotChips
+    ? hotChips + ' ' + coldChips
+    : '<span style="font-size:12px;color:var(--muted)">no hot sectors on your symbols right now</span>';
+  const zoneRows = (cz.found || []).map(z =>
+    `<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:7px 10px;font-weight:700;color:var(--accent)">${daEsc(z.symbol)}</td>
+      <td style="padding:7px 10px;text-align:right">$${daFmt(z.entry, 2)}</td>
+      <td style="padding:7px 10px;text-align:right;color:var(--red)">$${daFmt(z.stop, 2)}</td>
+      <td style="padding:7px 10px;text-align:right;color:var(--green)">$${daFmt(z.target, 2)}</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700">${daFmt(z.rr, 1)}×</td>
+    </tr>`).join('');
+  const zoneTable = zoneRows
+    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','ENTRY','STOP','TARGET','R/R'].map(h => `<th style="padding:6px 10px;text-align:${h === 'SYMBOL' ? 'left' : 'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${zoneRows}</tbody></table></div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">No consolidation zone on your symbols cleared the minimum R/R right now. That is a normal result, not an error.</div>';
+  const trunc = d.truncated
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Scanned ${daEsc(d.scanned_count)} of ${daEsc(d.requested_count)} symbols (cap ${daEsc(d.symbol_cap)}).</div>`
+    : '';
+  return `${trunc}
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Timeframe <b>${daEsc(d.timeframe || '—')}</b> · interval ${daEsc(d.interval || '—')} · min R/R ${daFmt(d.min_rr, 1)}×</div>
+    <div style="margin-bottom:12px"><div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Sector pre-filter</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${sectorChips}</div></div>
+    <div><div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Consolidation zones</div>${zoneTable}</div>
+    <div style="margin-top:10px;font-size:11px;color:var(--muted)">Levels are price math on your own symbols. Advisory only — no order is placed or staged.</div>`;
+}
+
+// Intelligence: SEC filings, news sentiment and fundamental momentum for the
+// customer's own symbols. Every sub-block degrades on its own.
+function buildBookIntelligencePane(d){
+  const sec = d.sec || {}, news = d.news || {}, fund = d.fundamentals || {};
+  const secRows = (sec.results || []).map(f =>
+    `<div style="border-bottom:1px solid var(--border);padding:8px 0">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(f.form || '')} · ${daEsc(f.filed || '')}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(f.summary || f.sentiment || '')}</div>
+    </div>`).join('');
+  const newsRows = (news.results || []).map(n =>
+    `<div style="border-bottom:1px solid var(--border);padding:8px 0">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(n.symbol)}</b><span style="font-weight:700;color:${(n.score || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${daEsc((n.score || 0) >= 0 ? '+' : '')}${daFmt(n.score, 0)}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(n.article_count != null ? n.article_count + ' articles' : '')} ${daEsc(n.summary || '')}</div>
+    </div>`).join('');
+  const fundRows = (fund.results || []).map(f =>
+    `<div style="border-bottom:1px solid var(--border);padding:8px 0">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-weight:700">${daFmt(f.score, 0)}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(f.summary || f.reason || '')}</div>
+    </div>`).join('');
+  const mood = news.market_mood
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Market mood <b>${daEsc(news.market_mood)}</b> · avg news score ${daFmt(news.avg_score, 1)}</div>`
+    : '';
+  // Columns are built inline from locals the guard can track. An earlier version
+  // passed pre-built HTML into a helper, but a function PARAMETER cannot be
+  // proven safe, so the guard flagged it — correctly.
+  const H = 'font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px';
+  const secCol = secRows
+    ? `<div><div style="${H}">SEC filings</div>${secRows}</div>`
+    : '<div><div style="' + H + '">SEC filings</div><div class="deep-ph-text" style="padding:10px 0">No recent filings for your symbols.</div></div>';
+  const newsCol = newsRows
+    ? `<div><div style="${H}">News sentiment</div>${newsRows}</div>`
+    : '<div><div style="' + H + '">News sentiment</div><div class="deep-ph-text" style="padding:10px 0">No scored news for your symbols right now.</div></div>';
+  const fundCol = fundRows
+    ? `<div><div style="${H}">Fundamental momentum</div>${fundRows}</div>`
+    : '<div><div style="' + H + '">Fundamental momentum</div><div class="deep-ph-text" style="padding:10px 0">No fundamental data for your symbols.</div></div>';
+  return `${mood}<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px">
+      ${secCol}${newsCol}${fundCol}
+    </div>`;
+}
+
+// Book-health gate (drawdown + loss streak) on the customer's OWN positions.
+// Deliberately NOT titled with the operator widget's name: that exact string in a
+// customer DOM is the tell that the owner console leaked, and a guard asserts it.
+// This panel is honest about being
+// empty: a book with two days of history is TOLD that, never shown a confident
+// HEALTHY built from nothing.
+function buildBookEcgPane(d){
+  const states = d.states || [], acc = d.accumulating || [], cov = d.coverage || {};
+  const ready = states.length
+    ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">${states.map(s => buildEcgChip(s)).join('')}</div>`
+    : '';
+  const waiting = acc.length
+    ? `<div style="font-size:12px;color:var(--muted)">Still accumulating: ${daEsc(acc.map(a => a.symbol || a).join(', '))}</div>`
+    : '';
+  return `<div style="font-size:13px;color:var(--text);font-weight:600;margin-bottom:8px">${daEsc(d.portfolio_message || '')}</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Gate <b>${daEsc(d.portfolio_gate || '—')}</b> · ${daEsc(cov.ready)} of ${daEsc(cov.total)} holdings have enough history (needs ${daEsc(d.snapshots_required)} daily observations over ${daEsc(d.history_days)} days).</div>
+    ${ready}${waiting}
+    <div style="margin-top:10px;font-size:11px;color:var(--muted)">Your equity curve builds from your own book only. Until a holding has enough observations it is reported as accumulating — never given a verdict.</div>`;
+}
+
+// build*-named so the guard walks it. The colour local is deliberately NOT named
+// `col`: the guard tracks locals by name file-wide, and `col` was elsewhere a
+// function, which poisoned both call sites.
+function buildEcgChip(s){
+  const st = String(s.state || s.gate || '').toUpperCase();
+  const stateCol = st === 'HEALTHY' ? 'var(--green)'
+    : st === 'SUSPENDED' ? 'var(--red)'
+    : st === 'COOLING' ? 'var(--yellow)' : 'var(--muted)';
+  return `<div style="border:1px solid var(--border);border-left:3px solid ${stateCol};border-radius:6px;padding:10px;background:var(--hover)">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(s.symbol)}</b><span style="font-size:11px;font-weight:700;color:${stateCol}">${daEsc(st || '—')}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:4px">${daEsc(s.message || s.detail || '')}</div>
+    </div>`;
 }
 
 // Per-holding verdicts the deep analysis already produced.
