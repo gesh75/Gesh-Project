@@ -479,14 +479,35 @@ def node_volume(symbol: str, close: np.ndarray | None = None, volume: np.ndarray
 
 # ─── Main consensus runner ────────────────────────────────────────────────────
 
+# ECG reads `equity_snapshots`, which is keyed by SYMBOL ALONE — there is no user
+# dimension in that table, so get_equity_history(symbol) returns the OWNER's curve
+# no matter who is asking. Customer-facing runs therefore switch this node off
+# entirely (see run_consensus_for_customer). The node is not called at all rather
+# than called-and-discarded: a vote computed from owner data and then dropped has
+# still read owner data into a customer request.
+_ECG_DISABLED_DETAIL = (
+    "Disabled for this scope — equity-curve history is not per-user, "
+    "so this node has no data it may read here"
+)
+
+
 def run_consensus_holding(
     symbol: str,
     equity: float = 0,
     total_portfolio: float = 1,
     avg_cost: float = 0,
     current_price: float = 0,
+    allow_ecg: bool = True,
 ) -> dict:
-    """Run all 9 nodes for one holding, return consensus verdict."""
+    """Run all nodes for one holding, return consensus verdict.
+
+    Args:
+        allow_ecg: When False the ECG node is skipped and recorded as ABSTAIN
+            (never VOTE_NEUTRAL — "we don't know" is not "we know it's
+            neutral"). Coverage drops accordingly, so a caller is never told a
+            node it did not receive agreed with the rest. Defaults True to keep
+            the owner pipeline unchanged.
+    """
     nodes = {}
 
     try:
@@ -554,7 +575,8 @@ def run_consensus_holding(
     nodes["Analyst"]        = node_analyst(symbol, obb_data=_obb_data)
     nodes["News"]           = node_news(symbol)
     nodes["Kelly"]          = node_kelly(symbol, equity, total_portfolio, avg_cost, current_price, returns=returns)
-    nodes["ECG"]            = node_ecg(symbol)
+    # Not `node_ecg(...) if allow_ecg else discard` — the call itself is the leak.
+    nodes["ECG"]            = node_ecg(symbol) if allow_ecg else (ABSTAIN, _ECG_DISABLED_DETAIL)
     nodes["Volume"]         = node_volume(symbol, close=c[-45:] if c is not None and len(c) > 0 else None, volume=v[-45:] if v is not None and len(v) > 0 else None)
     # Node 10: FFT Cycle phase (spectral analysis)
     try:
@@ -686,8 +708,15 @@ def run_consensus_holding(
     }
 
 
-def run_consensus_portfolio(holdings: list[dict], total_portfolio: float) -> dict:
-    """Run consensus on all holdings, return ranked results."""
+def run_consensus_portfolio(
+    holdings: list[dict],
+    total_portfolio: float,
+    allow_ecg: bool = True,
+) -> dict:
+    """Run consensus on all holdings, return ranked results.
+
+    `allow_ecg` is forwarded to every holding — see run_consensus_holding.
+    """
     import concurrent.futures
 
     def process_holding(h):
@@ -696,7 +725,7 @@ def run_consensus_portfolio(holdings: list[dict], total_portfolio: float) -> dic
         cost  = float(h.get("average_buy_price", 0))
         price = float(h.get("current_price", 0))
         print(f"  CONSENSUS: {sym}...")
-        return run_consensus_holding(sym, eq, total_portfolio, cost, price)
+        return run_consensus_holding(sym, eq, total_portfolio, cost, price, allow_ecg=allow_ecg)
 
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(holdings) or 1, 8)) as executor:
@@ -720,3 +749,59 @@ def run_consensus_portfolio(holdings: list[dict], total_portfolio: float) -> dic
         "total_analyzed": len(results),
         "as_of":         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
     }
+
+
+# ─── Customer-scoped consensus ────────────────────────────────────────────────
+
+# One consensus run per symbol fans out to ~6 independent providers (prices,
+# OpenBB/yfinance fundamentals + analyst, Reddit, regime). A customer book holds
+# up to 30 names (auth_users._MAX_POSITIONS), so an uncapped run is ~180 upstream
+# requests on one HTTP request. Cap the symbols scored and DISCLOSE the cut rather
+# than silently returning a partial book as if it were the whole one.
+MAX_CUSTOMER_CONSENSUS_SYMBOLS = 12
+
+
+def run_consensus_for_customer(
+    holdings: list[dict],
+    total_portfolio: float,
+    *,
+    allow_ecg: bool = False,
+    max_symbols: int = MAX_CUSTOMER_CONSENSUS_SYMBOLS,
+) -> dict:
+    """Consensus over a CUSTOMER's own book. Safe by default.
+
+    Differs from run_consensus_portfolio in exactly two ways, both required
+    because the caller is not the owner:
+
+    1. `allow_ecg` defaults to **False**. The ECG node reads `equity_snapshots`,
+       which has no user column, so it would feed the OWNER's equity curve into a
+       customer's verdict for any symbol they happen to share (AMD, NVDA, HOOD …
+       are all in the owner's real book). The node is skipped entirely and
+       recorded as ABSTAIN, so `data_coverage` visibly drops and the customer is
+       never told a node they didn't get agreed with the others. The parameter
+       exists so the choice is explicit and testable — it is not an invitation to
+       flip it; until `equity_snapshots` grows a user dimension, True is only
+       correct for the owner's own pipeline.
+    2. The book is capped at `max_symbols`, ranked by equity DESC (the same
+       convention as the deep-analysis card cap), and the omitted names are
+       reported so truncation is never silent.
+
+    Every other node is public market data for symbols the customer typed, which
+    is exactly what the customer/owner isolation contract permits.
+    """
+    ranked = sorted(holdings, key=lambda h: float(h.get("equity") or 0), reverse=True)
+    cap = max(int(max_symbols), 0)
+    analyzed, omitted = ranked[:cap], ranked[cap:]
+
+    result = run_consensus_portfolio(analyzed, total_portfolio, allow_ecg=allow_ecg)
+    result["ecg_enabled"] = allow_ecg
+    result["coverage"] = {
+        "analyzed": len(analyzed),
+        "total": len(ranked),
+        "truncated": bool(omitted),
+        "omitted_symbols": [h.get("symbol", "") for h in omitted],
+        "cap": cap,
+    }
+    if not allow_ecg:
+        result["ecg_note"] = _ECG_DISABLED_DETAIL
+    return result
