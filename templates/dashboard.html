@@ -568,9 +568,9 @@ body:not(.customer) .customer-only { display: none !important; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="4" y="3" width="16" height="18" rx="2"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
       <span class="nav-label">Intelligence</span>
     </button>
-    <button class="nav-item" data-tab="book-ecg" onclick="showBookEcg()" title="Equity curve health on your own book">
+    <button class="nav-item" data-tab="book-ecg" onclick="showBookEcg()" title="Drawdown and loss-streak health of your own positions">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>
-      <span class="nav-label">Equity Curve</span>
+      <span class="nav-label">Book Health</span>
     </button>
     <!--GESH_SLOT:owner_block_01-->
   </div>
@@ -698,7 +698,7 @@ body:not(.customer) .customer-only { display: none !important; }
 
   <div class="tab-pane customer-only" id="tab-book-ecg">
     <div class="card" style="margin-bottom:16px">
-      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">💓 Equity Curve — your book</div>
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">💓 Book Health — drawdown &amp; streak on your own positions</div>
       <div id="book-ecg-body"></div>
     </div>
   </div>
@@ -2987,7 +2987,10 @@ function buildBookIntelligencePane(d){
     </div>`;
 }
 
-// Equity Curve Gate on the customer's OWN book. This panel is honest about being
+// Book-health gate (drawdown + loss streak) on the customer's OWN positions.
+// Deliberately NOT titled with the operator widget's name: that exact string in a
+// customer DOM is the tell that the owner console leaked, and a guard asserts it.
+// This panel is honest about being
 // empty: a book with two days of history is TOLD that, never shown a confident
 // HEALTHY built from nothing.
 function buildBookEcgPane(d){
