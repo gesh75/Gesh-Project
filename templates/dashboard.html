@@ -548,13 +548,17 @@ body:not(.customer) .customer-only { display: none !important; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3a4 4 0 0 0-4 4 3.5 3.5 0 0 0-2 6.3A3.5 3.5 0 0 0 9 19a3 3 0 0 0 3 0 3 3 0 0 0 3 0 3.5 3.5 0 0 0 3-5.7A3.5 3.5 0 0 0 16 7a4 4 0 0 0-4-4z"/><line x1="12" y1="3" x2="12" y2="19"/></svg>
       <span class="nav-label">Deep Analysis</span>
     </button>
-    <button class="nav-item" onclick="switchTab('analyze'); showBookSignals()" title="Signals &amp; consensus for your holdings">
+    <button class="nav-item" data-tab="book-signals" onclick="showBookSignals()" title="Signals &amp; consensus for your holdings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg>
       <span class="nav-label">Signals</span>
     </button>
-    <button class="nav-item" onclick="switchTab('analyze'); showBookRisk()" title="Risk, Monte Carlo &amp; Kelly on your book">
+    <button class="nav-item" data-tab="book-risk" onclick="showBookRisk()" title="Monte Carlo &amp; Kelly sizing on your book">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2 2 21h20L12 2z"/><line x1="12" y1="9" x2="12" y2="14"/><line x1="12" y1="17.5" x2="12" y2="17.5"/></svg>
       <span class="nav-label">Model Risk</span>
+    </button>
+    <button class="nav-item" data-tab="book-radar" onclick="showBookRadar()" title="Diversification radar — new names that would spread your book">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="3" x2="12" y2="7"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      <span class="nav-label">Radar</span>
     </button>
     <!--GESH_SLOT:owner_block_01-->
   </div>
@@ -632,6 +636,37 @@ body:not(.customer) .customer-only { display: none !important; }
     <div class="card" style="margin-bottom:18px">
       <div class="ch" style="font-size:13px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)">Email preferences</div>
       <div id="home-prefs" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <!-- ═══ CUSTOMER BOOK PANES ═══
+       Until now the "My Book" nav group had four items and three of them
+       (Deep Analysis / Signals / Model Risk) called the SAME function: switch to
+       Analyze, re-run the analysis, scroll to #mybook-results. The nav promised a
+       product and delivered one page three times.
+
+       These are real destinations. They render from the LAST analysis result held
+       client-side in _mybookLastResult, so switching between them is instant and
+       spends nothing — the engines already computed all of this during the single
+       "Analyze My Portfolio" run; it was simply never surfaced. -->
+  <div class="tab-pane customer-only" id="tab-book-risk">
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">📉 Model Risk — your book</div>
+      <div id="book-risk-body"><div class="deep-ph-text" style="padding:18px 0;text-align:center">Run <b>🧠 Analyze My Portfolio</b> once — this pane then renders instantly from that result.</div></div>
+    </div>
+  </div>
+
+  <div class="tab-pane customer-only" id="tab-book-signals">
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">⚡ Signals — your holdings</div>
+      <div id="book-signals-body"><div class="deep-ph-text" style="padding:18px 0;text-align:center">Run <b>🧠 Analyze My Portfolio</b> once — this pane then renders instantly from that result.</div></div>
+    </div>
+  </div>
+
+  <div class="tab-pane customer-only" id="tab-book-radar">
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">🧭 Diversification Radar — your book</div>
+      <div id="book-radar-body"><div class="deep-ph-text" style="padding:18px 0;text-align:center">Run <b>🧠 Analyze My Portfolio</b> once — this pane then renders instantly from that result.</div></div>
     </div>
   </div>
 
@@ -2690,22 +2725,77 @@ function focusMyBookSection(section) {
   }, 80);
 }
 
-function showBookSignals() {
-  switchTab('analyze');
-  mybookAnalyze(); // ensures the rich verdict / kelly / signals are generated
-  setTimeout(() => {
-    const results = document.getElementById('mybook-results');
-    if (results) results.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 400);
+// The last completed analysis, held in memory so the book panes are instant and
+// free. The engine suite already produced all of this in ONE run; re-running it
+// per pane would spend a Claude call to redisplay data we already have.
+let _mybookLastResult = null;
+
+function _bookPane(paneId, bodyId, render){
+  switchTab(paneId);
+  const box = document.getElementById(bodyId);
+  if (!box) return;
+  if (!_mybookLastResult){
+    box.innerHTML = '<div class="deep-ph-text" style="padding:18px 0;text-align:center">No analysis yet — running one now. This takes 2–4 minutes and only has to happen once.</div>';
+    mybookAnalyze().then(() => { if (_mybookLastResult) box.innerHTML = render(_mybookLastResult); });
+    return;
+  }
+  box.innerHTML = render(_mybookLastResult);
 }
 
-function showBookRisk() {
-  switchTab('analyze');
-  mybookAnalyze(); // pulls in Monte Carlo + Kelly sizing
-  setTimeout(() => {
-    const results = document.getElementById('mybook-results');
-    if (results) results.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 400);
+function showBookSignals(){ _bookPane('book-signals', 'book-signals-body', buildBookSignalsPane); }
+function showBookRisk(){ _bookPane('book-risk', 'book-risk-body', buildBookRiskPane); }
+// buildDiversificationCard takes the radar block, not the whole result — passing
+// the result made its `!rad.mode` guard return '' and the pane rendered blank.
+function buildBookRadarPane(d){
+  const card = buildDiversificationCard((d || {}).radar || {});
+  return card || '<div class="deep-ph-text" style="padding:18px 0">The radar had no result on the last run — re-run the analysis.</div>';
+}
+function showBookRadar(){ _bookPane('book-radar', 'book-radar-body', buildBookRadarPane); }
+
+// Monte Carlo + Kelly, promoted out of the <details> they were folded into. Both
+// already run on every customer analysis; only the presentation is new.
+function buildBookRiskPane(d){
+  const mc = d.monte_carlo || {}, ky = d.kelly || {}, kh = ky.holdings || [];
+  if (mc.error && ky.error) return '<div class="deep-ph-text" style="padding:18px 0">Risk engines were unavailable on the last run — re-run the analysis.</div>';
+  const mcRows = mc.error ? '' :
+      buildRow('Median outcome', '$' + daFmt(mc.median, 0))
+    + buildRow('Best case (95th)', '$' + daFmt(mc.p95, 0))
+    + buildRow('Worst case (5th)', '$' + daFmt(mc.p5, 0))
+    + buildRow('VaR 95% (loss)', '$' + daFmt(mc.var_95, 0) + ' (' + daFmt(mc.var_95_pct, 1) + '%)')
+    + buildRow('Probability of profit', daFmt(mc.prob_profit_pct, 0) + '%')
+    + buildRow('Horizon', daFmt(mc.horizon_days || 21, 0) + ' trading days · ' + daFmt(mc.n_sims || 1000, 0) + ' simulations');
+  const kellyRows = (ky.error || !kh.length) ? '' : kh.slice(0, 20).map(k =>
+    `<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:7px 10px;font-weight:700;color:var(--accent)">${daEsc(k.symbol)}</td>
+      <td style="padding:7px 10px">${daEsc(k.action || '—')}</td>
+      <td style="padding:7px 10px;text-align:right">${daFmt(k.current_pct, 1)}%</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700">${daFmt(k.optimal_pct, 1)}%</td>
+      <td style="padding:7px 10px;text-align:right">${daEsc(k.delta_usd != null ? (k.delta_usd > 0 ? '+$' : '−$') + daFmt(Math.abs(k.delta_usd), 0) : '—')}</td>
+    </tr>`).join('');
+  const kellyTable = kellyRows
+    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','ACTION','NOW','KELLY','Δ $'].map(h => `<th style="padding:6px 10px;text-align:${h === 'SYMBOL' || h === 'ACTION' ? 'left' : 'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${kellyRows}</tbody></table></div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">Kelly sizing unavailable on the last run.</div>';
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+      <div><div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Monte Carlo stress test</div>
+        ${mcRows || '<div class="deep-ph-text" style="padding:10px 0">Monte Carlo unavailable on the last run.</div>'}</div>
+      <div><div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Kelly position sizing</div>
+        ${kellyTable}</div>
+    </div>
+    <div style="margin-top:12px;font-size:11px;color:var(--muted)">Simulated on your own positions. Hypothetical — not investment advice, and no order is placed or staged.</div>`;
+}
+
+// Per-holding verdicts the deep analysis already produced.
+function buildBookSignalsPane(d){
+  const hs = (d.analysis || {}).holdings_analysis || [];
+  if (!hs.length) return '<div class="deep-ph-text" style="padding:18px 0">No per-holding signals on the last run.</div>';
+  const cards = hs.map(h => buildAICard(h)).join('');
+  const cov = (d.analysis || {}).holdings_truncated;
+  const note = cov
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Detailed cards cover your ${daEsc(cov.analyzed)} largest holdings of ${daEsc(cov.total)}; portfolio-level scores use the full book.</div>`
+    : '';
+  return note + cards;
 }
 
 async function mybookImportWatchlist(){
@@ -2842,6 +2932,9 @@ async function mybookAnalyze(){
     }
     const d=j&&j.data;
     if(!d||!d.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now — try again in a minute.</div></div>'; return; }
+    // Hold the whole result so the Risk / Signals / Radar panes render from it
+    // instantly instead of each spending another full engine run.
+    _mybookLastResult = d;
     const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[], rad=d.radar||{};
     // Conclusions first (plan T2): one plain-language line per engine; the raw
     // stat rows fold behind <details>. Leads are plain text — daEsc'd at render.
