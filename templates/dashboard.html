@@ -2786,6 +2786,45 @@ function buildBookRiskPane(d){
     <div style="margin-top:12px;font-size:11px;color:var(--muted)">Simulated on your own positions. Hypothetical — not investment advice, and no order is placed or staged.</div>`;
 }
 
+// 11-node consensus on the customer's own book. The ECG node is excluded by
+// design — it reads equity_snapshots, which has no user column and would hand
+// the customer the OWNER's equity curve — so coverage tops out below the owner's
+// and the card says so. A silently missing node reading as agreement is exactly
+// the failure this surface must not have.
+function buildBookConsensusPane(d){
+  // Named uniquely on purpose: the XSS guard tracks locals by name across the
+  // whole file and is deny-by-default, so binding a RAW array to a name that is
+  // elsewhere a safely-built HTML string (`rows` in buildDiversificationCard)
+  // poisons that name and fails the guard at the other call site.
+  const consRows = (d.holdings || []);
+  if (!consRows.length) return '<div class="deep-ph-text" style="padding:14px 0">No consensus rows — add priceable positions and re-run.</div>';
+  const cov = d.coverage || {};
+  const trunc = cov.truncated
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Consensus covers your ${daEsc(cov.analyzed)} largest holdings of ${daEsc(cov.total)} (cap ${daEsc(cov.cap)}). Omitted: ${daEsc((cov.omitted_symbols || []).join(', '))}.</div>`
+    : '';
+  const ecgNote = d.ecg_enabled
+    ? ''
+    : `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">The equity-curve node is excluded on your book — it needs a position history this account does not have yet, so it abstains rather than guessing. Coverage below reflects that.</div>`;
+  const cards = consRows.map(h => {
+    const conv = h.conviction != null ? daFmt(h.conviction, 0) + '%' : '—';
+    const chips = Object.keys(h.votes || {}).map(n => {
+      const v = h.votes[n];
+      const col = v === 1 ? 'var(--green)' : v === -1 ? 'var(--red)' : v == null ? 'var(--muted)' : 'var(--muted2)';
+      return `<span style="font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid ${col};color:${col};white-space:nowrap">${daEsc(n)}</span>`;
+    }).join(' ');
+    return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--hover)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+        <span style="font-size:19px;font-weight:800;color:var(--accent)">${daEsc(h.symbol)}</span>
+        <span style="font-weight:700;font-size:12px">${daEsc(h.verdict || '—')}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-bottom:8px">
+        ${daEsc(h.bullish)} bull · ${daEsc(h.bearish)} bear · ${daEsc(h.neutral)} neutral · ${daEsc(h.abstains)} abstain
+        &nbsp;·&nbsp; coverage ${daFmt(h.data_coverage, 0)}% &nbsp;·&nbsp; conviction ${daEsc(conv)}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">${chips}</div>
+    </div>`;
+  }).join('');
+  return `${ecgNote}${trunc}<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">${cards}</div>`;
+}
+
 // Per-holding verdicts the deep analysis already produced.
 function buildBookSignalsPane(d){
   const hs = (d.analysis || {}).holdings_analysis || [];
