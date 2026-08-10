@@ -277,6 +277,16 @@ EXCLUDED: dict[str, str] = {
                    "owner data, mask-EXEMPT by design (masking would redact the customer's "
                    "own dollars back at them); per-user isolation + raw-dollar contract "
                    "locked by tests/test_mybook.py",
+    "/api/mybook/ecg": "Equity Curve Gate over the CALLER's own book, computed from the "
+                       "CALLER's own equity history (customer_equity_snapshots, keyed by "
+                       "user_id). Deliberately a separate route from the owner's /api/ecg, "
+                       "which reads the symbol-keyed `equity_snapshots` table and would "
+                       "return the OWNER's curve to any customer holding the same ticker. "
+                       "Covered by the same '/api/mybook' mask-exempt prefix (masking would "
+                       "redact the customer's own equity series back at them); the "
+                       "never-reads-the-owner-table contract, per-user isolation and the "
+                       "insufficient-history state are locked by "
+                       "tests/test_customer_equity_history.py",
     "/api/mybook/summary": "Home hero payload derived exclusively from the CUSTOMER's own "
                            "positions/watchlist/analysis — zero owner data. Covered by the "
                            "same '/api/mybook' mask-exempt prefix (masking would redact the "

@@ -5000,6 +5000,30 @@ def mybook_remove(symbol: str, request: Request):
     return mybook_get(request)
 
 
+@app.get("/api/mybook/ecg")
+def mybook_ecg(request: Request):
+    """Equity Curve Gate over the CALLER's own book and the CALLER's own history.
+
+    The owner panel at /api/ecg runs off `equity_snapshots`, which has no user
+    column — `get_equity_history(symbol)` hands back the owner's curve to whoever
+    asks, which is exactly why this is a separate route reading a separate,
+    per-user store (customer_equity_history). Zero owner data, zero live quotes,
+    zero LLM spend: it reads customer_positions + customer_equity_snapshots.
+
+    Coverage is reported honestly. A holding with fewer than
+    `snapshots_required` observations comes back as INSUFFICIENT_HISTORY with the
+    counts, never as a confident HEALTHY drawn from two days of data."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        import customer_equity_history
+
+        return {"status": "ok", "data": customer_equity_history.compute_book_ecg(email)}
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.post("/api/mybook/clear")
 def mybook_clear(request: Request):
     """Completely clear the user's book (all positions) and exit equal-weight mode.

@@ -31,6 +31,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import secrets
 import sqlite3
@@ -301,6 +302,27 @@ _CHILD_TABLE_DDL = {
             FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
         )
     """,
+    # The CUSTOMER's own equity curve — the per-user counterpart of the owner-only
+    # `equity_snapshots` table in gesh_financial.db, which has NO user column and
+    # therefore hands every caller the owner's curve. Rows here are derived
+    # exclusively from customer_positions valued at public closes.
+    #
+    # `percent_change` is deliberately ABSENT. In the owner table that column is
+    # the position's lifetime gain/loss vs average COST (a level, not a session
+    # change); feeding it to ecg._loss_streak auto-SUSPENDed every underwater
+    # holding, a bug this repo has fixed twice. Not storing it means nobody can
+    # reach for it: per-session changes are derived from the equity series itself.
+    "customer_equity_snapshots": """
+        CREATE TABLE {table} (
+            user_id       TEXT NOT NULL,
+            symbol        TEXT NOT NULL,
+            snapshot_at   TEXT NOT NULL,
+            equity        REAL NOT NULL,
+            current_price REAL NOT NULL,
+            PRIMARY KEY (user_id, symbol, snapshot_at),
+            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        )
+    """,
 }
 
 _CHILD_DATA_COLUMNS = {
@@ -316,6 +338,7 @@ _CHILD_DATA_COLUMNS = {
     "usage_reservations": (
         "job_id", "event", "state", "reserved_at", "completed_at",
     ),
+    "customer_equity_snapshots": ("symbol", "snapshot_at", "equity", "current_price"),
 }
 
 # Billing columns added 2026-06-26 (payment integration). Kept as an idempotent ALTER
@@ -1098,6 +1121,10 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_usage_reservations_window "
             "ON usage_reservations(user_id, event, state, reserved_at)"
         )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_customer_equity_snapshots_window "
+            "ON customer_equity_snapshots(user_id, symbol, snapshot_at DESC)"
+        )
         con.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
         violations = con.execute("PRAGMA foreign_key_check").fetchall()
@@ -1795,6 +1822,122 @@ def get_positions(email: str) -> list[dict]:
             for r in rows]
 
 
+# ── per-user equity history (the customer ECG's only data source) ────────────
+# The owner's `equity_snapshots` table (gesh_financial.db) is keyed by SYMBOL
+# ALONE: get_equity_history("AMD") returns the OWNER's curve to whoever asks, so
+# it can never feed a customer surface. These rows are the per-user counterpart,
+# written from customer_positions valued at public closes and read back scoped to
+# one tenant. Nothing here ever touches the owner table.
+
+_MAX_EQUITY_SNAPSHOTS_PER_SYMBOL = 400   # ~18 trading months at one daily snapshot
+_MAX_EQUITY_HISTORY_DAYS = 3_650
+
+
+def _finite_positive(value: object) -> float | None:
+    """A real observation, or None. price<=0 / NaN is MISSING data, never a loss —
+    persisting sentinels is what read back as a fake -96% crash on the owner curve
+    (audit D-07)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def record_equity_snapshots(
+    email: str, rows: list[dict], at: str | None = None
+) -> int:
+    """Append one equity observation per row for this user. Returns rows written.
+
+    `rows` are {symbol, equity, current_price}. Rows whose equity or price is not
+    finite and positive are dropped rather than stored. `at` (ISO-8601) overrides
+    the timestamp so a backfill or a test can place a row deterministically;
+    re-recording the same (user, symbol, timestamp) replaces it rather than
+    doubling the session count."""
+    user_id = resolve_user_id(email)
+    if not user_id or not rows:
+        return 0
+    stamp = str(at) if at else datetime.now(timezone.utc).isoformat()
+    clean: list[tuple[str, str, str, float, float]] = []
+    for row in rows:
+        symbol = str((row or {}).get("symbol") or "").strip().upper()
+        equity = _finite_positive((row or {}).get("equity"))
+        price = _finite_positive((row or {}).get("current_price"))
+        if symbol and equity is not None and price is not None:
+            clean.append((user_id, symbol, stamp, equity, price))
+    if not clean:
+        return 0
+    with _conn() as con:
+        con.executemany(
+            "INSERT INTO customer_equity_snapshots "
+            "(user_id, symbol, snapshot_at, equity, current_price) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(user_id, symbol, snapshot_at) DO UPDATE SET "
+            "equity=excluded.equity, current_price=excluded.current_price",
+            clean,
+        )
+        # Bound the per-(user, symbol) series so an every-30-min scheduler cannot
+        # grow gesh_auth.db without limit. Oldest rows go first.
+        for _uid, symbol, _stamp, _eq, _px in clean:
+            con.execute(
+                "DELETE FROM customer_equity_snapshots "
+                "WHERE user_id=? AND symbol=? AND snapshot_at NOT IN ("
+                "  SELECT snapshot_at FROM customer_equity_snapshots "
+                "  WHERE user_id=? AND symbol=? ORDER BY snapshot_at DESC LIMIT ?)",
+                (user_id, symbol, user_id, symbol, _MAX_EQUITY_SNAPSHOTS_PER_SYMBOL),
+            )
+    return len(clean)
+
+
+def get_user_equity_history(email: str, symbol: str, days: int = 30) -> list[dict]:
+    """This user's last N observations for one symbol, NEWEST FIRST.
+
+    Newest-first mirrors db.get_equity_history because ecg.compute_ecg reverses
+    what it is handed before the running-peak math. Empty list for an unknown
+    user — never another tenant's rows, and never the owner's."""
+    user_id = resolve_user_id(email)
+    sym = (symbol or "").strip().upper()
+    if not user_id or not sym:
+        return []
+    try:
+        limit = int(days)
+    except (TypeError, ValueError):
+        limit = 30
+    limit = max(1, min(limit, _MAX_EQUITY_HISTORY_DAYS))
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT snapshot_at, symbol, equity, current_price "
+            "FROM customer_equity_snapshots WHERE user_id=? AND symbol=? "
+            "ORDER BY snapshot_at DESC LIMIT ?",
+            (user_id, sym, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def last_equity_snapshot_at(email: str) -> str | None:
+    """ISO timestamp of this user's most recent observation, across all symbols —
+    the interval guard a scheduler checks before writing another one."""
+    user_id = resolve_user_id(email)
+    if not user_id:
+        return None
+    with _conn() as con:
+        row = con.execute(
+            "SELECT MAX(snapshot_at) AS at FROM customer_equity_snapshots WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+    return str(row["at"]) if row and row["at"] else None
+
+
+def customers_with_positions() -> list[str]:
+    """Active accounts holding at least one position — the snapshot sweep's
+    universe. Emails, resolved through users so a rename is followed."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT DISTINCT u.email FROM customer_positions p "
+            "JOIN users u ON u.user_id = p.user_id "
+            "WHERE COALESCE(u.is_active, 1)=1 ORDER BY u.email"
+        ).fetchall()
+    return [r["email"] for r in rows]
+
+
 # ── equal-weight (privacy) flag ──────────────────────────────────────────────
 # When a customer bulk-imports SYMBOLS ONLY (no share counts — sizes private), the
 # book is flagged equal-weight: the analysis weights every name 1/N instead of by an
@@ -2211,6 +2354,7 @@ if __name__ == "__main__":
 _USER_DATA_TABLES = (
     "customer_positions",
     "customer_book_prefs",
+    "customer_equity_snapshots",
     "watchlist",
     "customer_analyses",
     "usage_events",
@@ -2255,6 +2399,11 @@ def export_user_data(email: str) -> dict[str, Any]:
             "SELECT event, detail, at FROM usage_events WHERE user_id=? ORDER BY at DESC",
             (user_id,)
         ).fetchall()
+        equity_history = con.execute(
+            "SELECT symbol, snapshot_at, equity, current_price "
+            "FROM customer_equity_snapshots WHERE user_id=? "
+            "ORDER BY snapshot_at DESC, symbol", (user_id,)
+        ).fetchall()
 
     def _parse(raw: str) -> Any:
         try:
@@ -2273,6 +2422,7 @@ def export_user_data(email: str) -> dict[str, Any]:
             for r in analyses
         ],
         "usage": [dict(r) for r in usage],
+        "equity_history": [dict(r) for r in equity_history],
         "note": (
             "This is everything GESH Financial stores about your account. Payment "
             "records are held by Lemon Squeezy (our merchant of record), not by us."
