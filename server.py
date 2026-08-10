@@ -496,7 +496,11 @@ from allocation_config import (
     update_config,
 )
 from auth import login, logout
-from consensus import run_consensus_portfolio
+from consensus import (
+    MAX_CUSTOMER_CONSENSUS_SYMBOLS,
+    run_consensus_for_customer,
+    run_consensus_portfolio,
+)
 from consolidation_zone import detect_consolidation, scan_consolidations
 from data_fetcher import (
     DEFAULT_WATCHLIST,
@@ -5010,6 +5014,73 @@ def mybook_clear(request: Request):
         raise HTTPException(status_code=401, detail="Authentication required")
     auth_users.clear_positions(email)
     return {"status": "ok", "data": mybook_get(request)["data"]}
+
+
+# Consensus is a per-symbol network fan-out (~6 upstream providers per name), so
+# a 30-position book is ~180 requests on one HTTP call. Mirror the engine's own
+# cap here rather than hardcoding a second number, and disclose the cut.
+_BOOK_CONSENSUS_MAX_SYMBOLS = MAX_CUSTOMER_CONSENSUS_SYMBOLS
+
+
+@app.post("/api/mybook/consensus", dependencies=[Depends(require_customer_or_owner)])
+def mybook_consensus(request: Request):
+    """The multi-node consensus engine over the CUSTOMER's own book.
+
+    Same per-symbol shape the owner Signals page renders (verdict, raw_score,
+    per-node votes/details, bull/bear/neutral/abstain counts, coverage,
+    conviction), so one frontend renderer serves both surfaces.
+
+    Runs through `run_consensus_for_customer`, which forces the ECG node to
+    ABSTAIN: it reads `equity_snapshots`, a table keyed by symbol with no user
+    column, so on a customer request it would return the OWNER's equity curve for
+    any symbol the two books share. A customer therefore sees 8 of the 9 votable
+    nodes (max coverage 89% vs the owner's 100%), and the exclusion is stated in
+    the payload — so a customer is never shown a verdict that quietly counted a
+    node they did not receive.
+
+    Spends no LLM budget — every node is mechanical — so it carries no token
+    quota. It is bounded instead by the symbol cap plus the existing heavy rate
+    bucket, which already covers the whole `/api/mybook` prefix.
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        ew = auth_users.get_equal_weight(email)
+        payload = _customer_book_payload(auth_users.get_positions(email), equal_weight=ew)
+        holdings = payload["holdings"]
+        if not holdings:
+            # Nothing the customer owns is priceable — return the empty shape
+            # rather than fanning out to the network to score nothing.
+            return {
+                "status": "ok",
+                "data": {
+                    "holdings": [],
+                    "strong_buys": [],
+                    "buys": [],
+                    "sells": [],
+                    "ecg_enabled": False,
+                    "coverage": {
+                        "analyzed": 0,
+                        "total": 0,
+                        "truncated": False,
+                        "omitted_symbols": [],
+                        "cap": _BOOK_CONSENSUS_MAX_SYMBOLS,
+                    },
+                    "unpriced": payload["unpriced"],
+                },
+            }
+        result = run_consensus_for_customer(
+            holdings,
+            payload["equity_summary"]["portfolio_equity"],
+            max_symbols=_BOOK_CONSENSUS_MAX_SYMBOLS,
+        )
+        result["unpriced"] = payload["unpriced"]
+        # Kelly/Monte-Carlo style numpy scalars can ride out of the nodes; the
+        # JSON encoder rejects them and would turn a completed run into a 500.
+        return {"status": "ok", "data": _jsonable(result)}
+    except Exception as e:
+        raise _server_error(e)
 
 
 # Per-user cache + single-flight for the book analysis. Keyed by (email) with the
