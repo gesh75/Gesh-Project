@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import logging
 import math
@@ -492,11 +493,16 @@ from ai_analyzer import (
     deep_analyze_ticker,
 )
 from allocation_config import (
+    SCANNER_MODES,
     load_config,
     update_config,
 )
 from auth import login, logout
-from consensus import run_consensus_portfolio
+from consensus import (
+    MAX_CUSTOMER_CONSENSUS_SYMBOLS,
+    run_consensus_for_customer,
+    run_consensus_portfolio,
+)
 from consolidation_zone import detect_consolidation, scan_consolidations
 from data_fetcher import (
     DEFAULT_WATCHLIST,
@@ -5000,6 +5006,30 @@ def mybook_remove(symbol: str, request: Request):
     return mybook_get(request)
 
 
+@app.get("/api/mybook/ecg")
+def mybook_ecg(request: Request):
+    """Equity Curve Gate over the CALLER's own book and the CALLER's own history.
+
+    The owner panel at /api/ecg runs off `equity_snapshots`, which has no user
+    column — `get_equity_history(symbol)` hands back the owner's curve to whoever
+    asks, which is exactly why this is a separate route reading a separate,
+    per-user store (customer_equity_history). Zero owner data, zero live quotes,
+    zero LLM spend: it reads customer_positions + customer_equity_snapshots.
+
+    Coverage is reported honestly. A holding with fewer than
+    `snapshots_required` observations comes back as INSUFFICIENT_HISTORY with the
+    counts, never as a confident HEALTHY drawn from two days of data."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        import customer_equity_history
+
+        return {"status": "ok", "data": customer_equity_history.compute_book_ecg(email)}
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.post("/api/mybook/clear")
 def mybook_clear(request: Request):
     """Completely clear the user's book (all positions) and exit equal-weight mode.
@@ -5010,6 +5040,73 @@ def mybook_clear(request: Request):
         raise HTTPException(status_code=401, detail="Authentication required")
     auth_users.clear_positions(email)
     return {"status": "ok", "data": mybook_get(request)["data"]}
+
+
+# Consensus is a per-symbol network fan-out (~6 upstream providers per name), so
+# a 30-position book is ~180 requests on one HTTP call. Mirror the engine's own
+# cap here rather than hardcoding a second number, and disclose the cut.
+_BOOK_CONSENSUS_MAX_SYMBOLS = MAX_CUSTOMER_CONSENSUS_SYMBOLS
+
+
+@app.post("/api/mybook/consensus", dependencies=[Depends(require_customer_or_owner)])
+def mybook_consensus(request: Request):
+    """The multi-node consensus engine over the CUSTOMER's own book.
+
+    Same per-symbol shape the owner Signals page renders (verdict, raw_score,
+    per-node votes/details, bull/bear/neutral/abstain counts, coverage,
+    conviction), so one frontend renderer serves both surfaces.
+
+    Runs through `run_consensus_for_customer`, which forces the ECG node to
+    ABSTAIN: it reads `equity_snapshots`, a table keyed by symbol with no user
+    column, so on a customer request it would return the OWNER's equity curve for
+    any symbol the two books share. A customer therefore sees 8 of the 9 votable
+    nodes (max coverage 89% vs the owner's 100%), and the exclusion is stated in
+    the payload — so a customer is never shown a verdict that quietly counted a
+    node they did not receive.
+
+    Spends no LLM budget — every node is mechanical — so it carries no token
+    quota. It is bounded instead by the symbol cap plus the existing heavy rate
+    bucket, which already covers the whole `/api/mybook` prefix.
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        ew = auth_users.get_equal_weight(email)
+        payload = _customer_book_payload(auth_users.get_positions(email), equal_weight=ew)
+        holdings = payload["holdings"]
+        if not holdings:
+            # Nothing the customer owns is priceable — return the empty shape
+            # rather than fanning out to the network to score nothing.
+            return {
+                "status": "ok",
+                "data": {
+                    "holdings": [],
+                    "strong_buys": [],
+                    "buys": [],
+                    "sells": [],
+                    "ecg_enabled": False,
+                    "coverage": {
+                        "analyzed": 0,
+                        "total": 0,
+                        "truncated": False,
+                        "omitted_symbols": [],
+                        "cap": _BOOK_CONSENSUS_MAX_SYMBOLS,
+                    },
+                    "unpriced": payload["unpriced"],
+                },
+            }
+        result = run_consensus_for_customer(
+            holdings,
+            payload["equity_summary"]["portfolio_equity"],
+            max_symbols=_BOOK_CONSENSUS_MAX_SYMBOLS,
+        )
+        result["unpriced"] = payload["unpriced"]
+        # Kelly/Monte-Carlo style numpy scalars can ride out of the nodes; the
+        # JSON encoder rejects them and would turn a completed run into a 500.
+        return {"status": "ok", "data": _jsonable(result)}
+    except Exception as e:
+        raise _server_error(e)
 
 
 # Per-user cache + single-flight for the book analysis. Keyed by (email) with the
@@ -5653,6 +5750,103 @@ async def mybook_deploy_cash(request: Request):
         raise _server_error(e)
 
 
+def _radar_allocation(cand: dict) -> dict:
+    """Whitelist ONE sized radar candidate for the wire.
+
+    Two fields the sizer produces are deliberately dropped:
+
+      * `sector_weight_after` — combined with the dollar figure it is an
+        arithmetic oracle for the book total; the owner's /invest what-if path
+        drops it for the same reason.
+      * `sizing_binding_constraint` — its values are internal config-variable
+        names ("max_stock_per_trade", "7pct_cap", "budget"). The radar's swap
+        rationale already had a config-variable name removed because it renders
+        verbatim on the customer surface, where it is jargon about a setting they
+        can neither see nor change.
+
+    Everything kept is what a buyer actually needs: what, how much, and why.
+    """
+    return {
+        "symbol": cand.get("symbol"),
+        "company_name": cand.get("company_name"),
+        "sector": cand.get("sector"),
+        "price": cand.get("price"),
+        "dollars": cand.get("recommended_usd"),
+        "shares": cand.get("recommended_shares"),
+        "composite_score": cand.get("composite_score"),
+        "analyst_upside": cand.get("analyst_upside"),
+        "max_corr_to_holdings": cand.get("max_corr_to_holdings"),
+        "rationale": cand.get("rationale"),
+        "actionable": bool(cand.get("actionable")),
+    }
+
+
+@app.post("/api/mybook/radar-cash")
+async def mybook_radar_cash(request: Request):
+    """'What would this cash buy me OUTSIDE what I already hold?' — sizes the
+    Diversification Radar's scan-time shortlist against a cash amount.
+
+    The radar carried in a persisted analysis is computed CASH-FREE on purpose:
+    the analysis is cached per (user, book fingerprint), so folding a cash figure
+    into it would invalidate that cache the moment the customer moved the slider.
+    Sizing is therefore applied HERE, over the `resize_state` the scan captured —
+    pure arithmetic on cached data: no LLM, no quota, no network, exactly like
+    /api/mybook/deploy-cash. Advisory only; nothing is placed or staged.
+
+    `cash` is echoed back as asked, while `deployable_cash` is what was actually
+    sized against — invest_radar hard-caps the what-if at WHAT_IF_MAX, and a
+    clamp the customer cannot see is a clamp they will mistake for a bug.
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        cash = float((body or {}).get("cash"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="cash must be a number") from None
+    if not (0 < cash <= 10_000_000):
+        raise HTTPException(status_code=400, detail="cash out of range")
+    try:
+        saved = auth_users.get_latest_book_analysis(email)
+        if not saved:
+            raise HTTPException(
+                status_code=404, detail="No analysis yet — run Analyze My Portfolio first"
+            )
+        stale = _analysis_stale_for(email, saved)
+        # A persisted radar can be absent (analysis predates the feature), an
+        # error stub (it is best-effort inside the suite), or hand-corrupted.
+        # resize_for_cash degrades all three to NO_ACTION on its own.
+        radar = saved.get("radar")
+        state = radar.get("resize_state") if isinstance(radar, dict) else None
+        sized = invest_radar.resize_for_cash(state, cash, what_if_slots=None)
+        allocations = [_radar_allocation(c) for c in (sized.get("candidates") or [])]
+        spent = sum(float(a["dollars"] or 0) for a in allocations)
+        return {
+            "status": "ok",
+            "data": {
+                "cash": cash,
+                "stale": stale,
+                "mode": sized.get("mode", "NO_ACTION"),
+                "deployable_cash": sized.get("deployable_cash", 0.0),
+                "open_slots": sized.get("open_slots", 0),
+                "new_names_to_add": sized.get("new_names_to_add", 0),
+                "allocations": allocations,
+                # Measured against what they ASKED for: a clamped or unsizeable
+                # request leaves the remainder uncommitted, and saying so is the
+                # honest answer.
+                "leftover": round(max(0.0, cash - spent), 2),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.get("/api/mybook/summary")
 def mybook_summary(request: Request):
     """Hero payload for the customer Home pane: value, what changed, one next
@@ -5708,6 +5902,421 @@ def mybook_summary(request: Request):
     }
 
 
+# ─── Customer-scoped Scanner + Intelligence ──────────────────────────────────
+# The owner's Scanner page (sector pre-filter → consolidation zones) and
+# Intelligence page (SEC filings, news sentiment, fundamental momentum) are built
+# from SYMBOL-scoped engines: public OHLCV / EDGAR / vendor rows in, signals out.
+# None of them carries owner state, so the same code can serve a customer — but
+# only if the SYMBOLS come from the customer's own book and watchlist. The owner
+# scanner resolves symbols from the Robinhood snapshot (_resolved_payload); these
+# endpoints must never reach for it, and every row leaving them is post-filtered
+# against what the customer entered so a widened engine query cannot smuggle an
+# owner name through (`sec_filings` and `news_sentiment` are symbol-keyed OWNER
+# tables — see tests/test_customer_owner_isolation.py for the governing rule).
+#
+# Neither endpoint spends an LLM token: the scanner is pure price math, and the
+# intelligence legs read the cached/mechanical paths only. The live agent entry
+# points (watch_filings / scan_news / run_fundamental_scan) all call Claude and
+# get_latest_fundamental_scan returns the OWNER's whole-universe run, so none of
+# them belongs here.
+
+# One OHLCV download per symbol in the consolidation leg (plus one per UNIQUE
+# sector ETF, which sector_filter dedupes to ~12 at most), serialized behind
+# price_source's yfinance lock. The per-user position cap is 30 and the watchlist
+# cap is 50, so an uncapped scan would be an 80-download fan-out per click. 20
+# covers a full book while keeping the worst case to seconds, not minutes.
+MYBOOK_SCANNER_MAX_SYMBOLS = int(os.getenv("GESH_MYBOOK_SCANNER_MAX_SYMBOLS", "20"))
+
+# The intelligence legs are heavier PER SYMBOL than the scanner's — fundamentals
+# is ~2 yfinance calls a name. 12 mirrors news_agent.MAX_NEWS_SYMBOLS so the news
+# leg never truncates on a different boundary than the panel around it.
+MYBOOK_INTEL_MAX_SYMBOLS = int(os.getenv("GESH_MYBOOK_INTEL_MAX_SYMBOLS", "12"))
+
+# EDGAR is the slowest leg by far: a CIK lookup plus one RSS pull per form type
+# per symbol — four round trips a name against a 10s timeout, and it only runs at
+# all when the DB has no cached filings. Capped well below the endpoint-wide
+# limit, mirroring sec_agent.MAX_ANALYSES_PER_RUN.
+MYBOOK_INTEL_SEC_MAX_SYMBOLS = int(os.getenv("GESH_MYBOOK_INTEL_SEC_MAX_SYMBOLS", "6"))
+
+# A filing window shorter than a quarter routinely shows nothing at all, so the
+# SEC leg always looks back at least this far regardless of the news window.
+MYBOOK_INTEL_SEC_MIN_DAYS = 30
+
+# The scanner timeframes a customer may name. Derived from SCANNER_MODES rather
+# than hardcoded, minus any mode whose params fall outside the allow-list the
+# owner scanner already validates against (forex-4HR's "4h" interval does), so a
+# new mode becomes selectable automatically and an unrenderable one never does.
+_MYBOOK_SCANNER_TIMEFRAMES: dict[str, dict] = {
+    name: params
+    for name, params in SCANNER_MODES.items()
+    if params.get("interval") in _ALLOWED_INTERVALS and params.get("period") in _ALLOWED_PERIODS
+}
+
+_MYBOOK_SCANNER_BUCKET = "mybook_scanner"
+_MYBOOK_INTEL_BUCKET = "mybook_intel"
+
+
+def _customer_scan_symbols(
+    email: str, cap: int, include_watchlist: bool = True
+) -> tuple[list[str], int]:
+    """The symbols a customer-scoped engine may touch: THEIR book, then THEIR
+    watchlist. Returns (scanned, requested_total) so truncation can be disclosed.
+
+    Book before watchlist on purpose — when the cap bites, money at risk survives
+    and aspiration is dropped. A stored symbol that no longer validates is skipped
+    rather than raising: one bad row must not 400 the whole scan.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    candidates = [p["symbol"] for p in auth_users.get_positions(email)]
+    if include_watchlist:
+        candidates += list(auth_users.get_watch(email))
+    for raw in candidates:
+        sym = str(raw or "").strip().upper()
+        if sym and sym not in seen and _SYMBOL_RE.match(sym):
+            seen.add(sym)
+            ordered.append(sym)
+    return ordered[:cap], len(ordered)
+
+
+def _book_scan_cache_key(email: str, *parts: object) -> str:
+    """Per-user cache key for a book-wide scan. Hashed so no email address sits in
+    a process-global dict, and so the key length is bounded by a 30-name book."""
+    raw = "\x1f".join([email or "", *(str(p) for p in parts)])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _default_scanner_timeframe() -> tuple[str, dict]:
+    """The house scanner timeframe (gesh_config.scanner_timeframe). It is a
+    timeframe LABEL — it carries no position, cash or symbol data — so serving it
+    as the customer default is not a leak. Falls back to daily if unreadable."""
+    try:
+        name = str(load_config().get("scanner_timeframe") or "daily")
+    except Exception:  # noqa: BLE001 — a config hiccup must not 500 a scan
+        name = "daily"
+    params = _MYBOOK_SCANNER_TIMEFRAMES.get(name)
+    if not params:
+        name, params = "daily", _MYBOOK_SCANNER_TIMEFRAMES["daily"]
+    return name, params
+
+
+def _resolve_scanner_timeframe(body: dict) -> tuple[str | None, str, str]:
+    """(timeframe_name, interval, period) for a scan request.
+
+    An explicit interval/period pair wins over a named timeframe; both go through
+    the same `_validate_timeframe` allow-list the owner scanner uses, so a
+    customer can never smuggle an arbitrary yfinance argument downstream.
+    """
+    name = body.get("timeframe")
+    interval, period = body.get("interval"), body.get("period")
+    if interval or period:
+        interval, period = str(interval or ""), str(period or "")
+        _validate_timeframe(interval, period)
+        return (str(name) if name in _MYBOOK_SCANNER_TIMEFRAMES else None), interval, period
+    if name:
+        params = _MYBOOK_SCANNER_TIMEFRAMES.get(str(name))
+        if not params:
+            raise HTTPException(status_code=400, detail="Unknown scanner timeframe")
+        return str(name), params["interval"], params["period"]
+    name, params = _default_scanner_timeframe()
+    return name, params["interval"], params["period"]
+
+
+def _clamped_float(value: object, default: float, low: float, high: float) -> float:
+    """A bounded float from untrusted JSON. Garbage falls back to the default
+    rather than 400-ing — a mistyped slider must not lose the whole scan."""
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(out) or math.isinf(out):
+        return default
+    return max(low, min(high, out))
+
+
+def _sanitized_scan_errors(errors: object) -> list[dict]:
+    """`scan_consolidations` reports errors as (symbol, str(exception)). The
+    reason is raw upstream text — it has carried URLs and hostnames — so the
+    customer gets the symbol and a fixed phrase while the detail goes to the log
+    (same error-hygiene rule as `_server_error`)."""
+    out: list[dict] = []
+    for item in errors or []:  # type: ignore[union-attr]
+        try:
+            sym, reason = item[0], item[1]
+        except (TypeError, IndexError, KeyError):
+            sym, reason = item, ""
+        logger.info("customer scanner: %s unavailable (%s)", sym, reason)
+        out.append({"symbol": str(sym), "reason": "data unavailable"})
+    return out
+
+
+def _run_book_scanner(symbols: list[str], interval: str, period: str, min_rr: float) -> dict:
+    """Sector pre-filter → consolidation zones, in the documented pipeline order.
+
+    Each leg is independently fail-soft: this is two engines behind one button,
+    and one upstream outage must not blank the other's panel. The inner `sector`
+    and `consolidation` blocks keep the exact shape `/api/scanner/sector` and
+    `/api/scanner/consolidation` return, so one frontend renderer serves both the
+    owner page and the customer one.
+    """
+    try:
+        sector = dict(batch_sector_check(symbols))
+    except Exception as e:  # noqa: BLE001 — one leg down must not lose the other
+        logger.warning("customer scanner sector leg failed: %s", e)
+        sector = {"hot": [], "cold": [], "summary": "", "error": "sector data unavailable"}
+
+    hot = [r["symbol"] for r in (sector.get("hot") or []) if r.get("symbol")]
+    # Mirrors the owner scanner UI: on a low-volume session nothing clears the
+    # 1.2x threshold, and scanning nothing would read as "no setups found" rather
+    # than "no filter applied". Scan everything and say so.
+    fallback = bool(symbols) and not hot
+    scan_syms = hot if hot else list(symbols)
+
+    try:
+        cz = dict(scan_consolidations(scan_syms, interval=interval, period=period, min_rr=min_rr))
+        cz["errors"] = _sanitized_scan_errors(cz.get("errors"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("customer scanner consolidation leg failed: %s", e)
+        cz = {
+            "found": [], "no_zone": [], "errors": [], "summary": "",
+            "error": "price data unavailable",
+        }
+
+    return {
+        "sector": sector,
+        "consolidation": cz,
+        "hot_symbols": hot,
+        "sector_fallback": fallback,
+        "consolidation_symbols": scan_syms,
+    }
+
+
+@app.post("/api/mybook/scanner")
+async def mybook_scanner(request: Request):
+    """Sector pre-filter → consolidation-zone scan over the CUSTOMER's own symbols.
+
+    Body (all optional): {"timeframe": "5MIN"|..., "interval", "period",
+    "min_rr": 2.0, "include_watchlist": true}. Pure price math — no LLM, no owner
+    data, safe to call repeatedly (5-minute per-user cache keyed on the resolved
+    symbol set and parameters, so a book edit or a timeframe change is a miss).
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — an empty/garbage body means "defaults"
+        body = {}
+    body = body if isinstance(body, dict) else {}
+
+    include_watchlist = body.get("include_watchlist", True) is not False
+    timeframe, interval, period = _resolve_scanner_timeframe(body)
+    min_rr = _clamped_float(body.get("min_rr", 2.0), default=2.0, low=0.0, high=10.0)
+    symbols, requested = _customer_scan_symbols(
+        email, MYBOOK_SCANNER_MAX_SYMBOLS, include_watchlist
+    )
+
+    key = _book_scan_cache_key(
+        email, ",".join(symbols), requested, timeframe, interval, period, min_rr
+    )
+    cached = _ticker_get_cached(_MYBOOK_SCANNER_BUCKET, key)
+    if cached:
+        return cached
+
+    try:
+        # Downloads OHLCV for every symbol — off the event loop, same as the
+        # owner batch scanner.
+        data = await asyncio.to_thread(_run_book_scanner, symbols, interval, period, min_rr)
+    except Exception as e:
+        raise _server_error(e)
+
+    data.update(
+        {
+            "symbols": symbols,
+            "scanned_count": len(symbols),
+            "requested_count": requested,
+            "truncated": requested > len(symbols),
+            "symbol_cap": MYBOOK_SCANNER_MAX_SYMBOLS,
+            "timeframe": timeframe,
+            "interval": interval,
+            "period": period,
+            "min_rr": min_rr,
+            "include_watchlist": include_watchlist,
+        }
+    )
+    return _ticker_get_store(_MYBOOK_SCANNER_BUCKET, key, {"status": "ok", "data": data})
+
+
+def _customer_sec_block(symbols: list[str], days: int) -> dict:
+    """Recent SEC filings for the customer's symbols.
+
+    `get_filing_history` reads the stored analyses first and only falls back to
+    LLM-free EDGAR metadata discovery when the DB has nothing — no Claude call on
+    either path. Rows are re-filtered against the entitled set because the stored
+    table is symbol-keyed and shared with the owner's runs.
+    """
+    scoped = symbols[:MYBOOK_INTEL_SEC_MAX_SYMBOLS]
+    allowed = set(scoped)
+    rows = get_filing_history(scoped, days=max(days, MYBOOK_INTEL_SEC_MIN_DAYS)) if scoped else []
+    return {
+        "results": [
+            r for r in (rows or []) if str((r or {}).get("symbol") or "").upper() in allowed
+        ],
+        "symbols": scoped,
+        "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
+        "truncated": len(symbols) > len(scoped),
+        "days": max(days, MYBOOK_INTEL_SEC_MIN_DAYS),
+    }
+
+
+def _customer_news_block(symbols: list[str], days: int) -> dict:
+    """Cached news sentiment for the customer's symbols — a DB read, never a live
+    scan, so this path stays free of LLM spend.
+
+    Allow-listed to the same four fields `/api/news/{symbol}` ships (score, mood,
+    impact, article_count + as_of): the raw model analysis is owner-side research,
+    not a customer field. A row whose run analyzed ZERO articles is dropped rather
+    than reported — sentiment over no articles is fabricated by definition.
+    """
+    allowed = set(symbols)
+    rows = get_news_history(symbols, days=days) if symbols else []
+    out: list[dict] = []
+    for r in rows or []:
+        sym = str((r or {}).get("symbol") or "").upper()
+        if sym not in allowed:
+            continue
+        analysis = r.get("analysis") if isinstance(r.get("analysis"), dict) else {}
+        count = analysis.get("article_count") or 0
+        if not count:
+            continue
+        out.append(
+            {
+                "symbol": sym,
+                "score": r.get("sentiment_score"),
+                "mood": r.get("overall_sentiment"),
+                "impact": r.get("impact_level"),
+                "article_count": count,
+                "as_of": r.get("analyzed_at"),
+            }
+        )
+    scores = [x["score"] for x in out if isinstance(x["score"], (int, float))]
+    avg = round(sum(scores) / len(scores), 1) if scores else 0.0
+    # An empty cache is NEUTRAL, never bullish — same thresholds as the owner's
+    # /api/agents/news/history so the two surfaces cannot disagree.
+    mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
+    return {"results": out, "avg_score": avg, "market_mood": mood, "cached": True}
+
+
+def _customer_fundamentals_block(symbols: list[str]) -> dict:
+    """Fundamental momentum for the customer's symbols.
+
+    Uses the batch fetcher + pre-score directly (the same private pair
+    `/api/fundamentals/{symbol}` already falls back to) rather than
+    `run_fundamental_scan`, which spends a Claude call, or
+    `get_latest_fundamental_scan`, which returns the OWNER's ~95-name universe run.
+
+    Per-symbol degradation is the contract: the batch fetcher reports a failed
+    ticker as an `error` row, which becomes an entry in `errors` with the upstream
+    text stripped — never a lost panel and never an echoed vendor URL.
+    """
+    import fundamental_agent
+
+    rows = fundamental_agent._fetch_fundamentals_batch(list(symbols)) if symbols else []
+    allowed = set(symbols)
+    results: list[dict] = []
+    errors: list[dict] = []
+    for row in rows or []:
+        sym = str((row or {}).get("symbol") or "").upper()
+        if sym not in allowed:
+            continue
+        if row.get("error") or row.get("price") is None:
+            logger.info("customer fundamentals: %s unavailable (%s)", sym, row.get("error"))
+            errors.append({"symbol": sym, "reason": "data unavailable"})
+            continue
+        clean = {k: v for k, v in row.items() if not k.startswith("_")}
+        clean["momentum_score"] = fundamental_agent._pre_score(row)
+        results.append(clean)
+    results.sort(key=lambda r: r["momentum_score"], reverse=True)
+    return {"results": results, "errors": errors}
+
+
+def _run_book_intelligence(symbols: list[str], days: int) -> dict:
+    """SEC + news + fundamentals for one customer's symbols, each leg isolated.
+
+    A leg that fails reports its own outage inside the SAME shape it would have
+    returned, so the renderer never has to special-case a missing key — and the
+    other two still arrive.
+    """
+    legs: dict[str, dict] = {}
+    empty = {
+        "sec": {"results": [], "symbols": [], "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
+                "truncated": False, "days": days},
+        "news": {"results": [], "avg_score": 0.0, "market_mood": "NEUTRAL", "cached": True},
+        "fundamentals": {"results": [], "errors": []},
+    }
+    builders = {
+        "sec": lambda: _customer_sec_block(symbols, days),
+        "news": lambda: _customer_news_block(symbols, days),
+        "fundamentals": lambda: _customer_fundamentals_block(symbols),
+    }
+    for name, build in builders.items():
+        try:
+            legs[name] = build()
+        except Exception as e:  # noqa: BLE001 — one dead agent must not blank the panel
+            logger.warning("customer intelligence %s leg failed: %s", name, e)
+            legs[name] = dict(empty[name], error=f"{name} data unavailable")
+    return legs
+
+
+@app.post("/api/mybook/intelligence")
+async def mybook_intelligence(request: Request):
+    """SEC filings + news sentiment + fundamental momentum for the CUSTOMER's own
+    symbols.
+
+    Body (all optional): {"days": 7, "include_watchlist": true}. Cached/mechanical
+    reads only — zero LLM spend — with a 5-minute per-user cache keyed on the
+    resolved symbol set, so repeated clicks cost nothing.
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    body = body if isinstance(body, dict) else {}
+
+    include_watchlist = body.get("include_watchlist", True) is not False
+    days = int(_clamped_float(body.get("days", 7), default=7.0, low=1.0, high=90.0))
+    symbols, requested = _customer_scan_symbols(
+        email, MYBOOK_INTEL_MAX_SYMBOLS, include_watchlist
+    )
+
+    key = _book_scan_cache_key(email, ",".join(symbols), requested, days)
+    cached = _ticker_get_cached(_MYBOOK_INTEL_BUCKET, key)
+    if cached:
+        return cached
+
+    try:
+        # EDGAR + yfinance round trips — off the event loop.
+        data = await asyncio.to_thread(_run_book_intelligence, symbols, days)
+    except Exception as e:
+        raise _server_error(e)
+
+    data.update(
+        {
+            "symbols": symbols,
+            "scanned_count": len(symbols),
+            "requested_count": requested,
+            "truncated": requested > len(symbols),
+            "symbol_cap": MYBOOK_INTEL_MAX_SYMBOLS,
+            "days": days,
+            "include_watchlist": include_watchlist,
+        }
+    )
+    return _ticker_get_store(_MYBOOK_INTEL_BUCKET, key, {"status": "ok", "data": data})
+
+
 def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
     """First-sentence(s) lead + folded remainder, split on a sentence boundary.
     Customer surfaces show structured leads, not walls of model prose (plan T3).
@@ -5719,6 +6328,113 @@ def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
     if cut == -1:
         return t, ""
     return t[: cut + 1], t[cut + 2 :]
+
+
+def _render_radar_block(radar: object) -> str:
+    """Diversification Radar section of /mybook/report.
+
+    Renders PERSISTED radar output only. The engine is never re-run here — it
+    screens a live ~95-name universe, and this page must stay instant, free and
+    LLM-free. Sizing is absent by design (the radar is computed cash-free so the
+    cached analysis stays valid); /api/mybook/radar-cash applies cash separately.
+
+    Every dynamic string is escaped: sector keys, symbols and rationales are
+    vendor- and model-influenced text, and this page is outside the dashboard's
+    audited JS builders. Fail-quiet on a wrong-shaped payload — a print page must
+    degrade to less content, never to a 500.
+    """
+    import html as _h
+
+    if not isinstance(radar, dict) or radar.get("error") or not radar.get("mode"):
+        return ""
+    e = _h.escape
+
+    def num(v: object, digits: int = 1, suffix: str = "") -> str:
+        try:
+            return f"{float(v):,.{digits}f}{suffix}"  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return "—"
+
+    def dicts(key: str, limit: int) -> list[dict]:
+        """Persisted JSON is only as well-shaped as the run that wrote it."""
+        val = radar.get(key)
+        return [x for x in val[:limit] if isinstance(x, dict)] if isinstance(val, list) else []
+
+    raw_weights = radar.get("existing_sector_weights")
+    weights: list[tuple[str, float]] = []
+    for sec, w in (raw_weights.items() if isinstance(raw_weights, dict) else ()):
+        try:
+            weights.append((str(sec), float(w)))
+        except (TypeError, ValueError):
+            continue
+    weights.sort(key=lambda kv: kv[1], reverse=True)
+    weights = weights[:8]
+
+    # The concentration line is the point of the whole section — a customer
+    # holding one sector at 100% needs that stated before any ticker suggestion.
+    if weights:
+        top_sector, top_weight = weights[0]
+        colour = "#c00" if top_weight >= 0.4 else "#111"
+        headline = (
+            f"<p style='color:#111;line-height:1.6'>Your book is "
+            f"<b style='color:{colour}'>{num(top_weight * 100)}% {e(top_sector)}</b>.</p>"
+        )
+    else:
+        headline = "<p style='color:#666'>Sector mix unavailable for this book.</p>"
+
+    weight_rows = "".join(
+        f"<tr><td style='padding:6px 12px'>{e(sec)}</td>"
+        f"<td style='padding:6px 12px;text-align:right;font-weight:600'>{num(w * 100)}%</td></tr>"
+        for sec, w in weights
+    )
+
+    cand_rows = "".join(
+        f"<tr><td style='padding:6px 12px;font-weight:600'>{e(str(c.get('symbol', '')))}</td>"
+        f"<td style='padding:6px 12px'>{e(str(c.get('sector') or '—'))}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{num(c.get('composite_score'), 0)}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{num(c.get('analyst_upside'), 1, '%')}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{num(c.get('max_corr_to_holdings'), 2)}</td>"
+        f"<td style='padding:6px 12px;color:#555'>{e(str(c.get('rationale') or ''))}</td></tr>"
+        for c in dicts("candidates", 8)
+    )
+    cand_block = (
+        "<table><tr style='border-bottom:1px solid #ccc'>"
+        "<th style='padding:6px 12px;text-align:left'>Symbol</th>"
+        "<th style='padding:6px 12px;text-align:left'>Sector</th>"
+        "<th style='padding:6px 12px'>Score</th><th style='padding:6px 12px'>Upside</th>"
+        "<th style='padding:6px 12px'>Corr</th>"
+        "<th style='padding:6px 12px;text-align:left'>Why</th></tr>"
+        f"{cand_rows}</table>"
+        if cand_rows
+        else "<p style='color:#666'>No diversifying candidates cleared the correlation "
+        "and sector screens on this run.</p>"
+    )
+
+    swap_items = "".join(
+        f"<li><b>{e(str(s.get('trim_symbol') or ''))} &rarr; "
+        f"{e(str(s.get('fund_new_symbol') or ''))}</b> — {e(str(s.get('rationale') or ''))}</li>"
+        for s in dicts("swap_suggestions", 3)
+    )
+    swap_block = (
+        f"<h3 style='margin:18px 0 4px'>Funding swaps</h3><ul>{swap_items}</ul>"
+        if swap_items
+        else ""
+    )
+
+    excluded = radar.get("excluded_holdings")
+    n_excluded = len(excluded) if isinstance(excluded, (list, tuple)) else 0
+    held = f"{n_excluded} position is" if n_excluded == 1 else f"{n_excluded} positions are"
+    return f"""
+  <h2>Diversification Radar</h2>
+  {headline}
+  {("<table>" + weight_rows + "</table>") if weight_rows else ""}
+  <h3 style='margin:18px 0 4px'>New names screened</h3>
+  {cand_block}
+  {swap_block}
+  <p style='color:#888;font-size:12px'>Screens names you do NOT already hold — your
+  {held} excluded by construction. Advisory only, not financial advice; no order is placed
+  or staged. Sizing is not shown here: use <b>Where does new cash go?</b> on the dashboard
+  to size these against a cash amount.</p>"""
 
 
 def _render_book_report(email: str) -> str:
@@ -5851,6 +6567,10 @@ def _render_book_report(email: str) -> str:
             f"(95% confidence): &minus;${mc_var:,.0f} on your ${total:,.0f} book."
             f"{mc_stale_note}"
         )
+        # Diversification Radar — rendered from the PERSISTED radar only. It is
+        # best-effort inside the engine suite, so absent/errored is the normal
+        # degraded case and simply omits the section (never an empty heading).
+        radar_block = _render_radar_block(saved.get("radar"))
         # Structured-only AI output (plan T3): one bold takeaway sentence, the
         # rest of the model prose folded — never a free-standing wall of text.
         ctx_lead, ctx_rest = _lead_and_fold(str(d.get("market_context", "")))
@@ -5876,6 +6596,7 @@ def _render_book_report(email: str) -> str:
   <details><summary>How this was computed — Kelly sizing</summary>
   <table>{kelly_rows or row("Status", "unavailable")}</table></details>
   <h2>Per-holding research</h2>{cards}
+  {radar_block}
   <p style='color:#888;font-size:12px'>Analysis generated {e(str(saved.get("_saved_at", ""))[:16])} UTC.</p>"""
     else:
         body = "<p><em>No analysis yet — run <b>Analyze My Portfolio</b> on the dashboard, then reload this report.</em></p>"
