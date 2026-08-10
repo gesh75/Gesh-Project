@@ -2742,7 +2742,27 @@ function _bookPane(paneId, bodyId, render){
   box.innerHTML = render(_mybookLastResult);
 }
 
-function showBookSignals(){ _bookPane('book-signals', 'book-signals-body', buildBookSignalsPane); }
+function showBookSignals(){
+  _bookPane('book-signals', 'book-signals-body', buildBookSignalsPane);
+  loadBookConsensus();
+}
+
+// Consensus is a separate mechanical run (no LLM, no quota) from the deep
+// analysis, so it is fetched on demand and appended rather than blocking the
+// verdict cards behind it. Failure is quiet: the cards above still stand on
+// their own, and a broken panel must not imply a broken analysis.
+async function loadBookConsensus(){
+  const host = document.getElementById('book-consensus');
+  if (!host) return;
+  host.innerHTML = '<div class="deep-ph-text" style="padding:10px 0">Polling the consensus nodes…</div>';
+  try{
+    const r = await fetch('/api/mybook/consensus', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    if (r.status === 401){ host.innerHTML = '<div class="deep-ph-text" style="padding:10px 0">🔒 Sign in to see consensus.</div>'; return; }
+    if (!r.ok){ host.innerHTML = '<div class="deep-ph-text" style="padding:10px 0">Consensus unavailable right now.</div>'; return; }
+    const j = await r.json().catch(()=>null);
+    host.innerHTML = buildBookConsensusPane((j && j.data) || {});
+  }catch(e){ host.innerHTML = '<div class="deep-ph-text" style="padding:10px 0">Consensus unavailable right now.</div>'; }
+}
 function showBookRisk(){ _bookPane('book-risk', 'book-risk-body', buildBookRiskPane); }
 // buildDiversificationCard takes the radar block, not the whole result — passing
 // the result made its `!rad.mode` guard return '' and the pane rendered blank.
@@ -2834,7 +2854,9 @@ function buildBookSignalsPane(d){
   const note = cov
     ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Detailed cards cover your ${daEsc(cov.analyzed)} largest holdings of ${daEsc(cov.total)}; portfolio-level scores use the full book.</div>`
     : '';
-  return note + cards;
+  // Host for the mechanical consensus run, filled by loadBookConsensus().
+  const host = '<div id="book-consensus" style="margin-bottom:16px"></div>';
+  return host + note + cards;
 }
 
 async function mybookImportWatchlist(){
