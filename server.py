@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import logging
 import math
@@ -492,6 +493,7 @@ from ai_analyzer import (
     deep_analyze_ticker,
 )
 from allocation_config import (
+    SCANNER_MODES,
     load_config,
     update_config,
 )
@@ -5706,6 +5708,421 @@ def mybook_summary(request: Request):
             "next_action": action,
         },
     }
+
+
+# ─── Customer-scoped Scanner + Intelligence ──────────────────────────────────
+# The owner's Scanner page (sector pre-filter → consolidation zones) and
+# Intelligence page (SEC filings, news sentiment, fundamental momentum) are built
+# from SYMBOL-scoped engines: public OHLCV / EDGAR / vendor rows in, signals out.
+# None of them carries owner state, so the same code can serve a customer — but
+# only if the SYMBOLS come from the customer's own book and watchlist. The owner
+# scanner resolves symbols from the Robinhood snapshot (_resolved_payload); these
+# endpoints must never reach for it, and every row leaving them is post-filtered
+# against what the customer entered so a widened engine query cannot smuggle an
+# owner name through (`sec_filings` and `news_sentiment` are symbol-keyed OWNER
+# tables — see tests/test_customer_owner_isolation.py for the governing rule).
+#
+# Neither endpoint spends an LLM token: the scanner is pure price math, and the
+# intelligence legs read the cached/mechanical paths only. The live agent entry
+# points (watch_filings / scan_news / run_fundamental_scan) all call Claude and
+# get_latest_fundamental_scan returns the OWNER's whole-universe run, so none of
+# them belongs here.
+
+# One OHLCV download per symbol in the consolidation leg (plus one per UNIQUE
+# sector ETF, which sector_filter dedupes to ~12 at most), serialized behind
+# price_source's yfinance lock. The per-user position cap is 30 and the watchlist
+# cap is 50, so an uncapped scan would be an 80-download fan-out per click. 20
+# covers a full book while keeping the worst case to seconds, not minutes.
+MYBOOK_SCANNER_MAX_SYMBOLS = int(os.getenv("GESH_MYBOOK_SCANNER_MAX_SYMBOLS", "20"))
+
+# The intelligence legs are heavier PER SYMBOL than the scanner's — fundamentals
+# is ~2 yfinance calls a name. 12 mirrors news_agent.MAX_NEWS_SYMBOLS so the news
+# leg never truncates on a different boundary than the panel around it.
+MYBOOK_INTEL_MAX_SYMBOLS = int(os.getenv("GESH_MYBOOK_INTEL_MAX_SYMBOLS", "12"))
+
+# EDGAR is the slowest leg by far: a CIK lookup plus one RSS pull per form type
+# per symbol — four round trips a name against a 10s timeout, and it only runs at
+# all when the DB has no cached filings. Capped well below the endpoint-wide
+# limit, mirroring sec_agent.MAX_ANALYSES_PER_RUN.
+MYBOOK_INTEL_SEC_MAX_SYMBOLS = int(os.getenv("GESH_MYBOOK_INTEL_SEC_MAX_SYMBOLS", "6"))
+
+# A filing window shorter than a quarter routinely shows nothing at all, so the
+# SEC leg always looks back at least this far regardless of the news window.
+MYBOOK_INTEL_SEC_MIN_DAYS = 30
+
+# The scanner timeframes a customer may name. Derived from SCANNER_MODES rather
+# than hardcoded, minus any mode whose params fall outside the allow-list the
+# owner scanner already validates against (forex-4HR's "4h" interval does), so a
+# new mode becomes selectable automatically and an unrenderable one never does.
+_MYBOOK_SCANNER_TIMEFRAMES: dict[str, dict] = {
+    name: params
+    for name, params in SCANNER_MODES.items()
+    if params.get("interval") in _ALLOWED_INTERVALS and params.get("period") in _ALLOWED_PERIODS
+}
+
+_MYBOOK_SCANNER_BUCKET = "mybook_scanner"
+_MYBOOK_INTEL_BUCKET = "mybook_intel"
+
+
+def _customer_scan_symbols(
+    email: str, cap: int, include_watchlist: bool = True
+) -> tuple[list[str], int]:
+    """The symbols a customer-scoped engine may touch: THEIR book, then THEIR
+    watchlist. Returns (scanned, requested_total) so truncation can be disclosed.
+
+    Book before watchlist on purpose — when the cap bites, money at risk survives
+    and aspiration is dropped. A stored symbol that no longer validates is skipped
+    rather than raising: one bad row must not 400 the whole scan.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    candidates = [p["symbol"] for p in auth_users.get_positions(email)]
+    if include_watchlist:
+        candidates += list(auth_users.get_watch(email))
+    for raw in candidates:
+        sym = str(raw or "").strip().upper()
+        if sym and sym not in seen and _SYMBOL_RE.match(sym):
+            seen.add(sym)
+            ordered.append(sym)
+    return ordered[:cap], len(ordered)
+
+
+def _book_scan_cache_key(email: str, *parts: object) -> str:
+    """Per-user cache key for a book-wide scan. Hashed so no email address sits in
+    a process-global dict, and so the key length is bounded by a 30-name book."""
+    raw = "\x1f".join([email or "", *(str(p) for p in parts)])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _default_scanner_timeframe() -> tuple[str, dict]:
+    """The house scanner timeframe (gesh_config.scanner_timeframe). It is a
+    timeframe LABEL — it carries no position, cash or symbol data — so serving it
+    as the customer default is not a leak. Falls back to daily if unreadable."""
+    try:
+        name = str(load_config().get("scanner_timeframe") or "daily")
+    except Exception:  # noqa: BLE001 — a config hiccup must not 500 a scan
+        name = "daily"
+    params = _MYBOOK_SCANNER_TIMEFRAMES.get(name)
+    if not params:
+        name, params = "daily", _MYBOOK_SCANNER_TIMEFRAMES["daily"]
+    return name, params
+
+
+def _resolve_scanner_timeframe(body: dict) -> tuple[str | None, str, str]:
+    """(timeframe_name, interval, period) for a scan request.
+
+    An explicit interval/period pair wins over a named timeframe; both go through
+    the same `_validate_timeframe` allow-list the owner scanner uses, so a
+    customer can never smuggle an arbitrary yfinance argument downstream.
+    """
+    name = body.get("timeframe")
+    interval, period = body.get("interval"), body.get("period")
+    if interval or period:
+        interval, period = str(interval or ""), str(period or "")
+        _validate_timeframe(interval, period)
+        return (str(name) if name in _MYBOOK_SCANNER_TIMEFRAMES else None), interval, period
+    if name:
+        params = _MYBOOK_SCANNER_TIMEFRAMES.get(str(name))
+        if not params:
+            raise HTTPException(status_code=400, detail="Unknown scanner timeframe")
+        return str(name), params["interval"], params["period"]
+    name, params = _default_scanner_timeframe()
+    return name, params["interval"], params["period"]
+
+
+def _clamped_float(value: object, default: float, low: float, high: float) -> float:
+    """A bounded float from untrusted JSON. Garbage falls back to the default
+    rather than 400-ing — a mistyped slider must not lose the whole scan."""
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(out) or math.isinf(out):
+        return default
+    return max(low, min(high, out))
+
+
+def _sanitized_scan_errors(errors: object) -> list[dict]:
+    """`scan_consolidations` reports errors as (symbol, str(exception)). The
+    reason is raw upstream text — it has carried URLs and hostnames — so the
+    customer gets the symbol and a fixed phrase while the detail goes to the log
+    (same error-hygiene rule as `_server_error`)."""
+    out: list[dict] = []
+    for item in errors or []:  # type: ignore[union-attr]
+        try:
+            sym, reason = item[0], item[1]
+        except (TypeError, IndexError, KeyError):
+            sym, reason = item, ""
+        logger.info("customer scanner: %s unavailable (%s)", sym, reason)
+        out.append({"symbol": str(sym), "reason": "data unavailable"})
+    return out
+
+
+def _run_book_scanner(symbols: list[str], interval: str, period: str, min_rr: float) -> dict:
+    """Sector pre-filter → consolidation zones, in the documented pipeline order.
+
+    Each leg is independently fail-soft: this is two engines behind one button,
+    and one upstream outage must not blank the other's panel. The inner `sector`
+    and `consolidation` blocks keep the exact shape `/api/scanner/sector` and
+    `/api/scanner/consolidation` return, so one frontend renderer serves both the
+    owner page and the customer one.
+    """
+    try:
+        sector = dict(batch_sector_check(symbols))
+    except Exception as e:  # noqa: BLE001 — one leg down must not lose the other
+        logger.warning("customer scanner sector leg failed: %s", e)
+        sector = {"hot": [], "cold": [], "summary": "", "error": "sector data unavailable"}
+
+    hot = [r["symbol"] for r in (sector.get("hot") or []) if r.get("symbol")]
+    # Mirrors the owner scanner UI: on a low-volume session nothing clears the
+    # 1.2x threshold, and scanning nothing would read as "no setups found" rather
+    # than "no filter applied". Scan everything and say so.
+    fallback = bool(symbols) and not hot
+    scan_syms = hot if hot else list(symbols)
+
+    try:
+        cz = dict(scan_consolidations(scan_syms, interval=interval, period=period, min_rr=min_rr))
+        cz["errors"] = _sanitized_scan_errors(cz.get("errors"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("customer scanner consolidation leg failed: %s", e)
+        cz = {
+            "found": [], "no_zone": [], "errors": [], "summary": "",
+            "error": "price data unavailable",
+        }
+
+    return {
+        "sector": sector,
+        "consolidation": cz,
+        "hot_symbols": hot,
+        "sector_fallback": fallback,
+        "consolidation_symbols": scan_syms,
+    }
+
+
+@app.post("/api/mybook/scanner")
+async def mybook_scanner(request: Request):
+    """Sector pre-filter → consolidation-zone scan over the CUSTOMER's own symbols.
+
+    Body (all optional): {"timeframe": "5MIN"|..., "interval", "period",
+    "min_rr": 2.0, "include_watchlist": true}. Pure price math — no LLM, no owner
+    data, safe to call repeatedly (5-minute per-user cache keyed on the resolved
+    symbol set and parameters, so a book edit or a timeframe change is a miss).
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — an empty/garbage body means "defaults"
+        body = {}
+    body = body if isinstance(body, dict) else {}
+
+    include_watchlist = body.get("include_watchlist", True) is not False
+    timeframe, interval, period = _resolve_scanner_timeframe(body)
+    min_rr = _clamped_float(body.get("min_rr", 2.0), default=2.0, low=0.0, high=10.0)
+    symbols, requested = _customer_scan_symbols(
+        email, MYBOOK_SCANNER_MAX_SYMBOLS, include_watchlist
+    )
+
+    key = _book_scan_cache_key(
+        email, ",".join(symbols), requested, timeframe, interval, period, min_rr
+    )
+    cached = _ticker_get_cached(_MYBOOK_SCANNER_BUCKET, key)
+    if cached:
+        return cached
+
+    try:
+        # Downloads OHLCV for every symbol — off the event loop, same as the
+        # owner batch scanner.
+        data = await asyncio.to_thread(_run_book_scanner, symbols, interval, period, min_rr)
+    except Exception as e:
+        raise _server_error(e)
+
+    data.update(
+        {
+            "symbols": symbols,
+            "scanned_count": len(symbols),
+            "requested_count": requested,
+            "truncated": requested > len(symbols),
+            "symbol_cap": MYBOOK_SCANNER_MAX_SYMBOLS,
+            "timeframe": timeframe,
+            "interval": interval,
+            "period": period,
+            "min_rr": min_rr,
+            "include_watchlist": include_watchlist,
+        }
+    )
+    return _ticker_get_store(_MYBOOK_SCANNER_BUCKET, key, {"status": "ok", "data": data})
+
+
+def _customer_sec_block(symbols: list[str], days: int) -> dict:
+    """Recent SEC filings for the customer's symbols.
+
+    `get_filing_history` reads the stored analyses first and only falls back to
+    LLM-free EDGAR metadata discovery when the DB has nothing — no Claude call on
+    either path. Rows are re-filtered against the entitled set because the stored
+    table is symbol-keyed and shared with the owner's runs.
+    """
+    scoped = symbols[:MYBOOK_INTEL_SEC_MAX_SYMBOLS]
+    allowed = set(scoped)
+    rows = get_filing_history(scoped, days=max(days, MYBOOK_INTEL_SEC_MIN_DAYS)) if scoped else []
+    return {
+        "results": [
+            r for r in (rows or []) if str((r or {}).get("symbol") or "").upper() in allowed
+        ],
+        "symbols": scoped,
+        "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
+        "truncated": len(symbols) > len(scoped),
+        "days": max(days, MYBOOK_INTEL_SEC_MIN_DAYS),
+    }
+
+
+def _customer_news_block(symbols: list[str], days: int) -> dict:
+    """Cached news sentiment for the customer's symbols — a DB read, never a live
+    scan, so this path stays free of LLM spend.
+
+    Allow-listed to the same four fields `/api/news/{symbol}` ships (score, mood,
+    impact, article_count + as_of): the raw model analysis is owner-side research,
+    not a customer field. A row whose run analyzed ZERO articles is dropped rather
+    than reported — sentiment over no articles is fabricated by definition.
+    """
+    allowed = set(symbols)
+    rows = get_news_history(symbols, days=days) if symbols else []
+    out: list[dict] = []
+    for r in rows or []:
+        sym = str((r or {}).get("symbol") or "").upper()
+        if sym not in allowed:
+            continue
+        analysis = r.get("analysis") if isinstance(r.get("analysis"), dict) else {}
+        count = analysis.get("article_count") or 0
+        if not count:
+            continue
+        out.append(
+            {
+                "symbol": sym,
+                "score": r.get("sentiment_score"),
+                "mood": r.get("overall_sentiment"),
+                "impact": r.get("impact_level"),
+                "article_count": count,
+                "as_of": r.get("analyzed_at"),
+            }
+        )
+    scores = [x["score"] for x in out if isinstance(x["score"], (int, float))]
+    avg = round(sum(scores) / len(scores), 1) if scores else 0.0
+    # An empty cache is NEUTRAL, never bullish — same thresholds as the owner's
+    # /api/agents/news/history so the two surfaces cannot disagree.
+    mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
+    return {"results": out, "avg_score": avg, "market_mood": mood, "cached": True}
+
+
+def _customer_fundamentals_block(symbols: list[str]) -> dict:
+    """Fundamental momentum for the customer's symbols.
+
+    Uses the batch fetcher + pre-score directly (the same private pair
+    `/api/fundamentals/{symbol}` already falls back to) rather than
+    `run_fundamental_scan`, which spends a Claude call, or
+    `get_latest_fundamental_scan`, which returns the OWNER's ~95-name universe run.
+
+    Per-symbol degradation is the contract: the batch fetcher reports a failed
+    ticker as an `error` row, which becomes an entry in `errors` with the upstream
+    text stripped — never a lost panel and never an echoed vendor URL.
+    """
+    import fundamental_agent
+
+    rows = fundamental_agent._fetch_fundamentals_batch(list(symbols)) if symbols else []
+    allowed = set(symbols)
+    results: list[dict] = []
+    errors: list[dict] = []
+    for row in rows or []:
+        sym = str((row or {}).get("symbol") or "").upper()
+        if sym not in allowed:
+            continue
+        if row.get("error") or row.get("price") is None:
+            logger.info("customer fundamentals: %s unavailable (%s)", sym, row.get("error"))
+            errors.append({"symbol": sym, "reason": "data unavailable"})
+            continue
+        clean = {k: v for k, v in row.items() if not k.startswith("_")}
+        clean["momentum_score"] = fundamental_agent._pre_score(row)
+        results.append(clean)
+    results.sort(key=lambda r: r["momentum_score"], reverse=True)
+    return {"results": results, "errors": errors}
+
+
+def _run_book_intelligence(symbols: list[str], days: int) -> dict:
+    """SEC + news + fundamentals for one customer's symbols, each leg isolated.
+
+    A leg that fails reports its own outage inside the SAME shape it would have
+    returned, so the renderer never has to special-case a missing key — and the
+    other two still arrive.
+    """
+    legs: dict[str, dict] = {}
+    empty = {
+        "sec": {"results": [], "symbols": [], "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
+                "truncated": False, "days": days},
+        "news": {"results": [], "avg_score": 0.0, "market_mood": "NEUTRAL", "cached": True},
+        "fundamentals": {"results": [], "errors": []},
+    }
+    builders = {
+        "sec": lambda: _customer_sec_block(symbols, days),
+        "news": lambda: _customer_news_block(symbols, days),
+        "fundamentals": lambda: _customer_fundamentals_block(symbols),
+    }
+    for name, build in builders.items():
+        try:
+            legs[name] = build()
+        except Exception as e:  # noqa: BLE001 — one dead agent must not blank the panel
+            logger.warning("customer intelligence %s leg failed: %s", name, e)
+            legs[name] = dict(empty[name], error=f"{name} data unavailable")
+    return legs
+
+
+@app.post("/api/mybook/intelligence")
+async def mybook_intelligence(request: Request):
+    """SEC filings + news sentiment + fundamental momentum for the CUSTOMER's own
+    symbols.
+
+    Body (all optional): {"days": 7, "include_watchlist": true}. Cached/mechanical
+    reads only — zero LLM spend — with a 5-minute per-user cache keyed on the
+    resolved symbol set, so repeated clicks cost nothing.
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    body = body if isinstance(body, dict) else {}
+
+    include_watchlist = body.get("include_watchlist", True) is not False
+    days = int(_clamped_float(body.get("days", 7), default=7.0, low=1.0, high=90.0))
+    symbols, requested = _customer_scan_symbols(
+        email, MYBOOK_INTEL_MAX_SYMBOLS, include_watchlist
+    )
+
+    key = _book_scan_cache_key(email, ",".join(symbols), requested, days)
+    cached = _ticker_get_cached(_MYBOOK_INTEL_BUCKET, key)
+    if cached:
+        return cached
+
+    try:
+        # EDGAR + yfinance round trips — off the event loop.
+        data = await asyncio.to_thread(_run_book_intelligence, symbols, days)
+    except Exception as e:
+        raise _server_error(e)
+
+    data.update(
+        {
+            "symbols": symbols,
+            "scanned_count": len(symbols),
+            "requested_count": requested,
+            "truncated": requested > len(symbols),
+            "symbol_cap": MYBOOK_INTEL_MAX_SYMBOLS,
+            "days": days,
+            "include_watchlist": include_watchlist,
+        }
+    )
+    return _ticker_get_store(_MYBOOK_INTEL_BUCKET, key, {"status": "ok", "data": data})
 
 
 def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
