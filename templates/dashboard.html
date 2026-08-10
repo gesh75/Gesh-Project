@@ -2916,10 +2916,11 @@ function buildBookConsensusPane(d){
 // symbols. Pure price math — no LLM, no quota — so it is safe to re-run.
 function buildBookScannerPane(d){
   const sect = d.sector || {}, cz = d.consolidation || {};
+  // Keys are sector_filter's real ones: volume_ratio / etf_name (NOT ratio/sector).
   const hotChips = (sect.hot || []).map(h =>
-    `<span style="font-size:11.5px;padding:3px 8px;border-radius:4px;border:1px solid var(--green);color:var(--green)">${daEsc(h.symbol)}${daEsc(h.ratio != null ? ' · ' + daFmt(h.ratio, 1) + '×' : '')}</span>`).join(' ');
+    `<span title="${daEsc(h.etf_name || h.etf || '')}" style="font-size:11.5px;padding:3px 8px;border-radius:4px;border:1px solid var(--green);color:var(--green)">${daEsc(h.symbol)} · ${daFmt(h.volume_ratio, 1)}×</span>`).join(' ');
   const coldChips = (sect.cold || []).map(h =>
-    `<span style="font-size:11.5px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);color:var(--muted)">${daEsc(h.symbol)}</span>`).join(' ');
+    `<span title="${daEsc(h.etf_name || h.etf || '')}" style="font-size:11.5px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);color:var(--muted)">${daEsc(h.symbol)} · ${daFmt(h.volume_ratio, 1)}×</span>`).join(' ');
   const sectorChips = hotChips
     ? hotChips + ' ' + coldChips
     : '<span style="font-size:12px;color:var(--muted)">no hot sectors on your symbols right now</span>';
@@ -2929,7 +2930,7 @@ function buildBookScannerPane(d){
       <td style="padding:7px 10px;text-align:right">$${daFmt(z.entry, 2)}</td>
       <td style="padding:7px 10px;text-align:right;color:var(--red)">$${daFmt(z.stop, 2)}</td>
       <td style="padding:7px 10px;text-align:right;color:var(--green)">$${daFmt(z.target, 2)}</td>
-      <td style="padding:7px 10px;text-align:right;font-weight:700">${daFmt(z.rr, 1)}×</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700">${daFmt(z.rr_ratio, 1)}×</td>
     </tr>`).join('');
   const zoneTable = zoneRows
     ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -2951,20 +2952,29 @@ function buildBookScannerPane(d){
 // customer's own symbols. Every sub-block degrades on its own.
 function buildBookIntelligencePane(d){
   const sec = d.sec || {}, news = d.news || {}, fund = d.fundamentals || {};
+  // Keys below are the ENGINES' real ones, read off sec_agent.watch_filings,
+  // news_agent's cached rows and fundamental_agent._fetch_fundamentals_batch.
+  // An earlier version rendered invented keys (form/filed/score/summary) and
+  // shipped a panel of bare tickers and em-dashes.
   const secRows = (sec.results || []).map(f =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
-      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(f.form || '')} · ${daEsc(f.filed || '')}</span></div>
-      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(f.summary || f.sentiment || '')}</div>
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(f.form_type || '')} · ${daEsc(String(f.filing_date || '').slice(0, 10))}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(f.summary || '')}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(f.action_signal || '')}${daEsc(f.urgency ? ' · urgency ' + f.urgency : '')}</div>
     </div>`).join('');
   const newsRows = (news.results || []).map(n =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
       <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(n.symbol)}</b><span style="font-weight:700;color:${(n.score || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${daEsc((n.score || 0) >= 0 ? '+' : '')}${daFmt(n.score, 0)}</span></div>
-      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(n.article_count != null ? n.article_count + ' articles' : '')} ${daEsc(n.summary || '')}</div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(n.mood || '')}${daEsc(n.impact ? ' · ' + n.impact + ' impact' : '')}${daEsc(n.article_count != null ? ' · ' + n.article_count + ' articles' : '')}</div>
     </div>`).join('');
+  // There is NO score field on a fundamentals row — the useful signal is growth,
+  // analyst upside and the recommendation.
   const fundRows = (fund.results || []).map(f =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
-      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-weight:700">${daFmt(f.score, 0)}</span></div>
-      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(f.summary || f.reason || '')}</div>
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(f.sector || '')}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">
+        rev ${daFmt(f.revenue_growth, 1)}% · earnings ${daFmt(f.earnings_growth, 1)}% · upside ${daFmt(f.analyst_upside, 1)}%</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(f.recommendation || '')}${daEsc(f.num_analysts ? ' · ' + f.num_analysts + ' analysts' : '')}${daEsc(f.insider_signal ? ' · insider ' + f.insider_signal : '')}</div>
     </div>`).join('');
   const mood = news.market_mood
     ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Market mood <b>${daEsc(news.market_mood)}</b> · avg news score ${daFmt(news.avg_score, 1)}</div>`
