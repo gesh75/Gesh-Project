@@ -800,10 +800,16 @@ def _build_swaps(holdings, sector_value, survivors, total, sector_of) -> list[di
     return [{
         "trim_symbol": trim.get("symbol"),
         "fund_new_symbol": best["symbol"],
+        # No config-variable names in this string: it is rendered verbatim on the
+        # owner report AND on the customer's Analyze tab, where "max_open_positions"
+        # is both meaningless jargon and actively wrong — the customer surface
+        # derives that limit from their own book size, so any number quoted here
+        # would be advice about a setting they cannot see or change.
         "rationale": (f"{over_sector} is the most concentrated sector "
                       f"({round(sector_value[over_sector] / total * 100)}% of book). Trimming "
                       f"{trim.get('symbol')} would fund {best['symbol']} ({best['sector']}), a "
-                      f"lower-correlation diversifier — or raise max_open_positions toward 12–15."),
+                      f"lower-correlation diversifier — or hold more names so no single "
+                      f"sector dominates."),
     }]
 
 

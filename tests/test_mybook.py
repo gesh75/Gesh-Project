@@ -145,6 +145,13 @@ def _stub_engines(server, monkeypatch, counters=None):
                         lambda syms: {"regimes": [], "regime_summary": "NEUTRAL macro"},
                         raising=True)
     monkeypatch.setattr(server, "get_analyst_targets", lambda syms: {}, raising=True)
+    # The Radar screens a live ~95-name universe. Unstubbed it burns the offline
+    # guard once per symbol per run, which is slow enough to exhaust the analyze
+    # poll budget. Contract tests for it live in test_mybook_radar.py.
+    monkeypatch.setattr(
+        server, "_run_book_radar", lambda h, t: {"mode": "SCAN", "candidates": []},
+        raising=True,
+    )
     return c
 
 

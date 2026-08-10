@@ -2808,7 +2808,7 @@ async function mybookAnalyze(){
   // audit (2026-07-19) waited 1m13s of a 3m02s run and filed it as a rate-limit
   // failure — a paying customer reaches the same conclusion faster. The ticking
   // number is the whole fix: it proves liveness.
-  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo.<div style="margin-top:8px;font-variant-numeric:tabular-nums"><b id="mybook-elapsed">0:00</b> elapsed — a large book takes 2–4 minutes.</div><div style="margin-top:6px;font-size:12px;color:var(--muted)">Keep this tab open. If you navigate away the result is still saved — reopen this tab to collect it.</div></div></div>`;
+  box.innerHTML=`<div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 12px"></div>Running the full engine suite — deep AI, Kelly sizing, Monte Carlo, diversification radar.<div style="margin-top:8px;font-variant-numeric:tabular-nums"><b id="mybook-elapsed">0:00</b> elapsed — a large book takes 2–4 minutes.</div><div style="margin-top:6px;font-size:12px;color:var(--muted)">Keep this tab open. If you navigate away the result is still saved — reopen this tab to collect it.</div></div></div>`;
   const t0=Date.now();
   const tick=setInterval(()=>{
     const el=document.getElementById('mybook-elapsed'); if(!el){ clearInterval(tick); return; }
@@ -2842,7 +2842,7 @@ async function mybookAnalyze(){
     }
     const d=j&&j.data;
     if(!d||!d.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now — try again in a minute.</div></div>'; return; }
-    const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[];
+    const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[], rad=d.radar||{};
     // Conclusions first (plan T2): one plain-language line per engine; the raw
     // stat rows fold behind <details>. Leads are plain text — daEsc'd at render.
     const mcLead=mc.error?'Monte Carlo unavailable right now.'
@@ -2878,6 +2878,7 @@ async function mybookAnalyze(){
           <div style="font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.55;font-weight:600">${daEsc(kellyLead)}</div>
           ${ky.error||!kh.length?'':`<details><summary style="cursor:pointer;font-size:12px;color:var(--muted)">How this was computed — Kelly sizing</summary><div style="margin-top:8px">${buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div></details>`}</div>
       </div>
+      ${buildDiversificationCard(rad)}
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
   finally{ clearInterval(tick); _mybookAnalyzeInFlight=false; }
@@ -2919,6 +2920,57 @@ function buildDeployCashCard(d){
   return `${staleWarn}${cashBody}
     <div style="margin-top:10px;font-size:12px;color:var(--muted)">Leftover uncommitted: $${daFmt(d.leftover,2)}</div>
     <div style="margin-top:6px;font-size:11px;color:var(--muted)">Advisory only — not financial advice. Based on your last persisted Kelly sizing, not a live order.</div>`;
+}
+
+// Diversification Radar on the CUSTOMER's own book — the same engine the owner
+// chain runs, pointed at their positions. It screens NEW names only (anything
+// they already hold is excluded by construction) and reports where the book is
+// concentrated. Advisory and read-only: it never places or stages an order.
+// Sizing is deliberately absent — the analysis is cached per book fingerprint,
+// so cash is applied separately rather than baked into a cached result.
+function buildDiversificationCard(rad){
+  if(!rad||rad.error||!rad.mode) return '';
+  const T2='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
+  const weights=Object.entries(rad.existing_sector_weights||{}).sort((x,y)=>y[1]-x[1]).slice(0,6);
+  const cands=(rad.candidates||[]).slice(0,6);
+  // The concentration line is the point of the whole card — a customer holding
+  // one sector at 100% needs that stated before any ticker suggestion. Built
+  // inline in the return template rather than as a local: the XSS guard walks
+  // both branches of an inline ternary, but does not track an HTML-bearing
+  // local assigned from a multi-line one (and an HTML local must never be daEsc'd).
+  const topW=weights.length?weights[0][1]:0;
+  const topS=weights.length?weights[0][0]:'';
+  const bars=weights.map(w=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+      <span style="font-size:12px;color:var(--muted2);min-width:132px">${daEsc(w[0])}</span>
+      <span style="flex:1;background:rgba(255,255,255,.06);border-radius:3px;height:8px;position:relative">
+        <span style="position:absolute;left:0;top:0;bottom:0;border-radius:3px;width:${daFmt(w[1]*100,1)}%;background:${w[1]>=0.4?'var(--red)':'var(--accent)'}"></span></span>
+      <span style="font-size:12px;font-weight:700;min-width:46px;text-align:right">${daFmt(w[1]*100,1)}%</span>
+    </div>`).join('');
+  const rows=cands.map(c=>`<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:7px 10px;font-weight:700;color:var(--accent)">${daEsc(c.symbol)}</td>
+      <td style="padding:7px 10px;color:var(--muted2);font-size:12px">${daEsc(c.sector||'—')}</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700">${daFmt(c.composite_score,0)}</td>
+      <td style="padding:7px 10px;text-align:right">${daFmt(c.analyst_upside,1)}%</td>
+      <td style="padding:7px 10px;text-align:right">${daFmt(c.max_corr_to_holdings,2)}</td>
+      <td style="padding:7px 10px;color:var(--muted2);font-size:12px">${daEsc(c.rationale||'')}</td>
+    </tr>`).join('');
+  const table=rows
+    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SECTOR','SCORE','UPSIDE','CORR','WHY'].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'||h==='SECTOR'||h==='WHY'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody></table></div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">No diversifying candidates cleared the correlation and sector screens right now.</div>';
+  const swaps=(rad.swap_suggestions||[]).slice(0,3).map(s=>
+    `<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:13px">
+      <span class="da-dot" style="background:var(--yellow)"></span>
+      <span style="color:var(--muted2)"><b style="color:var(--text)">${daEsc(s.trim_symbol||'')} → ${daEsc(s.fund_new_symbol||'')}</b> · ${daEsc(s.rationale||'')}</span>
+    </div>`).join('');
+  const excl=(rad.excluded_holdings||[]).length;
+  return `<div class="card" style="margin-bottom:16px"><div style="${T2}">🧭 Diversification Radar</div>
+    <div style="font-size:13px;color:var(--text);margin-bottom:10px;line-height:1.55;font-weight:600">${weights.length?`Your book is <b style="color:${topW>=0.4?'var(--red)':'var(--text)'}">${daFmt(topW*100,0)}% ${daEsc(topS)}</b>.`:'Sector mix unavailable for this book.'}</div>
+    ${bars?`<div style="margin-bottom:12px">${bars}</div>`:''}
+    ${table}
+    ${swaps?`<div style="margin-top:12px">${swaps}</div>`:''}
+    <div style="margin-top:10px;font-size:11px;color:var(--muted)">Screens names you do NOT already hold — your ${daEsc(excl)} position${excl===1?'':'s'} are excluded by construction. Advisory only, not financial advice; no order is placed or staged.</div></div>`;
 }
 
 // Earnings EPS actual-vs-estimate grouped bar chart (data → Chart.js canvas API,

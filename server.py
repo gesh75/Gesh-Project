@@ -478,6 +478,7 @@ import billing  # Lemon Squeezy payment webhook → provision/revoke auth_users
 import decision_quality  # unified degraded-decision block (Codex #6)
 import email_sender  # transactional email (magic-link recovery via /auth/request-link)
 import fair_value  # canonical fair-value % (Codex #2)
+import invest_radar  # Diversification Radar — owner chain AND customer books
 import model_portfolio  # the ONLY portfolio shape a customer receives
 import portfolio_valuation  # CANONICAL money arithmetic — see module docstring
 import price_cache  # shared close-price cache (also used by cron digest)
@@ -5173,6 +5174,44 @@ def _jsonable(o):
     return o
 
 
+# The owner runs a fixed 5-slot book, so invest_radar's `max_open_positions`
+# default of 5 is correct for the 10:30 chain. A customer's question is a
+# different one — "what NEW names would diversify what I already hold" — and
+# their book is routinely larger than 5. Slots are therefore derived from their
+# book size; this is the count of new names the radar may propose.
+_BOOK_RADAR_NEW_NAMES = 4
+
+
+def _run_book_radar(holdings: list[dict], total_equity: float | None) -> dict:
+    """Diversification Radar scoped to a CUSTOMER's own book. Advisory only.
+
+    Same engine the owner chain calls — it was never owner-specific: holdings and
+    equity_summary are parameters and every network dependency is injectable. It
+    is read-only and cannot place a trade.
+
+    invest_radar enforces its own PII discipline (only `cash` and `total` are read
+    out of equity_summary), and the customer's equity_summary carries live
+    valuations, so an explicit two-key dict is passed rather than theirs — the
+    radar gets exactly what it documents needing and nothing else.
+
+    Sizing is deliberately computed cash-free. The analysis is cached per
+    (user, book fingerprint); folding a cash figure into the radar would make that
+    fingerprint wrong the moment the customer changed it. Ranking, sector
+    concentration and swap suggestions are all cash-independent, and sizing is
+    applied afterwards from the persisted `resize_state`.
+    """
+    cfg = {
+        # THEIR cash, and this is advisory. The $500 buffer is a live-trading gate
+        # concern on the owner's account; applying it here would silently shrink a
+        # customer's own money — the exact class of bug money-masking caused once.
+        "min_cash_buffer": 0.0,
+        "max_open_positions": len(holdings) + _BOOK_RADAR_NEW_NAMES,
+    }
+    return invest_radar.scan_candidates(
+        holdings, {"cash": 0.0, "total": float(total_equity or 0.0)}, config=cfg
+    )
+
+
 def _run_book_engines(payload: dict) -> dict:
     """Blocking engine suite on a customer payload — runs in a worker thread.
     Regime/Kelly/Monte-Carlo are best-effort (partial results beat a 500); the
@@ -5262,11 +5301,19 @@ def _run_book_engines(payload: dict) -> dict:
         )
     except Exception as e:
         kelly = {"error": f"kelly unavailable: {type(e).__name__}"}
+    try:
+        # Best-effort like Monte Carlo and Kelly: the radar is the least critical
+        # engine here and the most network-dependent (it screens a live universe),
+        # so it must never fail an analysis the customer already spent quota on.
+        radar = _run_book_radar(holdings, payload["equity_summary"]["portfolio_equity"])
+    except Exception as e:
+        radar = {"error": f"radar unavailable: {type(e).__name__}"}
     return _jsonable(
         {
             "analysis": analysis,
             "kelly": kelly,
             "monte_carlo": mc,
+            "radar": radar,
             "detailed_coverage": coverage,
             "book": {
                 "positions": payload["holdings"],

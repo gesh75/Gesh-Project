@@ -123,6 +123,7 @@ def test_large_book_gives_llm_full_book_summary_and_explicit_coverage(
     monkeypatch.setattr(server, "run_monte_carlo", lambda *args, **kwargs: {})
     monkeypatch.setattr(server, "get_analyst_targets", lambda symbols: {})
     monkeypatch.setattr(server, "run_kelly_analysis", lambda *args, **kwargs: {})
+    monkeypatch.setattr(server, "_run_book_radar", lambda *args, **kwargs: {})
 
     result = server._run_book_engines(payload)
 
