@@ -5750,6 +5750,103 @@ async def mybook_deploy_cash(request: Request):
         raise _server_error(e)
 
 
+def _radar_allocation(cand: dict) -> dict:
+    """Whitelist ONE sized radar candidate for the wire.
+
+    Two fields the sizer produces are deliberately dropped:
+
+      * `sector_weight_after` — combined with the dollar figure it is an
+        arithmetic oracle for the book total; the owner's /invest what-if path
+        drops it for the same reason.
+      * `sizing_binding_constraint` — its values are internal config-variable
+        names ("max_stock_per_trade", "7pct_cap", "budget"). The radar's swap
+        rationale already had a config-variable name removed because it renders
+        verbatim on the customer surface, where it is jargon about a setting they
+        can neither see nor change.
+
+    Everything kept is what a buyer actually needs: what, how much, and why.
+    """
+    return {
+        "symbol": cand.get("symbol"),
+        "company_name": cand.get("company_name"),
+        "sector": cand.get("sector"),
+        "price": cand.get("price"),
+        "dollars": cand.get("recommended_usd"),
+        "shares": cand.get("recommended_shares"),
+        "composite_score": cand.get("composite_score"),
+        "analyst_upside": cand.get("analyst_upside"),
+        "max_corr_to_holdings": cand.get("max_corr_to_holdings"),
+        "rationale": cand.get("rationale"),
+        "actionable": bool(cand.get("actionable")),
+    }
+
+
+@app.post("/api/mybook/radar-cash")
+async def mybook_radar_cash(request: Request):
+    """'What would this cash buy me OUTSIDE what I already hold?' — sizes the
+    Diversification Radar's scan-time shortlist against a cash amount.
+
+    The radar carried in a persisted analysis is computed CASH-FREE on purpose:
+    the analysis is cached per (user, book fingerprint), so folding a cash figure
+    into it would invalidate that cache the moment the customer moved the slider.
+    Sizing is therefore applied HERE, over the `resize_state` the scan captured —
+    pure arithmetic on cached data: no LLM, no quota, no network, exactly like
+    /api/mybook/deploy-cash. Advisory only; nothing is placed or staged.
+
+    `cash` is echoed back as asked, while `deployable_cash` is what was actually
+    sized against — invest_radar hard-caps the what-if at WHAT_IF_MAX, and a
+    clamp the customer cannot see is a clamp they will mistake for a bug.
+    """
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        cash = float((body or {}).get("cash"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="cash must be a number") from None
+    if not (0 < cash <= 10_000_000):
+        raise HTTPException(status_code=400, detail="cash out of range")
+    try:
+        saved = auth_users.get_latest_book_analysis(email)
+        if not saved:
+            raise HTTPException(
+                status_code=404, detail="No analysis yet — run Analyze My Portfolio first"
+            )
+        stale = _analysis_stale_for(email, saved)
+        # A persisted radar can be absent (analysis predates the feature), an
+        # error stub (it is best-effort inside the suite), or hand-corrupted.
+        # resize_for_cash degrades all three to NO_ACTION on its own.
+        radar = saved.get("radar")
+        state = radar.get("resize_state") if isinstance(radar, dict) else None
+        sized = invest_radar.resize_for_cash(state, cash, what_if_slots=None)
+        allocations = [_radar_allocation(c) for c in (sized.get("candidates") or [])]
+        spent = sum(float(a["dollars"] or 0) for a in allocations)
+        return {
+            "status": "ok",
+            "data": {
+                "cash": cash,
+                "stale": stale,
+                "mode": sized.get("mode", "NO_ACTION"),
+                "deployable_cash": sized.get("deployable_cash", 0.0),
+                "open_slots": sized.get("open_slots", 0),
+                "new_names_to_add": sized.get("new_names_to_add", 0),
+                "allocations": allocations,
+                # Measured against what they ASKED for: a clamped or unsizeable
+                # request leaves the remainder uncommitted, and saying so is the
+                # honest answer.
+                "leftover": round(max(0.0, cash - spent), 2),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.get("/api/mybook/summary")
 def mybook_summary(request: Request):
     """Hero payload for the customer Home pane: value, what changed, one next
@@ -6233,6 +6330,113 @@ def _lead_and_fold(text: str, max_lead: int = 220) -> tuple[str, str]:
     return t[: cut + 1], t[cut + 2 :]
 
 
+def _render_radar_block(radar: object) -> str:
+    """Diversification Radar section of /mybook/report.
+
+    Renders PERSISTED radar output only. The engine is never re-run here — it
+    screens a live ~95-name universe, and this page must stay instant, free and
+    LLM-free. Sizing is absent by design (the radar is computed cash-free so the
+    cached analysis stays valid); /api/mybook/radar-cash applies cash separately.
+
+    Every dynamic string is escaped: sector keys, symbols and rationales are
+    vendor- and model-influenced text, and this page is outside the dashboard's
+    audited JS builders. Fail-quiet on a wrong-shaped payload — a print page must
+    degrade to less content, never to a 500.
+    """
+    import html as _h
+
+    if not isinstance(radar, dict) or radar.get("error") or not radar.get("mode"):
+        return ""
+    e = _h.escape
+
+    def num(v: object, digits: int = 1, suffix: str = "") -> str:
+        try:
+            return f"{float(v):,.{digits}f}{suffix}"  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return "—"
+
+    def dicts(key: str, limit: int) -> list[dict]:
+        """Persisted JSON is only as well-shaped as the run that wrote it."""
+        val = radar.get(key)
+        return [x for x in val[:limit] if isinstance(x, dict)] if isinstance(val, list) else []
+
+    raw_weights = radar.get("existing_sector_weights")
+    weights: list[tuple[str, float]] = []
+    for sec, w in (raw_weights.items() if isinstance(raw_weights, dict) else ()):
+        try:
+            weights.append((str(sec), float(w)))
+        except (TypeError, ValueError):
+            continue
+    weights.sort(key=lambda kv: kv[1], reverse=True)
+    weights = weights[:8]
+
+    # The concentration line is the point of the whole section — a customer
+    # holding one sector at 100% needs that stated before any ticker suggestion.
+    if weights:
+        top_sector, top_weight = weights[0]
+        colour = "#c00" if top_weight >= 0.4 else "#111"
+        headline = (
+            f"<p style='color:#111;line-height:1.6'>Your book is "
+            f"<b style='color:{colour}'>{num(top_weight * 100)}% {e(top_sector)}</b>.</p>"
+        )
+    else:
+        headline = "<p style='color:#666'>Sector mix unavailable for this book.</p>"
+
+    weight_rows = "".join(
+        f"<tr><td style='padding:6px 12px'>{e(sec)}</td>"
+        f"<td style='padding:6px 12px;text-align:right;font-weight:600'>{num(w * 100)}%</td></tr>"
+        for sec, w in weights
+    )
+
+    cand_rows = "".join(
+        f"<tr><td style='padding:6px 12px;font-weight:600'>{e(str(c.get('symbol', '')))}</td>"
+        f"<td style='padding:6px 12px'>{e(str(c.get('sector') or '—'))}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{num(c.get('composite_score'), 0)}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{num(c.get('analyst_upside'), 1, '%')}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{num(c.get('max_corr_to_holdings'), 2)}</td>"
+        f"<td style='padding:6px 12px;color:#555'>{e(str(c.get('rationale') or ''))}</td></tr>"
+        for c in dicts("candidates", 8)
+    )
+    cand_block = (
+        "<table><tr style='border-bottom:1px solid #ccc'>"
+        "<th style='padding:6px 12px;text-align:left'>Symbol</th>"
+        "<th style='padding:6px 12px;text-align:left'>Sector</th>"
+        "<th style='padding:6px 12px'>Score</th><th style='padding:6px 12px'>Upside</th>"
+        "<th style='padding:6px 12px'>Corr</th>"
+        "<th style='padding:6px 12px;text-align:left'>Why</th></tr>"
+        f"{cand_rows}</table>"
+        if cand_rows
+        else "<p style='color:#666'>No diversifying candidates cleared the correlation "
+        "and sector screens on this run.</p>"
+    )
+
+    swap_items = "".join(
+        f"<li><b>{e(str(s.get('trim_symbol') or ''))} &rarr; "
+        f"{e(str(s.get('fund_new_symbol') or ''))}</b> — {e(str(s.get('rationale') or ''))}</li>"
+        for s in dicts("swap_suggestions", 3)
+    )
+    swap_block = (
+        f"<h3 style='margin:18px 0 4px'>Funding swaps</h3><ul>{swap_items}</ul>"
+        if swap_items
+        else ""
+    )
+
+    excluded = radar.get("excluded_holdings")
+    n_excluded = len(excluded) if isinstance(excluded, (list, tuple)) else 0
+    held = f"{n_excluded} position is" if n_excluded == 1 else f"{n_excluded} positions are"
+    return f"""
+  <h2>Diversification Radar</h2>
+  {headline}
+  {("<table>" + weight_rows + "</table>") if weight_rows else ""}
+  <h3 style='margin:18px 0 4px'>New names screened</h3>
+  {cand_block}
+  {swap_block}
+  <p style='color:#888;font-size:12px'>Screens names you do NOT already hold — your
+  {held} excluded by construction. Advisory only, not financial advice; no order is placed
+  or staged. Sizing is not shown here: use <b>Where does new cash go?</b> on the dashboard
+  to size these against a cash amount.</p>"""
+
+
 def _render_book_report(email: str) -> str:
     """Standalone, print-friendly HTML report of the customer's book + their LAST
     persisted analysis. Server-side rendered with every dynamic string escaped —
@@ -6363,6 +6567,10 @@ def _render_book_report(email: str) -> str:
             f"(95% confidence): &minus;${mc_var:,.0f} on your ${total:,.0f} book."
             f"{mc_stale_note}"
         )
+        # Diversification Radar — rendered from the PERSISTED radar only. It is
+        # best-effort inside the engine suite, so absent/errored is the normal
+        # degraded case and simply omits the section (never an empty heading).
+        radar_block = _render_radar_block(saved.get("radar"))
         # Structured-only AI output (plan T3): one bold takeaway sentence, the
         # rest of the model prose folded — never a free-standing wall of text.
         ctx_lead, ctx_rest = _lead_and_fold(str(d.get("market_context", "")))
@@ -6388,6 +6596,7 @@ def _render_book_report(email: str) -> str:
   <details><summary>How this was computed — Kelly sizing</summary>
   <table>{kelly_rows or row("Status", "unavailable")}</table></details>
   <h2>Per-holding research</h2>{cards}
+  {radar_block}
   <p style='color:#888;font-size:12px'>Analysis generated {e(str(saved.get("_saved_at", ""))[:16])} UTC.</p>"""
     else:
         body = "<p><em>No analysis yet — run <b>Analyze My Portfolio</b> on the dashboard, then reload this report.</em></p>"
