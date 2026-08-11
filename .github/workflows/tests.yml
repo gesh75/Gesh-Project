@@ -49,7 +49,7 @@ jobs:
   # The heavier `test` / `customer-isolation` gates also run on same-repo PRs —
   # see the note on the test job for why they must not be push-only.
   pr-lint:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -86,7 +86,7 @@ jobs:
     # properly by the two-step install below (the PAT is never live while
     # repository-controlled code builds), rather than by disabling the gate.
     if: >-
-      github.event_name == 'push' ||
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -172,7 +172,7 @@ jobs:
   # sweep; catches dependency CVEs and high-confidence Bandit findings early.
   security:
     if: >-
-      github.event_name == 'push' ||
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -216,7 +216,7 @@ jobs:
     # Same trigger scope and same credential handling as the test job above —
     # see the long note there for why this is not `push`-only any more.
     if: >-
-      github.event_name == 'push' ||
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
