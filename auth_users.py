@@ -2017,6 +2017,93 @@ def get_latest_book_analysis(email: str) -> dict | None:
         return None
 
 
+# `get_latest_book_analysis` only ever exposed the NEWEST row, so the four older
+# ones the writer keeps were unreachable — the customer had no way back to a past
+# run. These two readers close that. Both key strictly on the caller's user_id:
+# an id belonging to another customer resolves to None, indistinguishable from an
+# id that never existed.
+#
+# The id IS the SQLite rowid — `customer_analyses` has no surrogate key. Safe as
+# an identifier here because rowid reuse needs the table's MAX rowid to be freed,
+# and the prune below always deletes rows OLDER than the row it just inserted (so
+# the max survives every write). It is still an opaque, per-user handle: never
+# render it, never assume it survives a table rebuild (a tenant migration copies
+# `_CHILD_DATA_COLUMNS`, not rowids), and always re-read the index first.
+
+
+def list_book_analyses(email: str, limit: int = _MAX_ANALYSES_PER_USER) -> list[dict]:
+    """Newest-first index of this user's persisted analyses.
+
+    Each entry is {"id", "saved_at", "result", "parse_error"}. A row whose JSON is
+    unreadable is KEPT with result=None / parse_error=True rather than dropped —
+    silently shortening a history list would misrepresent what we hold (same
+    posture as `export_user_data`). Returns [] for an unknown user or limit <= 0.
+    """
+    user_id = resolve_user_id(email)
+    if not user_id or limit <= 0:
+        return []
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT rowid AS id, result_json, created_at FROM customer_analyses "
+            "WHERE user_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (user_id, int(limit)),
+        ).fetchall()
+    out: list[dict] = []
+    for row in rows:
+        try:
+            parsed = json.loads(row["result_json"])
+            if not isinstance(parsed, dict):
+                raise ValueError("analysis row is not an object")
+        except Exception:  # noqa: BLE001 — one corrupt row must not break the list
+            parsed = None
+        out.append(
+            {
+                "id": int(row["id"]),
+                "saved_at": row["created_at"],
+                "result": parsed,
+                "parse_error": parsed is None,
+            }
+        )
+    return out
+
+
+def get_book_analysis(email: str, analysis_id: int) -> dict | None:
+    """One persisted analysis by id, scoped to this user — the full stored payload
+    with `_saved_at` and `_id` stamped on (mirrors `get_latest_book_analysis`).
+
+    None when the id is unknown, belongs to ANOTHER user, or is unreadable.
+    """
+    user_id = resolve_user_id(email)
+    if not user_id:
+        return None
+    try:
+        row_id = int(analysis_id)
+    except (TypeError, ValueError):
+        return None
+    # A rowid is a signed 64-bit integer. Binding anything wider raises
+    # OverflowError inside sqlite3 — a caller-supplied path param must resolve to
+    # "not found", never to a 500.
+    if not -(2**63) <= row_id < 2**63:
+        return None
+    with _conn() as con:
+        row = con.execute(
+            "SELECT rowid AS id, result_json, created_at FROM customer_analyses "
+            "WHERE user_id=? AND rowid=?",
+            (user_id, row_id),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        out = json.loads(row["result_json"])
+        if not isinstance(out, dict):
+            return None
+    except Exception:  # noqa: BLE001 — corruption degrades to "not found", never a 500
+        return None
+    out["_saved_at"] = row["created_at"]
+    out["_id"] = int(row["id"])
+    return out
+
+
 # ── usage metering (per-customer event counters — tier/billing groundwork) ─────
 
 def _usage_total_in_transaction(

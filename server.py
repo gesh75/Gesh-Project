@@ -5861,6 +5861,134 @@ async def mybook_radar_cash(request: Request):
         raise _server_error(e)
 
 
+def _history_entry(row: dict, email: str) -> dict:
+    """Project one persisted analysis into an INDEX row — never the whole payload.
+
+    Every key is read off what `_run_book_engines` + `_mybook_analyze_worker`
+    actually persist ({analysis, kelly, monte_carlo, radar, detailed_coverage,
+    book} + `_fp`/`_job_id`), so a legacy or partial row degrades to nulls instead
+    of raising. Zero owner data: `row` came from customer_analyses keyed on this
+    caller's user_id.
+    """
+    result = row.get("result")
+    if not isinstance(result, dict):
+        # Unreadable row — surfaced honestly rather than hidden (see
+        # auth_users.list_book_analyses), and never claimable as the current book.
+        return {
+            "id": row["id"],
+            "saved_at": row["saved_at"],
+            "parse_error": True,
+            "fingerprint": None,
+            "is_current_book": False,
+            "portfolio_score": None,
+            "portfolio_verdict": None,
+            "portfolio_type": None,
+            "risk_score": None,
+            "diversification_score": None,
+            "positions_count": 0,
+            "symbols": [],
+            "total_equity": None,
+            "coverage": None,
+            "job_id": None,
+        }
+    analysis = result.get("analysis") or {}
+    book = result.get("book") or {}
+    positions = book.get("positions") or []
+    symbols = [p.get("symbol") for p in positions if isinstance(p, dict) and p.get("symbol")]
+    return {
+        "id": row["id"],
+        "saved_at": row["saved_at"],
+        "parse_error": False,
+        "fingerprint": result.get("_fp"),
+        # _analysis_stale_for is the SINGLE source of truth for staleness (see its
+        # docstring) — called per row rather than reimplemented here so this list
+        # can never disagree with /api/mybook/summary or the report banner.
+        "is_current_book": not _analysis_stale_for(email, result),
+        "portfolio_score": analysis.get("portfolio_score"),
+        "portfolio_verdict": analysis.get("portfolio_verdict"),
+        "portfolio_type": analysis.get("portfolio_type"),
+        "risk_score": analysis.get("risk_score"),
+        "diversification_score": analysis.get("diversification_score"),
+        "positions_count": len(positions),
+        "symbols": symbols,
+        "total_equity": book.get("total_equity"),
+        "coverage": result.get("detailed_coverage"),
+        "job_id": result.get("_job_id"),
+    }
+
+
+@app.get("/api/mybook/history")
+def mybook_history(request: Request):
+    """This user's OWN past book analyses, newest first — the customer's answer to
+    the owner's /api/history, which reads `analysis_runs` (OWNER data) and is not
+    reachable from here.
+
+    Index only: enough to pick a run (when, which book, score/verdict), not the
+    payload. Reads `customer_analyses` scoped to the caller's user_id; the writer
+    keeps the newest `max_kept` per user. DB reads only — no LLM, no quota, no
+    broker call."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        rows = auth_users.list_book_analyses(email)
+        return {
+            "status": "ok",
+            "data": {
+                "analyses": [_history_entry(r, email) for r in rows],
+                "count": len(rows),
+                "max_kept": auth_users._MAX_ANALYSES_PER_USER,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
+@app.get("/api/mybook/history/{analysis_id}")
+def mybook_history_detail(analysis_id: int, request: Request):
+    """One past analysis in full — replays a previous run with ZERO new LLM spend.
+
+    `analysis_id` is the opaque handle from /api/mybook/history and is resolved
+    ONLY within this user's rows: another customer's id returns 404, exactly like
+    an id that never existed (no existence oracle). The body mirrors
+    /api/mybook/analyze's success shape ({status, cached, data}) so the same
+    client renderer replays it unchanged; `cached: true` is literal — this is a
+    stored result, never a fresh computation."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        saved = auth_users.get_book_analysis(email, analysis_id)
+        if not saved:
+            raise HTTPException(status_code=404, detail="No such analysis")
+        stale = _analysis_stale_for(email, saved)
+        # `_saved_at` CANNOT travel in a JSON body: FastAPI's jsonable_encoder runs
+        # with sqlalchemy_safe=True, which silently drops every dict key starting
+        # with "_sa" — and "_saved_at" does. It would arrive missing, not wrong,
+        # which is the worst kind of bug (a panel that renders blank timestamps).
+        # Storage keeps the underscore name for the HTML/report readers; the wire
+        # carries a plain `saved_at`. Guarded by
+        # tests/test_mybook_history.py::test_saved_at_survives_json_encoding.
+        payload = {k: v for k, v in saved.items() if k != "_saved_at"}
+        payload["saved_at"] = saved.get("_saved_at")
+        return {
+            "status": "ok",
+            "cached": True,
+            "data": payload,
+            "meta": {
+                "id": saved.get("_id"),
+                "saved_at": saved.get("_saved_at"),
+                "is_current_book": not stale,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _server_error(e)
+
+
 @app.get("/api/mybook/summary")
 def mybook_summary(request: Request):
     """Hero payload for the customer Home pane: value, what changed, one next
