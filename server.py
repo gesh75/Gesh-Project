@@ -3751,7 +3751,21 @@ def consensus_symbol(symbol: str):
         from consensus import run_consensus_holding
 
         row = run_consensus_holding(
-            sym, equity=0.0, total_portfolio=1.0, avg_cost=0.0, current_price=0.0
+            sym,
+            equity=0.0,
+            total_portfolio=1.0,
+            avg_cost=0.0,
+            current_price=0.0,
+            # MUST stay False. node_ecg reads db.get_equity_history(symbol), and
+            # `equity_snapshots` is keyed by SYMBOL with no user column — it is the
+            # OWNER's curve. This route is the customer "analyse any share" surface,
+            # so with allow_ecg defaulting to True it returned the owner's real
+            # drawdown ("ECG=SUSPENDED DD=-71.9%") as a vote AND in `details`.
+            # run_consensus_for_customer closed this for the book path; the
+            # per-symbol path was missed. It is also correct on the merits: the
+            # docstring above promises a STATELESS run, and a position's equity
+            # curve is by definition position state.
+            allow_ecg=False,
         )
         # No node could vote (no price/history) → INSUFFICIENT DATA, not a
         # fabricated balanced consensus.
