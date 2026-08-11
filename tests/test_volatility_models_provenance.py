@@ -24,6 +24,7 @@ The fix is not to make GARCH work — installing `arch` is a separate decision. 
 to make the substitution *legible*, so a reader can always tell which estimator
 produced a figure.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -39,6 +40,7 @@ def _returns(n: int = 300, sigma: float = 0.02, seed: int = 0) -> pd.Series:
 
 
 # ── the detail API: every call must say which estimator actually ran ──────────
+
 
 def test_detail_reports_an_estimator_alongside_the_value():
     sigma, estimator = vm.garch_vol_detail(_returns())
@@ -72,6 +74,7 @@ def test_detail_never_claims_garch_when_the_value_equals_ewma():
 
 
 # ── the reporting surface must not fabricate a comparison ────────────────────
+
 
 def test_compare_states_whether_garch_was_actually_available():
     out = vm.compare_vol_models(_returns(), "TEST")
@@ -111,7 +114,16 @@ def test_compare_still_reports_ewma_normally():
     assert out["symbol"] == "TEST"
 
 
+def test_formatter_handles_unavailable_metric():
+    assert vm.format_optional_metric(None, format_spec=".1f", suffix="%") == "N/A"
+
+
+def test_formatter_preserves_numeric_metric_output():
+    assert vm.format_optional_metric(31.25, format_spec=".1f", suffix="%") == "31.2%"
+
+
 # ── backward compatibility: existing float callers keep working ──────────────
+
 
 def test_garch_vol_still_returns_a_plain_float_for_existing_callers():
     v = vm.garch_vol(_returns())
