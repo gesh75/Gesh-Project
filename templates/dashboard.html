@@ -680,6 +680,22 @@ body:not(.customer) .customer-only { display: none !important; }
        wrapping it produced a card inside a card and the title twice. -->
   <div class="tab-pane customer-only" id="tab-book-radar">
     <div id="book-radar-body"><div class="card" style="margin-bottom:16px"><div class="deep-ph-text" style="padding:18px 0;text-align:center">Run <b>🧠 Analyze My Portfolio</b> once — this pane then renders instantly from that result.</div></div></div>
+    <!-- The radar inside a saved analysis is computed CASH-FREE on purpose (the
+         analysis is cached per book fingerprint, so folding a cash figure into it
+         would invalidate that cache on every keystroke). Sizing therefore lives
+         here, on its own endpoint: pure arithmetic over the shortlist the scan
+         captured — no AI call, no quota, no broker. Sits OUTSIDE #book-radar-body
+         so re-rendering the radar never wipes the customer's typed amount. -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="ch" style="font-size:15px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px">💵 What would this cash buy?</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Sizes the radar shortlist — names you do <b>not</b> already hold — against a cash amount. Free to try: no AI call is made. Run <b>🧠 Analyze My Portfolio</b> first so there is a shortlist to size against.</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <input id="radar-cash-amount" placeholder="Cash to deploy ($)" type="number" min="0" step="any"
+               style="width:180px;background:var(--hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-family:var(--font);font-size:15px">
+        <button class="btn-analyze" onclick="radarCash()">What would this buy?</button>
+      </div>
+      <div id="radar-cash-results"></div>
+    </div>
   </div>
 
   <div class="tab-pane customer-only" id="tab-book-scanner">
@@ -770,6 +786,17 @@ body:not(.customer) .customer-only { display: none !important; }
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Your positions stay private to your account. Valued from public quotes; nothing here connects to a broker.</div>
       <div id="mybook-list" style="margin-bottom:12px"></div>
       <div id="mybook-results"></div>
+
+      <!-- Past runs. GET /api/mybook/history is an index read of the customer's
+           own persisted analyses, and opening one replays the STORED payload —
+           zero AI spend either way. This is the only way to look at last week's
+           verdict without paying for a new run. -->
+      <div class="card" style="margin-top:16px">
+        <div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px">📜 Past Analyses</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">Your recent saved runs. Opening one replays the stored result — <b>no new AI usage</b> and no quota spent.</div>
+        <div style="margin-bottom:10px"><button class="btn-analyze" onclick="mybookHistory(true)">↻ Load past analyses</button></div>
+        <div id="mybook-history-body"></div>
+      </div>
 
       <div class="card" style="margin-top:16px">
         <div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px">💵 Where Does New Cash Go?</div>
@@ -2839,6 +2866,87 @@ function showBookEcg(){
              buildBookEcgPane, 'Reading your equity curve…');
 }
 
+// ── Customer book charts ─────────────────────────────────────────────────────
+// Chart data goes through the Chart.js CANVAS API, never innerHTML: a canvas
+// dataset cannot carry markup, so none of this is an XSS surface. Both draws are
+// scheduled on a short timeout by their builder, because the builder only RETURNS
+// a string — the caller assigns it to innerHTML afterwards, so the <canvas> does
+// not exist until the current task finishes. Same shape as the owner's
+// renderMonteCarlo (setTimeout(...,60) after the innerHTML assignment).
+let bookMcChart = null;
+let bookEquityChart = null;
+
+// Monte Carlo outcome distribution. `buckets` is monte_carlo.run_monte_carlo's own
+// output: 10 entries of {label, center, pct} spanning the 1st–99th percentile of
+// the simulated final values. Bars below today's book value are red, above green,
+// so "how much of the cone is a loss" is readable without doing arithmetic.
+function drawBookMcChart(buckets, currentEquity){
+  const el = document.getElementById('book-mc-canvas');
+  if (!el || !window.Chart || !(buckets || []).length) return;
+  if (bookMcChart){ bookMcChart.destroy(); bookMcChart = null; }
+  const bookMcNow = Number(currentEquity) || 0;
+  const bookMcColors = buckets.map(b => (Number(b.center) || 0) < bookMcNow ? 'rgba(255,68,68,.75)' : 'rgba(0,230,118,.75)');
+  bookMcChart = new Chart(el.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: buckets.map(b => '$' + Math.round(Number(b.center) || 0).toLocaleString('en-US')),
+      datasets: [{data: buckets.map(b => Number(b.pct) || 0), backgroundColor: bookMcColors, borderRadius: 3, borderSkipped: false}]
+    },
+    options: {responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display: false}, tooltip: {callbacks: {label: c => ' ' + Number(c.raw).toFixed(1) + '% of simulations'}}},
+      scales: {x: {ticks: {color: '#4a5568', font: {size: 9}, maxRotation: 40}, grid: {display: false}},
+               y: {ticks: {color: '#4a5568', font: {size: 9}, callback: v => v + '%'}, grid: {color: 'rgba(28,28,53,.6)'}}}}
+  });
+}
+
+// The customer's own stored equity observations, one line per holding.
+// `equity_history` comes straight off /api/mybook/ecg's states[] (a list of
+// floats, OLDEST first — customer_equity_history.compute_book_ecg passes the
+// per-user rows to gesh_core.ecg.compute_ecg, which reverses them before the
+// running-peak math and echoes the reversed series).
+//
+// Series are right-aligned (most recent observation last) and padded with nulls
+// at the front, because holdings can have different observation counts — a name
+// added last week has fewer rows than one held since launch. A BOOK TOTAL line is
+// only drawn when every plotted series has the SAME length: with ragged series a
+// sum would jump every time a name enters the window, which reads as a real
+// portfolio move and is not one.
+function drawBookEquityChart(states){
+  const el = document.getElementById('book-equity-canvas');
+  if (!el || !window.Chart) return;
+  const bkSeries = (states || [])
+    .map(s => ({symbol: String(s.symbol || ''), points: (s.equity_history || []).map(Number).filter(v => isFinite(v))}))
+    .filter(s => s.points.length >= 2)
+    .slice(0, 8);
+  if (!bkSeries.length) return;
+  if (bookEquityChart){ bookEquityChart.destroy(); bookEquityChart = null; }
+  const bkSpan = Math.max(...bkSeries.map(s => s.points.length));
+  const bkLabels = [];
+  for (let n = bkSpan - 1; n > 0; n--) bkLabels.push('−' + n);
+  bkLabels.push('latest');
+  const bkPad = pts => new Array(bkSpan - pts.length).fill(null).concat(pts);
+  const bkPalette = ['#00d4ff', '#00e676', '#ffb800', '#ff6b6b', '#a78bfa', '#fb923c', '#34d399', '#f472b6'];
+  const bkDatasets = bkSeries.map((s, i) => ({
+    label: s.symbol, data: bkPad(s.points), borderColor: bkPalette[i % bkPalette.length],
+    backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: .25
+  }));
+  if (bkSeries.length > 1 && bkSeries.every(s => s.points.length === bkSpan)){
+    const bkTotal = [];
+    for (let k = 0; k < bkSpan; k++) bkTotal.push(bkSeries.reduce((sum, s) => sum + s.points[k], 0));
+    bkDatasets.unshift({label: 'Book total', data: bkTotal, borderColor: '#e2e8f0',
+      backgroundColor: 'transparent', borderWidth: 3, pointRadius: 0, tension: .25});
+  }
+  bookEquityChart = new Chart(el.getContext('2d'), {
+    type: 'line',
+    data: {labels: bkLabels, datasets: bkDatasets},
+    options: {responsive: true, maintainAspectRatio: false, interaction: {mode: 'index', intersect: false},
+      plugins: {legend: {labels: {color: '#e2e8f0', boxWidth: 10, font: {size: 10}}},
+                tooltip: {callbacks: {label: c => ' ' + c.dataset.label + ': $' + Number(c.raw).toLocaleString('en-US', {maximumFractionDigits: 2})}}},
+      scales: {x: {ticks: {color: '#4a5568', font: {size: 9}}, grid: {display: false}},
+               y: {ticks: {color: '#4a5568', font: {size: 9}, callback: v => '$' + Number(v).toLocaleString('en-US')}, grid: {color: 'rgba(28,28,53,.6)'}}}}
+  });
+}
+
 // Monte Carlo + Kelly, promoted out of the <details> they were folded into. Both
 // already run on every customer analysis; only the presentation is new.
 function buildBookRiskPane(d){
@@ -2864,9 +2972,17 @@ function buildBookRiskPane(d){
         <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','ACTION','NOW','KELLY','Δ $'].map(h => `<th style="padding:6px 10px;text-align:${h === 'SYMBOL' || h === 'ACTION' ? 'left' : 'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
         <tbody>${kellyRows}</tbody></table></div>`
     : '<div class="deep-ph-text" style="padding:10px 0">Kelly sizing unavailable on the last run.</div>';
+  // Distribution chart: only when the simulation actually produced buckets. The
+  // literal-string ternary keeps the XSS guard satisfied (nothing data-derived
+  // reaches the markup); the numbers travel through the canvas API below.
+  const bookMcBlock = (mc.buckets || []).length
+    ? '<div style="height:190px;margin-top:12px"><canvas id="book-mc-canvas"></canvas></div>'
+      + '<div style="margin-top:6px;font-size:11px;color:var(--muted)">Where the simulated outcomes landed. Red bars are worse than your book today, green better; each bar is the share of simulations in that value range.</div>'
+    : '';
+  if ((mc.buckets || []).length) setTimeout(() => drawBookMcChart(mc.buckets, mc.current_equity), 60);
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
       <div><div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Monte Carlo stress test</div>
-        ${mcRows || '<div class="deep-ph-text" style="padding:10px 0">Monte Carlo unavailable on the last run.</div>'}</div>
+        ${mcRows || '<div class="deep-ph-text" style="padding:10px 0">Monte Carlo unavailable on the last run.</div>'}${bookMcBlock}</div>
       <div><div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Kelly position sizing</div>
         ${kellyTable}</div>
     </div>
@@ -2967,7 +3083,7 @@ function buildBookIntelligencePane(d){
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
       <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(secF.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(secF.form_type || '')} · ${daEsc(String(secF.filing_date || '').slice(0, 10))}</span></div>
       <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc((secF.analysis && secF.analysis.summary) || '')}</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(secF.action_signal || '')}${daEsc(secF.urgency ? ' · urgency ' + secF.urgency : '')}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(secF.action_signal || (secF.analysis && secF.analysis.action_signal) || '')}${daEsc(secF.urgency ? ' · urgency ' + secF.urgency : '')}</div>
     </div>`).join('');
   const newsRows = (news.results || []).map(n =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
@@ -3002,15 +3118,25 @@ function buildBookIntelligencePane(d){
   const fundEmpty = fund.error
     ? `<div class="deep-ph-text" style="padding:10px 0">⚠ ${daEsc(fund.error)}</div>`
     : '<div class="deep-ph-text" style="padding:10px 0">No fundamental data for your symbols.</div>';
+  // A CAPPED scan is not an empty result. Both legs report their own gaps —
+  // sec.truncated/sec.symbol_cap and fundamentals.errors — and dropping them
+  // lets "we only looked at 6 of your 20 names" read as "there is nothing there",
+  // which is the same dishonesty as swallowing an outage.
+  const secCap = sec.truncated
+    ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">Covers your ${daEsc(sec.symbol_cap)} largest holdings — filings for the rest were not fetched.</div>`
+    : '';
+  const fundGaps = (fund.errors || []).length
+    ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">No fundamentals for ${daEsc((fund.errors || []).map(e => e.symbol).join(', '))}.</div>`
+    : '';
   const secCol = secRows
-    ? `<div><div style="${H}">SEC filings</div>${secRows}</div>`
-    : `<div><div style="${H}">SEC filings</div>${secEmpty}</div>`;
+    ? `<div><div style="${H}">SEC filings</div>${secRows}${secCap}</div>`
+    : `<div><div style="${H}">SEC filings</div>${secEmpty}${secCap}</div>`;
   const newsCol = newsRows
     ? `<div><div style="${H}">News sentiment</div>${newsRows}</div>`
     : `<div><div style="${H}">News sentiment</div>${newsEmpty}</div>`;
   const fundCol = fundRows
-    ? `<div><div style="${H}">Fundamental momentum</div>${fundRows}</div>`
-    : `<div><div style="${H}">Fundamental momentum</div>${fundEmpty}</div>`;
+    ? `<div><div style="${H}">Fundamental momentum</div>${fundRows}${fundGaps}</div>`
+    : `<div><div style="${H}">Fundamental momentum</div>${fundEmpty}${fundGaps}</div>`;
   return `${mood}<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px">
       ${secCol}${newsCol}${fundCol}
     </div>`;
@@ -3030,8 +3156,18 @@ function buildBookEcgPane(d){
   const waiting = acc.length
     ? `<div style="font-size:12px;color:var(--muted)">Still accumulating: ${daEsc(acc.map(a => a.symbol || a).join(', '))}</div>`
     : '';
+  // A holding needs at least two stored observations before there is a line to
+  // draw. `equity_history` is on every state gesh_core.ecg emits (including the
+  // still-accumulating ones), so this is the honest test for "is there history".
+  const bookEcgHasCurve = states.some(s => (s.equity_history || []).length >= 2);
+  const bookEcgBlock = bookEcgHasCurve
+    ? '<div style="height:210px;margin:12px 0"><canvas id="book-equity-canvas"></canvas></div>'
+      + '<div style="margin-bottom:10px;font-size:11px;color:var(--muted)">Your own stored observations, one line per holding, most recent on the right. Holdings can have different observation counts, so the combined line is drawn only when every plotted holding covers the same window.</div>'
+    : '';
+  if (bookEcgHasCurve) setTimeout(() => drawBookEquityChart(states), 60);
   return `<div style="font-size:13px;color:var(--text);font-weight:600;margin-bottom:8px">${daEsc(d.portfolio_message || '')}</div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Gate <b>${daEsc(d.portfolio_gate || '—')}</b> · ${daEsc(cov.ready)} of ${daEsc(cov.total)} holdings have enough history (needs ${daEsc(d.snapshots_required)} daily observations over ${daEsc(d.history_days)} days).</div>
+    ${bookEcgBlock}
     ${ready}${waiting}
     <div style="margin-top:10px;font-size:11px;color:var(--muted)">Your equity curve builds from your own book only. Until a holding has enough observations it is reported as accumulating — never given a verdict.</div>`;
 }
@@ -3157,7 +3293,6 @@ async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   if(_mybookAnalyzeInFlight) return;
   _mybookAnalyzeInFlight=true;
-  const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
   const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
   // Live elapsed counter, not static text: a large book runs ~3 min, and with a
   // frozen "2–4 minutes" message "working" is indistinguishable from "hung". A QA
@@ -3201,26 +3336,47 @@ async function mybookAnalyze(){
     // Hold the whole result so the Risk / Signals / Radar panes render from it
     // instantly instead of each spending another full engine run.
     _mybookLastResult = d;
-    const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[], rad=d.radar||{};
-    // Conclusions first (plan T2): one plain-language line per engine; the raw
-    // stat rows fold behind <details>. Leads are plain text — daEsc'd at render.
-    const mcLead=mc.error?'Monte Carlo unavailable right now.'
-      :('Worst plausible '+(mc.horizon_days||21)+'-day stretch (95% confidence): −$'+daFmt(mc.var_95,0)+' on your book.');
-    const kAdj=kh.filter(k=>k.action==='ADD'||k.action==='TRIM');
-    // "largest" = biggest |optimal-current| gap — the holdings list is sorted by
-    // optimal_pct DESC, so the first row is NOT the largest adjustment (PR #79).
-    const kAdjTop=kAdj.reduce((b,k)=>{
-      const dv=Math.abs((k.optimal_pct||0)-(k.current_pct||0));
-      return (!b||dv>b.dv)?{sym:k.symbol,act:k.action||'',dv}:b;},null);
-    const kellyLead=(ky.error||!kh.length)?'Kelly sizing unavailable right now.'
-      :(kAdj.length+' sizing adjustment'+(kAdj.length!==1?'s':'')+' suggested'
-        +(kAdjTop?' — largest: '+kAdjTop.sym+' '+kAdjTop.act:'')+'.');
-    const risks=(a.portfolio_risks||[]).map(r=>{
-      const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
-      return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;
-    }).join('');
-    await loadDcf();  // DCF rows render only if the map is here before the cards
-    box.innerHTML=`
+    await mybookRenderResult(d, box, null);
+    mybookHistory(true);   // the run just saved is now a past run — keep the list true
+  }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
+  finally{ clearInterval(tick); _mybookAnalyzeInFlight=false; }
+}
+
+// The whole analysis render, extracted so a REPLAY of a stored run
+// (GET /api/mybook/history/{id}) paints exactly the same page as a fresh run —
+// same builders, same escaping, zero AI spend. `meta` is the history route's
+// {id, saved_at, is_current_book}; null for a fresh run.
+async function mybookRenderResult(d, box, meta){
+  const T='font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px';
+  const a=d.analysis, mc=d.monte_carlo||{}, ky=d.kelly||{}, kh=(ky.holdings)||[], rad=d.radar||{};
+  // Conclusions first (plan T2): one plain-language line per engine; the raw
+  // stat rows fold behind <details>. Leads are plain text — daEsc'd at render.
+  const mcLead=mc.error?'Monte Carlo unavailable right now.'
+    :('Worst plausible '+(mc.horizon_days||21)+'-day stretch (95% confidence): −$'+daFmt(mc.var_95,0)+' on your book.');
+  const kAdj=kh.filter(k=>k.action==='ADD'||k.action==='TRIM');
+  // "largest" = biggest |optimal-current| gap — the holdings list is sorted by
+  // optimal_pct DESC, so the first row is NOT the largest adjustment (PR #79).
+  const kAdjTop=kAdj.reduce((b,k)=>{
+    const dv=Math.abs((k.optimal_pct||0)-(k.current_pct||0));
+    return (!b||dv>b.dv)?{sym:k.symbol,act:k.action||'',dv}:b;},null);
+  const kellyLead=(ky.error||!kh.length)?'Kelly sizing unavailable right now.'
+    :(kAdj.length+' sizing adjustment'+(kAdj.length!==1?'s':'')+' suggested'
+      +(kAdjTop?' — largest: '+kAdjTop.sym+' '+kAdjTop.act:'')+'.');
+  const risks=(a.portfolio_risks||[]).map(r=>{
+    const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
+    return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;
+  }).join('');
+  // Replay banner. `is_current_book` is the server's own staleness verdict
+  // (_analysis_stale_for — the SINGLE source of truth shared with the summary
+  // endpoint and the printed report), so this line can never disagree with them.
+  const histBanner=(meta&&meta.saved_at)
+    ? `<div class="card" style="margin-bottom:16px;border-left:3px solid var(--accent)">
+        <div style="font-size:13px;color:var(--text);font-weight:600">📜 Replaying a saved analysis from ${daEsc(relTime(meta.saved_at))} — no new AI usage.</div>
+        <div style="margin-top:5px;font-size:12px;color:${meta.is_current_book?'var(--muted)':'var(--yellow)'}">${daEsc(meta.is_current_book?'It still matches the book you hold today.':'Your book has changed since this ran — the numbers below describe the OLDER book.')}</div>
+      </div>`
+    : '';
+  await loadDcf();  // DCF rows render only if the map is here before the cards
+  box.innerHTML=`${histBanner}
       <div class="card" style="margin-bottom:16px"><div style="${T}">🧠 Portfolio Verdict</div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <span class="da-holding vrd" style="${daVerdictStyle(a.portfolio_verdict)}">${daEsc(a.portfolio_verdict||'—')}</span>
@@ -3239,8 +3395,78 @@ async function mybookAnalyze(){
       </div>
       ${buildDiversificationCard(rad)}
       ${(a.holdings_analysis||[]).map(h=>buildAICard(h)).join('')}`;
-  }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
-  finally{ clearInterval(tick); _mybookAnalyzeInFlight=false; }
+}
+
+// ── Past analyses ────────────────────────────────────────────────────────────
+// GET /api/mybook/history is an INDEX of this user's own persisted runs (newest
+// first, capped by the writer's max_kept). It is a DB read: no AI call, no quota.
+// Loaded on demand rather than on every book render so an idle tab costs nothing.
+let _mybookHistoryLoaded=false;
+async function mybookHistory(force){
+  const box=document.getElementById('mybook-history-body'); if(!box) return;
+  if(_mybookHistoryLoaded&&!force) return;
+  box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Loading your saved runs…</div>';
+  try{
+    const r=await fetch('/api/mybook/history');
+    const j=await r.json().catch(()=>null);
+    if(r.status===401){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">🔒 Sign in to see your saved runs.</div>'; return; }
+    if(!r.ok){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Saved runs are unavailable right now.</div>'; return; }
+    _mybookHistoryLoaded=true;
+    box.innerHTML=buildMybookHistoryList((j&&j.data)||{});
+  }catch(e){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Network error — try again.</div>'; }
+}
+// Row keys are server._history_entry's own: id, saved_at, parse_error,
+// fingerprint, is_current_book, portfolio_score, portfolio_verdict,
+// portfolio_type, risk_score, diversification_score, positions_count, symbols,
+// total_equity, coverage {analyzed,total}, job_id. A corrupt row arrives with
+// parse_error:true and null everywhere else — it is KEPT and labelled, because
+// silently dropping it would misrepresent what we hold.
+function buildMybookHistoryList(d){
+  const histRows=(d.analyses||[]).map(h=>{
+    const histWhen=daEsc(relTime(h.saved_at));
+    const histTag=h.is_current_book
+      ? '<span style="font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid var(--green);color:var(--green)">current book</span>'
+      : '<span style="font-size:10.5px;padding:2px 6px;border-radius:3px;border:1px solid var(--border);color:var(--muted)">older book</span>';
+    if(h.parse_error){
+      return `<tr style="border-bottom:1px dashed var(--border)">
+        <td style="padding:7px 10px;color:var(--muted)">${histWhen}</td>
+        <td colspan="4" style="padding:7px 10px;color:var(--yellow);font-size:12px">This saved run could not be read back — it is kept here rather than hidden, but there is nothing to replay.</td>
+        <td></td></tr>`;
+    }
+    return `<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:7px 10px;color:var(--muted2);white-space:nowrap">${histWhen} ${histTag}</td>
+      <td style="padding:7px 10px;font-weight:700">${daEsc(h.portfolio_verdict||'—')}</td>
+      <td style="padding:7px 10px;text-align:right">${daEsc(h.portfolio_score!=null?h.portfolio_score+' / 100':'—')}</td>
+      <td style="padding:7px 10px;text-align:right">${daEsc(h.positions_count)}</td>
+      <td style="padding:7px 10px;color:var(--muted2);font-size:12px">${daEsc((h.symbols||[]).slice(0,6).join(', '))}${daEsc((h.symbols||[]).length>6?' +'+((h.symbols||[]).length-6):'')}</td>
+      <td style="padding:7px 10px;text-align:right"><button class="per-btn" onclick="mybookHistoryOpen('${daEsc(h.id)}')" title="Replay this saved run — no new AI usage">Open</button></td>
+    </tr>`;
+  }).join('');
+  if(!histRows) return '<div class="deep-ph-text" style="padding:10px 0">No saved runs yet — your first <b>🧠 Analyze My Portfolio</b> will appear here.</div>';
+  return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="border-bottom:1px solid var(--border)">${['WHEN','VERDICT','SCORE','POSITIONS','SYMBOLS',''].map(h=>`<th style="padding:6px 10px;text-align:${h==='SCORE'||h==='POSITIONS'?'right':'left'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+      <tbody>${histRows}</tbody></table></div>
+    <div style="margin-top:8px;font-size:11px;color:var(--muted)">Only your ${daEsc(d.max_kept)} most recent runs are kept.</div>`;
+}
+// Replay one stored run. The detail route mirrors /api/mybook/analyze's success
+// shape, so the SAME renderer paints it — and it also refreshes the Risk /
+// Signals / Radar panes, which read _mybookLastResult.
+async function mybookHistoryOpen(id){
+  const box=document.getElementById('mybook-results'); if(!box) return;
+  switchTab('analyze');
+  box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Opening your saved analysis…</div></div>';
+  box.scrollIntoView({behavior:'smooth',block:'start'});
+  try{
+    const r=await fetch('/api/mybook/history/'+encodeURIComponent(id));
+    const j=await r.json().catch(()=>null);
+    if(r.status===401){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">🔒 Sign in to open a saved run.</div></div>'; return; }
+    if(r.status===404){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">That saved run is no longer available — only the most recent few are kept.</div></div>'; return; }
+    if(!r.ok){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Could not open that run — try again.</div></div>'; return; }
+    const saved=j&&j.data;
+    if(!saved||!saved.analysis){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">That saved run has no analysis to show.</div></div>'; return; }
+    _mybookLastResult=saved;
+    await mybookRenderResult(saved, box, (j&&j.meta)||null);
+  }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Network error — try again.</div></div>'; }
 }
 
 // "Where does new cash go?" — LLM-free Kelly-gap proportional cash deployment,
@@ -3279,6 +3505,67 @@ function buildDeployCashCard(d){
   return `${staleWarn}${cashBody}
     <div style="margin-top:10px;font-size:12px;color:var(--muted)">Leftover uncommitted: $${daFmt(d.leftover,2)}</div>
     <div style="margin-top:6px;font-size:11px;color:var(--muted)">Advisory only — not financial advice. Based on your last persisted Kelly sizing, not a live order.</div>`;
+}
+
+// "What would this cash buy me OUTSIDE what I already hold?" — the Radar's other
+// half. deployCash() (above) ranks cash against Kelly gaps on names the customer
+// ALREADY owns; this sizes the radar's NEW-name shortlist. Both endpoints are pure
+// arithmetic over a persisted scan: no AI call, no quota, no broker.
+async function radarCash(){
+  const box=document.getElementById('radar-cash-results'); if(!box) return;
+  const input=document.getElementById('radar-cash-amount');
+  const cash=Number(input&&input.value);
+  if(!cash||cash<=0){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Enter a cash amount above $0.</div>'; return; }
+  box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Sizing…</div>';
+  try{
+    const r=await fetch('/api/mybook/radar-cash',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({cash})});
+    const j=await r.json().catch(()=>null);
+    if(r.status===401){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">🔒 Sign in to unlock this.</div>'; return; }
+    if(r.status===404){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Run <b>🧠 Analyze My Portfolio</b> first — this sizes the shortlist that run captured.</div>'; return; }
+    if(!r.ok){ box.innerHTML=`<div class="deep-ph-text" style="padding:10px 0">${daEsc(String((j&&j.detail)||'Could not size that amount — try again.'))}</div>`; return; }
+    box.innerHTML=buildRadarCashCard((j&&j.data)||{});
+  }catch(e){ box.innerHTML='<div class="deep-ph-text" style="padding:10px 0">Network error — try again.</div>'; }
+}
+// Keys are invest_radar's real ones via server._radar_allocation: symbol,
+// company_name, sector, price, dollars, shares, composite_score, analyst_upside,
+// max_corr_to_holdings, rationale, actionable — plus cash / deployable_cash /
+// mode / open_slots / new_names_to_add / leftover / stale on the envelope.
+// `actionable:false` marks an UNSIZED preview row (invest_radar._public sets it
+// from the absence of recommended_shares), so dollars/shares arrive null and must
+// read as "—", never as $0.
+function buildRadarCashCard(d){
+  const radarStale=d.stale?`<div style="color:var(--yellow);font-size:12px;margin-bottom:8px">&#9888; Your last analysis predates your current book — re-run <b>Analyze My Portfolio</b> for a fresher shortlist.</div>`:'';
+  // deployable_cash is what was actually sized against; invest_radar hard-caps the
+  // what-if, and a clamp the customer cannot see is a clamp they call a bug.
+  const radarClamp=(d.deployable_cash!=null&&d.cash!=null&&d.deployable_cash<d.cash)
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:8px">Sized against $${daFmt(d.deployable_cash,2)} — the what-if is capped above that.</div>`
+    : '';
+  const radarRows=(d.allocations||[]).map(a=>
+    `<tr style="border-bottom:1px dashed var(--border)">
+      <td style="padding:7px 10px;font-weight:700;color:var(--accent)">${daEsc(a.symbol)}</td>
+      <td style="padding:7px 10px;color:var(--muted2);font-size:12px">${daEsc(a.sector||'—')}</td>
+      <td style="padding:7px 10px;text-align:right">$${daFmt(a.price,2)}</td>
+      <td style="padding:7px 10px;text-align:right;font-weight:700">${daEsc(a.dollars!=null?'$'+daFmt(a.dollars,2):'—')}</td>
+      <td style="padding:7px 10px;text-align:right">${daEsc(a.shares!=null?a.shares:'—')}</td>
+      <td style="padding:7px 10px;text-align:right">${daFmt(a.max_corr_to_holdings,2)}</td>
+      <td style="padding:7px 10px;color:var(--muted2);font-size:12px">${daEsc(a.rationale||'')}</td>
+    </tr>`).join('');
+  const radarBody=radarRows
+    ? `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="border-bottom:1px solid var(--border)">${['SYMBOL','SECTOR','PRICE','$','SHARES','CORR','WHY'].map(h=>`<th style="padding:6px 10px;text-align:${h==='SYMBOL'||h==='SECTOR'||h==='WHY'?'left':'right'};color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em">${daEsc(h)}</th>`).join('')}</tr></thead>
+        <tbody>${radarRows}</tbody></table></div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">Nothing cleared the correlation and sector screens for that amount right now. That is a normal result, not an error.</div>';
+  // SWAP_ONLY means the shortlist came back UNSIZED — say so rather than let the
+  // em-dashes in the $ column read as broken.
+  const radarMode=d.mode==='SWAP_ONLY'
+    ? '<div style="font-size:12px;color:var(--yellow);margin-bottom:8px">Preview only — this amount does not size a whole position in any candidate, so the names below are shown without dollars.</div>'
+    : d.mode==='NO_ACTION'
+    ? '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">The last scan captured no shortlist to size — re-run the analysis.</div>'
+    : '';
+  return `${radarStale}${radarMode}${radarClamp}${radarBody}
+    <div style="margin-top:10px;font-size:12px;color:var(--muted)">Leftover uncommitted: $${daFmt(d.leftover,2)} · room modelled for ${daEsc(d.new_names_to_add)} new name${d.new_names_to_add===1?'':'s'}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">Screens only names you do NOT already hold. Advisory and read-only — not financial advice, and no order is placed or staged.</div>`;
 }
 
 // Diversification Radar on the CUSTOMER's own book — the same engine the owner
