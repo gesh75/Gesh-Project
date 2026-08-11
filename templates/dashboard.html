@@ -2956,11 +2956,18 @@ function buildBookIntelligencePane(d){
   // news_agent's cached rows and fundamental_agent._fetch_fundamentals_batch.
   // An earlier version rendered invented keys (form/filed/score/summary) and
   // shipped a panel of bare tickers and em-dashes.
-  const secRows = (sec.results || []).map(f =>
+  // Row variables are named per PRODUCER (secF / newsN / fundF), never a shared
+  // `f`. tests/test_renderer_producer_contract.py extracts the keys read off each
+  // variable and checks them against that producer's real output — with one name
+  // serving two producers it cannot tell which contract a key belongs to.
+  //
+  // `summary` is NOT top level: sec_agent nests it at analysis.summary. Reading
+  // it at top level is the bug that shipped a correct header over a blank body.
+  const secRows = (sec.results || []).map(secF =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
-      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(f.form_type || '')} · ${daEsc(String(f.filing_date || '').slice(0, 10))}</span></div>
-      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(f.summary || '')}</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(f.action_signal || '')}${daEsc(f.urgency ? ' · urgency ' + f.urgency : '')}</div>
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(secF.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(secF.form_type || '')} · ${daEsc(String(secF.filing_date || '').slice(0, 10))}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc((secF.analysis && secF.analysis.summary) || '')}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(secF.action_signal || '')}${daEsc(secF.urgency ? ' · urgency ' + secF.urgency : '')}</div>
     </div>`).join('');
   const newsRows = (news.results || []).map(n =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
@@ -2969,12 +2976,12 @@ function buildBookIntelligencePane(d){
     </div>`).join('');
   // There is NO score field on a fundamentals row — the useful signal is growth,
   // analyst upside and the recommendation.
-  const fundRows = (fund.results || []).map(f =>
+  const fundRows = (fund.results || []).map(fundF =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
-      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(f.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(f.sector || '')}</span></div>
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(fundF.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(fundF.sector || '')}</span></div>
       <div style="font-size:12px;color:var(--muted2);margin-top:3px">
-        rev ${daFmt(f.revenue_growth, 1)}% · earnings ${daFmt(f.earnings_growth, 1)}% · upside ${daFmt(f.analyst_upside, 1)}%</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(f.recommendation || '')}${daEsc(f.num_analysts ? ' · ' + f.num_analysts + ' analysts' : '')}${daEsc(f.insider_signal ? ' · insider ' + f.insider_signal : '')}</div>
+        rev ${daFmt(fundF.revenue_growth, 1)}% · earnings ${daFmt(fundF.earnings_growth, 1)}% · upside ${daFmt(fundF.analyst_upside, 1)}%</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(fundF.recommendation || '')}${daEsc(fundF.num_analysts ? ' · ' + fundF.num_analysts + ' analysts' : '')}${daEsc(fundF.insider_signal ? ' · insider ' + fundF.insider_signal : '')}</div>
     </div>`).join('');
   const mood = news.market_mood
     ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Market mood <b>${daEsc(news.market_mood)}</b> · avg news score ${daFmt(news.avg_score, 1)}</div>`
@@ -2983,15 +2990,27 @@ function buildBookIntelligencePane(d){
   // passed pre-built HTML into a helper, but a function PARAMETER cannot be
   // proven safe, so the guard flagged it — correctly.
   const H = 'font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:6px';
+  // Each leg reports its OWN outage via an `error` key. Rendering "no filings"
+  // when the truth is "the filings agent is down" states a fact we do not have —
+  // a customer reads it as a real result about their book. Distinguish them.
+  const secEmpty = sec.error
+    ? `<div class="deep-ph-text" style="padding:10px 0">⚠ ${daEsc(sec.error)}</div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">No recent filings for your symbols.</div>';
+  const newsEmpty = news.error
+    ? `<div class="deep-ph-text" style="padding:10px 0">⚠ ${daEsc(news.error)}</div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">No scored news for your symbols right now.</div>';
+  const fundEmpty = fund.error
+    ? `<div class="deep-ph-text" style="padding:10px 0">⚠ ${daEsc(fund.error)}</div>`
+    : '<div class="deep-ph-text" style="padding:10px 0">No fundamental data for your symbols.</div>';
   const secCol = secRows
     ? `<div><div style="${H}">SEC filings</div>${secRows}</div>`
-    : '<div><div style="' + H + '">SEC filings</div><div class="deep-ph-text" style="padding:10px 0">No recent filings for your symbols.</div></div>';
+    : `<div><div style="${H}">SEC filings</div>${secEmpty}</div>`;
   const newsCol = newsRows
     ? `<div><div style="${H}">News sentiment</div>${newsRows}</div>`
-    : '<div><div style="' + H + '">News sentiment</div><div class="deep-ph-text" style="padding:10px 0">No scored news for your symbols right now.</div></div>';
+    : `<div><div style="${H}">News sentiment</div>${newsEmpty}</div>`;
   const fundCol = fundRows
     ? `<div><div style="${H}">Fundamental momentum</div>${fundRows}</div>`
-    : '<div><div style="' + H + '">Fundamental momentum</div><div class="deep-ph-text" style="padding:10px 0">No fundamental data for your symbols.</div></div>';
+    : `<div><div style="${H}">Fundamental momentum</div>${fundEmpty}</div>`;
   return `${mood}<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px">
       ${secCol}${newsCol}${fundCol}
     </div>`;

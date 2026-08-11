@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.gesh.equity-snapshots — TEMPLATE, NOT INSTALLED.
+
+  This file is a template on purpose: nothing in this change loads it, and no
+  launchctl command was run. Rendering and bootstrapping it is an explicit
+  operator action.
+
+  WHAT IT RUNS
+    record_equity_snapshots.sh -> customer_equity_history.py record-snapshots
+    Values every active CUSTOMER's book at public closes and appends one row per
+    holding to customer_equity_snapshots (gesh_auth.db). The owner is excluded
+    inside record_snapshot() by construction. Without this job the customer
+    "Book Health" panel reads 0 snapshots forever.
+
+  RENDER (the __GESH_HOME__ placeholder keeps a /Users path out of tracked code;
+  launchd itself needs absolute paths, so substitution happens at install time):
+
+      GESH_HOME="$HOME/Projects/gesh-project"
+      sed "s#__GESH_HOME__#$GESH_HOME#g" \
+        "$GESH_HOME/com.gesh.equity-snapshots.plist.template" \
+        > "$HOME/Library/LaunchAgents/com.gesh.equity-snapshots.plist"
+
+  BOOTSTRAP (exact commands — run them yourself; this change does not):
+
+      launchctl bootout gui/$(id -u)/com.gesh.equity-snapshots 2>/dev/null
+      launchctl bootstrap gui/$(id -u) "$HOME/Library/LaunchAgents/com.gesh.equity-snapshots.plist"
+      launchctl kickstart -k gui/$(id -u)/com.gesh.equity-snapshots   # optional: run once now
+
+  VERIFY
+
+      tail -20 /tmp/gesh_equity_snapshots.log
+      # expect: "equity snapshot sweep: users=N recorded=M skipped=… failed=0 …"
+
+  UNINSTALL
+
+      launchctl bootout gui/$(id -u)/com.gesh.equity-snapshots
+      rm "$HOME/Library/LaunchAgents/com.gesh.equity-snapshots.plist"
+
+  ★ TIMEZONE HAZARD — StartCalendarInterval is the HOST's LOCAL time, never ET.
+    This repo has already shipped a launchd job that fired on the host's wall
+    clock when the author meant US market time. The Hour/Minute below target
+    16:15 America/New_York (just after the close, so the book is valued on a
+    settled price) and are written for a host on UTC+3. CONFIRM before install:
+
+      TZ=America/New_York date '+ET %H:%M'; date '+local %H:%M %Z'
+
+    and shift Hour by the difference. The offset moves twice a year on each side;
+    the recorder's --min-interval guard makes a mistimed extra tick a cheap no-op,
+    but a job that drifts OUTSIDE the trading day prices nothing new.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gesh.equity-snapshots</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__GESH_HOME__/record_equity_snapshots.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__GESH_HOME__</string>
+
+    <!-- Weekdays only: 1=Mon … 5=Fri. Markets are shut on the weekend, so a
+         Sat/Sun run would append a duplicate of Friday's close and pad the
+         session count ECG reads. Hour/Minute are LOCAL time — see the hazard
+         note above. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>23</integer>
+            <key>Minute</key><integer>15</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>23</integer>
+            <key>Minute</key><integer>15</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>23</integer>
+            <key>Minute</key><integer>15</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>23</integer>
+            <key>Minute</key><integer>15</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>23</integer>
+            <key>Minute</key><integer>15</integer>
+        </dict>
+    </array>
+
+    <!-- RunAtLoad false: bootstrapping at an arbitrary hour would write an
+         off-schedule observation. Use `launchctl kickstart -k` for a deliberate
+         one-off. KeepAlive false: this is a batch job, not a daemon. -->
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/gesh_equity_snapshots.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/gesh_equity_snapshots.log</string>
+</dict>
+</plist>

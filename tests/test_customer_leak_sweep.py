@@ -287,6 +287,20 @@ EXCLUDED: dict[str, str] = {
                        "never-reads-the-owner-table contract, per-user isolation and the "
                        "insufficient-history state are locked by "
                        "tests/test_customer_equity_history.py",
+    "/api/mybook/history": "newest-first INDEX of the CALLER's own persisted book "
+                           "analyses (customer_analyses, keyed by user_id) — the customer "
+                           "counterpart to the owner's /api/history, which reads "
+                           "gesh_financial.db::analysis_runs and is never touched here. "
+                           "Zero owner data; covered by the same '/api/mybook' mask-exempt "
+                           "prefix (masking would redact the customer's own total_equity "
+                           "back at them). Per-user isolation, the never-reads-analysis_runs "
+                           "contract and the raw-dollar contract are locked by "
+                           "tests/test_mybook_history.py",
+    "/api/mybook/history/{analysis_id}": "one of the CALLER's own persisted analyses, "
+                           "replayed with zero LLM spend. The id is resolved ONLY within "
+                           "the caller's rows, so another customer's id 404s exactly like "
+                           "an id that never existed; same mask-exempt prefix and same "
+                           "guard file as /api/mybook/history",
     "/api/mybook/summary": "Home hero payload derived exclusively from the CUSTOMER's own "
                            "positions/watchlist/analysis — zero owner data. Covered by the "
                            "same '/api/mybook' mask-exempt prefix (masking would redact the "
