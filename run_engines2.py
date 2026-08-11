@@ -314,7 +314,7 @@ try:
     import numpy as np
     import pandas as pd
 
-    from volatility_models import compare_vol_models
+    from volatility_models import compare_vol_models, format_optional_metric
 
     vol_results = {}
     # compare_vol_models expects a RETURNS SERIES, not a ticker string — the old
@@ -334,8 +334,11 @@ try:
             rets = np.log(col / col.shift(1)).dropna()
             vr = compare_vol_models(rets, sym)
             vol_results[sym] = vr
+            garch_display = format_optional_metric(
+                vr.get("garch_annual_pct"), format_spec=".1f", suffix="%"
+            )
             print(
-                f"  {sym}: GARCH={vr.get('garch_annual_pct', 0):.1f}%  "
+                f"  {sym}: GARCH={garch_display}  "
                 f"EWMA={vr.get('ewma_annual_pct', 0):.1f}%  preferred={vr.get('preferred', '?')}"
             )
         except Exception as e2:

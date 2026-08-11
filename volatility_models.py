@@ -26,13 +26,15 @@ Installation (optional — for GARCH)
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
-from typing import Any
+
 import price_source  # locked yf.download adapter (thread-safety)
 
-
 # ─── EWMA ─────────────────────────────────────────────────────────────────────
+
 
 def ewma_vol(returns: pd.Series, span: int = 30) -> float:
     """
@@ -150,7 +152,7 @@ def garch_portfolio_vol(
     total_weight = 0.0
     for h in valid_holdings:
         sym = h["symbol"]
-        wt  = h["equity"] / total_equity
+        wt = h["equity"] / total_equity
         ret = log_returns_df[sym].dropna()
         sig = garch_vol(ret)
         weighted_vol += wt * sig
@@ -162,6 +164,7 @@ def garch_portfolio_vol(
 
 
 # ─── Model comparison ─────────────────────────────────────────────────────────
+
 
 def compare_vol_models(
     returns: pd.Series,
@@ -180,40 +183,57 @@ def compare_vol_models(
     # which reads as "the two models agree perfectly". They had not been compared at
     # all. Emit None rather than a figure that cannot mean what its key says.
     out: dict[str, Any] = {
-        "symbol":           symbol,
-        "ewma_daily_pct":   round(ewma_sig * 100, 3),
-        "ewma_annual_pct":  round(ewma_sig * np.sqrt(252) * 100, 2),
-        "garch_available":  available,
-        "estimator":        estimator,
+        "symbol": symbol,
+        "ewma_daily_pct": round(ewma_sig * 100, 3),
+        "ewma_annual_pct": round(ewma_sig * np.sqrt(252) * 100, 2),
+        "garch_available": available,
+        "estimator": estimator,
     }
     if available:
         diff_bp = round((garch_sig - ewma_sig) * 10_000, 1)
-        out.update({
-            "garch_daily_pct":  round(garch_sig * 100, 3),
-            "garch_annual_pct": round(garch_sig * np.sqrt(252) * 100, 2),
-            "diff_basis_pts":   diff_bp,
-            "preferred":        "GARCH" if abs(diff_bp) > 20 else "EWMA",
-        })
+        out.update(
+            {
+                "garch_daily_pct": round(garch_sig * 100, 3),
+                "garch_annual_pct": round(garch_sig * np.sqrt(252) * 100, 2),
+                "diff_basis_pts": diff_bp,
+                "preferred": "GARCH" if abs(diff_bp) > 20 else "EWMA",
+            }
+        )
     else:
-        out.update({
-            "garch_daily_pct":  None,
-            "garch_annual_pct": None,
-            "diff_basis_pts":   None,
-            "preferred":        f"EWMA (GARCH unavailable: {estimator})",
-        })
+        out.update(
+            {
+                "garch_daily_pct": None,
+                "garch_annual_pct": None,
+                "diff_basis_pts": None,
+                "preferred": f"EWMA (GARCH unavailable: {estimator})",
+            }
+        )
     return out
+
+
+def format_optional_metric(value: float | None, *, format_spec: str, suffix: str = "") -> str:
+    """Format a numeric report metric, using ``N/A`` for unavailable values."""
+    return "N/A" if value is None else f"{value:{format_spec}}{suffix}"
 
 
 # ─── CLI test ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     for ticker in ["NVDA", "MSTR", "SPY"]:
-        data   = price_source.locked_yf_download(ticker, period="1y", auto_adjust=True, progress=False)["Close"]
-        rets   = np.log(data / data.shift(1)).dropna()
+        data = price_source.locked_yf_download(
+            ticker, period="1y", auto_adjust=True, progress=False
+        )["Close"]
+        rets = np.log(data / data.shift(1)).dropna()
         result = compare_vol_models(rets, ticker)
+        garch_display = format_optional_metric(
+            result["garch_annual_pct"], format_spec=".1f", suffix="%"
+        )
+        diff_display = format_optional_metric(
+            result["diff_basis_pts"], format_spec="+.0f", suffix="bp"
+        )
         print(
             f"{ticker}: EWMA={result['ewma_annual_pct']:.1f}%  "
-            f"GARCH={result['garch_annual_pct']:.1f}%  "
-            f"Δ={result['diff_basis_pts']:+.0f}bp  "
+            f"GARCH={garch_display}  "
+            f"Δ={diff_display}  "
             f"→ {result['preferred']}"
         )
