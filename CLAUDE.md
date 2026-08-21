@@ -999,6 +999,86 @@ instead of weakening the new isolation fixture.
 + `0d7bf5a` (merge) + `555b3e3` (test fixes). Branch protection still gates the actual merge on
 `test` + `customer-isolation` passing green on the new head.
 
+## Model Independence — 2026-08-21 ★★ (the chain survives Anthropic being down)
+
+**The daily chain no longer dies when Claude is unavailable.** `llm_failover.py`
+supplies a second set of providers behind the same wire contract, wired into the
+single chokepoint `llm_gateway.Gateway._call`.
+
+**Why the gateway and not `ai_analyzer`:** `llm_contracts.extract_tool_input`
+reads `message.content[].{type,name,input}`. A fallback that returns an
+Anthropic-Message-shaped object therefore needs **zero downstream changes** —
+`renest_analysis`, `fair_value.canonicalize_analysis`, `gen_report2`,
+`db.log_analysis` and all four gateway call sites (deep analysis, screener,
+sentiment, SEC) work untouched. That duck type is the whole design.
+
+| Env | Default | Meaning |
+|---|---|---|
+| `GESH_LLM_FAILOVER` | `grok,gemini` | provider order; **empty string disables failover** |
+| `GESH_GROK_MODEL` | `grok-4.6` | id from `grok models` |
+| `GESH_GROK_TIMEOUT_S` | `900` | deep analysis runs ~420-460s on Grok vs ~240s on Claude |
+| `GESH_GROK_MAX_TURNS` | `4` | headroom so an inherited global rule cannot exhaust the budget |
+
+**Providers.** `grok` shells the Grok CLI headless (`grok --prompt-file … --output-format
+json --max-turns 1`), authenticating off the OAuth session in `~/.grok/auth.json` —
+**no `XAI_API_KEY` needed**, same "CLI as courier" pattern as `fetch_snapshot_mcp.sh`.
+`gemini` uses `GEMINI_API_KEY` via `gemini_agent._generate`.
+
+**What triggers failover:** `LLMUnavailableError` (retries exhausted),
+`LLMBudgetExceededError` (daily Anthropic budget spent), and raw
+`anthropic.APIStatusError/APIConnectionError/APITimeoutError`. **Deliberately NOT**
+`LLMRefusalError` (a refusal must not be laundered through a second vendor) or
+`LLMTruncatedError` (a schema-too-large bug a silent fallback would hide — see the
+`_max_tokens` note under "Chain Repair — 2026-07-27").
+
+**Fallback output is NOT grammar-constrained.** There is no forced-tool grammar, so
+`llm_failover.coerce_to_schema` fills any omitted required key with a *typed blank*
+(`""`, `0`, `[]`) rather than raising mid-chain. A blank renders as blank — it never
+invents a number. JSON is recovered by brace-matching that respects strings and
+escapes, so a `}` inside `analyst_note` cannot truncate the parse.
+
+**A failover run is never allowed to read as a clean run** — three disclosures:
+`engine_results.json` gets `ai_provider` + `ai_failover_count`; `run_ai2.py` prints a
+`WARNING: ANTHROPIC UNAVAILABLE`; `analysis_runs.model` records
+`"grok (FAILOVER, anthropic down)"` instead of the Claude id; and `gen_report2`
+renders a `MODEL FAILOVER` banner above the AI verdict.
+
+**Measured 2026-08-21 (Anthropic forced dead, `GESH_LLM_FAILOVER=grok`):** real
+23-name book, 421s, **23/23 holdings cards**, all 10 top-level keys, **zero** key
+drift vs the Claude result at any nesting level, valuation scores 27–74 across 23
+distinct values (no clustering), report renders 153KB vs 161KB for Claude (chain
+floor is 60KB) at 87% of Claude's prose density. Guard tests:
+`tests/test_llm_failover.py` (18).
+
+**The Grok CLI inherits YOUR global agent rules — this is the subtle failure.**
+`~/.claude/CLAUDE.md` instructs every agent to open an OMEGA memory session before
+answering, and Grok obeys it: the first run returned
+`"I'll load OMEGA context first, then return only the requested JSON.{...}"` and
+intermittently died with `Error: max turns reached` on `--max-turns 1`. A pure
+completion must not run an agent loop, so `call_grok` pins it with `--tools
+read_file` (a minimal allowlist), an explicit `--rules` override forbidding tool /
+MCP / memory calls, and `--max-turns 4` (env `GESH_GROK_MAX_TURNS`) for headroom.
+Result: 1 turn, no preamble. **If Grok answers start carrying chatty prefixes again,
+check whether a new global rule is being inherited** — brace-matching tolerates a
+prefix, but a tool-calling loop will exhaust the turn budget.
+The answer arrives under the envelope's **`text`** key (not `result`, which is null).
+
+**Model ids rotate — this already bit once.** `grok-build` (still named in the
+"Agent harness model" section above) is retired; the CLI rejects it with `unknown
+model id`. `call_grok` now retries once on the CLI's own default when it sees that
+error, so a stale pin degrades instead of taking down the fallback that exists to
+survive outages. Check `grok models` for current ids.
+
+**The OTHER Claude dependency is step 1/5, and it is separate from this.** The
+snapshot fetch's tier 2 is a `claude -p` courier. Independence there means keeping
+**tier 1** (`fetch_snapshot_direct.py`, free, own OAuth, no LLM) healthy — verified
+working 2026-08-21 (25 positions, `source=robinhood_mcp`). Its failure is
+silent-by-design; the only tell is `direct MCP fetch failed` in
+`/tmp/gesh_fullchain.log`. **`fetch_snapshot_direct.py` takes no `--out` flag and
+writes `live_portfolio_snapshot.json` in place** — do not run it ad-hoc expecting a
+sandboxed output; the previous snapshot is recoverable from
+`engine_results.json['snapshot']`.
+
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.
 All trading decisions remain the user's responsibility.

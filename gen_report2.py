@@ -447,6 +447,29 @@ def _signal_gate_banner(eng: dict) -> str:
 signal_gate_banner_html = _signal_gate_banner(eng)
 
 
+def _provider_banner(eng: dict) -> str:
+    """Disclose when a non-Anthropic model authored this analysis.
+
+    The daily chain can fail over to Grok/Gemini when Claude is unavailable. That
+    output is not grammar-constrained and omitted keys are filled with blanks, so
+    the reader must be able to see which vendor wrote the page — an undisclosed
+    swap would let a degraded run read as a normal one.
+    """
+    provider = str(eng.get("ai_provider") or "anthropic").lower()
+    if not eng.get("ai_failover_count") or provider in ("", "anthropic"):
+        return ""
+    return (
+        '<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
+        + f"⚠️ MODEL FAILOVER — Anthropic was unavailable; this analysis was produced by "
+        + f"<b>{_esc(provider)}</b>. Output was not grammar-constrained and any field the "
+        + "model omitted is blank rather than estimated. Engine numbers (regime, Kelly, "
+        + "Monte Carlo, gates) are unaffected — they are computed, not generated.</div>"
+    )
+
+
+provider_banner_html = _provider_banner(eng)
+
+
 # ─── Diversification radar section (advisory-only, new non-held names) ────────
 # Every string cell is HTML-escaped (company/sector come from yfinance, thesis/swap
 # rationale may originate downstream) — never trust free text in an f-string table.
@@ -848,6 +871,7 @@ html = f"""<!DOCTYPE html>
   {'<div class="override-banner">⚠️ RULE 8 ACTIVE — Cash $' + f"{cash:.2f} < $500 minimum buffer. ALL ADD signals blocked. Priority action: generate $" + f"{500 - cash:.0f}+ cash to restore tactical flexibility.</div>" if cash_blocked else ""}
   {('<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">⚠️ RULE 5 ACTIVE — RSI≥70 overrides Kelly ADD → HOLD for: ' + ", ".join(f"{s} (RSI={v:.0f})" for s, v in rsi_overrides.items()) + "</div>") if rsi_overrides else ""}
 
+  {provider_banner_html}
   {signal_gate_banner_html}
 
   <!-- AI Verdict -->
