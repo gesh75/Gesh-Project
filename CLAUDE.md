@@ -1079,6 +1079,127 @@ writes `live_portfolio_snapshot.json` in place** — do not run it ad-hoc expect
 sandboxed output; the previous snapshot is recoverable from
 `engine_results.json['snapshot']`.
 
+## Robinhood MCP as a data source — 2026-08-21 ★★ (Stages 1 + 2)
+
+**The agent MCP exposes 54 tools; the chain was using 3.** `fetch_snapshot_direct.py`
+(step 1/5, tier 1) has always authenticated against `agent.robinhood.com/mcp/trading`
+and called only `get_portfolio` / `get_equity_positions` / `get_equity_quotes`. A
+`tools/list` probe found the rest, including OHLCV, broker-computed indicators,
+per-lot cost basis, a server-side screener and real realized P&L.
+
+**Why this matters more than it sounds:** rule #54 says the corporate VPN
+SNI-category-blocks *every* finance-data host, which is the whole reason
+`price_source.py` carries a Yahoo→RH fallback chain whose RH tier is the thin
+UNAUTHENTICATED quote endpoint. **The MCP path already survives the VPN** — it is how
+the snapshot fetches — so it is a first-class primary source that was sitting unused.
+
+| Module | Role |
+|---|---|
+| `rh_mcp_data.py` | **Stage 1, read-only.** `historicals()` (yfinance-shaped frame, `.attrs['gesh_price_source']='robinhood_mcp'`), `indicator()`/`atr()`/`latest_indicator()` (broker-computed RSI/MACD/BB/ATR/VWAP), `tax_lots()` + `unrealized_by_lot()` (per-lot basis, open_date, st/lt term), `quotes()`. TTL caches (rule #42) cleared via `clear_caches()`. |
+| `rh_order_review.py` | **Stage 2, read-only.** Wraps `review_equity_order` — SIMULATES an order, returns broker pre-trade alerts. Places nothing. |
+
+**The safety invariant is the allowlist, and it is a code invariant not a
+convention.** `rh_mcp_data._ALLOWED_TOOLS` is a frozenset of read-only names;
+`_call()` raises `ValueError` *before building a request* for anything else.
+`place_equity_order`, `place_option_order`, `cancel_*` and `exercise_option` are
+absent, so the module **structurally cannot place, cancel or exercise anything**.
+Order review lives in a separate module so data reads and order-shaped calls never
+share an import surface. Guard tests parametrize over every mutating verb and assert
+the transport is never reached; a second test fails if any allowlisted name merely
+*starts with* a mutating verb. `ruff --fix` must never be allowed to "clean up" these.
+
+**Both modules import `fetch_snapshot_direct` under `except BaseException`, not
+`except Exception`** — that module resolves `GESH_RH_ACCOUNT` at import time and calls
+`SystemExit` when unset (see the `GESH_RH_ACCOUNT` note above). `SystemExit` derives
+from `BaseException`, so a bare `except Exception` would let an unset account var take
+down every caller.
+
+### Stage 2 status: UNAUTHORIZED by design, and that is not a failure
+
+The OAuth client `fetch_snapshot_direct.py` registers holds scope `internal`, which
+grants every read tool but **not the order family**. Verified 2026-08-21:
+`review_equity_order` returns `FORBIDDEN: agent not authorized to access this account`
+(`_meta.rh_error_category: "unauthorized"`). **`place_equity_order` was deliberately
+never called** — that is inference from the shared error category, not a measurement.
+
+So the stored token currently *cannot* place an order even if code tried. Granting the
+account trading authorization is an owner-only decision that widens what the token can
+do; the module activates by itself if it is ever granted.
+
+**Status taxonomy — the load-bearing design detail.** `OK` / `REJECTED` are conclusive;
+`UNAUTHORIZED` / `UNAVAILABLE` / `ERROR` mean **"not checked"** and must never collapse
+into a boolean that reads as a pass. `ReviewResult.executable` is True *only* for `OK`.
+This is the rule #45/#59 theme again: a degraded state must announce itself rather than
+resemble a measurement. Guard test
+`test_inconclusive_review_never_vetoes_even_when_blocking` pins the other direction —
+"not checked" must not silently become "refused", which would blank the paper book on
+any VPN blip.
+
+**Wiring (`run_paper_gate2.py::gate_and_execute`).** The reviewer runs AFTER the 9 gates
+approve and BEFORE the recorder, so `GESH_REVIEW_BLOCKING=1` can genuinely veto. It was
+deliberately NOT implemented as a post-hoc annotation: the paper record would already
+exist by then, and a config flag that silently does nothing is worse than no flag.
+Defaults: `GESH_BROKER_REVIEW=1` (on — it is read-only), `GESH_REVIEW_BLOCKING=0` (off —
+Stage 2 gathers evidence; vetoing before the evidence exists changes gate behaviour for
+no measured reason). A reviewer exception lands on the gate result as
+`broker_review_error` and never breaks the chain. An `UNAUTHORIZED` verdict is memoized
+per process, so a batch costs one MCP call, not one per symbol.
+
+**Why Stage 2 is worth running while it returns UNAUTHORIZED:** paper mode proves the
+engine's arithmetic but can never prove its intents are *executable* — it knows nothing
+about halted symbols, collars, settled funds or PDT. Every fill in `orders` is an
+assumption. The `[gate] broker preflight: N/M conclusively checked` line reports coverage
+as a ratio precisely so an all-UNAUTHORIZED day cannot read as an all-clear.
+
+Tests: `tests/test_rh_mcp_integration.py` (31).
+
+### Stage 1b — `tax_lots_enrich.py`: the wash-sale blind spot (2026-08-21)
+
+**The proposed rationale was measured and found FALSE, and the module was rebuilt
+around what the data actually showed.** The pitch was "per-lot basis unlocks more
+harvestable loss than blended average cost". Measured on the real book: position-level
+harvestable loss $407, lot-level $376 — lot selection found *less*, because these lots
+mostly lose together. Only NVDA benefited (blended −$11 vs −$19 selling just the two
+losing lots). Recording this so the claim is not re-derived: **lot selection is not a
+harvest-size optimisation on a book like this.**
+
+**The real defect it fixes is correctness.** `gesh_core.tax_harvester.get_wash_status()`
+queries only `wash_sale_log`, and that table is written only by `record_harvest()`. So it
+sees a wash window opened by *a prior harvest sale we made* and is **structurally blind
+to purchases** — while the IRS window runs 30 days on BOTH sides of the loss sale. An
+ordinary buy therefore creates real exposure the scan cannot see, and it would report
+such a position ELIGIBLE. Measured 2026-08-21: **10 of 11 losing positions were inside a
+purchase-side wash window** (BAC/RTX 17d, COF 16d, PANW 15d, DELL 11d, ZS 7d, SBUX 4d,
+GTLB/BABA/KO 1d). Only NVDA was clean. On an actively-traded book this is the normal
+case, not an edge case.
+
+**`enrich()` unions the base report's rows with every holding at a loss — the union is
+load-bearing.** `get_harvest_summary()` exposes only `eligible` / `in_wash_window` /
+`no_cost_basis` and **DISCARDS every BELOW_THRESHOLD candidate**, so with
+`MIN_LOSS_USD=500` and a book whose largest loss is ~$100, the report contains zero
+losing rows. Deriving the symbol set from the report alone checked nothing and reported
+"no wash warnings" — the exact false-clear the module exists to prevent (first draft did
+precisely this: `lot coverage: 0/0`). A sub-threshold loss still carries wash exposure
+the moment it is sold.
+
+**Additive by contract.** `enrich()` returns a NEW dict and adds only `lots_by_symbol`,
+`purchase_wash_warnings`, `lot_coverage`; a guard test asserts every pre-existing key is
+byte-identical, so `gen_report2.py` / `server.py` readers are untouched. It wraps the
+shim's OUTPUT rather than editing `tax_harvester.py` — that is a gesh-core shim and rule
+#46 forbids editing the shim body.
+
+**Unknown is never safe.** An unavailable lot view omits `wash_risk_from_purchases`
+*entirely* rather than setting it False, and `lot_coverage` reports
+`{checked, available, unavailable}` as a ratio so a total MCP outage cannot read as "no
+warnings found" (rule #59 theme).
+
+**Also fixed:** `gen_report2.py`'s empty-candidates fallback read **"No harvest
+candidates — all positions profitable."** That is a fabricated claim of exactly the rule
+#60 shape — 11 positions were at a loss. It now states the $500 threshold and the count
+of sub-threshold losers, and renders the wash warnings plus a lot-coverage caveat.
+
+Tests: `tests/test_tax_lots_enrich.py` (17).
+
 ## Disclaimer
 This tool is for informational and educational purposes. Not financial advice.
 All trading decisions remain the user's responsibility.
