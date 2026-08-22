@@ -189,11 +189,11 @@ def historicals(
     interval: str = "day",
     bounds: str = "regular",
 ) -> pd.DataFrame:
-    """OHLCV bars shaped IDENTICALLY to ``yfinance.download()``.
+    """OHLCV bars shaped IDENTICALLY to a yfinance OHLCV frame.
 
     Single symbol → simple columns (Open/High/Low/Close/Volume).
-    Multiple symbols → column MultiIndex (field, ticker), matching yfinance's
-    default ``group_by="column"`` so ``frame["Close"]`` yields a per-ticker frame.
+    Multiple symbols → column MultiIndex (field, ticker), matching yfinance
+    ``group_by="column"`` so ``frame["Close"]`` yields a per-ticker frame.
 
     Returns an EMPTY DataFrame on any failure — never raises, never partial-lies.
     A returned frame carries ``.attrs['gesh_price_source'] = 'robinhood_mcp'``
