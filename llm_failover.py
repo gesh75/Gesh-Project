@@ -160,9 +160,7 @@ def extracted_payload_matches_schema(payload: Any, schema: dict[str, Any]) -> bo
     return any(k in payload for k in keys)
 
 
-def extract_json_object(
-    text: str, *, required_any: list[str] | None = None
-) -> dict[str, Any]:
+def extract_json_object(text: str, *, required_any: list[str] | None = None) -> dict[str, Any]:
     """Pull the first complete JSON object out of a free-text model response.
 
     Fallback providers have no forced-tool grammar, so the payload arrives as
@@ -386,7 +384,10 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
         # xAI rotates model ids (grok-build -> grok-4.6 broke this once already).
         # A pinned-but-retired id must degrade to the CLI's own default rather
         # than take down the fallback that exists precisely to survive outages.
-        if proc.returncode != 0 and "unknown model id" in (proc.stderr or proc.stdout or "").lower():
+        if (
+            proc.returncode != 0
+            and "unknown model id" in (proc.stderr or proc.stdout or "").lower()
+        ):
             logger.warning(
                 "LLM_FAILOVER: grok model %r rejected as unknown — retrying on the CLI default. "
                 "Set GESH_GROK_MODEL to a current id from `grok models`.",
