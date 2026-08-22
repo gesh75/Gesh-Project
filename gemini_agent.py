@@ -174,11 +174,19 @@ def _generate(
         except Exception as exc:
             last_exc = exc
             err_str = str(exc)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                # Try fallback model after brief pause
-                time.sleep(2)
+            is_quota = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+            is_missing_model = (
+                "404" in err_str
+                or "NOT_FOUND" in err_str
+                or "no longer available" in err_str.lower()
+            )
+            if is_quota or is_missing_model:
+                # Quota: brief pause. Retired model id: skip straight to fallback
+                # (gemini-2.5-pro 404s for new API users — sleeping does not help).
+                if is_quota:
+                    time.sleep(2)
                 continue
-            raise  # non-quota errors propagate immediately
+            raise  # other errors propagate immediately
 
     raise last_exc or RuntimeError("All Gemini models failed")
 

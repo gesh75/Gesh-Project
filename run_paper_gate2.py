@@ -6,9 +6,9 @@ chain (trade_intents / risk_decisions / paper trades) that had been dead since
 the step was left to manual agent snippets.
 
 Causality contract (TASK F): intent → risk decision → (only if APPROVED)
-record/fill. Each intent carries the order's REAL confidence (consensus, else
-Kelly win_rate; missing → 0.0, fail closed) and REAL post-trade target — never
-invented literals. One uuid threads intent → decision → paper record. A
+record/fill. Each intent carries the order's REAL confidence (consensus conviction, else
+coverage, else Kelly win_rate; missing → 0.0, fail closed) and REAL post-trade
+target — never invented literals. One uuid threads intent → decision → paper record. A
 REJECTED intent leaves NO paper-trade record.
 
 Reads engine_results.json (must already contain kelly + regime + snapshot from
@@ -26,6 +26,7 @@ sys.path. The gesh-project copies of paper_trading / trade_log / trading.* are
 the ones wired to this repo's gesh_financial.db (the :9000 dashboard DB).
 """
 import json
+import logging
 import math
 import os
 import sys
@@ -34,6 +35,13 @@ import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
 
 BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE))
@@ -86,17 +94,24 @@ def preflight_outcome(
 def build_confidence_map(consensus: dict, kelly: dict) -> dict[str, float]:
     """Real per-symbol signal confidence in [0, 1].
 
-    Consensus-engine confidence wins; Kelly win_rate is the fallback (both are
-    0–100 scales). Symbols absent from both stay absent — callers treat a miss
-    as 0.0 (fail closed), never an invented number.
+    Conviction (call strength) wins. ``confidence`` on a consensus payload is
+    data coverage — share of nodes with live data, not the strength of the
+    call (see consensus.py) — and is only used when conviction is absent.
+    Kelly win_rate is the last fallback. Symbols absent from all three stay
+    absent — callers treat a miss as 0.0 (fail closed), never an invented number.
     """
     conf: dict[str, float] = {}
     for sym, k in (kelly or {}).items():
         if isinstance(k, dict) and k.get('win_rate') is not None:
             conf[sym] = min(1.0, max(0.0, float(k['win_rate']) / 100.0))
     for sym, c in (consensus or {}).items():
-        if isinstance(c, dict) and c.get('confidence') is not None:
-            conf[sym] = min(1.0, max(0.0, float(c['confidence']) / 100.0))
+        if not isinstance(c, dict):
+            continue
+        raw = c.get('conviction')
+        if raw is None:
+            raw = c.get('confidence')
+        if raw is not None:
+            conf[sym] = min(1.0, max(0.0, float(raw) / 100.0))
     return conf
 
 

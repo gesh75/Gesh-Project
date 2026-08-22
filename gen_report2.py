@@ -16,6 +16,35 @@ def _html(value):
     return _esc(str(value), quote=True)
 
 
+def _optional_pct(value) -> str:
+    """Format a percent-unit metric. Missing/None renders N/A, never a fake 0.0%."""
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.1f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _cvar_95_display(monte: dict, fallback_equity: float) -> str:
+    """CVaR as a percent of equity. Derive it; never default a missing key to 0.0%."""
+    raw = monte.get("cvar_95_pct") if isinstance(monte, dict) else None
+    if isinstance(raw, (int, float)):
+        return f"{float(raw):.1f}%"
+    if not isinstance(monte, dict):
+        return "N/A"
+    cvar = monte.get("cvar_95")
+    equity = monte.get("current_equity") or fallback_equity
+    try:
+        cvar_f = float(cvar)
+        eq_f = float(equity)
+    except (TypeError, ValueError):
+        return "N/A"
+    if eq_f <= 0:
+        return "N/A"
+    return f"{(cvar_f / eq_f) * 100:.1f}%"
+
+
 def _json_script(value):
     """Serialize data for an inline script without permitting ``</script>``."""
     return (
@@ -252,10 +281,10 @@ def holding_card(h):
     verdict_ai = ai_h.get("verdict", "—")
 
     vol_sym = vol_models.get(sym, {})
-    # compare_vol_models emits *_annual_pct (already in percent units) — convert
-    # to fractions so the existing :.1% format renders correctly.
-    garch_v = (vol_sym.get("garch_annual_pct", 0) or 0) / 100
-    ewma_v = (vol_sym.get("ewma_annual_pct", 0) or 0) / 100
+    # compare_vol_models emits *_annual_pct in percent units, or None when GARCH
+    # was not estimated (`arch` missing). Never coerce None to 0.0%.
+    garch_display = _optional_pct(vol_sym.get("garch_annual_pct"))
+    ewma_display = _optional_pct(vol_sym.get("ewma_annual_pct"))
 
     exp_sym = explanations.get(sym, {})
     headline = exp_sym.get("headline", "") if isinstance(exp_sym, dict) else ""
@@ -294,7 +323,7 @@ def holding_card(h):
       </div>
       {pct_bar(curr_pct, 30)}
       <div class="hc-section-title" style="margin-top:10px">Volatility</div>
-      <div style="font-size:11px;color:#aaa">GARCH {garch_v:.1%} &nbsp;|&nbsp; EWMA {ewma_v:.1%} annualised</div>
+      <div style="font-size:11px;color:#aaa">GARCH {garch_display} &nbsp;|&nbsp; EWMA {ewma_display} annualised</div>
     </div>
     <div class="hc-col">
       <div class="hc-section-title">Snowflake Scores</div>
@@ -605,17 +634,16 @@ for rd in regimes_list:
 vol_rows = ""
 for sym in kelly_syms:
     vd = vol_models.get(sym, {})
-    # *_annual_pct keys are percent units; convert to fractions for :.1% format
-    gv = (vd.get("garch_annual_pct", 0) or 0) / 100
-    ev = (vd.get("ewma_annual_pct", 0) or 0) / 100
+    gv = vd.get("garch_annual_pct")
+    ev = vd.get("ewma_annual_pct")
     diff_str = ""
-    if gv and ev:
-        diff = (gv - ev) / ev * 100 if ev else 0
+    if isinstance(gv, (int, float)) and isinstance(ev, (int, float)) and ev:
+        diff = (gv - ev) / ev * 100
         diff_str = f"{'↑' if diff > 0 else '↓'} {abs(diff):.0f}%"
     vol_rows += f"""<tr>
       <td>{_html(sym)}</td>
-      <td style="color:#00d4ff">{gv:.1%}</td>
-      <td style="color:#f0b429">{ev:.1%}</td>
+      <td style="color:#00d4ff">{_optional_pct(gv)}</td>
+      <td style="color:#f0b429">{_optional_pct(ev)}</td>
       <td style="color:#888;font-size:11px">{diff_str}</td>
     </tr>"""
 
@@ -710,7 +738,7 @@ port_verdict = ai.get("portfolio_verdict", "")
 mkt_ctx = ai.get("market_context", "")
 
 var95_pct = monte.get("var_95_pct", 0)
-cvar95_pct = monte.get("cvar_95_pct", 0)
+cvar95_display = _cvar_95_display(monte, monte.get("current_equity") or total or portfolio_equity)
 prob_profit = monte.get("prob_profit_pct", 0)
 mc_median = monte.get("median", 0)
 
@@ -876,7 +904,7 @@ html = f"""<!DOCTYPE html>
     </div>
     <div class="stat-card">
       <div class="sl">CVaR 95%</div>
-      <div class="sv" style="color:#f0b429">{cvar95_pct:.1f}%</div>
+      <div class="sv" style="color:#f0b429">{cvar95_display}</div>
     </div>
     <div class="stat-card">
       <div class="sl">Prob Profit</div>

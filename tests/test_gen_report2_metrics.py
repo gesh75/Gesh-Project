@@ -1,0 +1,159 @@
+"""Report metrics must not fabricate a confident zero.
+
+CVaR 95% is produced as dollars (`cvar_95`); nothing writes `cvar_95_pct`.
+GARCH is correctly `None` when `arch` is missing. The renderer used to coerce
+both to 0.0% — a number that looks measured. These tests lock the honest
+render: derive CVaR %, and print N/A when GARCH was not estimated.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _holding() -> dict:
+    return {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "quantity": 1.0,
+        "equity": 100.0,
+        "average_buy_price": 90.0,
+        "percent_change": 5.0,
+    }
+
+
+def _render(tmp_path: Path, engine: dict) -> str:
+    source = tmp_path / "engine_results.json"
+    output = tmp_path / "report.html"
+    source.write_text(json.dumps(engine))
+    env = os.environ.copy()
+    env.update(GESH_ENGINE_RESULTS=str(source), GESH_REPORT_OUTPUT=str(output))
+    proc = subprocess.run(
+        [sys.executable, "gen_report2.py"],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return output.read_text()
+
+
+def test_cvar_card_derives_percent_from_dollars_when_pct_key_absent(tmp_path):
+    # Measured 2026-08-21 book: $1,608.63 / $34,799.63 = 4.62% → rendered .1f.
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {
+                "total": 34799.63,
+                "cash": 1313.45,
+                "portfolio_equity": 34799.63,
+            },
+            "monte_carlo": {
+                "cvar_95": 1608.63,
+                "current_equity": 34799.63,
+                "var_95_pct": 2.84,
+                "median": 35000,
+                "prob_profit_pct": 55,
+                "buckets": [],
+            },
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    assert "CVaR 95%" in report
+    assert ">0.0%</div>" not in report.split("CVaR 95%", 1)[1][:200]
+    assert "4.6%" in report.split("CVaR 95%", 1)[1][:200]
+
+
+def test_cvar_card_renders_na_when_neither_dollars_nor_pct_exist(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 1000, "portfolio_equity": 0},
+            "monte_carlo": {
+                "var_95_pct": 2.8,
+                "median": 1000,
+                "prob_profit_pct": 50,
+                "buckets": [],
+            },
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    cvar_block = report.split("CVaR 95%", 1)[1][:200]
+    assert "N/A" in cvar_block
+    assert "0.0%" not in cvar_block
+
+
+def test_holding_card_prints_na_for_none_garch(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "monte_carlo": {
+                "cvar_95": 10.0,
+                "current_equity": 1000,
+                "var_95_pct": 2.0,
+                "median": 1000,
+                "prob_profit_pct": 50,
+                "buckets": [],
+            },
+            "vol_models": {
+                "NVDA": {
+                    "garch_annual_pct": None,
+                    "ewma_annual_pct": 31.2,
+                    "estimator": "ewma:no_arch",
+                }
+            },
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    assert "GARCH 0.0%" not in report
+    assert "GARCH N/A" in report
+    assert "31.2%" in report
+
+
+def test_vol_table_prints_na_for_none_garch(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "monte_carlo": {
+                "cvar_95": 10.0,
+                "current_equity": 1000,
+                "var_95_pct": 2.0,
+                "median": 1000,
+                "prob_profit_pct": 50,
+                "buckets": [],
+            },
+            "vol_models": {"NVDA": {"garch_annual_pct": None, "ewma_annual_pct": 40.0}},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    # Table cell, not the holding-card line.
+    assert ">N/A</td>" in report
+    assert "GARCH 0.0%" not in report

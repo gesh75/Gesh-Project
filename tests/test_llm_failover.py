@@ -9,6 +9,7 @@ needs to know a different vendor answered.
 from __future__ import annotations
 
 import json
+import sys
 
 import anthropic
 import pytest
@@ -108,9 +109,7 @@ def test_coerce_fills_missing_required_keys_with_typed_blanks():
 
 
 def test_coerce_recurses_into_array_items():
-    out = llm_failover.coerce_to_schema(
-        {"holdings_analysis": [{"symbol": "NVDA"}]}, _SCHEMA
-    )
+    out = llm_failover.coerce_to_schema({"holdings_analysis": [{"symbol": "NVDA"}]}, _SCHEMA)
     assert out["holdings_analysis"][0] == {"symbol": "NVDA", "verdict": ""}
 
 
@@ -124,8 +123,10 @@ def test_coerce_casts_numeric_strings_to_int():
 
 def test_failover_message_satisfies_extract_tool_input():
     msg = llm_failover.FailoverMessage(
-        provider="grok", model="grok-build",
-        tool_name="return_portfolio_analysis", payload={"portfolio_score": 71},
+        provider="grok",
+        model="grok-build",
+        tool_name="return_portfolio_analysis",
+        payload={"portfolio_score": 71},
     )
     got = llm_contracts.extract_tool_input(
         msg, expected_tool="return_portfolio_analysis", operation="t"
@@ -150,14 +151,15 @@ def test_gateway_fails_over_when_anthropic_unreachable(monkeypatch, tmp_path):
     _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))
 
     gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
-    msg = gw.stream(operation="deep_analyze_portfolio", model="claude-sonnet-4-6",
-                    max_tokens=1000, **_kwargs())
+    msg = gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **_kwargs()
+    )
 
     out = llm_contracts.extract_tool_input(
         msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
     )
     assert out["portfolio_score"] == 64
-    assert out["risk_score"] == 0          # coerced, not missing
+    assert out["risk_score"] == 0  # coerced, not missing
     assert llm_failover.FAILOVER_COUNT == 1
 
 
@@ -168,8 +170,12 @@ def test_gateway_failover_is_disabled_by_empty_env(monkeypatch, tmp_path):
 
     gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
     with pytest.raises(llm_gateway.LLMUnavailableError):
-        gw.stream(operation="deep_analyze_portfolio", model="claude-sonnet-4-6",
-                  max_tokens=1000, **_kwargs())
+        gw.stream(
+            operation="deep_analyze_portfolio",
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
+            **_kwargs(),
+        )
 
 
 def test_original_error_is_reraised_when_all_providers_fail(monkeypatch, tmp_path):
@@ -178,8 +184,12 @@ def test_original_error_is_reraised_when_all_providers_fail(monkeypatch, tmp_pat
 
     gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
     with pytest.raises(llm_gateway.LLMUnavailableError):
-        gw.stream(operation="deep_analyze_portfolio", model="claude-sonnet-4-6",
-                  max_tokens=1000, **_kwargs())
+        gw.stream(
+            operation="deep_analyze_portfolio",
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
+            **_kwargs(),
+        )
 
 
 def test_refusal_is_not_laundered_through_a_fallback():
@@ -206,8 +216,8 @@ def test_build_prompt_embeds_schema_and_forbids_tools():
     tool_name, prompt, schema = llm_failover.build_prompt(_kwargs())
     assert tool_name == "return_portfolio_analysis"
     assert schema["properties"]["portfolio_score"]["type"] == "integer"
-    assert "You are an analyst." in prompt      # system prompt carried over
-    assert "Analyze this book." in prompt       # user content carried over
+    assert "You are an analyst." in prompt  # system prompt carried over
+    assert "Analyze this book." in prompt  # user content carried over
     assert "RAW JSON only" in prompt
     assert "Do not use any tools" in prompt
 
@@ -250,7 +260,7 @@ def test_grok_command_pins_a_single_turn_completion(monkeypatch):
     rules = cmd[cmd.index("--rules") + 1].lower()
     assert "do not call any tool" in rules
     assert "memory system" in rules
-    assert seen["check"] is False        # non-zero exit is translated, not raised
+    assert seen["check"] is False  # non-zero exit is translated, not raised
     assert llm_failover.extract_json_object(out) == {"ok": 1}
 
 
@@ -379,9 +389,7 @@ def test_unconfigured_is_a_failover_trigger_but_its_parent_is_not():
     assert llm_gateway.LLMProviderUnconfiguredError in llm_gateway._FAILOVER_TRIGGERS
     assert llm_gateway.LLMConfigurationError not in llm_gateway._FAILOVER_TRIGGERS
     # ...and the subclass relationship keeps every existing handler working.
-    assert issubclass(
-        llm_gateway.LLMProviderUnconfiguredError, llm_gateway.LLMConfigurationError
-    )
+    assert issubclass(llm_gateway.LLMProviderUnconfiguredError, llm_gateway.LLMConfigurationError)
 
 
 def test_malformed_setting_still_fails_loudly(monkeypatch):
@@ -394,3 +402,62 @@ def test_malformed_setting_still_fails_loudly(monkeypatch):
     with pytest.raises(llm_gateway.LLMConfigurationError):
         llm_gateway.create_client()
     assert calls == [], "a malformed setting must never reach a fallback provider"
+
+
+# ── Gemini adapter (P0-5, 2026-08-21 audit) ───────────────────────────────────
+#
+# llm_failover.call_gemini pinned gemini-2.5-pro, which 404s for new API users.
+# Combined with the scheduled-PATH bug that hid Grok, the chain lost step 3/5
+# on 2026-08-20. Default to a live Flash id and retry on 404 like call_grok
+# already retries a retired model pin.
+
+
+def test_call_gemini_defaults_to_flash_not_retired_pro(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk-test")
+    monkeypatch.delenv("GESH_GEMINI_FAILOVER_MODEL", raising=False)
+    seen: list[str] = []
+
+    class _Agent:
+        @staticmethod
+        def _generate(prompt, model=""):
+            seen.append(model)
+            return '{"ok": true}'
+
+    monkeypatch.setitem(sys.modules, "gemini_agent", _Agent)
+    assert llm_failover.call_gemini("hi") == '{"ok": true}'
+    assert seen == ["gemini-2.5-flash"]
+
+
+def test_call_gemini_model_is_env_overridable(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk-test")
+    monkeypatch.setenv("GESH_GEMINI_FAILOVER_MODEL", "gemini-2.0-flash-lite")
+    seen: list[str] = []
+
+    class _Agent:
+        @staticmethod
+        def _generate(prompt, model=""):
+            seen.append(model)
+            return "ok"
+
+    monkeypatch.setitem(sys.modules, "gemini_agent", _Agent)
+    llm_failover.call_gemini("hi")
+    assert seen == ["gemini-2.0-flash-lite"]
+
+
+def test_call_gemini_retries_fallback_when_pinned_model_404s(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk-test")
+    monkeypatch.setenv("GESH_GEMINI_FAILOVER_MODEL", "gemini-2.5-pro")
+    monkeypatch.delenv("GESH_GEMINI_FAILOVER_FALLBACK", raising=False)
+    seen: list[str] = []
+
+    class _Agent:
+        @staticmethod
+        def _generate(prompt, model=""):
+            seen.append(model)
+            if model == "gemini-2.5-pro":
+                raise RuntimeError("404 NOT_FOUND no longer available to new users")
+            return '{"ok": true}'
+
+    monkeypatch.setitem(sys.modules, "gemini_agent", _Agent)
+    assert llm_failover.call_gemini("hi") == '{"ok": true}'
+    assert seen == ["gemini-2.5-pro", "gemini-2.0-flash-lite"]

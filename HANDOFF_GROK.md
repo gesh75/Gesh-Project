@@ -1,9 +1,17 @@
 # HANDOFF → Grok: gesh-project (GESH Financial — THE PRODUCT, port 9000)
 
-> **Regenerated 2026-08-21 (evening), replacing the morning draft**, which was already wrong on
-> five points — including claiming a React/Next.js frontend that does not exist. Every fact below
-> was verified by running the command.
-> **Authority order: live code > `CLAUDE.md` > `docs/` > this file.**
+> **Takeover 2026-08-22 (Grok).** This file was written 2026-08-21 19:58 and already stale
+> by 20:20; §0a below corrected that once. **Re-derive git state — never trust a table here.**
+>
+> **Authority order: live code > `CLAUDE.md` > `GAPS_AND_IMPROVEMENTS_2026-08-21.md` > this file.**
+>
+> **Done since this file was written:** PATH fix for Grok CLI (`8da2dca`);
+> `LLMProviderUnconfiguredError` committed (`263472f`); CVaR/GARCH no longer render as 0.0%;
+> Gemini failover defaults to `gemini-2.5-flash` and retries on 404; CONFIDENCE_FLOOR reads
+> conviction; chain scripts configure logging; `:9000` launcher no longer `source activate`;
+> trading-repo PRs now run pytest. **Still owner-only:** rotate `ROBINHOOD_PASS` (P0-1).
+>
+> Branch from `origin/main`, never local `main` (still ~184 behind). No React/Next.js.
 
 ---
 
@@ -27,7 +35,7 @@ and the list below disagree, **the list below wins.**
 | This doc says | Verified reality |
 |---|---|
 | §0/§3: "C1 deadline — two tracked files are currently 0 bytes" | **Already resolved**, one minute after this doc was written. `Gesh_Architecture_Diagram.html` is 44,296 B and `gesh_financial_learning_path.html` is 17,603 B. The only 0-byte tracked files are legitimate package `__init__.py` markers. Ignore §3's warning block. |
-| §"live defect C2": "`llm_gateway.py:147` raises `LLMConfigurationError`, no failover" | **Fix is written** — `LLMProviderUnconfiguredError` is defined at `:53`, raised at `:167`, and included in `_FAILOVER_TRIGGERS` at `:647`. The line refs `:147`/`:618-624` are stale. But it is **staged, not committed** — that is still tonight's #1 item. Commit path-limited (rule #30). |
+| §"live defect C2": "`llm_gateway.py:147` raises `LLMConfigurationError`, no failover" | **Committed** as `263472f`. `LLMProviderUnconfiguredError` is in `_FAILOVER_TRIGGERS`. |
 | §2: "3 commits exist only on local `main` — on no remote" | **They are pushed.** All three (`383cf92`, `bfd23f0`, `40e7195`) are on `origin/rescue/track-record-scope-hardening-20260808`. |
 | §2: "`copilot-worktrees/gesh-project` is a git worktree of this repo" | **Does not exist.** `~/Projects/copilot-worktrees/` is empty. The real second worktree is `~/Projects/.worktrees/gesh-track-record-scope-hardening`. |
 | §2: "Two prunable worktrees" | Neither is prunable. The `prunable` marker only appears when `git worktree list` runs from the sandbox, where host paths can't be stat'd — a sandbox artifact mistaken for a fact. |

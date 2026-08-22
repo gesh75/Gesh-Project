@@ -4,11 +4,19 @@ run_ai2.py — Call Claude deep_analyze_portfolio on fresh engine results.
 Appends ai_result back to engine_results.json.
 """
 import json
+import logging
 import os
 import sys
 import time
 import traceback
 from pathlib import Path
+
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stderr,
+    )
 
 T0 = time.time()
 

@@ -49,6 +49,11 @@ _DEFAULT_ORDER: Final[str] = "grok,gemini"
 _GROK_MODEL: Final[str] = os.getenv("GESH_GROK_MODEL", "grok-4.6")
 _GROK_TIMEOUT_S: Final[float] = float(os.getenv("GESH_GROK_TIMEOUT_S", "900"))
 _GROK_MAX_TURNS: Final[str] = os.getenv("GESH_GROK_MAX_TURNS", "4")
+# gemini-2.5-pro 404s for new API users ("no longer available"). Flash is the
+# live default; the id is env-overridable and a 404 degrades to the lite model
+# the same way a retired Grok pin degrades to the CLI default.
+_GEMINI_FAILOVER_DEFAULT: Final[str] = "gemini-2.5-flash"
+_GEMINI_FAILOVER_FALLBACK_DEFAULT: Final[str] = "gemini-2.0-flash-lite"
 
 # The Grok CLI loads the user's global agent rules, which on this host instruct it
 # to open a memory MCP session before answering ("I'll load OMEGA context first…").
@@ -332,7 +337,10 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
         # xAI rotates model ids (grok-build -> grok-4.6 broke this once already).
         # A pinned-but-retired id must degrade to the CLI's own default rather
         # than take down the fallback that exists precisely to survive outages.
-        if proc.returncode != 0 and "unknown model id" in (proc.stderr or proc.stdout or "").lower():
+        if (
+            proc.returncode != 0
+            and "unknown model id" in (proc.stderr or proc.stdout or "").lower()
+        ):
             logger.warning(
                 "LLM_FAILOVER: grok model %r rejected as unknown — retrying on the CLI default. "
                 "Set GESH_GROK_MODEL to a current id from `grok models`.",
@@ -363,6 +371,19 @@ def gemini_available() -> bool:
     return bool(os.getenv("GEMINI_API_KEY"))
 
 
+def _gemini_failover_model() -> str:
+    return os.getenv("GESH_GEMINI_FAILOVER_MODEL") or _GEMINI_FAILOVER_DEFAULT
+
+
+def _gemini_failover_fallback() -> str:
+    return os.getenv("GESH_GEMINI_FAILOVER_FALLBACK") or _GEMINI_FAILOVER_FALLBACK_DEFAULT
+
+
+def _is_missing_gemini_model(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "404" in text or "not_found" in text or "no longer available" in text
+
+
 def call_gemini(prompt: str) -> str:
     if not gemini_available():
         raise FailoverUnavailable("GEMINI_API_KEY unset")
@@ -370,10 +391,35 @@ def call_gemini(prompt: str) -> str:
         import gemini_agent
     except Exception as exc:  # pragma: no cover - import guard
         raise FailoverUnavailable(f"gemini_agent unavailable: {exc}") from exc
-    text = gemini_agent._generate(prompt, model="gemini-2.5-pro")
-    if not isinstance(text, str) or not text.strip():
-        raise FailoverUnavailable("gemini returned empty text")
-    return text
+
+    models = [_gemini_failover_model()]
+    fallback = _gemini_failover_fallback()
+    if fallback not in models:
+        models.append(fallback)
+
+    last_exc: BaseException | None = None
+    for model in models:
+        try:
+            text = gemini_agent._generate(prompt, model=model)
+        except Exception as exc:
+            last_exc = exc
+            if (
+                _is_missing_gemini_model(exc)
+                or "429" in str(exc)
+                or "RESOURCE_EXHAUSTED" in str(exc)
+            ):
+                logger.warning(
+                    "LLM_FAILOVER: gemini model %r failed (%s) — retrying fallback. "
+                    "Set GESH_GEMINI_FAILOVER_MODEL to a current id.",
+                    model,
+                    exc,
+                )
+                continue
+            raise FailoverUnavailable(f"gemini failed: {exc}") from exc
+        if isinstance(text, str) and text.strip():
+            return text
+        last_exc = FailoverUnavailable("gemini returned empty text")
+    raise FailoverUnavailable(f"gemini failed: {last_exc}")
 
 
 _PROVIDERS: Final[dict[str, tuple[Any, Any]]] = {

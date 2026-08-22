@@ -91,10 +91,20 @@ HOLDINGS = [
 ]
 TOTAL_EQ = 10_000.0
 ORDERS = [
-    {"symbol": "NVDA", "action": "BUY", "shares": 5, "current_price": 100.0,
-     "signal_reason": "Kelly ADD: now 20.0% vs optimal 25.0%"},
-    {"symbol": "MU", "action": "TRIM", "shares": 10, "current_price": 50.0,
-     "signal_reason": "Kelly TRIM: now 15.0% vs optimal 10.0%"},
+    {
+        "symbol": "NVDA",
+        "action": "BUY",
+        "shares": 5,
+        "current_price": 100.0,
+        "signal_reason": "Kelly ADD: now 20.0% vs optimal 25.0%",
+    },
+    {
+        "symbol": "MU",
+        "action": "TRIM",
+        "shares": 10,
+        "current_price": 50.0,
+        "signal_reason": "Kelly TRIM: now 15.0% vs optimal 10.0%",
+    },
 ]
 CONFIDENCE = {"NVDA": 0.89, "MU": 0.78}
 
@@ -113,8 +123,13 @@ def _run(gate_mod, verdicts: dict | None = None, orders=ORDERS, conf=CONFIDENCE)
         gate_evaluate=_make_gate(events, verdicts or {}),
         recorder=_make_recorder(events, rec_calls),
     )
-    return SimpleNamespace(events=events, intents=intents, rec_calls=rec_calls,
-                           gate_results=gate_results, created=created)
+    return SimpleNamespace(
+        events=events,
+        intents=intents,
+        rec_calls=rec_calls,
+        gate_results=gate_results,
+        created=created,
+    )
 
 
 # ── (a) causal order: intent → decision → record ──────────────────────────────
@@ -222,10 +237,27 @@ def test_each_symbol_uses_its_own_provider_quote_timestamp(gate_mod):
 # ── real confidence derivation: consensus first, kelly win_rate fallback ──────
 def test_build_confidence_map_uses_real_signals(gate_mod):
     consensus = {"NVDA": {"confidence": 89.0}}
-    kelly = {"NVDA": {"win_rate": 53.5}, "MU": {"win_rate": 54.5},
-             "OVER": {"win_rate": 250.0}}
+    kelly = {"NVDA": {"win_rate": 53.5}, "MU": {"win_rate": 54.5}, "OVER": {"win_rate": 250.0}}
     conf = gate_mod.build_confidence_map(consensus, kelly)
-    assert conf["NVDA"] == pytest.approx(0.89)   # consensus beats kelly
-    assert conf["MU"] == pytest.approx(0.545)    # kelly win_rate fallback
-    assert conf["OVER"] == 1.0                   # clamped to [0, 1]
-    assert conf.get("MISSING", 0.0) == 0.0       # absent → fail-closed
+    assert conf["NVDA"] == pytest.approx(0.89)  # consensus beats kelly
+    assert conf["MU"] == pytest.approx(0.545)  # kelly win_rate fallback
+    assert conf["OVER"] == 1.0  # clamped to [0, 1]
+    assert conf.get("MISSING", 0.0) == 0.0  # absent → fail-closed
+
+
+def test_build_confidence_map_prefers_conviction_over_coverage(gate_mod):
+    """`confidence` is data coverage, not call strength (consensus.py:652).
+
+    A HOLD with 8/9 nodes online scores 0.89 coverage and still clears
+    MIN_CONFIDENCE=0.75. Conviction is the strength of the vote.
+    """
+    consensus = {"NVDA": {"confidence": 89.0, "conviction": 43.0}}
+    conf = gate_mod.build_confidence_map(consensus, {"NVDA": {"win_rate": 53.5}})
+    assert conf["NVDA"] == pytest.approx(0.43)
+    assert conf["NVDA"] < 0.75
+
+
+def test_build_confidence_map_falls_back_to_coverage_without_conviction(gate_mod):
+    consensus = {"MU": {"confidence": 80.0}}
+    conf = gate_mod.build_confidence_map(consensus, {})
+    assert conf["MU"] == pytest.approx(0.80)
