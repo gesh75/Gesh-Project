@@ -141,9 +141,9 @@ def test_enrich_is_additive_and_never_mutates_base_report():
     snapshot = dict(report)
     out = T.enrich(report, _holdings(), loader=lambda s, p: [], today=TODAY)
     assert report == snapshot, "input report must not be mutated"
-    assert out["total_harvestable_loss_usd"] == 0.0
-    assert out["summary"] == snapshot["summary"]
     assert out is not report
+    for k, v in snapshot.items():
+        assert out[k] == v, f"enrich() must not change pre-existing key {k!r}"
 
 
 def test_lot_coverage_reports_a_ratio_not_a_bare_count():

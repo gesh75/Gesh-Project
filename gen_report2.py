@@ -644,10 +644,11 @@ if tax_cands:
         loss = tc.get("unrealized_loss", 0) if isinstance(tc, dict) else 0
         tax_html += f'<div class="tax-item"><span>{_html(sym)}</span><span style="color:#ff7c3a">${loss:,.0f} harvestable</span></div>'
 else:
-    # NOT "all positions profitable" — that was a fabricated claim. An empty
-    # candidate list means no loss cleared MIN_LOSS_USD ($500), which is a very
-    # different statement from "nothing is underwater" (rule #60). Report the
-    # threshold, and the count of losing positions when the lot layer knows it.
+    # NOT a claim that the book is in profit — that was a fabricated claim.
+    # An empty candidate list means no loss cleared MIN_LOSS_USD ($500), which
+    # is a very different statement from "nothing is underwater" (rule #60).
+    # Report the threshold, and the count of losing positions when the lot
+    # layer knows it.
     _lot_views = tax_report.get("lots_by_symbol") or {}
     _losing = len(_lot_views)
     _detail = (f" {_losing} position(s) are at a loss but below the threshold."
@@ -662,7 +663,7 @@ if _wash_warn:
     tax_html += ('<div style="margin-top:10px;padding:8px;border-left:3px solid #f0b429;'
                  'background:#1a1508"><div style="color:#f0b429;font-weight:600;'
                  'margin-bottom:4px">⚠ Wash-sale exposure from recent purchases</div>')
-    for _w in _wash_warn[:8]:
+    for _w in _wash_warn:
         tax_html += (f'<div class="tax-item"><span>{_html(_w["ticker"])}</span>'
                      f'<span style="color:#f0b429">bought {int(_w["bought_days_ago"])}d ago '
                      f'· safe in {int(_w["days_until_safe"])}d</span></div>')
