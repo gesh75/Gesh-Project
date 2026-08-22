@@ -109,7 +109,13 @@ ORDERS = [
 CONFIDENCE = {"NVDA": 0.89, "MU": 0.78}
 
 
-def _run(gate_mod, verdicts: dict | None = None, orders=ORDERS, conf=CONFIDENCE):
+def _run(
+    gate_mod,
+    verdicts: dict | None = None,
+    orders=ORDERS,
+    conf=CONFIDENCE,
+    **gate_kw,
+):
     events: list = []
     intents: list = []
     rec_calls: list = []
@@ -122,6 +128,7 @@ def _run(gate_mod, verdicts: dict | None = None, orders=ORDERS, conf=CONFIDENCE)
         intent_builder=_make_intent_builder(events, intents),
         gate_evaluate=_make_gate(events, verdicts or {}),
         recorder=_make_recorder(events, rec_calls),
+        **gate_kw,
     )
     return SimpleNamespace(
         events=events,
@@ -245,19 +252,44 @@ def test_build_confidence_map_uses_real_signals(gate_mod):
     assert conf.get("MISSING", 0.0) == 0.0  # absent → fail-closed
 
 
-def test_build_confidence_map_prefers_conviction_over_coverage(gate_mod):
-    """`confidence` is data coverage, not call strength (consensus.py:652).
+def test_build_confidence_map_uses_coverage_not_conviction(gate_mod):
+    """CONFIDENCE_FLOOR is a data-coverage gate, not call strength.
 
-    A HOLD with 8/9 nodes online scores 0.89 coverage and still clears
-    MIN_CONFIDENCE=0.75. Conviction is the strength of the vote.
+    Putting conviction on intent.confidence would also reject TRIMs of
+    weak-vote names. Coverage 89 with conviction 43 must still clear 0.75.
     """
     consensus = {"NVDA": {"confidence": 89.0, "conviction": 43.0}}
     conf = gate_mod.build_confidence_map(consensus, {"NVDA": {"win_rate": 53.5}})
-    assert conf["NVDA"] == pytest.approx(0.43)
-    assert conf["NVDA"] < 0.75
+    assert conf["NVDA"] == pytest.approx(0.89)
+    assert conf["NVDA"] >= 0.75
 
 
-def test_build_confidence_map_falls_back_to_coverage_without_conviction(gate_mod):
-    consensus = {"MU": {"confidence": 80.0}}
+def test_build_confidence_map_conviction_zero_does_not_replace_coverage(gate_mod):
+    consensus = {"NVDA": {"confidence": 89.0, "conviction": 0.0}}
     conf = gate_mod.build_confidence_map(consensus, {})
-    assert conf["MU"] == pytest.approx(0.80)
+    assert conf["NVDA"] == pytest.approx(0.89)
+
+
+def test_buy_below_entry_floor_is_rejected_trim_is_not(gate_mod):
+    """Conviction belongs on the BUY-only entry floor, not CONFIDENCE_FLOOR.
+
+    NVDA raw_score 0.237 → conviction ~43, below min_entry_score 0.35.
+    Coverage stays 0.89 on the intent so a TRIM of the same book still clears
+    the 0.75 floor.
+    """
+    r = _run(
+        gate_mod,
+        raw_score_by_sym={"NVDA": 0.237, "MU": 0.237},
+        min_entry_score=0.35,
+    )
+    nvda_intent = next(i for i in r.intents if i.symbol == "NVDA")
+    mu_intent = next(i for i in r.intents if i.symbol == "MU")
+    assert nvda_intent.confidence == pytest.approx(0.89)
+    assert mu_intent.confidence == pytest.approx(0.78)
+    nvda = next(g for g in r.gate_results if g["symbol"] == "NVDA")
+    mu = next(g for g in r.gate_results if g["symbol"] == "MU")
+    assert nvda["approved"] is False
+    assert "entry floor" in (nvda["reason"] or "").lower()
+    assert mu["approved"] is True
+    assert ("record", "NVDA") not in r.events
+    assert ("record", "MU") in r.events

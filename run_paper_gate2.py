@@ -6,9 +6,10 @@ chain (trade_intents / risk_decisions / paper trades) that had been dead since
 the step was left to manual agent snippets.
 
 Causality contract (TASK F): intent → risk decision → (only if APPROVED)
-record/fill. Each intent carries the order's REAL confidence (consensus conviction, else
+record/fill. Each intent carries the order's REAL coverage confidence (consensus
 coverage, else Kelly win_rate; missing → 0.0, fail closed) and REAL post-trade
-target — never invented literals. One uuid threads intent → decision → paper record. A
+target — never invented literals. NEW BUYs also face the P2 entry-conviction
+floor on consensus raw_score; TRIM/SELL do not. One uuid threads intent → decision → paper record. A
 REJECTED intent leaves NO paper-trade record.
 
 Reads engine_results.json (must already contain kelly + regime + snapshot from
@@ -35,6 +36,8 @@ import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from gesh_core.trading.autopilot_core import entry_floor_blocks
 
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -92,26 +95,22 @@ def preflight_outcome(
 
 
 def build_confidence_map(consensus: dict, kelly: dict) -> dict[str, float]:
-    """Real per-symbol signal confidence in [0, 1].
+    """Data-coverage confidence in [0, 1] for CONFIDENCE_FLOOR.
 
-    Conviction (call strength) wins. ``confidence`` on a consensus payload is
-    data coverage — share of nodes with live data, not the strength of the
-    call (see consensus.py) — and is only used when conviction is absent.
-    Kelly win_rate is the last fallback. Symbols absent from all three stay
-    absent — callers treat a miss as 0.0 (fail closed), never an invented number.
+    Consensus ``confidence`` is node coverage, not call strength
+    (consensus.py). It belongs on the floor that asks "do we have enough
+    live nodes?" Call strength is gated separately on NEW BUYs via
+    ``entry_floor_blocks`` / ``raw_score``. Putting conviction here would
+    also reject TRIMs of weak-vote names. Kelly win_rate is the fallback.
+    Symbols absent from both stay absent — miss → 0.0, fail closed.
     """
     conf: dict[str, float] = {}
     for sym, k in (kelly or {}).items():
         if isinstance(k, dict) and k.get('win_rate') is not None:
             conf[sym] = min(1.0, max(0.0, float(k['win_rate']) / 100.0))
     for sym, c in (consensus or {}).items():
-        if not isinstance(c, dict):
-            continue
-        raw = c.get('conviction')
-        if raw is None:
-            raw = c.get('confidence')
-        if raw is not None:
-            conf[sym] = min(1.0, max(0.0, float(raw) / 100.0))
+        if isinstance(c, dict) and c.get('confidence') is not None:
+            conf[sym] = min(1.0, max(0.0, float(c['confidence']) / 100.0))
     return conf
 
 
@@ -141,6 +140,8 @@ def gate_and_execute(
     scanner_source: str = 'daily-analysis',
     reviewer=None,
     review_blocks: bool = False,
+    raw_score_by_sym: Mapping[str, float] | None = None,
+    min_entry_score: float = 0.35,
 ) -> tuple[list[dict], list[dict]]:
     """Causal audit chain per order: intent → risk decision → record if APPROVED.
 
@@ -172,6 +173,27 @@ def gate_and_execute(
         )
         symbol_payload = dict(gate_payload)
         symbol_payload['as_of'] = (quote_as_of_by_symbol or {}).get(a['symbol'])
+        if raw_score_by_sym is not None and side == 'BUY':
+            try:
+                raw_score = float(raw_score_by_sym.get(a['symbol']))
+            except (TypeError, ValueError):
+                raw_score = 0.0
+            if entry_floor_blocks(side, raw_score, min_entry_score):
+                gate_results.append({
+                    'symbol':      a['symbol'],
+                    'action':      a['action'],
+                    'shares':      a['shares'],
+                    'approved':    False,
+                    'reason':      (
+                        f"entry floor: raw_score={raw_score:.2f} "
+                        f"< {min_entry_score:.2f}"
+                    ),
+                    'gates':       {'ENTRY_FLOOR': False},
+                    'intent_uuid': intent.intent_uuid,
+                    'confidence':  intent.confidence,
+                    'target_position_pct': intent.target_position_pct,
+                })
+                continue
         verdict = gate_evaluate(intent, symbol_payload)
         gate_results.append({
             'symbol':      a['symbol'],
@@ -354,10 +376,25 @@ def main(results_path: str | Path | None = None) -> int:
             'holdings':       holdings,
             'equity_summary': gate_eqs,
         }
+        consensus = eng.get('consensus') if isinstance(eng.get('consensus'), dict) else {}
         confidence_by_sym = build_confidence_map(
-            eng.get('consensus') if isinstance(eng.get('consensus'), dict) else {},
+            consensus,
             kelly if isinstance(kelly, dict) else {},
         )
+        raw_score_by_sym: dict[str, float] = {}
+        for _sym, _c in consensus.items():
+            if not isinstance(_c, dict):
+                continue
+            try:
+                raw_score_by_sym[_sym] = float(_c.get('raw_score', _c.get('score', 0)) or 0)
+            except (TypeError, ValueError):
+                raw_score_by_sym[_sym] = 0.0
+        min_entry_score = 0.35
+        try:
+            from trading.config import RiskConfig
+            min_entry_score = float(RiskConfig.from_env().min_entry_score)
+        except Exception:
+            pass
         # Stage 2 broker preflight — read-only simulation of each approved order.
         # Import is best-effort: a missing/broken module must not cost the chain
         # its paper session, so the reviewer simply stays None.
@@ -377,6 +414,8 @@ def main(results_path: str | Path | None = None) -> int:
             intent_builder=manual_intent,
             gate_evaluate=risk_gate_evaluate,
             recorder=run_paper_session,
+            raw_score_by_sym=raw_score_by_sym,
+            min_entry_score=min_entry_score,
             reviewer=_reviewer,
             review_blocks=_review_blocks,
         )

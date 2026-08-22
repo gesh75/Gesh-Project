@@ -26,6 +26,24 @@ def _optional_pct(value) -> str:
         return "N/A"
 
 
+def _finite_float(value):
+    """None if the value is missing or not a real number. 0.0 is kept (measured)."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN
+        return None
+    return v
+
+
+def _optional_usd(value) -> str:
+    n = _finite_float(value)
+    return "N/A" if n is None else f"${n:,.0f}"
+
+
 def _cvar_95_display(monte: dict, fallback_equity: float) -> str:
     """CVaR as a percent of equity. Derive it; never default a missing key to 0.0%."""
     raw = monte.get("cvar_95_pct") if isinstance(monte, dict) else None
@@ -577,11 +595,13 @@ buckets = monte.get("buckets", [])
 mc_labels = [b.get("label", "") for b in buckets]
 mc_data = [b.get("pct", 0) for b in buckets]
 mc_colors = []
-var95 = monte.get("var_95_pct", 0)
-curr_eq = monte.get("current_equity", total)
+var95 = _finite_float(monte.get("var_95_pct") if isinstance(monte, dict) else None)
+curr_eq = monte.get("current_equity", total) if isinstance(monte, dict) else total
 for b in buckets:
     center = b.get("center", 0)
-    if center < curr_eq * (1 - var95 / 100):
+    if var95 is None:
+        mc_colors.append("'#00d4ff'")
+    elif center < curr_eq * (1 - var95 / 100):
         mc_colors.append("'#ff3c5a'")
     elif center < curr_eq:
         mc_colors.append("'#f0b429'")
@@ -737,12 +757,20 @@ port_type = ai.get("portfolio_type", "")
 port_verdict = ai.get("portfolio_verdict", "")
 mkt_ctx = ai.get("market_context", "")
 
-var95_pct = monte.get("var_95_pct", 0)
+var95_pct = _finite_float(monte.get("var_95_pct") if isinstance(monte, dict) else None)
 cvar95_display = _cvar_95_display(monte, monte.get("current_equity") or total or portfolio_equity)
-prob_profit = monte.get("prob_profit_pct", 0)
-mc_median = monte.get("median", 0)
+prob_n = _finite_float(monte.get("prob_profit_pct") if isinstance(monte, dict) else None)
+prob_display = "N/A" if prob_n is None else f"{prob_n:.0f}%"
+mc_median_display = _optional_usd(monte.get("median") if isinstance(monte, dict) else None)
 
-var_col = "#ff3c5a" if var95_pct > 15 else "#f0b429" if var95_pct > 10 else "#00e87a"
+if var95_pct is None:
+    var_col, var_badge = "#888", "n/a"
+elif var95_pct > 15:
+    var_col, var_badge = "#ff3c5a", "⚠️ RED >15%"
+elif var95_pct > 10:
+    var_col, var_badge = "#f0b429", "✓ OK"
+else:
+    var_col, var_badge = "#00e87a", "✓ OK"
 cash_col = "#ff3c5a" if cash < 500 else "#00e87a"
 
 # ─── Full HTML ────────────────────────────────────────────────────────────────
@@ -899,8 +927,8 @@ html = f"""<!DOCTYPE html>
     </div>
     <div class="stat-card">
       <div class="sl">VaR 95% (21d)</div>
-      <div class="sv" style="color:{var_col}">{var95_pct:.1f}%</div>
-      <div style="font-size:9px;color:{var_col}">{"⚠️ RED >15%" if var95_pct > 15 else "✓ OK"}</div>
+      <div class="sv" style="color:{var_col}">{_optional_pct(var95_pct)}</div>
+      <div style="font-size:9px;color:{var_col}">{var_badge}</div>
     </div>
     <div class="stat-card">
       <div class="sl">CVaR 95%</div>
@@ -908,11 +936,11 @@ html = f"""<!DOCTYPE html>
     </div>
     <div class="stat-card">
       <div class="sl">Prob Profit</div>
-      <div class="sv" style="color:#00d4ff">{prob_profit:.0f}%</div>
+      <div class="sv" style="color:#00d4ff">{prob_display}</div>
     </div>
     <div class="stat-card">
       <div class="sl">MC Median (21d)</div>
-      <div class="sv" style="color:#00d4ff">${mc_median:,.0f}</div>
+      <div class="sv" style="color:#00d4ff">{mc_median_display}</div>
     </div>
     <div class="stat-card">
       <div class="sl">Cash / Buying Power</div>

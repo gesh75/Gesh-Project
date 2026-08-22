@@ -157,3 +157,30 @@ def test_vol_table_prints_na_for_none_garch(tmp_path):
     # Table cell, not the holding-card line.
     assert ">N/A</td>" in report
     assert "GARCH 0.0%" not in report
+
+
+def test_missing_monte_carlo_does_not_paint_var_as_ok_zero(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 1000, "portfolio_equity": 0},
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    var_block = report.split("VaR 95%", 1)[1][:280]
+    assert "N/A" in var_block
+    assert "✓ OK" not in var_block
+    assert "0.0%" not in var_block
+    cvar_block = report.split("CVaR 95%", 1)[1][:200]
+    assert "N/A" in cvar_block
+    prob_block = report.split("Prob Profit", 1)[1][:200]
+    assert "N/A" in prob_block
+    median_block = report.split("MC Median", 1)[1][:200]
+    assert "N/A" in median_block
+    assert "$0" not in median_block
