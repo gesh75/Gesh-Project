@@ -45,9 +45,9 @@ Stack: FastAPI + SQLite + yfinance + Anthropic (with Grok/Gemini failover).
 
 | | |
 |---|---|
-| Branch | **`feat/rh-mcp-data-layer`** — not `main`. **2 ahead of `origin/main`, 0 behind.** |
-| HEAD | `d63b352` — *feat: read-only Robinhood MCP data layer + broker preflight*, today |
-| Working tree | **dirty, 17 entries** — see §3, and note the 0-byte damage |
+| Branch | **`feat/rh-mcp-data-layer`** — not `main`. **PUSHED to origin 2026-08-21 evening; in sync.** 4 ahead of `origin/main`. |
+| HEAD | `263472f` — *LLM failover: fail over on absent ANTHROPIC_API_KEY* |
+| Working tree | 2 modified HTML hubs + 12 untracked (generated reports, a stray 0-byte `webhook` file). No source pending. |
 | Tests | **180** `tests/test_*.py` |
 | CI | `tests.yml` — PR triggers correctly in place, `ruff --isolated` whole-repo gate live |
 | gesh-core pin | `49312393…` (v0.8.1) — **the engine is on v0.8.0. Mismatch: audit C4.** |
@@ -70,9 +70,19 @@ Both are **tracked files currently truncated to 0 bytes** (628 and 259 lines del
 
 ### Also at risk
 
-- **3 commits exist only on local `main`** — unpushed, unmerged, on no remote and not on this
-  branch. `40e7195` is a real reliability fix to `_create_streaming` (mid-stream transport stalls),
-  `bfd23f0` a report fix. Cherry-pick them onto the branch or push `main` before anyone resets it.
+- **3 commits exist only on local `main`** — unpushed, unmerged, on no remote and not on this branch:
+  `40e7195`, `bfd23f0`, `383cf92`.
+  - **`40e7195` is SUPERSEDED — do not cherry-pick it.** Attempted 2026-08-21 and aborted on a
+    conflict, which turned out to be correct: it patches `_create_streaming` in `ai_analyzer.py`,
+    and that function **no longer exists there** (grep count 0) — the failover refactor moved LLM
+    calling into `llm_gateway.py`. Its intent (retry mid-stream transport stalls) is already
+    covered more thoroughly by `llm_gateway._is_retryable` (`:202`, called from the retry loop at
+    `:786`), which matches **nine** exception types including `httpx.ReadTimeout` and also unwraps
+    a wrapped `__cause__` — versus the stranded commit's three. Nothing to rescue.
+  - `bfd23f0` (report Symbol column + priority chip colours) and `383cf92` (plan docs) were **not**
+    assessed. Cherry-pick or discard on inspection.
+  - Either way, **`main` is 182 behind `origin/main`** — never `git reset --hard` it without
+    first deciding about these three.
 - **`stash@{0}` on main** — *"Scanner owner-only + margin panel"*. Security-relevant, still unapplied.
 - Two **prunable worktrees**, one holding work on `fix/audit-p0-p1-pr` that is on no branch you're on.
 
