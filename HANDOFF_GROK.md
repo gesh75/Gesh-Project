@@ -9,10 +9,47 @@
 
 ## 0. Read these first, in order
 
-1. **`../gesh-project-trading/GESH_CROSS_REPO_AUDIT_2026-08-21.md`** — 5 CRITICAL items spanning
-   both repos, verified. **C1 has a deadline: two tracked files are currently 0 bytes.**
-2. `GAPS_AND_IMPROVEMENTS_2026-08-04.md` — the living roadmap. The audit corrects two entries.
-3. `AGENTS.md`, then `CLAUDE.md`.
+1. **`GAPS_AND_IMPROVEMENTS_2026-08-21.md`** — the full four-pass audit run at the end of the
+   Max subscription. **Start here.** It supersedes both the 08-04 roadmap and the cross-repo
+   audit, and it lists what is verified *healthy* so you don't re-audit solid work.
+2. `AGENTS.md`, then `CLAUDE.md`.
+3. `../gesh-project-trading/GESH_CROSS_REPO_AUDIT_2026-08-21.md` — still useful, but see the
+   corrections immediately below before acting on it.
+
+---
+
+## 0a. ⚠️ VERIFIED CORRECTIONS — appended 2026-08-21 ~21:00, after a four-pass re-audit
+
+**This document was written at 19:58 and several of its lead items were already false by 20:20.**
+Each correction below was verified by running the command that would falsify it. Where this file
+and the list below disagree, **the list below wins.**
+
+| This doc says | Verified reality |
+|---|---|
+| §0/§3: "C1 deadline — two tracked files are currently 0 bytes" | **Already resolved**, one minute after this doc was written. `Gesh_Architecture_Diagram.html` is 44,296 B and `gesh_financial_learning_path.html` is 17,603 B. The only 0-byte tracked files are legitimate package `__init__.py` markers. Ignore §3's warning block. |
+| §"live defect C2": "`llm_gateway.py:147` raises `LLMConfigurationError`, no failover" | **Fix is written** — `LLMProviderUnconfiguredError` is defined at `:53`, raised at `:167`, and included in `_FAILOVER_TRIGGERS` at `:647`. The line refs `:147`/`:618-624` are stale. But it is **staged, not committed** — that is still tonight's #1 item. Commit path-limited (rule #30). |
+| §2: "3 commits exist only on local `main` — on no remote" | **They are pushed.** All three (`383cf92`, `bfd23f0`, `40e7195`) are on `origin/rescue/track-record-scope-hardening-20260808`. |
+| §2: "`copilot-worktrees/gesh-project` is a git worktree of this repo" | **Does not exist.** `~/Projects/copilot-worktrees/` is empty. The real second worktree is `~/Projects/.worktrees/gesh-track-record-scope-hardening`. |
+| §2: "Two prunable worktrees" | Neither is prunable. The `prunable` marker only appears when `git worktree list` runs from the sandbox, where host paths can't be stat'd — a sandbox artifact mistaken for a fact. |
+| §"scheduler": "`com.gesh.signal-alerts` + `weekly-digest` have never sent a message" | Both are bootstrapped with `StartInterval 1800`, and the installed plists are byte-identical to the repo copies. |
+| §: "Four stale root doc duplicates shadow `docs/`" | **Eight**: DEFECT_REGISTER, EXECUTIVE_AUDIT, FEATURE_MATRIX, FINANCIAL_ACCURACY_REVIEW, LAUNCH_CHECKLIST, NEXT_ACTIONS, PRODUCT_ROADMAP, SECURITY_REVIEW. |
+| §: "CLAUDE.md and AGENTS.md still pin the retired `grok-build`" | **Fixed** in commit `3b919f3`. `grok models` returns `grok-4.6` (default) and `grok-4.5`. No live file pins `grok-build`. |
+| §2 branch/HEAD/dirty-count table | **Stale on arrival.** HEAD moved twice during the audit and the dirty count went 34 → 25 → 17. Multiple live writers share this tree — **re-derive §2, never trust it.** |
+| `HANDOFF_GROK_SCHEDULER.md §3.3`: "the bare-echo silent failure is stale, the code has moved" | **Still open.** `run_daily_analysis.sh:171` is still `echo "direct MCP fetch failed…"`; `tg_alert` fires only after all tiers and all 4 retries fail. |
+
+**Two things this document does not mention that matter more than anything in it:**
+
+1. **The Grok failover could not fire from the scheduled chain.** `scripts/daily_analysis_et.sh:28`
+   overwrote `PATH` without `$HOME/.local/bin`, where the Grok CLI lives, so
+   `llm_failover.grok_available()` returned `False` in every scheduled run and the chain skipped
+   silently to Gemini. **Fixed and verified 2026-08-21.** Every earlier verification of the Grok
+   path was done interactively, where grok *is* on PATH — which is why it survived.
+2. **`gesh-project-trading` runs zero tests on pull requests** — 981 test functions, no pytest in
+   the required check. You will be committing there for a month. See P0-4 in the new gaps file.
+
+**Also note:** local `main` is **182 commits behind `origin/main`** — always branch from
+`origin/main`, never from local `main`. And there are **four** handoff docs in play that
+contradict each other; consolidate to one.
 
 ---
 
