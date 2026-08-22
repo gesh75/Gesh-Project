@@ -204,6 +204,10 @@ prompt += "\n" + cz_report["summary"]
 ## Continuous Improvement
 See the living `GAPS_AND_IMPROVEMENTS_2026-08-04.md` (current prioritized roadmap). Historical deep review: `GAPS_AND_IMPROVEMENTS_2026-07-09.md`. Update the living file after major milestones.
 
+Point-in-time cross-repo audit (both repos, last day of the Claude-subscription/Grok-handoff
+transition): `../gesh-project-trading/GESH_CROSS_REPO_AUDIT_2026-08-21.md` — supplements the
+living roadmap above and corrects two of its entries; does not replace it. Companion: `HANDOFF_GROK.md`.
+
 ## Agent harness model (Grok / Cursor)
 
 **GESH coding agent:** use **Grok 4.6** (CLI default) — fallback id `grok-4.5`. `grok-build` and

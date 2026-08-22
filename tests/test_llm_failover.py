@@ -303,3 +303,94 @@ def test_grok_surfaces_other_cli_failures(monkeypatch):
     monkeypatch.setattr(llm_failover.shutil, "which", lambda _: "/usr/bin/grok")
     with pytest.raises(llm_failover.FailoverUnavailable, match="not authenticated"):
         llm_failover.call_grok("x")
+
+
+# ── Absent-credentials failover (added 2026-08-21) ────────────────────────────
+#
+# The 18 tests above all run with ANTHROPIC_API_KEY set (see the _reset fixture) and
+# simulate Anthropic being *down*. None of them exercised Anthropic being *absent* —
+# which is the state the moment a subscription lapses, and the single most likely
+# trigger for the whole failover feature. It did not work: create_client raised
+# LLMConfigurationError, which was deliberately excluded from _FAILOVER_TRIGGERS, so
+# the daily chain died at step 3/5 instead of handing off.
+#
+# These three tests pin the corrected behaviour AND the distinction it rests on.
+
+
+def _fallback_ok(monkeypatch, calls: list):
+    """Route llm_failover.attempt() to a stub that records that it ran."""
+
+    def _attempt(*, operation, max_tokens, **kwargs):
+        calls.append(operation)
+        payload = llm_failover.coerce_to_schema(
+            {
+                "portfolio_score": 61,
+                "portfolio_verdict": "HOLD",
+                "risk_score": 44,
+                "holdings_analysis": [{"symbol": "SPY", "verdict": "HOLD"}],
+            },
+            _SCHEMA,
+        )
+        return llm_failover.FailoverMessage(
+            provider="grok",
+            model="grok-4.6",
+            tool_name="return_portfolio_analysis",
+            payload=payload,
+        )
+
+    monkeypatch.setattr(llm_failover, "enabled", lambda: True)
+    monkeypatch.setattr(llm_failover, "attempt", _attempt)
+
+
+def test_absent_api_key_fails_over_instead_of_killing_the_chain(monkeypatch):
+    """unset ANTHROPIC_API_KEY must hand off, not raise.
+
+    Regression guard: before 2026-08-21 this raised LLMConfigurationError straight
+    out of the gateway and took the daily chain with it.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    calls: list = []
+    _fallback_ok(monkeypatch, calls)
+
+    llm_gateway.reset_gateway()
+    gw = llm_gateway.Gateway(db_path=None)
+    result = gw._call(
+        mode="create",
+        operation="deep_analysis",
+        model="claude-sonnet-4-6",
+        max_tokens=4096,
+        **_kwargs(),
+    )
+
+    assert calls == ["deep_analysis"], "fallback provider was never reached"
+    payload = llm_contracts.extract_tool_input(
+        result, expected_tool="return_portfolio_analysis", operation="deep_analysis"
+    )
+    assert payload["portfolio_verdict"] == "HOLD"
+
+
+def test_unconfigured_is_a_failover_trigger_but_its_parent_is_not():
+    """The distinction is the whole point — pin it so neither side drifts.
+
+    Adding the parent LLMConfigurationError to the tuple would silently launder a
+    genuinely malformed setting (e.g. GESH_LLM_TIMEOUT_SECONDS="abc") through a
+    second vendor. Removing the subclass reopens the dead-chain bug above.
+    """
+    assert llm_gateway.LLMProviderUnconfiguredError in llm_gateway._FAILOVER_TRIGGERS
+    assert llm_gateway.LLMConfigurationError not in llm_gateway._FAILOVER_TRIGGERS
+    # ...and the subclass relationship keeps every existing handler working.
+    assert issubclass(
+        llm_gateway.LLMProviderUnconfiguredError, llm_gateway.LLMConfigurationError
+    )
+
+
+def test_malformed_setting_still_fails_loudly(monkeypatch):
+    """A real misconfiguration must NOT fail over — it must surface."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("GESH_LLM_TIMEOUT_SECONDS", "not-a-number")
+    calls: list = []
+    _fallback_ok(monkeypatch, calls)
+
+    with pytest.raises(llm_gateway.LLMConfigurationError):
+        llm_gateway.create_client()
+    assert calls == [], "a malformed setting must never reach a fallback provider"
