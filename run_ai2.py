@@ -187,7 +187,25 @@ try:
         print(f"[ai] WARNING: strict-tool grammar degraded x{_strict_degrades} — "
               f"schema exceeds the provider limit; shrink DEEP_ANALYSIS_SCHEMA to restore strict mode")
 
+    # Which vendor actually produced this analysis. A Grok/Gemini-driven run must
+    # never be readable as a Claude run: the report, the DB provenance column and
+    # engine_results.json all carry the real provider.
+    _ai_provider, _failovers = 'anthropic', 0
+    try:
+        import llm_failover as _lf  # noqa: E402 — imported by llm_gateway already
+        _failovers = int(getattr(_lf, 'FAILOVER_COUNT', 0) or 0)
+        if _failovers and isinstance(getattr(_lf, 'LAST_FAILOVER', None), dict):
+            _ai_provider = _lf.LAST_FAILOVER.get('provider') or 'unknown'
+    except Exception:
+        pass
+    if _failovers:
+        print(f"[ai] WARNING: ANTHROPIC UNAVAILABLE — this analysis was produced by "
+              f"'{_ai_provider}' via failover (x{_failovers}). Output was NOT "
+              f"grammar-constrained; schema coercion filled any omitted keys.")
+
     # Save back to engine_results.json
+    eng['ai_provider'] = _ai_provider
+    eng['ai_failover_count'] = _failovers
     eng['ai_strict_degraded'] = _strict_degrades
     eng['ai_result'] = ai_result
     eng['ai_result_ran_at'] = __import__('datetime').datetime.now(
@@ -229,6 +247,10 @@ try:
             from ai_analyzer import MODEL as _MODEL
         except Exception:
             _MODEL = 'claude-sonnet-4-6'
+        if _failovers:
+            # Recording the Claude model id for a Grok-authored run would make the
+            # analysis_runs provenance column silently wrong.
+            _MODEL = f"{_ai_provider} (FAILOVER, anthropic down)"
         _run_id = _gdb.log_analysis(f"{_MODEL} (chain)", payload, ai_result)
 
         # ── Decision Ledger (Phase 4B, non-fatal) ─────────────────────────────

@@ -20,6 +20,8 @@ from typing import Any, Callable, Final, Literal
 import anthropic
 import httpx
 
+import llm_failover
+
 ModelAlias = Literal["sonnet", "haiku"]
 MODEL_IDS: Final[dict[ModelAlias, str]] = {
     "sonnet": "claude-sonnet-4-6",
@@ -611,6 +613,17 @@ class _Ledger:
 # ── Gateway ───────────────────────────────────────────────────────────────────
 
 
+# Provider-level failures that justify handing the call to another vendor.
+# Deliberately excludes LLMRefusalError / LLMTruncatedError / LLMConfigurationError.
+_FAILOVER_TRIGGERS: Final[tuple[type[BaseException], ...]] = (
+    LLMUnavailableError,
+    LLMBudgetExceededError,
+    anthropic.APIStatusError,
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+)
+
+
 class Gateway:
     """Single entry point for Anthropic create/stream with spend accounting."""
 
@@ -694,6 +707,36 @@ class Gateway:
             return self._dispatch(mode=mode, model=model, max_tokens=max_tokens, **degraded)
 
     def _call(
+        self, *, mode: str, operation: str, model: str, max_tokens: int, **kwargs: Any
+    ) -> Any:
+        """Anthropic first; on a provider-level failure, hand off to a fallback.
+
+        Failover covers the cases where Claude is genuinely *unavailable* —
+        retries exhausted, auth/connection failure, daily budget spent. It does
+        NOT cover refusal or truncation: a refusal must not be laundered through
+        a second model, and a truncation is a schema-too-large bug that a silent
+        fallback would hide (see the max_tokens note in CLAUDE.md).
+        """
+        try:
+            return self._call_anthropic(
+                mode=mode, operation=operation, model=model, max_tokens=max_tokens, **kwargs
+            )
+        except _FAILOVER_TRIGGERS as exc:
+            if not llm_failover.enabled():
+                raise
+            try:
+                return llm_failover.attempt(
+                    operation=operation, max_tokens=max_tokens, **kwargs
+                )
+            except llm_failover.FailoverUnavailable as fexc:
+                logger.error(
+                    "LLM_FAILOVER: all fallback providers failed for operation=%s (%s)",
+                    operation,
+                    fexc,
+                )
+                raise exc from fexc
+
+    def _call_anthropic(
         self, *, mode: str, operation: str, model: str, max_tokens: int, **kwargs: Any
     ) -> Any:
         # Never persist prompt/message/tool bodies — kwargs stay in-memory only.
