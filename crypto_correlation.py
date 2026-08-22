@@ -150,6 +150,17 @@ def node_crypto_correlation(
 
 # ─── Portfolio-level risk summary ─────────────────────────────────────────────
 
+def _holding_equity(h: dict) -> float:
+    for key in ("equity", "market_value", "value", "marketValue"):
+        try:
+            v = float(h.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return 0.0
+
+
 def crypto_risk_summary(
     holdings: list[dict],
     lookback_days: int = DEFAULT_LOOKBACK,
@@ -157,10 +168,14 @@ def crypto_risk_summary(
     """
     Portfolio-level crypto correlation risk summary for dashboard injection.
 
+    avg_btc_corr is equity-weighted (GFD-026). Unweighted mean is still
+    returned as unweighted_avg_btc_corr so a concentration case is visible.
+
     Returns
     -------
     {
-        avg_btc_corr, max_btc_corr, highest_corr_symbol,
+        avg_btc_corr, unweighted_avg_btc_corr, weighting,
+        max_btc_corr, highest_corr_symbol,
         risk_label, correlations, summary_text
     }
     """
@@ -175,7 +190,18 @@ def crypto_risk_summary(
     if not btc_map:
         return {"summary_text": "Crypto correlation data unavailable.", "risk_label": "UNKNOWN"}
 
-    avg_btc = float(np.mean(list(btc_map.values())))
+    equity_by_sym = {h["symbol"]: _holding_equity(h) for h in holdings}
+    pairs = [(sym, corr, equity_by_sym.get(sym, 0.0)) for sym, corr in btc_map.items()]
+    values = np.array([p[1] for p in pairs], dtype=float)
+    weights = np.array([p[2] for p in pairs], dtype=float)
+    unweighted = float(np.mean(values))
+    if float(weights.sum()) > 0:
+        avg_btc = float(np.average(values, weights=weights))
+        weighting = "equity"
+    else:
+        avg_btc = unweighted
+        weighting = "equal-fallback"
+
     max_btc = max(btc_map.values())
     top_sym = max(btc_map, key=btc_map.__getitem__)
 
@@ -190,18 +216,20 @@ def crypto_risk_summary(
 
     summary = (
         f"Crypto-Equity Correlation ({lookback_days}d): "
-        f"avg BTC corr={avg_btc:+.2f} → {risk_label}. "
+        f"avg BTC corr={avg_btc:+.2f} (equity-weighted) → {risk_label}. "
         f"Highest: {top_sym} ({max_btc:+.2f})."
     )
 
     return {
-        "avg_btc_corr":          round(avg_btc, 3),
-        "max_btc_corr":          round(max_btc, 3),
-        "highest_corr_symbol":   top_sym,
-        "risk_label":            risk_label,
-        "correlations":          {sym: {"btc": btc_map.get(sym), "eth": eth_map.get(sym)} for sym in symbols},
-        "summary_text":          summary,
-        "detail_lines":          detail_lines,
+        "avg_btc_corr":              round(avg_btc, 3),
+        "unweighted_avg_btc_corr":   round(unweighted, 3),
+        "weighting":                 weighting,
+        "max_btc_corr":              round(max_btc, 3),
+        "highest_corr_symbol":       top_sym,
+        "risk_label":                risk_label,
+        "correlations":              {sym: {"btc": btc_map.get(sym), "eth": eth_map.get(sym)} for sym in symbols},
+        "summary_text":              summary,
+        "detail_lines":              detail_lines,
     }
 
 

@@ -1,6 +1,23 @@
 # GESH Financial — Gaps & Improvements (living)
 
-**Date:** 2026-08-04  
+**Date:** 2026-08-22 (code pass on `grok/gap-fixes-2026-08-22`)  
+**Supersedes priority list of:** `GAPS_AND_IMPROVEMENTS_2026-07-09.md` (keep for history)  
+**Scope:** `gesh-project` after GFD-008 / GFD-026 code fixes. See `docs/GFD_FIXES_2026-08-22.md`.
+
+## Code-closed this pass (not the legal/ops P0s)
+
+| ID | Status |
+|---|---|
+| GFD-008 | **Fixed in code.** Legacy paper TRIM/SELL now FIFO-close longs. `close_trade` is long-only P&L. Tests in `tests/test_paper_long_exit.py`. Historical inverted rows are not rewritten. |
+| GFD-026 | **Fixed in code.** `crypto_risk_summary` equity-weights BTC correlation. Tests in `tests/test_crypto_risk_weighted.py`. |
+| Android `local.properties` | Removed from VCS; gitignored. |
+| README drift | Python 3.12; 11 votable nodes; Jinja+Chart.js dashboard. |
+
+P0 remaining: attorney ToS/Privacy, autonomy tracker proof, silent Claude snapshot fallback, Sentry.
+
+---
+
+**Prior date:** 2026-08-04  
 **Supersedes priority list of:** `GAPS_AND_IMPROVEMENTS_2026-07-09.md` (keep for history)  
 **Scope:** `gesh-project` (:9000) after sync to `main` @ `a27d52e` (+80 commits since early Aug cloud snapshot).
 

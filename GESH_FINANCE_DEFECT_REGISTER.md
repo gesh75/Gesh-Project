@@ -3,6 +3,15 @@
 **Baseline:** `main` at `dc969264`, 2026-07-18. Open PRs are not fixes until merged and deployed.
 **Severity:** Critical blocks launch or risks material legal/financial/security harm; High can materially mislead, expose data, deny service or break a core workflow; Medium impairs reliability/maintainability; Low is contained polish/debt.
 
+## Status updates (2026-08-22)
+
+| ID | Update |
+|---|---|
+| GFD-008 | **Code-fixed** on `grok/gap-fixes-2026-08-22`. Legacy `paper_trading.py` TRIM/SELL FIFO-close open BUY/ADD lots. `close_trade` always uses long P&L. Historical inverted rows are not migrated. |
+| GFD-026 | **Code-fixed.** `crypto_risk_summary` equity-weights BTC correlation; unweighted mean still returned for contrast. |
+
+Original rows below are retained as audit evidence.
+
 ## Launch-blocking and high-priority defects
 
 | ID | Severity | Area | Defect and evidence | Impact | Required remediation / acceptance |
