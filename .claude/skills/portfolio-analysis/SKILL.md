@@ -1,7 +1,7 @@
 ---
 name: portfolio-analysis
 description: Deep AI portfolio analysis — snowflake scores, fair value, verdicts on holdings.
-model: grok-build
+model: grok-4.6
 ---
 
 # Skill: Portfolio Analysis (Deep AI)

@@ -1,7 +1,7 @@
 ---
 name: trade-signal-generator
 description: Multi-timeframe scanner pipeline — sector filter, consolidation zones, consensus, TradeIntent.
-model: grok-build
+model: grok-4.6
 ---
 
 # Trade Signal Generator Skill

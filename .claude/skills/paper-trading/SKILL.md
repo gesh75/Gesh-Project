@@ -1,7 +1,7 @@
 ---
 name: paper-trading
 description: Paper trading, risk gate, trade logging, and signal performance review.
-model: grok-build
+model: grok-4.6
 ---
 
 # Paper Trading & Execution Layer Skill

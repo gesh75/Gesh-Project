@@ -206,15 +206,19 @@ See the living `GAPS_AND_IMPROVEMENTS_2026-08-04.md` (current prioritized roadma
 
 ## Agent harness model (Grok / Cursor)
 
-**GESH coding agent:** use **Grok 4.5** — model id `grok-build` (alias `grok-4.5`). Do not use `grok-composer-2.5-fast` for analysis or implementation in this repo.
+**GESH coding agent:** use **Grok 4.6** (CLI default) — fallback id `grok-4.5`. `grok-build` and
+`grok-composer-2.5-fast` are RETIRED; the CLI rejects `grok-build` with `unknown model id`. Model
+ids rotate — verify with `grok models` before trusting any pinned id, including this one. (This
+correction landed 2026-08-21; see "Model Independence — 2026-08-21" below for the incident that
+surfaced it.)
 
 | Harness | How |
 |---------|-----|
-| Cursor | Model picker → **grok-build** or **grok-4.5** |
-| Grok CLI | `grok --agent gesh` or `grok -m grok-build` |
+| Cursor | Model picker → **grok-4.6** (default) or **grok-4.5** |
+| Grok CLI | `grok --agent gesh` or `grok -m grok-4.6` |
 | Project rules | `AGENTS.md`, `.grok/agents/gesh.md`, `.grok/rules/grok-model.md` |
 
-Analysis skills under `.claude/skills/` pin `model: grok-build` in frontmatter.
+Analysis skills under `.claude/skills/` pin `model: grok-4.6` in frontmatter.
 
 ---
 

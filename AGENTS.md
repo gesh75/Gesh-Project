@@ -11,8 +11,10 @@ Repository guide for coding agents working in `gesh75/Gesh-Project`.
 
 ## 2. Model routing
 
-- Use **Grok 4.5** for coding-agent analysis and implementation in this repo.
-- Preferred model ids: `grok-build` or `grok-4.5`.
+- Use **`grok-4.6`** (the CLI default) for coding-agent analysis and implementation in this repo.
+- Available ids as of 2026-08-21: `grok-4.6` (default), `grok-4.5`. Verify with `grok models`.
+- **`grok-build` is RETIRED** — the CLI rejects it with `unknown model id`. Any doc still naming
+  it is stale, including older sections of `CLAUDE.md`.
 - Do **not** use `grok-composer-2.5-fast` for substantive work here.
 
 ## 3. Safety and product boundaries

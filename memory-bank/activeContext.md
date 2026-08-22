@@ -19,5 +19,5 @@ _Last updated: 2026-08-04_
 - Sentry; server.py split; coverage → 70%
 
 ## Operate
-- Agent model: **grok-build** / **grok-4.5**
+- Agent model: **grok-4.6** / **grok-4.5** (grok-build retired 2026-08-21)
 - On `main`, clean with origin
