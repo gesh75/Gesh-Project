@@ -1,11 +1,11 @@
 # HANDOFF → Grok: the scheduler layer
 
-> Written 2026-08-21, 20:30 EDT — the last Claude day. Every fact below was verified by
-> running the command on this Mac, not copied from a doc.
+> Rewritten **2026-08-22** after the cutover ACT. The 2026-08-21 20:30 EDT Claude draft
+> is **stale** — do not follow its §4 commit block or its “still open” table.
 >
-> The two existing handoffs cover the **repos**:
-> `HANDOFF_GROK.md` (product, :9000) and `../gesh-project-trading/HANDOFF_GROK.md` (engine, :9003).
-> **This file covers the clock** — the four scheduled tasks, and how Grok replaces them.
+> Repo handoffs: `HANDOFF_GROK.md` (product, :9000) and
+> `../gesh-project-trading/HANDOFF_GROK.md` (engine, :9003).
+> **This file covers the clock.**
 >
 > Authority order: live code > `CLAUDE.md` > the two repo handoffs > this file.
 
@@ -13,324 +13,262 @@
 
 ## 0. The short version
 
-Four Cowork scheduled tasks run as **Claude agent sessions bound to this Mac**. They stop
-when the subscription lapses. **launchd does not.**
+Four Cowork cards were Claude agent sessions bound to this Mac. They die with the
+subscription. **launchd does not.**
 
-Everything that actually trades, scans, prices, and writes to the databases is launchd +
-Python and contains no model call — it keeps running tomorrow with nothing changed. What
-you lose is the *narration and verification* layer sitting on top, and only two of the four
-tasks genuinely need a model to do their job. The other two are a file reader and a health
-check wearing an LLM costume; they should become plain launchd jobs and never touch a model
-again.
+Layer 1 (trades, scans, prices, writes DBs) is launchd + Python, no model, and was
+already healthy. Layer 2 was narration/verification. As of 2026-08-22 those four
+cards are LaunchAgents on this Mac:
 
-The Grok failover-on-absent-key fix **is committed** (`263472f` on `feat/rh-mcp-data-layer`,
-PR #239). The scheduled PATH hole that hid the Grok CLI is also committed (`8da2dca`).
-Gemini's retired `gemini-2.5-pro` pin was replaced 2026-08-22 (`GESH_GEMINI_FAILOVER_MODEL`,
-default Flash, 404→lite).
+| Cowork card | LaunchAgent | ET window | Model? |
+|---|---|---|---|
+| Gesh crypto analysis | `com.gesh.crypto-reader` | 02/06/14/18/22 | **no** — stdlib reader + Telegram |
+| Gesh autopilot daily | `com.gesh.autopilot-health` | weekdays 08:25 | **no** — kickstart + Telegram only if down |
+| Gesh daily portfolio analysis | `com.gesh.daily-analysis` (chain) + `com.gesh.daily-narrate` | 10:30 chain, 10:50 briefing | Grok **last mile only**, never fatal |
+| Gesh weekly tracker review | native Fri 09:00 autopilot job + `com.gesh.weekly-narrate` | Fri 10:00 briefing | Grok **last mile only**, never fatal |
 
-**2026-08-22 ACT:** the four Cowork cards are now launchd jobs on this Mac (no Claude
-subscription). Crypto reader + autopilot health are model-free. Daily + weekly narration
-are best-effort `grok --prompt-file`. `refresh_dashboard_snapshot.sh` now prefers
-`fetch_snapshot_direct.py` (LLM-free); `claude -p` is fallback only.
+The C2 missing-key failover **is committed** (`263472f`, PR #239). The PATH hole that hid
+the Grok CLI from launchd **is committed** (`8da2dca`). Dashboard snapshot H4 **is fixed**
+(`refresh_dashboard_snapshot.sh` prefers `fetch_snapshot_direct.py`).
 
-What can still break Monday: **unrotated `ROBINHOOD_PASS`** (exposed in the 2026-08-21
-audit transcript) and a `:9000` process that predates the rule-#57 launcher fix — restart
-`com.gesh.main` after the launcher commit lands.
+Monday risk that is still owner-side: **unrotated `ROBINHOOD_PASS`** (audit transcript)
+and merging PR #239 so `main` matches this checkout.
 
 ---
 
-## 1. Verified host state at handover
-
-Local time at audit: **Fri 2026-08-21 20:14 EDT**.
+## 1. Verified host state (2026-08-22, post-cutover)
 
 | Component | State |
 |---|---|
-| `com.gesh.trading.autopilot` | **healthy** — last job 18:02:25, "executed successfully", next 18:00 Fri |
-| `com.gesh.crypto.scheduler` | **healthy** — 4h cycle completed 17:36:02 in 29.3s, **Errors: 0**, next 21:35 |
-| `com.gesh.daily-analysis` | **healthy** — `StartInterval 600` + ET gate, log written 20:04 |
-| Grok CLI | **1.0.5** at `~/.local/bin/grok`, logged in to grok.com, default **`grok-4.6`** |
-| Grok failover, key absent | ✅ **verified live** — `env -u ANTHROPIC_API_KEY … call_grok()` returned `FAILOVER_OK` |
-| `tests/test_llm_failover.py` | ✅ **25 passed** in 9.52s |
-| `ruff --isolated` on gateway+failover | ✅ clean |
-| Audit C1 (0-byte tracked files) | ✅ **resolved** — both restored 23:59 (44,296 and 17,603 bytes) |
-| `gesh-project` git | `feat/rh-mcp-data-layer`, **2 ahead / 0 behind** `origin/main`, **25 dirty entries** |
+| `com.gesh.trading.autopilot` | **running** — pid 1026, last exit 0 |
+| `com.gesh.crypto.scheduler` | **running** — pid 959, last exit 0 |
+| `com.gesh.daily-analysis` | loaded, last exit 0 (`StartInterval 600` + ET gate) |
+| `com.gesh.crypto-reader` | loaded, last exit 0 |
+| `com.gesh.autopilot-health` | loaded, last exit 0 |
+| `com.gesh.daily-narrate` | loaded, last exit 0 |
+| `com.gesh.weekly-narrate` | loaded, last exit 0 |
+| `com.gesh.dashboard-snapshot` | loaded, last exit 0 |
+| `com.gesh.signal-alerts` / `weekly-digest` | loaded, last exit 0, `StartInterval 1800` |
+| Grok CLI | `~/.local/bin/grok`, logged in, default **`grok-4.6`** (also `grok-4.5`) |
+| C2 on this checkout | `LLMProviderUnconfiguredError` is in `_FAILOVER_TRIGGERS` |
+| Product git | `feat/rh-mcp-data-layer` @ `07c3899` (scheduler commit). PR #239 HEAD is `e687442`. **Do not push this branch onto #239** — local also has `2b64100` / `d57fc29` from another session. |
+| Trading git | local `main` @ `90c1ae2`, on [PR #127](https://github.com/gesh75/gesh-project-trading/pull/127) |
 
-**29 `com.gesh.*` LaunchAgents are loaded.** The three above are the ones the scheduled
-tasks touch. Do not audit the other twenty-six as part of this cutover.
+~34 `com.gesh.*` LaunchAgents are installed. The table above is the cutover set.
+Do not audit the rest as part of this file.
 
 ---
 
-## 2. Two layers, and only one of them is Claude's
+## 2. Two layers — crossing point is still step 3/5
 
 ```
-LAYER 1 — HOST / DETERMINISTIC          ← model-free. Survives tomorrow untouched.
+LAYER 1 — HOST / DETERMINISTIC          ← model-free. Survives without Claude.
   launchd  →  bash  →  Python
-    com.gesh.crypto.scheduler   KeepAlive, APScheduler, 4h    → crypto.db, crypto_financial.db
-    com.gesh.trading.autopilot  KeepAlive, APScheduler, 14 jobs → gesh_tracker.db
-    com.gesh.daily-analysis     StartInterval 600 + ET gate   → run_daily_analysis.sh (5 steps)
+    com.gesh.crypto.scheduler   KeepAlive, 4h     → crypto.db, crypto_financial.db
+    com.gesh.trading.autopilot  KeepAlive, 14 jobs → gesh_tracker.db
+    com.gesh.daily-analysis     StartInterval 600 + ET gate → run_daily_analysis.sh
                                                     ↑ step 3/5 is the ONLY LLM call in layer 1
 
-LAYER 2 — NARRATION / VERIFICATION      ← Claude agent sessions. Dies with the subscription.
-    4 Cowork scheduled tasks, device-bound, read layer 1's output and explain it
+LAYER 2 — NARRATION / HEALTH            ← was Cowork; now launchd (2026-08-22)
+    com.gesh.crypto-reader       stdlib reader --telegram
+    com.gesh.autopilot-health    kickstart if down
+    com.gesh.daily-narrate       grok --prompt-file (best-effort)
+    com.gesh.weekly-narrate      grok --prompt-file (best-effort)
 ```
 
-The single crossing point between the layers is **step 3/5 of the daily chain**
-(`run_ai2.py`, which imports `llm_gateway` and `llm_failover`). That call already routes to
-Grok. It is not part of layer 2 and does not need re-plumbing.
+Step 3/5 (`run_ai2.py` → `llm_gateway` / `llm_failover`) already routes to Grok.
+It is not a Cowork task and does not need re-plumbing. If Anthropic is unset,
+`LLMProviderUnconfiguredError` fails over. If that class is missing, the dead-key
+stopgap in §7 still works.
 
 ---
 
-## 3. The four tasks — what each really is
+## 3. The four tasks — current wiring
 
-### 3.1 Gesh crypto analysis — **needs no model at all**
+Every new plist is **`StartInterval 600` with no `StartCalendarInterval`** (rule #56).
+launchd here is Europe/Sofia; the script decides in `America/New_York` via
+`../gesh-project-trading/scripts/et_gate.sh`.
 
-| | |
-|---|---|
-| Schedule | 02:00, 06:00, 14:00, 18:00, 22:00 daily |
-| Contract | `../gesh-project-trading/CRYPTO_READER_SKILL.md` (frontmatter `name: gesh-crypto-analysis`) |
-| Does | `python3 crypto_report_reader.py --telegram` — live prices + DB state, then reports |
-| Dependencies | **stdlib only**, verified: `argparse json os sqlite3 sys time urllib.request datetime pathlib`. No venv. |
-
-The skill file is explicit that this is a **reader**, not a runner: the LaunchAgent already
-did the analysis, and re-running `crypto_scheduler.py` from a sandbox breaks because the
-macOS 3.14 `.so` files are not loadable by the sandbox's Linux Python. The task's entire job
-is one deterministic command plus a formatted summary.
-
-**Replacement: a launchd job, no model.** The reader already emits the numbers and sends the
-Telegram. Wrapping it in an agent adds a failure mode and buys nothing.
-
-### 3.2 Gesh autopilot daily — **needs no model at all**
+### 3.1 Gesh crypto analysis — **no model**
 
 | | |
 |---|---|
-| Schedule | Weekdays 08:25 ET |
-| Does | Health-check the `com.gesh.trading.autopilot` LaunchAgent; auto-restart + Telegram **only if down** |
+| LaunchAgent | `com.gesh.crypto-reader` |
+| Script | `../gesh-project-trading/scripts/crypto_reader_et.sh` |
+| Slots | `02:00,06:00,14:00,18:00,22:00` ET ±25 min, `et_gate_require_slots` (per-slot stamp) |
+| Does | `/opt/homebrew/bin/python3 crypto_report_reader.py --telegram` |
+| Log | `/tmp/gesh_crypto_reader.log` |
+| Heavy pipeline | still `com.gesh.crypto.scheduler` — **do not** run `crypto_scheduler.py` from an agent |
 
-This is `launchctl list | grep`, a conditional `kickstart`, and a conditional curl. It is
-pure shell logic with a natural-language wrapper. As a launchd job it also gains something
-it does not have today: it will run when the agent layer is gone.
-
-**Replacement: bash + launchd, no model.**
-
-### 3.3 Gesh daily portfolio analysis — **model for narration only**
+### 3.2 Gesh autopilot daily — **no model**
 
 | | |
 |---|---|
-| Schedule | Weekdays 10:30 ET |
-| Contract | account skill `daily-portfolio-analysis` v2.0.0 |
-| Does | Triggers `run_daily_analysis.sh`, verifies it, narrates the result. **Never re-runs the engines.** |
+| LaunchAgent | `com.gesh.autopilot-health` |
+| Script | `../gesh-project-trading/scripts/autopilot_health_et.sh` |
+| Window | weekdays 08:25 ET ±20 min |
+| Does | if `com.gesh.trading.autopilot` is missing or not running → bootstrap/kickstart + Telegram. Healthy days are silent. |
+| Log | `/tmp/gesh_autopilot_health.log` |
 
-The chain is 295 lines and deliberately hostile to improvisation — `caffeinate -i` re-exec,
-`ulimit -n 10240`, a lock, a stale-venv guard, `umask 077`. Step 3/5 is fatal on failure and
-keeps the previous report rather than writing a bad one. The task's model use is genuinely
-just the last mile: read `engine_results.json` and the report, reconcile conflicts per
-`references/conflict-resolution.md`, say what to do.
+### 3.3 Gesh daily portfolio analysis — **chain is layer 1; Grok narrates**
 
-**One Claude dependency lives inside this chain and should be retired.** Step 1/5 fetches the
-snapshot in three tiers, with 4 retries at 0 / +15m / +30m / +60m:
+| | |
+|---|---|
+| Chain | `com.gesh.daily-analysis` → `scripts/daily_analysis_et.sh` → `run_daily_analysis.sh` (10:30 ET weekdays) |
+| Narration | `com.gesh.daily-narrate` → `scripts/narrate_daily_et.sh` (10:50 ET weekdays) |
+| Narration log | `/tmp/gesh_daily_narrate.log` |
+| Contract | `.claude/skills/daily-portfolio-analysis/SKILL.md` — inlined into the grok prompt, not discovered from `~/.grok/skills/` |
 
-| Tier | Path | Tomorrow |
+Step 1/5 snapshot tiers:
+
+| Tier | Path | Monday |
 |---|---|---|
-| 1 | `fetch_snapshot_direct.py` — direct MCP, **LLM-free, no CLI, no subscription** | ✅ healthy, self-refreshing |
-| 2 | `fetch_snapshot_mcp.sh` — `claude -p` at `/opt/homebrew/bin/claude`, OAuth in the **macOS Keychain** | ❌ cannot authenticate |
-| 3 | `fetch_live_snapshot.py` — legacy `robin_stocks` pickle | backstop |
+| 1 | `fetch_snapshot_direct.py` — LLM-free MCP | **primary** |
+| 2 | `fetch_snapshot_mcp.sh` — `claude -p` | dead weight; burns timeout if tier 1 fails |
+| 3 | `fetch_live_snapshot.py` — robin_stocks pickle | backstop |
 
-Tier 1 is the one that matters and it is fine. Tier 2 becomes dead weight — each failed fetch
-will now spend its full timeout on a CLI that cannot log in before falling to tier 3. Failure is
-**not** silent: all-tiers-failed sends a `tg_alert`, and `snapshot_state.py` then gates the run
-FRESH / SERVICEABLE (degraded, 1440-min limit) / FATAL. Earlier handoffs describe this step as a
-bare `echo` with a silent failure mode; that description is stale — the code has moved.
+`refresh_dashboard_snapshot.sh` **used to call tier 2 only**. As of 2026-08-22 it prefers
+tier 1 (`venv/bin/python`, not host 3.9). That was audit H4.
 
-The job that *does* break outright is `refresh_dashboard_snapshot.sh`: it calls tier 2 directly
-and skips tier 1 entirely. That is audit H4, and tomorrow it stops being a risk and becomes a
-certainty.
+Grok narration is **best-effort**: a CLI failure logs and exits 0. The HTML report
+still exists if Grok is down.
 
-**Replacement: launchd runs the chain (it already does), then `grok --prompt-file` narrates.**
-
-### 3.4 Gesh weekly tracker review — **model for narrative only**
+### 3.4 Gesh weekly tracker review — **same pattern**
 
 | | |
 |---|---|
-| Schedule | Fridays 10:00 |
-| Contract | account skill `weekly-portfolio-review` v2.0.0 |
-| Does | Consumes the **9am native `weekly_tracker_review`** autopilot job's snapshot, adds the current-spec gate check and a narrative, short-circuits on a flat week |
+| Layer 1 | autopilot job `weekly_tracker_review` Fri 09:00 → `tracker_weekly_log.md` + Telegram |
+| Narration | `com.gesh.weekly-narrate` Fri 10:00 ET ±20 → `scripts/narrate_weekly_et.sh` |
+| Log | `/tmp/gesh_weekly_narrate.log` |
 
-`weekly_tracker_review` is one of the 14 jobs registered in `trading/autopilot.py:1433`. It
-runs whether or not any agent is watching. The task reads its output.
-
-**Replacement: same pattern as 3.3.**
-
-### A note on the three ⚠️ markers
-
-Three of the four task cards carry a warning marker; **Gesh crypto analysis does not**. I
-could not read the task run history from this session, so I will not guess at the cause.
-What I can say is that the host chains those three tasks depend on were all healthy at audit
-time, so the warnings are far more likely to be about the *agent* runs — a device-bound task
-only fires while the Mac is awake and online, and this laptop sleeps. Check each card's run
-history before treating any of it as a host problem. Two of the three stop mattering the
-moment they become launchd jobs.
+The ⚠️ markers on the Cowork cards were agent-layer (Mac asleep / device-bound).
+They do not mean the host jobs were down. launchd still coalesces a missed
+`StartInterval` fire after sleep — expected, not a defect.
 
 ---
 
-## 4. Cutover status (2026-08-22, Grok ACT)
+## 4. Do not re-run Friday's commit block
 
-C2 + grok-4.6 corrections are **committed** on `feat/rh-mcp-data-layer` (PR #239, CI green).
-Do not re-run the staging block that used to live here.
+The 2026-08-21 “stage these 21 files tonight” list is **done**. C2 lives on PR #239.
+Re-running that `git add` on this dirty tree would sweep generated HTML and another
+session's CVaR/Gemini commits (`2b64100`, `d57fc29`) into the harvest PR.
 
-**LaunchAgents installed on this Mac** (repo copies + `~/Library/LaunchAgents/`):
-
-| Label | Replaces Cowork card | When (ET) | Model? |
-|---|---|---|---|
-| `com.gesh.crypto-reader` | Gesh crypto analysis | 02/06/14/18/22 | no — stdlib reader |
-| `com.gesh.autopilot-health` | Gesh autopilot daily | weekdays 08:25 | no — launchctl + Telegram if down |
-| `com.gesh.daily-narrate` | Gesh daily portfolio analysis (last mile) | weekdays 10:50 | grok, best-effort |
-| `com.gesh.weekly-narrate` | Gesh weekly tracker review (last mile) | Fri 10:00 | grok, best-effort |
-
-Layer 1 is unchanged and already healthy: `com.gesh.crypto.scheduler`,
-`com.gesh.trading.autopilot`, `com.gesh.daily-analysis`.
-
-**Stage explicit paths. Never `git add -A`.** Scheduled jobs write `PROGRESS_LOG.md`,
-`tracker_weekly_log.md`, generated HTML into these trees while you work.
+**Stage explicit paths. Never `git add -A`.**
 
 ---
 
 ## 5. Driving Grok headless on this Mac
 
-The invocation below is **already in production** in `llm_failover.py::call_grok` and is the
-form to copy. Do not invent a new one.
+Failover path (already in `llm_failover.py::call_grok`) — cwd is a **temp dir**:
 
 ```bash
 grok --prompt-file /tmp/prompt.txt \
      --verbatim \
      --output-format json \
-     --max-turns 1 \
+     --max-turns 4 \
      --tools read_file \
-     --rules "<no tool/MCP/memory calls>" \
+     --rules "Answer using ONLY the text of this prompt. Do not call any tool, MCP, or memory." \
      --no-auto-update \
      --model grok-4.6
 ```
 
-Five things that are load-bearing and non-obvious:
+Narration jobs (`narrate_daily_et.sh`, `narrate_weekly_et.sh`) copy that shape but
+**cwd is the repo** so `read_file` can see `engine_results.json` / `tracker_weekly_log.md`.
+They use `--max-turns 4` and a read-only `--rules` override.
 
-1. **`--prompt-file`, not argv.** A deep-analysis prompt is tens of KB and will hit `ARG_MAX`.
-2. **`--max-turns` bounds the loop.** Without it the CLI inherits `~/.claude/CLAUDE.md` global
-   agent rules and starts an agent loop instead of returning a completion. Narration jobs need
-   more than 1 turn and more tools than `read_file` — raise both deliberately, per job, and keep
-   the explicit `--rules` override.
-3. **`cwd` is a temp dir** in the failover path, on purpose, so the CLI cannot wander the repo.
-   A narration job *does* need the repo as cwd — that is a real difference, not an oversight to
-   copy past.
-4. **The answer is under the envelope's `text` key.** `result` is `null`.
-5. **Model ids rotate.** `call_grok` already retries on the CLI default when it sees
-   `unknown model id`. Verify with `grok models` before trusting any doc, this one included.
-   Available today: `grok-4.6` (default), `grok-4.5`.
+Load-bearing:
 
-### Grok's environment on this Mac
+1. **`--prompt-file`, not argv** — ARG_MAX.
+2. **`--max-turns` + `--rules`** — without them the CLI inherits `~/.claude/CLAUDE.md` and
+   starts an agent loop (OMEGA, etc.).
+3. Failover cwd = temp; narration cwd = repo. Do not copy one onto the other.
+4. JSON envelope: answer is under **`text`**. `result` is often `null`.
+5. Model ids rotate. `call_grok` retries on `unknown model id`. Check `grok models`.
 
 | | |
 |---|---|
-| `~/.grok/config.toml` | default `grok-4.6`, `default_reasoning_effort = "xhigh"`, **65 plugins enabled** |
-| `permission_mode` | **`always-approve`** (`yolo = false`) |
-| `~/.grok/trusted_folders.toml` | `/Users/georgigaydarov/Projects` — covers both repos |
-| `~/.grok/skills/` | **empty** |
-| `~/.grok/hooks/` | **empty** |
-
-Two gaps worth naming:
-
-**`always-approve` plus a scheduled job is a bad combination.** It is fine interactively. For
-anything launchd fires unattended, pass an explicit `--deny` set or a `--sandbox` profile
-rather than inheriting blanket approval. `AGENTS.md §4` lists what must never be touched —
-production DBs, `.env`, billing, brokerage, LaunchAgents, live snapshots. That list is the
-deny list.
-
-**Grok does not auto-discover the skills.** `~/.grok/skills/` is empty, and the 11 project
-skills live under `.claude/skills/`, which Grok has no reason to read. `.grok/agents/gesh.md`
-tells the agent to read them by path, which works only if the agent complies. For the two
-narration jobs, **inline the skill file into the prompt** rather than hoping. The two account
-skills those tasks used (`daily-portfolio-analysis`, `weekly-portfolio-review`) are Claude-side
-and will not be there tomorrow — their step-by-step bash is what matters and it is reproduced
-in the repo skills and in §3 above.
+| `~/.grok/config.toml` | default `grok-4.6`, `default_reasoning_effort = "xhigh"` |
+| `permission_mode` | **`always-approve`** — fine interactively; narration jobs constrain via `--tools` + `--rules` |
+| `~/.grok/trusted_folders.toml` | `/Users/georgigaydarov/Projects` |
+| `~/.grok/skills/` | **empty** — inline the skill text into the prompt (already done in the two narrate scripts) |
 
 ---
 
-## 6. Git working agreement under Grok
+## 6. Git working agreement
 
-- **Never `git add -A`.** Scheduled jobs write `PROGRESS_LOG.md`, `tracker_weekly_log.md`,
-  `GESH_COMMERCIAL_ROADMAP.md`, `.crypto_cache.json`, and generated HTML into these trees
-  while you work. Stage explicit paths, every time.
-- **Three commits exist only on local `main`**, unpushed and on no remote: `40e7195` (a real
-  `_create_streaming` mid-stream-stall fix), `bfd23f0` (report fix), `383cf92` (a checkpoint).
-  Cherry-pick or push before anyone resets `main`.
-- **`stash@{0}` on `main`** — *"Scanner owner-only + margin panel"*, security-relevant, still
-  unapplied.
-- **Two prunable worktrees.** `git worktree list` before editing an unfamiliar directory:
-  `.worktrees/gesh-track-record-scope-hardening` (383cf92, main) and
-  `gesh-project-audit-hardening` (c279313, `fix/audit-p0-p1-pr`). Both are worktrees of this
-  repo, not copies.
-- `gesh-core` is pinned by **40-char SHA, never a tag**. The product is on v0.8.1, the engine
-  on v0.8.0 — that mismatch is audit C4, still open.
-- `../gesh-project-trading` CI has **no PR trigger** (push-to-main only). A PR there is not
-  gated the way one here is.
+- **Never `git add -A`.** Jobs write `PROGRESS_LOG.md`, `tracker_weekly_log.md`,
+  `GESH_COMMERCIAL_ROADMAP.md`, `.crypto_cache.json`, generated HTML.
+- Product **local `main`** still has three commits not on `origin/main`: `40e7195`,
+  `bfd23f0`, `383cf92`. **Do not cherry-pick `40e7195`** — it patches `_create_streaming`
+  in `ai_analyzer.py`, which the failover refactor removed. Intent is in
+  `llm_gateway._is_retryable` (includes `httpx.ReadTimeout`). Do not `git reset --hard` local `main`.
+- Product `stash@{0}` on `main`: *"Scanner owner-only + margin panel"* — unapplied, security-relevant.
+- Worktrees of this repo, not copies: re-run `git worktree list` before editing an unfamiliar
+  directory. Do not treat a sandbox `prunable` marker as fact.
+- `gesh-core` is pinned by **40-char SHA**. Trading PR #127 bumped the declared pin to
+  `4931239` (v0.8.1), matching product. Live venvs were already there.
+- Trading **pytest** still runs on push-to-`main` only (secret-bearing). PR #127 added a
+  secret-free whole-repo parse gate to the required `pr-test` check. Do not add
+  `GESH_CORE_PAT` to `pull_request`.
 
 ---
 
 ## 7. Monday 2026-08-24 runbook
 
+Stay on checkout `~/Projects/gesh-project` branch `feat/rh-mcp-data-layer` so launchd
+sees C2 + harvest + snapshot fix. Switching this tree to another branch changes what
+the agents execute.
+
 Before market open:
 
 ```bash
-grok models                                    # confirm grok-4.6 still exists
+grok models
 cd ~/Projects/gesh-project
 env -u ANTHROPIC_API_KEY ./venv/bin/python -c \
   "import llm_failover as f; print(f.grok_available(), f.call_grok('Reply exactly: OK'))"
-launchctl list | grep -E 'crypto.scheduler|trading.autopilot|daily-analysis'
+launchctl list | grep -E 'crypto.scheduler|crypto-reader|trading.autopilot|autopilot-health|daily-analysis|daily-narrate|weekly-narrate|dashboard-snapshot'
 ```
 
-Then watch, in order:
+Watch:
 
-1. **08:25** — `com.gesh.autopilot-health` (launchd). Check `/tmp/gesh_autopilot_health.log`.
-2. **~10:30** — `tail -f ~/Projects/gesh-project/.logs/gesh_fullchain.log`. **Step 3/5 is the
-   test of the whole migration.** If it survives with no Anthropic key, the cutover worked.
-3. **13:35 / 17:35** — crypto reader.
+1. **08:25** — `/tmp/gesh_autopilot_health.log` (`HEALTHY — no action` is the good line).
+2. **~10:30** — `tail -f ~/Projects/gesh-project/.logs/gesh_fullchain.log`. **Step 3/5 is
+   the migration test.** Survives with no Anthropic key → cutover worked.
+3. **~10:50** — `/tmp/gesh_daily_narrate.log` (best-effort; a grok fail is not a chain fail).
+4. **13:35 / 17:35** (and 02/06/22) — `/tmp/gesh_crypto_reader.log`.
 
-If step 3/5 exits 1 and the C2 commit is in place, the failover did not fire — check
-`grok_available()` first; a dead `~/.grok/auth.json` drops silently to Gemini.
+If step 3/5 exits 1: `grok_available()` first. Dead `~/.grok/auth.json` drops to Gemini.
 
-**Stopgap needing no code change:** leave a syntactically valid but dead key in `.env`. The
-SDK then raises `AuthenticationError`, a subclass of `APIStatusError`, which has always been
-in `_FAILOVER_TRIGGERS`. Keep this in your pocket — it makes the chain work even if the C2
-commit is somehow lost.
+**Stopgap if C2 is somehow not on the checkout:** leave a syntactically valid but dead
+`ANTHROPIC_API_KEY` in `.env`. The SDK raises `AuthenticationError` ⊂ `APIStatusError`,
+which has always been in `_FAILOVER_TRIGGERS`.
 
 ---
 
-## 8. Failure modes, and what each looks like
+## 8. Failure modes
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Step 3/5 exits 1, `LLMConfigurationError` in log | C2 commit lost | Re-apply, or the dead-key stopgap (§7) |
-| Step 3/5 succeeds but the narrative is thin | Grok fell through to Gemini | `~/.grok/auth.json` expired — `grok` once interactively to re-auth |
-| `unknown model id` | Retired id — `grok-build` still lives in stale docs | `grok models`; `call_grok` self-heals to the CLI default |
-| Chain runs at 4pm with off-hours prices | launchd coalesced a 10:30 fire missed during sleep | Intended recovery. The report timestamp shows the real run time. |
-| Crypto task reports nothing | Someone ran `crypto_scheduler.py` instead of the reader | Reader only — the scheduler needs the macOS venv |
-| Step 1/5 slow, then DEGRADED | Tier 2 (`claude -p`) can no longer authenticate; every retry burns its timeout | Cosmetic Monday, real waste — retire tier 2 |
-| 30-min dashboard snapshot stale | Direct MCP token expired | `python3 fetch_snapshot_direct.py --auth` (browser). `claude -p` is fallback only as of 2026-08-22. |
+| Step 3/5 exits 1, `LLMConfigurationError` | C2 not on this checkout | Stay on `feat/rh-mcp-data-layer`, or dead-key stopgap |
+| Step 3/5 OK but briefing thin/missing | Grok auth or narrate script | `grok` once interactively; `/tmp/gesh_daily_narrate.log` |
+| `unknown model id` | retired pin | `grok models`; `call_grok` self-heals to CLI default |
+| Chain at 4pm, off-hours prices | launchd coalesced a sleep-missed 10:30 | Intended. Trust the report timestamp |
+| Crypto Telegram empty | ran `crypto_scheduler.py` instead of the reader | Reader only |
+| Step 1/5 slow then DEGRADED | tier 2 `claude -p` timeout on every retry | Cosmetic; tier 1 is primary. Retire tier 2 later |
+| Dashboard snapshot stale | `.rh_mcp_oauth.json` expired | `./venv/bin/python fetch_snapshot_direct.py --auth` |
+| Autopilot Telegram at 08:25 | pid `-` or last_exit ≠ 0 | `launchctl kickstart -k gui/$(id -u)/com.gesh.trading.autopilot` |
 
 ---
 
-## 9. What is still open after this cutover
+## 9. Still open (owner)
 
-| Item | Where |
+| Item | State |
 |---|---|
-| C2 commit + push | **Done** — PR #239 (not merged to `main`) |
-| Convert tasks 3.1 and 3.2 to launchd, no model | **Done 2026-08-22** — loaded on this Mac |
-| Convert tasks 3.3 and 3.4 to launchd + `grok --prompt-file` | **Done 2026-08-22** — best-effort narration, never fatal |
-| Dashboard snapshot H4 (`claude -p` as primary) | **Done 2026-08-22** — `refresh_dashboard_snapshot.sh` prefers `fetch_snapshot_direct.py` |
-| C3 — `signal-alerts` + `weekly-digest` | **Bootstrapped** 2026-08-21 (`StartInterval 1800`, 33 runs, last exit 0) |
-| C4 — gesh-core pin | **Done on trading PR #127** (4931239 / v0.8.1) |
-| C5 — `strategy_trial_ledger.jsonl` | **Tracked** on trading PR #127 |
-| Merge PR #239 (product) and PR #127 (trading) | Owner |
-| Rotate `ROBINHOOD_PASS` | Owner — P0-1 |
-| Standing objective — **23 / 100 engine closes**, gate FAIL, target late Oct 2026 | Outranks everything else in the engine repo |
+| Merge [PR #239](https://github.com/gesh75/Gesh-Project/pull/239) (harvest + C2 + MCP) | Open, CI green. Local branch has extra commits — peel before pushing |
+| Merge [PR #127](https://github.com/gesh75/gesh-project-trading/pull/127) (handoff + parse gate + pin + scheduler jobs) | Open |
+| Rotate `ROBINHOOD_PASS` | P0-1, owner |
+| Retire step 1/5 tier 2 (`claude -p`) so a tier-1 miss does not burn 4 timeouts | later |
+| Standing objective — **23 / 100 engine closes**, gate FAIL, late Oct 2026 | outranks everything in the engine repo |
 
 ---
 
