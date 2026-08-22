@@ -61,6 +61,19 @@ _GROK_RULES: Final[str] = (
     "your first message."
 )
 _GROK_TOOL_ALLOWLIST: Final[str] = "read_file"
+# Keys the Grok CLI --output-format json envelope uses for the model answer.
+_GROK_ENVELOPE_ANSWER_KEYS: Final[tuple[str, ...]] = (
+    "text",
+    "result",
+    "response",
+    "content",
+    "output",
+)
+# If stdout parses as a dict carrying any of these, it is a CLI envelope — not
+# the analysis payload. An empty/null answer must fail the provider, not coerce.
+_GROK_ENVELOPE_MARKERS: Final[frozenset[str]] = frozenset(
+    (*_GROK_ENVELOPE_ANSWER_KEYS, "session_id", "num_turns", "tool_calls", "messages")
+)
 
 
 class FailoverUnavailable(RuntimeError):
@@ -120,12 +133,45 @@ class FailoverMessage:
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
-def extract_json_object(text: str) -> dict[str, Any]:
+def schema_required_keys(schema: dict[str, Any]) -> list[str]:
+    """Required object keys, falling back to property names when `required` is empty."""
+    if not isinstance(schema, dict):
+        return []
+    required = schema.get("required") or []
+    if required:
+        return [str(k) for k in required]
+    props = schema.get("properties") or {}
+    return [str(k) for k in props]
+
+
+def extracted_payload_matches_schema(payload: Any, schema: dict[str, Any]) -> bool:
+    """True when extracted JSON already carries at least one schema key.
+
+    ``coerce_to_schema`` fills omitted required keys with typed blanks, so a CLI
+    envelope or ``{ok: true}`` would otherwise become a 'successful' analysis
+    with ``portfolio_score=0`` and empty holdings — and the empty-payload guard
+    after coerce never fires, because the coerced dict is non-empty.
+    """
+    if not isinstance(payload, dict) or not payload:
+        return False
+    keys = schema_required_keys(schema)
+    if not keys:
+        return True
+    return any(k in payload for k in keys)
+
+
+def extract_json_object(
+    text: str, *, required_any: list[str] | None = None
+) -> dict[str, Any]:
     """Pull the first complete JSON object out of a free-text model response.
 
     Fallback providers have no forced-tool grammar, so the payload arrives as
     prose-wrapped text. Brace matching (rather than a greedy regex) is what makes
     this safe for the nested holdings_analysis array.
+
+    When ``required_any`` is set, a complete object that shares none of those
+    keys is skipped so a CLI envelope or status blob cannot beat the real
+    analysis sitting later in the same text.
     """
     if not isinstance(text, str) or not text.strip():
         raise ValueError("empty model response")
@@ -137,36 +183,44 @@ def extract_json_object(text: str) -> dict[str, Any]:
 
     for candidate in candidates:
         start = candidate.find("{")
-        if start < 0:
-            continue
-        depth = 0
-        in_str = False
-        esc = False
-        for idx in range(start, len(candidate)):
-            ch = candidate[idx]
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-                continue
-            if ch == '"':
-                in_str = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    blob = candidate[start : idx + 1]
-                    try:
-                        parsed = json.loads(blob)
-                    except json.JSONDecodeError:
+        while start >= 0:
+            depth = 0
+            in_str = False
+            esc = False
+            skip_to: int | None = None
+            for idx in range(start, len(candidate)):
+                ch = candidate[idx]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        blob = candidate[start : idx + 1]
+                        try:
+                            parsed = json.loads(blob)
+                        except json.JSONDecodeError:
+                            skip_to = start + 1
+                            break
+                        if isinstance(parsed, dict):
+                            if required_any and not any(k in parsed for k in required_any):
+                                skip_to = idx + 1
+                                break
+                            return parsed
+                        skip_to = idx + 1
                         break
-                    if isinstance(parsed, dict):
-                        return parsed
-                    break
+            if skip_to is None:
+                break
+            start = candidate.find("{", skip_to)
     raise ValueError("no JSON object found in model response")
 
 
@@ -350,10 +404,15 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
     try:
         env = json.loads(raw)
         if isinstance(env, dict):
-            for key in ("text", "result", "response", "content", "output"):
+            for key in _GROK_ENVELOPE_ANSWER_KEYS:
                 val = env.get(key)
                 if isinstance(val, str) and val.strip():
                     return val
+            # Parsed as a CLI envelope with no answer. Returning the envelope
+            # itself lets coerce_to_schema mint a blank analysis that the chain
+            # then persists as a successful run.
+            if _GROK_ENVELOPE_MARKERS & env.keys():
+                raise FailoverUnavailable("grok CLI envelope had no text answer")
     except json.JSONDecodeError:
         pass
     return raw
@@ -423,7 +482,10 @@ def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessag
                 name,
             )
             text = call(prompt)
-            payload = extract_json_object(text)
+            required_any = schema_required_keys(schema)
+            payload = extract_json_object(text, required_any=required_any or None)
+            if not extracted_payload_matches_schema(payload, schema):
+                raise ValueError("extracted JSON is not a schema-shaped analysis payload")
             payload = coerce_to_schema(payload, schema)
             if not isinstance(payload, dict) or not payload:
                 raise ValueError("coerced payload empty")

@@ -96,6 +96,26 @@ def test_extract_json_raises_on_prose_only():
         llm_failover.extract_json_object("I cannot help with that.")
 
 
+def test_extract_json_skips_unrelated_object_when_required_keys_given():
+    """A status blob or CLI envelope must not beat the real analysis after it."""
+    text = '{"ok": true, "num_turns": 1}\n{"portfolio_score": 71, "portfolio_verdict": "HOLD"}'
+    got = llm_failover.extract_json_object(
+        text, required_any=["portfolio_score", "portfolio_verdict"]
+    )
+    assert got == {"portfolio_score": 71, "portfolio_verdict": "HOLD"}
+
+
+def test_extracted_payload_rejects_cli_envelope():
+    envelope = {"result": None, "text": None, "num_turns": 1, "session_id": "abc"}
+    assert not llm_failover.extracted_payload_matches_schema(envelope, _SCHEMA)
+
+
+def test_extracted_payload_accepts_partial_analysis():
+    assert llm_failover.extracted_payload_matches_schema(
+        {"portfolio_score": 64}, _SCHEMA
+    )
+
+
 # ── Schema coercion ──────────────────────────────────────────────────────────
 
 
@@ -143,6 +163,39 @@ def test_failover_message_reports_zero_anthropic_usage():
 
 
 # ── Gateway wiring ───────────────────────────────────────────────────────────
+
+
+def test_attempt_rejects_cli_envelope_and_tries_next_provider(monkeypatch):
+    """Empty-text Grok envelope must not coerce into a zeroed successful analysis."""
+    providers = {
+        "grok": (
+            lambda: True,
+            lambda _prompt: json.dumps({"result": None, "text": "", "num_turns": 1}),
+        ),
+        "gemini": (
+            lambda: True,
+            lambda _prompt: json.dumps(
+                {"portfolio_score": 61, "portfolio_verdict": "HOLD"}
+            ),
+        ),
+    }
+    monkeypatch.setattr(llm_failover, "_PROVIDERS", providers)
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "grok,gemini")
+
+    msg = llm_failover.attempt(
+        operation="deep_analyze_portfolio", max_tokens=1000, **_kwargs()
+    )
+    assert msg.provider == "gemini"
+    assert msg.content[0].input["portfolio_score"] == 61
+    assert msg.content[0].input["portfolio_verdict"] == "HOLD"
+
+
+def test_attempt_rejects_unrelated_json_object(monkeypatch):
+    _install_provider(monkeypatch, json.dumps({"ok": True, "status": "done"}))
+    with pytest.raises(llm_failover.FailoverUnavailable, match="schema-shaped"):
+        llm_failover.attempt(
+            operation="deep_analyze_portfolio", max_tokens=1000, **_kwargs()
+        )
 
 
 def test_gateway_fails_over_when_anthropic_unreachable(monkeypatch, tmp_path):
@@ -291,6 +344,35 @@ def test_grok_retries_on_the_cli_default_when_model_id_is_retired(monkeypatch):
     assert llm_failover.extract_json_object(llm_failover.call_grok("x")) == {"ok": True}
     assert len(calls) == 2
     assert "--model" in calls[0] and "--model" not in calls[1]
+
+
+def test_grok_rejects_envelope_with_no_text_answer(monkeypatch):
+    """result is documented-null; empty text must fail, not become the payload."""
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"result": null, "text": "", "num_turns": 1, "session_id": "s"}'
+        stderr = ""
+
+    monkeypatch.setattr(llm_failover.subprocess, "run", lambda cmd, **kw: _Proc())
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: "/usr/bin/grok")
+    with pytest.raises(llm_failover.FailoverUnavailable, match="envelope had no text"):
+        llm_failover.call_grok("x")
+
+
+def test_grok_returns_bare_analysis_json_when_not_an_envelope(monkeypatch):
+    class _Proc:
+        returncode = 0
+        stdout = '{"portfolio_score": 5, "portfolio_verdict": "HOLD"}'
+        stderr = ""
+
+    monkeypatch.setattr(llm_failover.subprocess, "run", lambda cmd, **kw: _Proc())
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: "/usr/bin/grok")
+    raw = llm_failover.call_grok("x")
+    assert llm_failover.extract_json_object(raw) == {
+        "portfolio_score": 5,
+        "portfolio_verdict": "HOLD",
+    }
 
 
 def test_grok_surfaces_other_cli_failures(monkeypatch):
