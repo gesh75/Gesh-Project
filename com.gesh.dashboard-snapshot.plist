@@ -15,7 +15,8 @@
     <string>/Users/georgigaydarov/Projects/gesh-project</string>
 
     <!-- Fire every 30 min around the clock; the wrapper's market-hours guard makes
-         off-hours ticks a cheap no-op (no LLM spend). RunAtLoad refreshes once on load. -->
+         off-hours ticks a cheap no-op. Primary path is LLM-free (fetch_snapshot_direct.py).
+         RunAtLoad refreshes once on load. -->
     <key>StartInterval</key>
     <integer>1800</integer>
     <key>RunAtLoad</key>
