@@ -9,8 +9,11 @@ needs to know a different vendor answered.
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import anthropic
+import httpx
 import pytest
 
 import llm_contracts
@@ -568,3 +571,176 @@ def test_malformed_setting_still_fails_loudly(monkeypatch):
     with pytest.raises(llm_gateway.LLMConfigurationError):
         llm_gateway.create_client()
     assert calls == [], "a malformed setting must never reach a fallback provider"
+
+
+def test_call_grok_requires_cli_on_path(monkeypatch):
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: None)
+    with pytest.raises(llm_failover.FailoverUnavailable, match="not on PATH"):
+        llm_failover.call_grok("x")
+
+
+# ── Availability / Gemini / attempt fallbacks ────────────────────────────────
+
+
+def test_enabled_is_false_for_empty_or_whitespace_env(monkeypatch):
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "")
+    assert llm_failover.enabled() is False
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "  ,  ")
+    assert llm_failover.enabled() is False
+    assert llm_failover.provider_order() == []
+
+
+def test_grok_available_requires_cli_plus_auth(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: None)
+    monkeypatch.setattr(llm_failover.Path, "home", lambda *a: tmp_path)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert llm_failover.grok_available() is False
+
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: "/usr/bin/grok")
+    assert llm_failover.grok_available() is False
+
+    grok_dir = tmp_path / ".grok"
+    grok_dir.mkdir()
+    (grok_dir / "auth.json").write_text("{}", encoding="utf-8")
+    assert llm_failover.grok_available() is True
+
+    (grok_dir / "auth.json").unlink()
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-used")
+    assert llm_failover.grok_available() is True
+
+
+def test_gemini_available_follows_api_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert llm_failover.gemini_available() is False
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-not-used")
+    assert llm_failover.gemini_available() is True
+
+
+def test_call_gemini_requires_key(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(llm_failover.FailoverUnavailable, match="GEMINI_API_KEY"):
+        llm_failover.call_gemini("x")
+
+
+def test_call_gemini_returns_generated_text(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-not-used")
+    fake = types.SimpleNamespace(_generate=lambda prompt, model="": '{"portfolio_score": 61}')
+    monkeypatch.setitem(sys.modules, "gemini_agent", fake)
+    assert llm_failover.call_gemini("analyze") == '{"portfolio_score": 61}'
+
+
+def test_call_gemini_rejects_empty_text(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-not-used")
+    fake = types.SimpleNamespace(_generate=lambda prompt, model="": "   ")
+    monkeypatch.setitem(sys.modules, "gemini_agent", fake)
+    with pytest.raises(llm_failover.FailoverUnavailable, match="empty"):
+        llm_failover.call_gemini("analyze")
+
+
+def test_attempt_skips_unconfigured_provider_and_uses_next(monkeypatch):
+    """A missing Grok CLI must not take down Gemini — order is a preference, not a lock."""
+
+    def _boom(_prompt: str) -> str:
+        raise AssertionError("unconfigured provider must not be called")
+
+    providers = {
+        "grok": (lambda: False, _boom),
+        "stub": (
+            lambda: True,
+            lambda _p: json.dumps({"portfolio_score": 55, "portfolio_verdict": "HOLD"}),
+        ),
+    }
+    monkeypatch.setattr(llm_failover, "_PROVIDERS", providers)
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "grok,stub")
+
+    msg = llm_failover.attempt(operation="deep_analyze_portfolio", max_tokens=10, **_kwargs())
+    assert msg.provider == "stub"
+    assert msg.content[0].input["portfolio_score"] == 55
+    assert llm_failover.FAILOVER_COUNT == 1
+    assert llm_failover.LAST_FAILOVER == {
+        "operation": "deep_analyze_portfolio",
+        "provider": "stub",
+    }
+
+
+def test_attempt_tries_next_provider_when_the_first_raises(monkeypatch):
+    providers = {
+        "dead": (
+            lambda: True,
+            lambda _p: (_ for _ in ()).throw(llm_failover.FailoverUnavailable("boom")),
+        ),
+        "stub": (lambda: True, lambda _p: json.dumps({"portfolio_score": 41})),
+    }
+    monkeypatch.setattr(llm_failover, "_PROVIDERS", providers)
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "dead,stub")
+
+    msg = llm_failover.attempt(operation="screener", max_tokens=10, **_kwargs())
+    assert msg.provider == "stub"
+    assert msg.content[0].input["portfolio_score"] == 41
+
+
+def test_gateway_create_fails_over_on_api_status_error(monkeypatch, tmp_path):
+    """create() shares _call with stream(); a 503 must fail over, not only connection errors."""
+
+    def dead(*_a, **_k):
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        response = httpx.Response(503, request=request)
+        raise anthropic.APIStatusError("overloaded", response=response, body=None)
+
+    monkeypatch.setattr(llm_gateway, "create_client", dead)
+    _install_provider(monkeypatch, json.dumps({"portfolio_score": 33, "portfolio_verdict": "HOLD"}))
+
+    gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
+    msg = gw.create(
+        operation="deep_analyze_portfolio",
+        model="claude-sonnet-4-6",
+        max_tokens=1000,
+        **_kwargs(),
+    )
+    out = llm_contracts.extract_tool_input(
+        msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
+    )
+    assert out["portfolio_score"] == 33
+    assert llm_failover.FAILOVER_COUNT == 1
+
+
+def test_api_timeout_is_a_failover_trigger():
+    assert anthropic.APITimeoutError in llm_gateway._FAILOVER_TRIGGERS
+    assert anthropic.APIStatusError in llm_gateway._FAILOVER_TRIGGERS
+
+
+def test_coerce_fills_boolean_and_number_blanks_and_invalid_ints():
+    schema = {
+        "type": "object",
+        "required": ["ok", "beta", "n"],
+        "properties": {
+            "ok": {"type": "boolean"},
+            "beta": {"type": "number"},
+            "n": {"type": "integer"},
+        },
+    }
+    out = llm_failover.coerce_to_schema({}, schema)
+    assert out == {"ok": False, "beta": 0, "n": 0}
+    assert llm_failover.coerce_to_schema({"n": "not-a-number"}, schema)["n"] == 0
+    assert llm_failover.coerce_to_schema({"beta": "1.5"}, schema)["beta"] == 1.5
+
+
+def test_extract_json_raises_on_empty_and_on_arrays():
+    with pytest.raises(ValueError):
+        llm_failover.extract_json_object("")
+    with pytest.raises(ValueError):
+        llm_failover.extract_json_object("[1, 2]")
+
+
+def test_build_prompt_flattens_string_system_and_mixed_user_blocks():
+    kwargs = _kwargs()
+    kwargs["system"] = "plain system"
+    kwargs["messages"] = [
+        {"role": "user", "content": ["part-a", {"type": "text", "text": "part-b"}]},
+        {"role": "assistant", "content": "ignore me"},
+    ]
+    _name, prompt, _schema = llm_failover.build_prompt(kwargs)
+    assert "plain system" in prompt
+    assert "part-a" in prompt
+    assert "part-b" in prompt
+    assert "ignore me" not in prompt
