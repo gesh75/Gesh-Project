@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,18 +31,38 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.lock
-      - name: Authorize private gesh-core dependency
+
+      # ── Two-step install: the credential is live for exactly one package ──
+      # Same hazard class as tests.yml. Writing GESH_CORE_PAT into the runner's
+      # default ~/.gitconfig and then `pip install -r requirements.lock` lets a
+      # workflow_dispatch (or Copilot checkout) on a poisoned branch add an
+      # install-hook dependency that reads git config and steals the PAT.
+      # The PAT is in scope ONLY while the source-pinned gesh-core line is
+      # fetched; remaining deps install with no credential present.
+      - name: Install private gesh-core (credential-scoped)
         env:
           GESH_CORE_PAT: ${{ secrets.GESH_CORE_PAT }}
         run: |
-          if [ -n "$GESH_CORE_PAT" ]; then
-            git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
-          else
-            echo "::warning::GESH_CORE_PAT not set - the private gesh-core dependency will fail to install."
+          set -euo pipefail
+          export GIT_CONFIG_GLOBAL="$(mktemp)"
+          trap 'rm -f "$GIT_CONFIG_GLOBAL"' EXIT
+          if [ -z "${GESH_CORE_PAT:-}" ]; then
+            echo "::error::GESH_CORE_PAT not set — the private gesh-core dependency cannot install."
+            exit 1
           fi
-
-      - name: Install dependencies
-        run: |
+          git config --global url."https://x-access-token:${GESH_CORE_PAT}@github.com/".insteadOf "https://github.com/"
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.lock
-          python -m pip install pytest pytest-cov ruff
+          CORE_SPEC="$(grep '^gesh-core @' requirements.lock)"
+          case "$CORE_SPEC" in
+            "gesh-core @ git+https://github.com/gesh75/gesh-core.git@"*) ;;
+            *) echo "::error::unexpected gesh-core source: ${CORE_SPEC}"; exit 1 ;;
+          esac
+          pip install "$CORE_SPEC"
+
+      - name: Install remaining runtime + test deps (no credential in scope)
+        run: |
+          set -euo pipefail
+          grep -v '^gesh-core @' requirements.lock > ci-rest.lock
+          pip install -r ci-rest.lock
+          pip check
+          pip install pytest pytest-cov ruff
