@@ -392,6 +392,33 @@ def enabled() -> bool:
     return bool(provider_order())
 
 
+def current_provenance() -> tuple[str, int]:
+    """``(provider, failover_count)`` for engine_results + the analysis_runs model id.
+
+    A failover run must never be recorded as a clean Anthropic run. Lookup
+    errors stay fail-safe (``('anthropic', 0)``) so a broken observability
+    import cannot invent a failover. When the count is non-zero but
+    ``LAST_FAILOVER`` is missing or not a dict, the provider stays
+    ``anthropic`` — matching the original run_ai2 inline contract.
+    """
+    try:
+        count = int(FAILOVER_COUNT or 0)
+    except (TypeError, ValueError):
+        return "anthropic", 0
+    provider = "anthropic"
+    if count and isinstance(LAST_FAILOVER, dict):
+        provider = LAST_FAILOVER.get("provider") or "unknown"
+    return provider, count
+
+
+def analysis_model_label(default_model: str) -> str:
+    """DB / ledger model id: rewrite a failover so it cannot read as Claude."""
+    provider, count = current_provenance()
+    if count:
+        return f"{provider} (FAILOVER, anthropic down)"
+    return default_model
+
+
 # ── Entry point used by llm_gateway ──────────────────────────────────────────
 
 

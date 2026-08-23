@@ -193,9 +193,7 @@ try:
     _ai_provider, _failovers = 'anthropic', 0
     try:
         import llm_failover as _lf  # noqa: E402 — imported by llm_gateway already
-        _failovers = int(getattr(_lf, 'FAILOVER_COUNT', 0) or 0)
-        if _failovers and isinstance(getattr(_lf, 'LAST_FAILOVER', None), dict):
-            _ai_provider = _lf.LAST_FAILOVER.get('provider') or 'unknown'
+        _ai_provider, _failovers = _lf.current_provenance()
     except Exception:
         pass
     if _failovers:
@@ -247,10 +245,14 @@ try:
             from ai_analyzer import MODEL as _MODEL
         except Exception:
             _MODEL = 'claude-sonnet-4-6'
-        if _failovers:
-            # Recording the Claude model id for a Grok-authored run would make the
-            # analysis_runs provenance column silently wrong.
-            _MODEL = f"{_ai_provider} (FAILOVER, anthropic down)"
+        try:
+            import llm_failover as _lf  # noqa: E402
+            _MODEL = _lf.analysis_model_label(_MODEL)
+        except Exception:
+            if _failovers:
+                # Recording the Claude model id for a Grok-authored run would make the
+                # analysis_runs provenance column silently wrong.
+                _MODEL = f"{_ai_provider} (FAILOVER, anthropic down)"
         _run_id = _gdb.log_analysis(f"{_MODEL} (chain)", payload, ai_result)
 
         # ── Decision Ledger (Phase 4B, non-fatal) ─────────────────────────────
