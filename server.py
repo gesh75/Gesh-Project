@@ -227,6 +227,13 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
                 status_code=503,
                 detail="Claude API rate limit — wait a minute and retry",
             )
+        # 400 credit-too-low, 401 dead key, 5xx provider outage — not app bugs.
+        # Failover should have already run; if we're here, every vendor failed.
+        if isinstance(exc, anthropic.APIStatusError):
+            return HTTPException(
+                status_code=503,
+                detail="AI provider temporarily unavailable",
+            )
     except ImportError:
         pass
     if isinstance(exc, EnvironmentError) and "ANTHROPIC" in str(exc).upper():

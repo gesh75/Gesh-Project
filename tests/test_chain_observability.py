@@ -25,3 +25,7 @@ def test_start_gesh_main_invokes_venv_python_absolutely():
     assert "source venv/bin/activate" not in commands
     assert "venv/bin/python3" in commands
     assert "sys.prefix" in src
+    assert ".local/bin" in commands, (
+        "launchd PATH omits ~/.local/bin; without it grok_available() is False "
+        "and dashboard LLM failover cannot reach the Grok CLI"
+    )

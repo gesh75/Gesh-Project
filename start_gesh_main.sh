@@ -13,6 +13,12 @@ set -euo pipefail
 ulimit -n 65536
 cd "$(dirname "$0")"
 
+# Rule #55: launchd PATH has no Homebrew and no ~/.local/bin. The Grok CLI
+# used by llm_failover lives in ~/.local/bin; without this export,
+# grok_available() is False for every dashboard LLM call and the Anthropic
+# credit-exhaustion path 500s instead of failing over.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 REPO="$(pwd)"
 PY="$REPO/venv/bin/python3"
 

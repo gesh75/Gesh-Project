@@ -285,9 +285,29 @@ def coerce_to_schema(payload: Any, schema: dict[str, Any]) -> Any:
 
 # ── Providers ────────────────────────────────────────────────────────────────
 
+# launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin. The Grok CLI lives in
+# ~/.local/bin. shutil.which("grok") is therefore False in every :9000 process
+# started by com.gesh.main — the same hole that hid Grok from the scheduled
+# chain (scripts/daily_analysis_et.sh). Search well-known locations too.
+_GROK_FALLBACK_BINS: Final[tuple[str, ...]] = (
+    os.path.expanduser("~/.local/bin/grok"),
+    "/opt/homebrew/bin/grok",
+    "/usr/local/bin/grok",
+)
+
+
+def _grok_executable() -> str | None:
+    found = shutil.which("grok")
+    if found:
+        return found
+    for raw in _GROK_FALLBACK_BINS:
+        if os.path.isfile(raw) and os.access(raw, os.X_OK):
+            return raw
+    return None
+
 
 def grok_available() -> bool:
-    if shutil.which("grok") is None:
+    if _grok_executable() is None:
         return False
     # The CLI falls back to XAI_API_KEY when no OAuth session is cached.
     return Path.home().joinpath(".grok", "auth.json").exists() or bool(os.getenv("XAI_API_KEY"))
@@ -300,7 +320,8 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
     and would risk ARG_MAX as an argv string. --max-turns 1 keeps it a single
     completion rather than an agentic loop that might try to read the repo.
     """
-    if shutil.which("grok") is None:
+    grok_bin = _grok_executable()
+    if grok_bin is None:
         raise FailoverUnavailable("grok CLI not on PATH")
 
     timeout_s = timeout_s or _GROK_TIMEOUT_S
@@ -308,7 +329,7 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
         prompt_path = Path(workdir) / "prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
         base = [
-            "grok",
+            grok_bin,
             "--prompt-file",
             str(prompt_path),
             "--verbatim",

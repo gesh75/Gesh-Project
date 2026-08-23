@@ -146,6 +146,66 @@ def test_failover_message_reports_zero_anthropic_usage():
 # ── Gateway wiring ───────────────────────────────────────────────────────────
 
 
+def _credit_exhausted() -> anthropic.BadRequestError:
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(400, request=request)
+    return anthropic.BadRequestError(
+        "Your credit balance is too low to access the Anthropic API",
+        response=response,
+        body=None,
+    )
+
+
+def test_gateway_fails_over_when_anthropic_credits_are_exhausted(monkeypatch, tmp_path):
+    """Subscription lapsed / credit 400 is the actual 2026-08-22 dashboard 500.
+
+    BadRequestError is non-retryable, so it used to bubble out of _call_anthropic
+    as a raw SDK error. It is an APIStatusError and MUST fail over, not 500.
+    """
+
+    class _Stream:
+        def __enter__(self):
+            raise _credit_exhausted()
+
+        def __exit__(self, *a):
+            return False
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**k):
+                raise _credit_exhausted()
+
+            @staticmethod
+            def stream(**k):
+                return _Stream()
+
+    monkeypatch.setattr(llm_gateway, "create_client", lambda: _Client())
+    _install_provider(
+        monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"})
+    )
+    gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
+    msg = gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **_kwargs()
+    )
+    out = llm_contracts.extract_tool_input(
+        msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
+    )
+    assert out["portfolio_score"] == 64
+    assert llm_failover.FAILOVER_COUNT == 1
+
+
+def test_grok_executable_finds_home_local_bin_when_not_on_path(monkeypatch, tmp_path):
+    grok = tmp_path / "grok"
+    grok.write_text("#!/bin/sh\n")
+    grok.chmod(0o755)
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: None)
+    monkeypatch.setattr(llm_failover, "_GROK_FALLBACK_BINS", (str(grok),))
+    assert llm_failover._grok_executable() == str(grok)
+
+
 def test_gateway_fails_over_when_anthropic_unreachable(monkeypatch, tmp_path):
     _kill_anthropic(monkeypatch)
     _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))

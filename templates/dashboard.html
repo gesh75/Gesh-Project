@@ -1063,9 +1063,17 @@ function applyViewDisclosure(body){
 // Backstop: turn an owner-only 403 (or its raw JSON body) into a clean line.
 function friendlyErr(e){
   const m=(e&&e.message)?e.message:String(e||'');
-  return /Owner-only|model_book|\b403\b/.test(m)
-    ? 'Showing the latest cached research — live re-runs happen on the daily schedule.'
-    : m;
+  if(/Owner-only|model_book|\b403\b/.test(m))
+    return 'Showing the latest cached research — live re-runs happen on the daily schedule.';
+  // fetch() error bodies are often raw JSON {"detail":"..."}. Never dump that.
+  const brace=m.indexOf('{');
+  if(brace>=0){
+    try{
+      const j=JSON.parse(m.slice(brace));
+      if(j&&typeof j.detail==='string'&&j.detail.trim()) return j.detail;
+    }catch(_){}
+  }
+  return m;
 }
 
 async function loadPortfolio(){
@@ -1745,11 +1753,12 @@ const urgCls=u=>({'HIGH':'sp-high','MEDIUM':'sp-medium','LOW':'sp-low'}[u]||'sp-
 const sentCls=s=>s.includes('POSITIVE')||s==='BULLISH'?'sp-bullish':s.includes('NEGATIVE')||s==='BEARISH'?'sp-bearish':'sp-neutral';
 
 function normalizeNewsIntel(news){
-  if(!news) return {results:[], avg_score:0, market_mood:'NEUTRAL'};
+  if(!news) return {results:[], avg_score:null, market_mood:'UNAVAILABLE'};
   if(Array.isArray(news)){
     const results=news;
     const scores=results.map(n=>n.sentiment_score).filter(v=>typeof v==='number');
-    const avg=scores.length?Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*10)/10:0;
+    if(!scores.length) return {results, avg_score:null, market_mood:'UNAVAILABLE', cached:true};
+    const avg=Math.round(scores.reduce((a,b)=>a+b,0)/scores.length*10)/10;
     return {results, avg_score:avg, market_mood:avg>20?'RISK_ON':avg<-20?'RISK_OFF':'NEUTRAL', cached:true};
   }
   return news;
@@ -1773,8 +1782,9 @@ function renderIntelligence(sec, news, fund){
   // ── SEC Panel
   const secItems=(sec||[]).map(f=>{
     const a=f.analysis||{};
-    const sig=a.action_signal||'NEUTRAL';
-    const urg=a.urgency||'LOW';
+    const sig=(a.availability==='UNAVAILABLE'||a.action_signal==='PARSE_ERROR')
+      ? 'UNAVAILABLE' : (a.action_signal||'NEUTRAL');
+    const urg=(sig==='UNAVAILABLE')?'UNKNOWN':(a.urgency||'LOW');
     const findings=(a.key_findings||[]).slice(0,2).map(x=>`<div>• ${daEsc(x)}</div>`).join('');
     return `<div class="intel-card">
       <div class="intel-card-head">
@@ -1796,8 +1806,8 @@ function renderIntelligence(sec, news, fund){
   }).join('') || '<div class="empty" style="padding:20px">No recent filings found</div>';
 
   // ── News Panel
-  const moodScore=news?.avg_score||0;
-  const moodColor=moodScore>20?'var(--green)':moodScore<-20?'var(--red)':'var(--yellow)';
+  const moodScore=(typeof news?.avg_score==='number')?news.avg_score:null;
+  const moodColor=moodScore==null?'var(--muted)':moodScore>20?'var(--green)':moodScore<-20?'var(--red)':'var(--yellow)';
   const newsItems=(news?.results||news||[]).map(n=>{
     const a=n.analysis||n;
     const score=n.sentiment_score||0;
