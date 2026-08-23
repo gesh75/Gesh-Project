@@ -12,12 +12,13 @@ The critical design constraint: the object returned here must quack like an
 Satisfying that shape means NOTHING downstream changes when a fallback runs.
 
 Providers are tried in the order named by ``GESH_LLM_FAILOVER`` (default
-``grok,gemini``):
+``xai,grok,gemini``):
 
-  grok    — the Grok CLI in headless mode (``grok -p --output-format json``).
-            Uses the interactive OAuth session in ~/.grok/auth.json, so it needs
-            no XAI_API_KEY. This is the same "CLI as a courier" pattern the
-            snapshot fetcher already uses for the Robinhood MCP.
+  xai     — SpaceXAI HTTP Chat Completions (``https://api.x.ai/v1/chat/completions``)
+            with ``XAI_API_KEY``. Model ``grok-4.6``. This is the production path
+            for pay.geshfinance.com — no CLI, no launchd PATH hole.
+  grok    — the Grok CLI in headless mode. Uses ~/.grok/auth.json (grok.com
+            login, no extra API bill) when XAI_API_KEY is unset.
   gemini  — google-genai via GEMINI_API_KEY (see gemini_agent.py).
 
 Failover is deliberately LOUD: ``FAILOVER_COUNT`` / ``LAST_FAILOVER`` are module
@@ -38,6 +39,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Final
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 # Observability: mirrors llm_gateway.STRICT_DEGRADE_COUNT so a caller (run_ai2)
@@ -45,10 +48,13 @@ logger = logging.getLogger(__name__)
 FAILOVER_COUNT: int = 0
 LAST_FAILOVER: dict[str, Any] | None = None
 
-_DEFAULT_ORDER: Final[str] = "grok,gemini"
+_DEFAULT_ORDER: Final[str] = "xai,grok,gemini"
 _GROK_MODEL: Final[str] = os.getenv("GESH_GROK_MODEL", "grok-4.6")
 _GROK_TIMEOUT_S: Final[float] = float(os.getenv("GESH_GROK_TIMEOUT_S", "900"))
 _GROK_MAX_TURNS: Final[str] = os.getenv("GESH_GROK_MAX_TURNS", "4")
+_XAI_URL: Final[str] = "https://api.x.ai/v1/chat/completions"
+_XAI_MODEL: Final[str] = os.getenv("GESH_XAI_MODEL", "grok-4.6")
+_XAI_TIMEOUT_S: Final[float] = float(os.getenv("GESH_XAI_TIMEOUT_S", "900"))
 # gemini-2.5-pro 404s for new API users ("no longer available"). Flash is the
 # live default; the id is env-overridable and a 404 degrades to the lite model
 # the same way a retired Grok pin degrades to the CLI default.
@@ -388,6 +394,47 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
     return raw
 
 
+def xai_available() -> bool:
+    return bool(os.getenv("XAI_API_KEY"))
+
+
+def call_xai(prompt: str) -> str:
+    """SpaceXAI Chat Completions. Key from env only — never logged."""
+    key = os.getenv("XAI_API_KEY") or ""
+    if not key:
+        raise FailoverUnavailable("XAI_API_KEY unset")
+    model = os.getenv("GESH_XAI_MODEL") or _XAI_MODEL
+    try:
+        response = httpx.post(
+            _XAI_URL,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+            },
+            timeout=_XAI_TIMEOUT_S,
+        )
+    except Exception as exc:
+        raise FailoverUnavailable(f"xAI request failed: {type(exc).__name__}") from exc
+    if response.status_code >= 400:
+        raise FailoverUnavailable(f"xAI HTTP {response.status_code}: {response.text[:240]}")
+    try:
+        data = response.json()
+    except Exception as exc:
+        raise FailoverUnavailable("xAI returned non-JSON") from exc
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, str) and content.strip():
+            return content
+    raise FailoverUnavailable("xAI returned empty content")
+
+
 def gemini_available() -> bool:
     return bool(os.getenv("GEMINI_API_KEY"))
 
@@ -444,6 +491,7 @@ def call_gemini(prompt: str) -> str:
 
 
 _PROVIDERS: Final[dict[str, tuple[Any, Any]]] = {
+    "xai": (xai_available, call_xai),
     "grok": (grok_available, call_grok),
     "gemini": (gemini_available, call_gemini),
 }
@@ -498,9 +546,10 @@ def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessag
             FAILOVER_COUNT += 1
             LAST_FAILOVER = {"operation": operation, "provider": name}
             logger.warning("LLM_FAILOVER: operation=%s satisfied by %s", operation, name)
+            model = _XAI_MODEL if name == "xai" else (_GROK_MODEL if name == "grok" else name)
             return FailoverMessage(
                 provider=name,
-                model=_GROK_MODEL if name == "grok" else name,
+                model=model,
                 tool_name=tool_name,
                 payload=payload,
             )

@@ -267,9 +267,58 @@ def test_budget_exhaustion_triggers_failover():
     assert llm_gateway.LLMBudgetExceededError in llm_gateway._FAILOVER_TRIGGERS
 
 
-def test_provider_order_defaults_to_grok_then_gemini(monkeypatch):
+def test_provider_order_defaults_to_xai_then_grok_then_gemini(monkeypatch):
     monkeypatch.delenv("GESH_LLM_FAILOVER", raising=False)
-    assert llm_failover.provider_order() == ["grok", "gemini"]
+    assert llm_failover.provider_order() == ["xai", "grok", "gemini"]
+
+
+def test_xai_available_requires_key(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert llm_failover.xai_available() is False
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    assert llm_failover.xai_available() is True
+
+
+def test_call_xai_reads_chat_completions_content(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    monkeypatch.delenv("GESH_XAI_MODEL", raising=False)
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    def fake_post(url, **kwargs):
+        seen["url"] = url
+        seen["headers"] = kwargs.get("headers")
+        seen["json"] = kwargs.get("json")
+        return _Resp()
+
+    monkeypatch.setattr(llm_failover.httpx, "post", fake_post)
+    out = llm_failover.call_xai("return json")
+    assert out == '{"ok": true}'
+    assert seen["url"] == "https://api.x.ai/v1/chat/completions"
+    assert seen["headers"]["Authorization"] == "Bearer xai-test-not-a-real-key"
+    assert seen["json"]["model"] == "grok-4.6"
+
+
+def test_call_xai_raises_on_http_error_without_leaking_the_key(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-secret-key-must-not-leak")
+
+    class _Resp:
+        status_code = 401
+        text = "unauthorized"
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(llm_failover.httpx, "post", lambda *a, **k: _Resp())
+    with pytest.raises(llm_failover.FailoverUnavailable, match="xAI HTTP 401") as ei:
+        llm_failover.call_xai("hi")
+    assert "xai-secret-key-must-not-leak" not in str(ei.value)
 
 
 def test_build_prompt_embeds_schema_and_forbids_tools():
