@@ -25,7 +25,17 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 # Rule #55: launchd runs jobs with a minimal PATH that omits Homebrew.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+#
+# $HOME/.local/bin is load-bearing, not cosmetic: the Grok CLI installs there, and
+# llm_failover.grok_available() resolves it with a bare shutil.which("grok"). Without
+# this entry the LLM failover's PRIMARY leg is invisible to every scheduled run —
+# grok_available() returns False, the chain skips silently to Gemini, and nothing in
+# the log says the preferred provider was never even attempted. Verified 2026-08-21:
+#   env -i PATH="<the old value>" sh -c 'command -v grok'  → not found
+#   interactive                                            → /Users/…/.local/bin/grok
+# Every prior verification of the Grok path was done interactively, where it IS on
+# PATH — which is exactly why this survived. Rule #55, one level deeper.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 ET_GATE_LABEL=daily-analysis
 # shellcheck source=scripts/et_gate.sh

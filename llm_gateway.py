@@ -50,6 +50,25 @@ class LLMConfigurationError(RuntimeError):
     """Raised when model routing or client configuration is invalid."""
 
 
+class LLMProviderUnconfiguredError(LLMConfigurationError):
+    """The primary provider has no credentials at all — not a malformed setting.
+
+    Split out from LLMConfigurationError (2026-08-21) because the two cases warrant
+    OPPOSITE handling and were previously conflated:
+
+      * a malformed value (GESH_LLM_TIMEOUT_SECONDS="abc") is an operator error and
+        must fail LOUDLY — failing over would hide a bug;
+      * an ABSENT ANTHROPIC_API_KEY is the expected steady state whenever the
+        subscription lapses, and must fail OVER to Grok/Gemini.
+
+    Only this subclass is in _FAILOVER_TRIGGERS. Do NOT add the parent class — that
+    would silently launder real misconfiguration through a second vendor.
+
+    Subclasses LLMConfigurationError so every existing `except LLMConfigurationError`
+    handler keeps working unchanged.
+    """
+
+
 class LLMUnavailableError(RuntimeError):
     """Provider temporarily unreachable after exhausting retries."""
 
@@ -144,7 +163,8 @@ def create_client(*, timeout_seconds: float | None = None) -> anthropic.Anthropi
     """
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise LLMConfigurationError("Anthropic service is not configured")
+        # Unconfigured != misconfigured. This one fails OVER (see the class docstring).
+        raise LLMProviderUnconfiguredError("Anthropic service is not configured")
     timeout = default_timeout_seconds() if timeout_seconds is None else float(timeout_seconds)
     if not 1.0 <= timeout <= 600.0:
         raise LLMConfigurationError("GESH_LLM_TIMEOUT_SECONDS must be between 1 and 600")
@@ -614,10 +634,17 @@ class _Ledger:
 
 
 # Provider-level failures that justify handing the call to another vendor.
-# Deliberately excludes LLMRefusalError / LLMTruncatedError / LLMConfigurationError.
+# Deliberately excludes LLMRefusalError (a refusal must not be laundered through a second
+# vendor) and LLMTruncatedError (a schema-too-large bug a silent fallback would hide).
+#
+# LLMProviderUnconfiguredError IS included; its parent LLMConfigurationError is NOT.
+# An absent API key is the expected state once the subscription lapses and must fail over;
+# a malformed setting is an operator error and must still fail loudly. Adding the parent
+# class here would collapse that distinction — don't.
 _FAILOVER_TRIGGERS: Final[tuple[type[BaseException], ...]] = (
     LLMUnavailableError,
     LLMBudgetExceededError,
+    LLMProviderUnconfiguredError,
     anthropic.APIStatusError,
     anthropic.APIConnectionError,
     anthropic.APITimeoutError,

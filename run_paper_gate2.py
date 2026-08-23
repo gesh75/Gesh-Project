@@ -124,6 +124,8 @@ def gate_and_execute(
     gate_evaluate,
     recorder,
     scanner_source: str = 'daily-analysis',
+    reviewer=None,
+    review_blocks: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Causal audit chain per order: intent → risk decision → record if APPROVED.
 
@@ -132,6 +134,16 @@ def gate_and_execute(
     A REJECTED intent records nothing. A recorder failure is per-order
     fail-soft: logged on the gate result, remaining orders still gated.
     Inputs are never mutated — the recorder receives uuid-stamped copies.
+
+    Broker preflight (Stage 2, `reviewer`): an optional callable taking the
+    action dict and returning an object with ``.status`` / ``.as_dict()``
+    (see rh_order_review.review_action). It runs AFTER the 9 gates approve and
+    BEFORE the recorder, so `review_blocks=True` can genuinely veto — a
+    post-hoc annotation could not, and a config flag that silently does nothing
+    is worse than no flag. It places nothing; a reviewer exception is
+    swallowed onto the gate result. Only an explicitly conclusive REJECTED
+    verdict vetoes: UNAUTHORIZED/UNAVAILABLE/ERROR mean "not checked" and must
+    never be read as either approval or refusal.
     """
     gate_results: list[dict] = []
     created: list[dict] = []
@@ -161,6 +173,25 @@ def gate_and_execute(
         print(f"  {mark} {a['symbol']:6s} {a['action']:5s} — {verdict.reason or 'approved'}")
         if not verdict.approved:
             continue
+
+        # ── Broker preflight (read-only; places nothing) ──────────────────────
+        if reviewer is not None:
+            try:
+                rv = reviewer(a)
+                gate_results[-1] = {**gate_results[-1], 'broker_review': rv.as_dict()}
+                note = rv.status if rv.checked else f"{rv.status} (not checked)"
+                extra = f" · {len(rv.alerts)} alert(s)" if getattr(rv, 'alerts', ()) else ''
+                print(f"     ↳ broker preflight: {note}{extra}")
+                if review_blocks and rv.status == 'REJECTED':
+                    gate_results[-1] = {**gate_results[-1],
+                                        'approved': False,
+                                        'reason': f"BROKER_REVIEW: {rv.message or 'rejected'}"}
+                    print(f"     ⛔ {a['symbol']} vetoed by broker preflight — no paper record")
+                    continue
+            except Exception as e:                      # never break the chain
+                gate_results[-1] = {**gate_results[-1], 'broker_review_error': str(e)}
+                print(f"     ↳ broker preflight failed (non-fatal): {e}")
+
         try:
             recs = recorder([{**a, 'intent_uuid': intent.intent_uuid}],
                             holdings, total_eq, scanner_source=scanner_source)
@@ -312,12 +343,27 @@ def main(results_path: str | Path | None = None) -> int:
             eng.get('consensus') if isinstance(eng.get('consensus'), dict) else {},
             kelly if isinstance(kelly, dict) else {},
         )
+        # Stage 2 broker preflight — read-only simulation of each approved order.
+        # Import is best-effort: a missing/broken module must not cost the chain
+        # its paper session, so the reviewer simply stays None.
+        _reviewer = None
+        _review_blocks = False
+        try:
+            import rh_order_review
+            if rh_order_review.enabled():
+                _reviewer = rh_order_review.review_action
+                _review_blocks = rh_order_review.blocking()
+        except Exception as e:
+            print(f"{_t()} [gate] broker preflight unavailable (non-fatal): {e}")
+
         gate_results, paper_created = gate_and_execute(
             executable, holdings, total_eq, gate_payload, confidence_by_sym,
             quote_as_of_by_symbol=(eng.get('run_manifest') or {}).get('quote_as_of') or {},
             intent_builder=manual_intent,
             gate_evaluate=risk_gate_evaluate,
             recorder=run_paper_session,
+            reviewer=_reviewer,
+            review_blocks=_review_blocks,
         )
         paper_block['created'] = paper_created
         print(f"{_t()} [gate] paper session: {len(paper_created)} record(s) (approved intents only)")
@@ -394,6 +440,17 @@ def main(results_path: str | Path | None = None) -> int:
     approved = sum(1 for g in gate_results if g['approved'])
     print(f"\n{_t()} [gate] Done — {len(gate_results)} gated ({approved} approved), "
           f"{len(paper_block['created'])} paper records, {len(paper_block['closed'])} closed")
+
+    # Broker-preflight coverage. Reported as checked-vs-total rather than a bare
+    # count so an all-UNAUTHORIZED day can never read as an all-clear.
+    _rv = [g['broker_review'] for g in gate_results if isinstance(g.get('broker_review'), dict)]
+    if _rv:
+        _checked = sum(1 for r in _rv if r.get('checked'))
+        _statuses = {}
+        for r in _rv:
+            _statuses[r.get('status', '?')] = _statuses.get(r.get('status', '?'), 0) + 1
+        _detail = ' '.join(f"{k}={v}" for k, v in sorted(_statuses.items()))
+        print(f"{_t()} [gate] broker preflight: {_checked}/{len(_rv)} conclusively checked · {_detail}")
     return 0
 
 

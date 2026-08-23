@@ -1,7 +1,7 @@
 ---
 name: kelly-sizer
 description: Kelly criterion position sizing, trim/add, rebalance recommendations.
-model: grok-build
+model: grok-4.6
 ---
 
 # Skill: Kelly Criterion Position Sizer

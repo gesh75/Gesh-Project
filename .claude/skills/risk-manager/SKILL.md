@@ -1,7 +1,7 @@
 ---
 name: risk-manager
 description: Portfolio risk — VaR, Monte Carlo stress tests, drawdown and exposure analysis.
-model: grok-build
+model: grok-4.6
 ---
 
 # Skill: AI Risk Manager

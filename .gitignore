@@ -103,3 +103,4 @@ docs/ATTORNEY_*
 # Runtime manifests and degraded reports (ephemeral, per-run)
 run_manifest.json
 gesh_report.degraded.*.html
+.claude/settings.local.json

@@ -1,7 +1,7 @@
 ---
 name: regime-detector
 description: ADX/Bollinger/RSI regime detection and technical context for symbols.
-model: grok-build
+model: grok-4.6
 ---
 
 # Skill: Market Regime Detector

@@ -377,6 +377,26 @@ try:
     # Expects dict keyed by symbol
     holdings_dict = {h["symbol"]: h for h in holdings}
     tax_report = get_harvest_summary(holdings_dict)
+
+    # Lot-level enrichment (additive; never edits the base report's keys).
+    # Closes a real correctness gap: get_wash_status() reads only wash_sale_log,
+    # which record_harvest() writes — so it sees prior harvest SALES and is blind
+    # to PURCHASES, though the IRS window runs 30 days either side of the loss
+    # sale. Best-effort: a lot-fetch failure must never cost us the base report.
+    try:
+        from tax_lots_enrich import enrich as _enrich_lots
+
+        tax_report = _enrich_lots(tax_report, holdings)
+        _cov = tax_report.get("lot_coverage") or {}
+        _warn = tax_report.get("purchase_wash_warnings") or []
+        print(f"  lot coverage: {_cov.get('available', 0)}/{_cov.get('checked', 0)} symbols"
+              f" · purchase-side wash warnings: {len(_warn)}")
+        for _w in _warn:
+            print(f"    ⚠ {_w['ticker']}: bought {_w['bought_days_ago']}d ago —"
+                  f" wash risk, safe in {_w['days_until_safe']}d")
+    except Exception as _e:
+        print(f"  lot enrichment skipped (non-fatal): {_e}")
+
     results["tax_report"] = tax_report
     print(f"  harvest candidates: {len(tax_report.get('candidates', []))}")
 except Exception as e:
