@@ -5560,8 +5560,9 @@ async def mybook_analyze(request: Request):
                 raise HTTPException(
                     status_code=404, detail="No market data for any symbol on your book"
                 )
-            raise HTTPException(status_code=500, detail="Book analysis failed — please retry.")
-        if latest.get("status") == "done" and latest.get("result") is not None:
+            # A failed generation is over. Do not 500 the poll — enqueue a new
+            # run so "Analyze My Portfolio" recovers in one click after an LLM outage.
+        elif latest.get("status") == "done" and latest.get("result") is not None:
             auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
             return {"status": "ok", "cached": False, "data": latest["result"]}
 
