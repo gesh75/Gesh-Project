@@ -60,7 +60,11 @@ eng = json.load(open('engine_results.json'))
 ```
 
 Sanity: `ai_result.portfolio_score` non-zero; `vol_models` not all-identical;
-snapshot age in the log ≤30 min.
+snapshot age in the log ≤30 min. Also read `ai_provider` / `ai_failover_count`:
+a failover run (`ai_failover_count > 0`) is **not** a clean Claude run — say
+so in the briefing (the report already renders a `MODEL FAILOVER` banner).
+A `portfolio_score` of 0 with empty `holdings_analysis` after failover is a
+coerced-blank payload, not a real 0-score book — treat it as a failed Step 3.
 
 ## Step 3 — Narrate (your only creative work)
 
@@ -121,3 +125,11 @@ INFORMATIONAL PURPOSES ONLY".
 - Broker preflight (step 4/5): `[gate] broker preflight: N/M conclusively
   checked`. An all-`UNAUTHORIZED` day is expected on the current OAuth scope —
   not an all-clear, and not a veto (`GESH_REVIEW_BLOCKING` defaults off).
+- Step 3/5 can fail over to Grok/Gemini when Anthropic is down
+  (`GESH_LLM_FAILOVER`, default `grok,gemini`). Look for
+  `WARNING: ANTHROPIC UNAVAILABLE` in the chain log and
+  `ai_provider` / `ai_failover_count` in `engine_results.json`.
+  Engine numbers are unaffected; the narrative is not
+  grammar-constrained. Empty `GESH_LLM_FAILOVER` disables it.
+  See `docs/LLM_OPERATIONS.md` §6. This is **separate** from
+  snapshot step 1/5's `claude -p` courier (`direct MCP fetch failed`).

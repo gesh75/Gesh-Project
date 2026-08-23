@@ -4,7 +4,7 @@
 
 # 🏛️ GESH Financial — Architecture
 
-GESH Financial is a single-node Python platform that turns a **live Robinhood portfolio** into AI-driven trading intelligence. A FastAPI server (port `9000`) ingests holdings via `robin_stocks`, runs a stack of quantitative engines (ADX/Bollinger/RSI **regime** with a live FRED macro layer, **Monte Carlo**, **Kelly** sizing, **FFT cycles**, EWMA/GARCH volatility) and a **12-node consensus** voting engine, then routes structured prompts to Claude (Sonnet/Haiku), Gemini, and a local Ollama model for deep analysis and contrarian second opinions. Every signal is funneled through a typed **`TradeIntent`** contract and an **8-gate risk gate** before a paper-mode execution layer simulates orders — with the whole `signal → gate → execute` chain audited to SQLite and scheduled by an APScheduler autopilot. The Chart.js dashboard is the customer-facing product; the trading engine runs silently to accumulate paper win-rate proof.
+GESH Financial is a single-node Python platform that turns a **live Robinhood portfolio** into AI-driven trading intelligence. A FastAPI server (port `9000`) ingests holdings via `robin_stocks`, runs a stack of quantitative engines (ADX/Bollinger/RSI **regime** with a live FRED macro layer, **Monte Carlo**, **Kelly** sizing, **FFT cycles**, EWMA/GARCH volatility) and a **12-node consensus** voting engine, then routes structured prompts through `llm_gateway` to Claude (Sonnet/Haiku) — with a loud Grok/Gemini failover when Anthropic is down — plus Gemini and a local Ollama model for second opinions. Every signal is funneled through a typed **`TradeIntent`** contract and an **8-gate risk gate** before a paper-mode execution layer simulates orders — with the whole `signal → gate → execute` chain audited to SQLite and scheduled by an APScheduler autopilot. The Chart.js dashboard is the customer-facing product; the trading engine runs silently to accumulate paper win-rate proof. Operator contract: [`LLM_OPERATIONS.md`](LLM_OPERATIONS.md).
 
 On top of the owner engine sits a **per-user customer surface** (the *Analyze* tab): any-ticker research cards (company-name→ticker search, 12-node consensus, momentum RSI/MACD/Volume, support/resistance trade setup, EPS beat/miss earnings, regime, cycle, fundamentals, analyst, news), a price-grounded **AI research card** (one Claude call/symbol/15 min), a per-user **watchlist + portfolio book**, and a full engine run on the customer's own book — all money-masked so a customer never sees the owner's real account dollars. Customer HTTP also runs inside `unauthenticated_rh_fallback()` so a Yahoo 401 cannot restore the owner's `robin_stocks` pickle (PR #258). See [`CUSTOMER_SURFACE.md`](CUSTOMER_SURFACE.md).
 
@@ -44,6 +44,7 @@ flowchart TB
 
     subgraph AI["AI Models"]
         claude["Anthropic Claude - Sonnet and Haiku"]:::ai
+        grok["Grok CLI / Gemini - failover only"]:::ai
         gemini["Google Gemini 2.5"]:::ai
         ollama["Ollama llama3.2"]:::ai
     end
@@ -60,6 +61,7 @@ flowchart TB
     gesh -->|"history, fundamentals"| yf
     gesh -->|"rates, yield curve, CPI"| fred
     gesh -->|"forced-tool JSON"| claude
+    gesh -->|"failover when Claude is down"| grok
     gesh -->|"second opinion"| gemini
     gesh -->|"offline fallback"| ollama
     gesh -->|"sentiment, macro"| news
@@ -103,7 +105,7 @@ flowchart TB
 
     subgraph BRAIN["Consensus and AI Routing"]
         cons["consensus.py - 12 nodes"]:::data
-        ai["ai_analyzer.py - Claude routing and schemas"]:::ai
+        ai["llm_gateway + ai_analyzer - Claude, loud Grok/Gemini failover"]:::ai
     end
 
     subgraph EXEC["trading Execution"]
@@ -220,7 +222,7 @@ flowchart LR
     news["news, SEC, fundamentals"]:::ai --> gdb[("gesh.db - sentiment")]:::store
     gdb --> cons["consensus - 12 nodes to verdict"]:::data
     eng --> cons
-    cons --> claude["Claude forced-JSON - deep analysis"]:::ai
+    cons --> claude["llm_gateway - Claude, failover to Grok or Gemini"]:::ai
     claude --> persist[("gesh_financial.db - analysis, orders")]:::store
     cons --> persist
     persist --> ui["Chart.js dashboard plus cached api"]:::core
