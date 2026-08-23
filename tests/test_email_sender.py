@@ -62,12 +62,15 @@ def test_send_email_2xx_returns_true(monkeypatch: pytest.MonkeyPatch):
         return SimpleNamespace(status_code=200, text="ok")
 
     monkeypatch.setitem(__import__("sys").modules, "requests", SimpleNamespace(post=_post))
-    assert email_sender.send_email(
-        "user@example.com",
-        "Your GESH access",
-        "<p>welcome</p>",
-        headers={"List-Unsubscribe": "<mailto:x>"},
-    ) is True
+    assert (
+        email_sender.send_email(
+            "user@example.com",
+            "Your GESH access",
+            "<p>welcome</p>",
+            headers={"List-Unsubscribe": "<mailto:x>"},
+        )
+        is True
+    )
     assert captured["url"] == email_sender._RESEND_ENDPOINT
     assert captured["timeout"] == 15
     assert captured["headers"]["Authorization"] == "Bearer re_test_not_a_real_key"

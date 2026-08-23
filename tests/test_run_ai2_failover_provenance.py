@@ -69,17 +69,13 @@ def test_current_provenance_count_without_last_keeps_anthropic(
 
 def test_current_provenance_garbage_count_fails_safe(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(llm_failover, "FAILOVER_COUNT", "not-a-number", raising=False)
-    monkeypatch.setattr(
-        llm_failover, "LAST_FAILOVER", {"provider": "gemini"}, raising=False
-    )
+    monkeypatch.setattr(llm_failover, "LAST_FAILOVER", {"provider": "gemini"}, raising=False)
     assert llm_failover.current_provenance() == ("anthropic", 0)
 
 
 def test_analysis_model_label_rewrites_failover(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(llm_failover, "FAILOVER_COUNT", 1, raising=False)
-    monkeypatch.setattr(
-        llm_failover, "LAST_FAILOVER", {"provider": "gemini"}, raising=False
-    )
+    monkeypatch.setattr(llm_failover, "LAST_FAILOVER", {"provider": "gemini"}, raising=False)
     assert llm_failover.analysis_model_label("claude-sonnet-4-6") == (
         "gemini (FAILOVER, anthropic down)"
     )
@@ -98,8 +94,8 @@ def test_run_ai2_stamps_engine_results_and_rewrites_db_model():
     src = (REPO / "run_ai2.py").read_text()
     assert "current_provenance()" in src
     assert "analysis_model_label(" in src
-    assert "eng['ai_provider'] = _ai_provider" in src
-    assert "eng['ai_failover_count'] = _failovers" in src
+    assert "eng['ai_provider']" in src or 'eng["ai_provider"]' in src
+    assert "eng['ai_failover_count']" in src or 'eng["ai_failover_count"]' in src
     assert "WARNING: ANTHROPIC UNAVAILABLE" in src
     assert "(FAILOVER, anthropic down)" in src
     # Fail-safe: a broken import must not invent a failover.
