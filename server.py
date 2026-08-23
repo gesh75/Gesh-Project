@@ -5330,15 +5330,32 @@ def _run_book_radar(holdings: list[dict], total_equity: float | None) -> dict:
     )
 
 
+def _blank_book_analysis(*, reason: str) -> dict:
+    """Typed empty LLM result. Scores stay None — never a fabricated 0."""
+    return {
+        "portfolio_verdict": "",
+        "portfolio_type": "",
+        "portfolio_score": None,
+        "risk_score": None,
+        "diversification_score": None,
+        "holdings_analysis": [],
+        "portfolio_risks": [],
+        "market_context": "",
+        "ai_unavailable": True,
+        "ai_unavailable_reason": reason,
+    }
+
+
 def _run_book_engines(payload: dict) -> dict:
     """Blocking engine suite on a customer payload — runs in a worker thread.
-    Regime/Kelly/Monte-Carlo are best-effort (partial results beat a 500); the
-    Claude deep analysis is the core deliverable and failures propagate.
 
-    Order matters: the deep analysis runs BEFORE Kelly so its per-holding verdicts
-    (verdict + fair-value gap) feed run_kelly_analysis exactly like the owner
-    pipeline does (/api/kelly builds the same map from the latest analysis run) —
-    without them Kelly sizes verdict-blind."""
+    Kelly / Monte Carlo / radar are local math (API spend $0) and are the
+    deliverable when Anthropic/Grok/Gemini cannot narrate. The LLM narrative
+    is best-effort: a provider outage must not 500 the Analyze button.
+
+    Order: try deep analysis BEFORE Kelly so per-holding verdicts can feed
+    sizing when a model is available; if it fails, Kelly sizes verdict-blind.
+    """
     # Cap expensive detailed AI, regime, and analyst enrichment. Kelly still
     # sizes the full book; holdings outside the enrichment cap receive neutral
     # analyst-upside input instead of triggering unbounded per-symbol network IO.
@@ -5388,7 +5405,14 @@ def _run_book_engines(payload: dict) -> dict:
         regime_context = detect_regimes(analyzed_symbols).get("regime_summary")
     except Exception:
         pass
-    analysis = _deep_analyze_for_book(analysis_payload, regime_context, truncated)
+    try:
+        analysis = _deep_analyze_for_book(analysis_payload, regime_context, truncated)
+    except Exception as exc:
+        logger.warning(
+            "mybook deep analysis unavailable (%s) — returning engines only",
+            type(exc).__name__,
+        )
+        analysis = _blank_book_analysis(reason=type(exc).__name__)
     if truncated:
         analysis["holdings_truncated"] = truncated
     ai_verdicts = {}

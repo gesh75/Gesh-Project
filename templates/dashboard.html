@@ -3386,7 +3386,11 @@ async function mybookRenderResult(d, box, meta){
       </div>`
     : '';
   await loadDcf();  // DCF rows render only if the map is here before the cards
-  box.innerHTML=`${histBanner}
+  const aiDown=!!a.ai_unavailable;
+  const aiBanner=aiDown
+    ? `<div class="card" style="margin-bottom:16px;border-left:3px solid var(--yellow)"><div style="font-size:13px;color:var(--yellow);font-weight:600">AI narrative unavailable — showing local Kelly sizing and Monte Carlo (no API spend).</div><div style="margin-top:5px;font-size:12px;color:var(--muted)">Snowflake / fair-value cards need a language model. Engines below are computed on this server.</div></div>`
+    : '';
+  box.innerHTML=`${histBanner}${aiBanner}
       <div class="card" style="margin-bottom:16px"><div style="${T}">🧠 Portfolio Verdict</div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <span class="da-holding vrd" style="${daVerdictStyle(a.portfolio_verdict)}">${daEsc(a.portfolio_verdict||'—')}</span>
