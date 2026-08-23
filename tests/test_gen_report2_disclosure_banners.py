@@ -51,9 +51,7 @@ def banners() -> dict[str, object]:
 
 
 def test_provider_banner_hidden_on_a_clean_anthropic_run(banners):
-    html = banners["_provider_banner"](
-        {"ai_provider": "anthropic", "ai_failover_count": 0}
-    )
+    html = banners["_provider_banner"]({"ai_provider": "anthropic", "ai_failover_count": 0})
     assert html == ""
 
 
@@ -69,16 +67,12 @@ def test_provider_banner_hidden_when_provider_is_still_anthropic(banners):
     run_ai2 defaults ai_provider to 'anthropic' when LAST_FAILOVER is missing.
     The banner must not claim a vendor swap it cannot name.
     """
-    html = banners["_provider_banner"](
-        {"ai_provider": "anthropic", "ai_failover_count": 2}
-    )
+    html = banners["_provider_banner"]({"ai_provider": "anthropic", "ai_failover_count": 2})
     assert html == ""
 
 
 def test_provider_banner_discloses_grok_failover(banners):
-    html = banners["_provider_banner"](
-        {"ai_provider": "grok", "ai_failover_count": 1}
-    )
+    html = banners["_provider_banner"]({"ai_provider": "grok", "ai_failover_count": 1})
     assert "MODEL FAILOVER" in html
     assert "<b>grok</b>" in html
     assert "not grammar-constrained" in html
@@ -86,20 +80,18 @@ def test_provider_banner_discloses_grok_failover(banners):
 
 
 def test_provider_banner_discloses_gemini_failover(banners):
-    html = banners["_provider_banner"](
-        {"ai_provider": "gemini", "ai_failover_count": 1}
-    )
+    html = banners["_provider_banner"]({"ai_provider": "gemini", "ai_failover_count": 1})
     assert "MODEL FAILOVER" in html
     assert "<b>gemini</b>" in html
 
 
 def test_provider_banner_escapes_untrusted_provider_name(banners):
     html = banners["_provider_banner"](
-        {"ai_provider": '<img src=x onerror=alert(1)>', "ai_failover_count": 1}
+        {"ai_provider": "<img src=x onerror=alert(1)>", "ai_failover_count": 1}
     )
     assert "<img" not in html
-    assert "onerror" not in html
     assert "&lt;img" in html
+    assert "&gt;" in html
 
 
 # ── SIGNAL vs GATE (2026-07-17) ──────────────────────────────────────────────
