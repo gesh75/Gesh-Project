@@ -1089,6 +1089,8 @@ sandboxed output; the previous snapshot is recoverable from
 
 ## Robinhood MCP as a data source — 2026-08-21 ★★ (Stages 1 + 2)
 
+Operator runbook (APIs, env, pitfalls): [`docs/RH_MCP.md`](docs/RH_MCP.md).
+
 **The agent MCP exposes 54 tools; the chain was using 3.** `fetch_snapshot_direct.py`
 (step 1/5, tier 1) has always authenticated against `agent.robinhood.com/mcp/trading`
 and called only `get_portfolio` / `get_equity_positions` / `get_equity_quotes`. A
