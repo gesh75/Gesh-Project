@@ -206,3 +206,53 @@ def test_missing_monte_carlo_does_not_paint_var_as_ok_zero(tmp_path):
     median_block = report.split("MC Median", 1)[1][:200]
     assert "N/A" in median_block
     assert "$0" not in median_block
+
+
+def test_missing_ai_scores_render_na_not_zero(tmp_path):
+    """Failover typed-blanks (portfolio_score=None) must not render as 0/100."""
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 1000, "portfolio_equity": 0},
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    ai_block = report.split("AI Score", 1)[1][:200]
+    assert "N/A" in ai_block
+    assert "0/100" not in ai_block
+    risk_block = report.split("AI Risk Opinion", 1)[1][:200]
+    assert "N/A" in risk_block
+    assert "0/100" not in risk_block
+    div_block = report.split("Diversification", 1)[1][:200]
+    assert "N/A" in div_block
+    assert "0/100" not in div_block
+
+
+def test_measured_zero_ai_score_is_kept(tmp_path):
+    """A real 0 is a measurement. Only missing/unparseable scores become N/A."""
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 1000, "portfolio_equity": 0},
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {
+                "portfolio_score": 0,
+                "risk_score": 0,
+                "diversification_score": 0,
+            },
+        },
+    )
+    assert "0/100" in report.split("AI Score", 1)[1][:200]
+    assert "0/100" in report.split("AI Risk Opinion", 1)[1][:200]
+    assert "0/100" in report.split("Diversification", 1)[1][:200]

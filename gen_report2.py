@@ -44,6 +44,12 @@ def _optional_usd(value) -> str:
     return "N/A" if n is None else f"${n:,.0f}"
 
 
+def _score_display(value) -> str:
+    """AI score card. Missing/unparseable renders N/A, never a fake 0/100."""
+    n = _finite_float(value)
+    return "N/A" if n is None else f"{n:g}/100"
+
+
 def _cvar_95_display(monte: dict, fallback_equity: float) -> str:
     """CVaR as a percent of equity. Derive it; never default a missing key to 0.0%."""
     raw = monte.get("cvar_95_pct") if isinstance(monte, dict) else None
@@ -146,10 +152,12 @@ day_gain_col = "#00e87a" if day_gain_usd >= 0 else "#ff3c5a"
 
 # Score colour helpers
 def score_col(s):
-    s = float(s or 0)
-    if s >= 75:
+    n = _finite_float(s)
+    if n is None:
+        return "#888"
+    if n >= 75:
         return "#00e87a"
-    if s >= 50:
+    if n >= 50:
         return "#f0b429"
     return "#ff3c5a"
 
@@ -765,9 +773,9 @@ else:
     yield_html = '<div style="color:#666;font-style:italic">Yield data unavailable.</div>'
 
 # ─── Scores box ──────────────────────────────────────────────────────────────
-port_score = ai.get("portfolio_score", 0)
-risk_score = ai.get("risk_score", 0)
-div_score = ai.get("diversification_score", 0)
+port_score = _finite_float(ai.get("portfolio_score") if isinstance(ai, dict) else None)
+risk_score = _finite_float(ai.get("risk_score") if isinstance(ai, dict) else None)
+div_score = _finite_float(ai.get("diversification_score") if isinstance(ai, dict) else None)
 port_type = ai.get("portfolio_type", "")
 port_verdict = ai.get("portfolio_verdict", "")
 mkt_ctx = ai.get("market_context", "")
@@ -933,12 +941,12 @@ html = f"""<!DOCTYPE html>
     </div>
     <div class="stat-card">
       <div class="sl">AI Score</div>
-      <div class="sv" style="color:{score_col(port_score)}">{port_score}/100</div>
+      <div class="sv" style="color:{score_col(port_score)}">{_score_display(port_score)}</div>
       <div style="font-size:9px;color:#7a8a99">model-generated, not a calculation</div>
     </div>
     <div class="stat-card">
       <div class="sl">AI Risk Opinion</div>
-      <div class="sv" style="color:{score_col(100 - risk_score)}">{risk_score}/100</div>
+      <div class="sv" style="color:{score_col(None if risk_score is None else 100 - risk_score)}">{_score_display(risk_score)}</div>
       <div style="font-size:9px;color:#7a8a99">model-generated, not a calculation</div>
     </div>
     <div class="stat-card">
@@ -965,7 +973,7 @@ html = f"""<!DOCTYPE html>
     </div>
     <div class="stat-card">
       <div class="sl">Diversification</div>
-      <div class="sv" style="color:{score_col(div_score)}">{div_score}/100</div>
+      <div class="sv" style="color:{score_col(div_score)}">{_score_display(div_score)}</div>
     </div>
   </div>
 
