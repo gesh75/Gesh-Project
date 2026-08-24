@@ -38,3 +38,25 @@ def test_report_does_not_default_missing_cvar_or_garch_to_zero():
     assert "format_optional_usd" in src
     assert "cvar_95_pct(monte)" in src
     assert "var_95_status" in src
+
+
+def test_lot_coverage_caveat_never_reads_as_all_clear():
+    """An MCP outage must render as 'unknown, not clear' — never as no wash risk."""
+    src = (REPO_ROOT / "gen_report2.py").read_text()
+    assert "wash-sale status unknown, not clear" in src
+    assert "lot_coverage" in src
+
+
+def test_engines_lot_enrichment_is_best_effort():
+    """A lot-fetch failure must never drop the base harvest report."""
+    src = (REPO_ROOT / "run_engines2.py").read_text()
+    assert "from tax_lots_enrich import enrich" in src
+    assert "lot enrichment skipped (non-fatal)" in src
+
+
+def test_paper_gate_wires_reviewer_through_enabled_flag():
+    """main() must honor GESH_BROKER_REVIEW rather than hard-wiring a no-op."""
+    src = (REPO_ROOT / "run_paper_gate2.py").read_text()
+    assert "rh_order_review.enabled()" in src
+    assert "reviewer=_reviewer" in src
+    assert "review_blocks=_review_blocks" in src
