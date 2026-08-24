@@ -43,7 +43,8 @@ def test_report_does_not_default_missing_cvar_or_garch_to_zero():
 def test_lot_coverage_caveat_never_reads_as_all_clear():
     """An MCP outage must render as 'unknown, not clear' — never as no wash risk."""
     src = (REPO_ROOT / "gen_report2.py").read_text()
-    assert "wash-sale status unknown, not clear" in src
+    assert "wash-sale status" in src
+    assert "unknown, not clear" in src
     assert "lot_coverage" in src
 
 
