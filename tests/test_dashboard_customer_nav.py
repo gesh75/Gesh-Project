@@ -14,6 +14,7 @@ an `LT_Macro` consensus node. There is no such node on this branch (it is a
 separate draft PR); the panel is an advisory long-term macro overlay. The literal
 token `LT_Macro` must not appear anywhere in the template.
 """
+
 from __future__ import annotations
 
 import re
@@ -30,7 +31,9 @@ TEMPLATE = Path(__file__).resolve().parents[1] / "templates" / "dashboard.html"
 
 def _composed(role: str) -> str:
     import server
+
     return server._render_dashboard(role)
+
 
 # Split the markup on each sidebar GROUP container `<div class="sb-group"…>` /
 # `<div class="sb-group owner-only">` — but NOT on `<div class="sb-group-title">`
@@ -72,7 +75,24 @@ def test_no_sidebar_nav_group_reaches_a_customer_unmarked():
             continue
         for tab in re.findall(r'data-tab="(\w+)"', group):
             assert f'id="tab-{tab}"' in customer, (
-                f"customer sidebar links to tab '{tab}' with no pane in their document")
+                f"customer sidebar links to tab '{tab}' with no pane in their document"
+            )
+
+
+def test_da_deadline_covers_xai_timeout():
+    """Grok/xAI deep analysis is 7–15 min. A 300s client abort cancelled live runs."""
+    html = TEMPLATE.read_text()
+    m = re.search(r"const DA_DEADLINE_MS=(\d+)", html)
+    assert m, "DA_DEADLINE_MS missing from dashboard.html"
+    assert int(m.group(1)) >= 900000
+    assert "Powered by Claude" not in html
+
+
+def test_analyze_ai_does_not_call_a_503_a_sign_in_wall():
+    """Claude-down / no-key 503 must not be labelled 'sign in'."""
+    html = TEMPLATE.read_text()
+    assert "res.status===401||res.status===503" not in html
+    assert "AI research is temporarily unavailable" in html
 
 
 def test_margin_panel_makes_no_lt_macro_node_claim():
@@ -87,8 +107,8 @@ def test_customer_home_pane_and_default_exist():
     html = TEMPLATE.read_text()
     assert 'id="tab-home"' in html
     assert 'data-tab="home"' in html
-    assert "customer-only" in html            # role-gated nav class exists
-    assert "buildHomeHero" in html            # audited builder name
+    assert "customer-only" in html  # role-gated nav class exists
+    assert "buildHomeHero" in html  # audited builder name
 
 
 def test_customer_book_analysis_leads_with_conclusions():
@@ -96,9 +116,9 @@ def test_customer_book_analysis_leads_with_conclusions():
     conclusions-first pattern: one plain-language line per engine, mechanics
     behind <details> (plan T2)."""
     html = TEMPLATE.read_text()
-    assert "Worst plausible" in html                  # Monte Carlo conclusion line
-    assert "sizing adjustment" in html                # Kelly conclusion line
-    assert "How this was computed" in html            # fold summary label
+    assert "Worst plausible" in html  # Monte Carlo conclusion line
+    assert "sizing adjustment" in html  # Kelly conclusion line
+    assert "How this was computed" in html  # fold summary label
     # the "largest" headline pick is by |optimal-current| delta, not list order
     # (the list is sorted by optimal_pct DESC — PR #79 review, finding 1)
     assert "kAdjTop" in html and "Math.abs((k.optimal_pct||0)-(k.current_pct||0))" in html
@@ -144,18 +164,20 @@ def test_customer_book_analysis_market_context_is_lead_and_fold():
     """The dashboard's customer book-analysis market-context render uses the same
     lead + folded-prose pattern as the report (audited builder + fold label)."""
     html = TEMPLATE.read_text()
-    assert "buildLeadFold" in html            # audited build*-named helper
-    assert "Full context" in html             # fold summary label
+    assert "buildLeadFold" in html  # audited build*-named helper
+    assert "Full context" in html  # fold summary label
 
 
 # ─── news as attached sentiment — no generic feed for customers (plan T4) ─────
 
+
 def test_ticker_card_uses_news_chip_not_feed():
     html = TEMPLATE.read_text()
-    assert "buildNewsChip" in html            # audited build*-named chip builder
-    assert "article_count" in html            # guards the zero-article rule
+    assert "buildNewsChip" in html  # audited build*-named chip builder
+    assert "article_count" in html  # guards the zero-article rule
     # the raw article-headline card on the shared Analyze pane is owner-only
     idx = html.find("Recent News")
     assert idx != -1, "Recent News card expected in the Analyze pane"
-    assert "owner-only" in html[max(0, idx - 300):idx], (
-        "the article feed must be scoped owner-only — customers get the chip")
+    assert "owner-only" in html[max(0, idx - 300) : idx], (
+        "the article feed must be scoped owner-only — customers get the chip"
+    )

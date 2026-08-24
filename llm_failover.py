@@ -55,6 +55,10 @@ _GROK_MAX_TURNS: Final[str] = os.getenv("GESH_GROK_MAX_TURNS", "4")
 _XAI_URL: Final[str] = "https://api.x.ai/v1/chat/completions"
 _XAI_MODEL: Final[str] = os.getenv("GESH_XAI_MODEL", "grok-4.6")
 _XAI_TIMEOUT_S: Final[float] = float(os.getenv("GESH_XAI_TIMEOUT_S", "900"))
+# Interactive intel (news/SEC/fundamentals) must not inherit the 15-minute deep
+# analysis budget. One hung grok-4.6 call per ticker froze Company Intelligence.
+_XAI_FAST_TIMEOUT_S: Final[float] = float(os.getenv("GESH_XAI_FAST_TIMEOUT_S", "20"))
+_FAST_OPS: Final[frozenset[str]] = frozenset({"news_sentiment", "sec_filing", "fundamental_scan"})
 # gemini-2.5-pro 404s for new API users ("no longer available"). Flash is the
 # live default; the id is env-overridable and a 404 degrades to the lite model
 # the same way a retired Grok pin degrades to the CLI default.
@@ -273,6 +277,11 @@ def coerce_to_schema(payload: Any, schema: dict[str, Any]) -> Any:
             return []
         return [coerce_to_schema(item, items) for item in payload]
     if payload is None:
+        # Omitted scores must not become 0 — a missing portfolio_score rendered
+        # as "0 / 100" is a fabricated measurement (gap F-11). Strings/arrays
+        # stay typed blanks so required-key readers do not KeyError.
+        if node_type in ("integer", "number"):
+            return None
         return _ZERO_BY_TYPE.get(str(node_type), None)
     if node_type == "integer":
         try:
@@ -398,7 +407,13 @@ def xai_available() -> bool:
     return bool(os.getenv("XAI_API_KEY"))
 
 
-def call_xai(prompt: str) -> str:
+def _xai_timeout_s(operation: str = "") -> float:
+    if operation in _FAST_OPS:
+        return _XAI_FAST_TIMEOUT_S
+    return _XAI_TIMEOUT_S
+
+
+def call_xai(prompt: str, *, operation: str = "") -> str:
     """SpaceXAI Chat Completions. Key from env only — never logged."""
     key = os.getenv("XAI_API_KEY") or ""
     if not key:
@@ -416,7 +431,7 @@ def call_xai(prompt: str) -> str:
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.2,
             },
-            timeout=_XAI_TIMEOUT_S,
+            timeout=_xai_timeout_s(operation),
         )
     except Exception as exc:
         raise FailoverUnavailable(f"xAI request failed: {type(exc).__name__}") from exc
@@ -531,13 +546,16 @@ def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessag
             if not is_available():
                 errors.append(f"{name}: not configured")
                 continue
+            if operation in _FAST_OPS and name == "grok":
+                errors.append("grok: skipped (slow CLI) for fast operation")
+                continue
             logger.warning(
                 "LLM_FAILOVER: Anthropic unavailable for operation=%s — falling back to %s. "
                 "Output is NOT grammar-constrained; schema coercion applies.",
                 operation,
                 name,
             )
-            text = call(prompt)
+            text = call(prompt, operation=operation) if call is call_xai else call(prompt)
             payload = extract_json_object(text)
             payload = coerce_to_schema(payload, schema)
             if not isinstance(payload, dict) or not payload:

@@ -591,7 +591,7 @@ body:not(.customer) .customer-only { display: none !important; }
 <!-- ═══ TOPBAR ═══ -->
 <header class="topbar">
   <span class="badge" id="modelbook-badge" title="Customer view: absolute dollar amounts are normalized to a model portfolio so real account size stays private — percentages, prices, and signals are all real; only the dollar sizing is illustrative." style="display:none;background:rgba(255,184,0,.12);color:#ffb800;border:1px solid rgba(255,184,0,.35)">📊 Illustrative sizing · signals are real</span>
-  <span class="badge b-cyan" id="model-badge" title="Deep analysis runs on {{ model }}">✨ Powered by Claude</span>
+  <span class="badge b-cyan" id="model-badge" title="Deep analysis: {{ model }}; failover xAI grok-4.6 / Grok CLI / Gemini">✨ Powered by Grok</span>
   <span class="live-wrap" id="live-wrap"><span class="dot" id="live-dot"></span><span id="live-txt">Connecting…</span></span>
   <span class="ts" id="ts">—</span>
   <!--GESH_SLOT:owner_block_06-->
@@ -1488,7 +1488,8 @@ async function loadLongTermMacro(useCached=true) {
     const r = await fetch(url);
     if (!r.ok) throw new Error('fetch failed');
     const j = await r.json();
-    const data = j.data || j;
+    if (!j || j.status === 'unavailable' || !j.data) throw new Error('unavailable');
+    const data = j.data;
     renderLongTermMacro(data);
   } catch(e) {
     console.warn('long-term-macro load failed', e);
@@ -2589,11 +2590,14 @@ async function analyzeAI(sym){
     <div class="deep-ph-text" style="padding:16px 0;text-align:center"><div class="spin" style="width:20px;height:20px;border-width:3px;margin:0 auto 10px"></div>Generating deep AI analysis…</div></div>`;
   try{
     const res=await fetch('/api/analyze-ticker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})}).catch(()=>null);
-    if(res&&(res.status===401||res.status===503)){
-      // Gate is fail-closed (anonymous caller, or wall off with no API key) — say
-      // so instead of vanishing, so the dark state is legible rather than a bug.
+    if(res&&res.status===401){
       el.innerHTML=`<div class="card" style="margin-bottom:16px"><div style="${T}">🧠 AI Research — ${daEsc(sym)}</div>
         <div class="deep-ph-text" style="padding:16px 0;text-align:center">🔒 Sign in to unlock the AI research card — scores, fair value, and a 3M/12M outlook.</div></div>`;
+      return;
+    }
+    if(res&&res.status===503){
+      el.innerHTML=`<div class="card" style="margin-bottom:16px"><div style="${T}">🧠 AI Research — ${daEsc(sym)}</div>
+        <div class="deep-ph-text" style="padding:16px 0;text-align:center">AI research is temporarily unavailable — mechanical cards above still apply. Try again shortly.</div></div>`;
       return;
     }
     if(res&&res.status===429){
@@ -3089,28 +3093,40 @@ function buildBookIntelligencePane(d){
   //
   // `summary` is NOT top level: sec_agent nests it at analysis.summary. Reading
   // it at top level is the bug that shipped a correct header over a blank body.
-  const secRows = (sec.results || []).map(secF =>
-    `<div style="border-bottom:1px solid var(--border);padding:8px 0">
+  const secRows = (sec.results || []).map(secF => {
+    const rawSig = secF.action_signal || (secF.analysis && secF.analysis.action_signal) || '';
+    const sigU = String(rawSig).toUpperCase();
+    const sig = (sigU === 'PARSE_ERROR' || sigU === 'UNAVAILABLE' || sigU === 'UNKNOWN') ? '' : rawSig;
+    const urg = (String(secF.urgency || '').toUpperCase() === 'UNKNOWN') ? '' : (secF.urgency || '');
+    const sigLine = [sig, urg ? ('urgency ' + urg) : ''].filter(Boolean).join(' · ');
+    return `<div style="border-bottom:1px solid var(--border);padding:8px 0">
       <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(secF.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(secF.form_type || '')} · ${daEsc(String(secF.filing_date || '').slice(0, 10))}</span></div>
       <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc((secF.analysis && secF.analysis.summary) || '')}</div>
-      <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(secF.action_signal || (secF.analysis && secF.analysis.action_signal) || '')}${daEsc(secF.urgency ? ' · urgency ' + secF.urgency : '')}</div>
-    </div>`).join('');
+      ${sigLine ? `<div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(sigLine)}</div>` : ''}
+    </div>`;
+  }).join('');
   const newsRows = (news.results || []).map(n =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
       <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(n.symbol)}</b><span style="font-weight:700;color:${(n.score || 0) >= 0 ? 'var(--green)' : 'var(--red)'}">${daEsc((n.score || 0) >= 0 ? '+' : '')}${daFmt(n.score, 0)}</span></div>
       <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(n.mood || '')}${daEsc(n.impact ? ' · ' + n.impact + ' impact' : '')}${daEsc(n.article_count != null ? ' · ' + n.article_count + ' articles' : '')}</div>
     </div>`).join('');
+  const newsHeads = (news.headlines || []).map(h =>
+    `<div style="border-bottom:1px solid var(--border);padding:8px 0">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(h.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(String(h.published || '').slice(0, 10))}</span></div>
+      <div style="font-size:12px;color:var(--muted2);margin-top:3px">${daEsc(h.title || '')}${daEsc(h.source ? ' · ' + h.source : '')}</div>
+    </div>`).join('');
   // There is NO score field on a fundamentals row — the useful signal is growth,
   // analyst upside and the recommendation.
+  const fundPct = v => (v == null || !isFinite(Number(v))) ? '—' : (daFmt(v, 1) + '%');
   const fundRows = (fund.results || []).map(fundF =>
     `<div style="border-bottom:1px solid var(--border);padding:8px 0">
       <div style="display:flex;justify-content:space-between;gap:8px"><b style="color:var(--accent)">${daEsc(fundF.symbol)}</b><span style="font-size:11px;color:var(--muted)">${daEsc(fundF.sector || '')}</span></div>
       <div style="font-size:12px;color:var(--muted2);margin-top:3px">
-        rev ${daFmt(fundF.revenue_growth, 1)}% · earnings ${daFmt(fundF.earnings_growth, 1)}% · upside ${daFmt(fundF.analyst_upside, 1)}%</div>
+        rev ${daEsc(fundPct(fundF.revenue_growth))} · earnings ${daEsc(fundPct(fundF.earnings_growth))} · upside ${daEsc(fundPct(fundF.analyst_upside))}</div>
       <div style="font-size:11px;color:var(--muted);margin-top:3px">${daEsc(fundF.recommendation || '')}${daEsc(fundF.num_analysts ? ' · ' + fundF.num_analysts + ' analysts' : '')}${daEsc(fundF.insider_signal ? ' · insider ' + fundF.insider_signal : '')}</div>
     </div>`).join('');
-  const mood = news.market_mood
-    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Market mood <b>${daEsc(news.market_mood)}</b> · avg news score ${daFmt(news.avg_score, 1)}</div>`
+  const mood = (typeof news.avg_score === 'number')
+    ? `<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Market mood <b>${daEsc(news.market_mood || '')}</b> · avg news score ${daFmt(news.avg_score, 1)}</div>`
     : '';
   // Columns are built inline from locals the guard can track. An earlier version
   // passed pre-built HTML into a helper, but a function PARAMETER cannot be
@@ -3143,7 +3159,9 @@ function buildBookIntelligencePane(d){
     : `<div><div style="${H}">SEC filings</div>${secEmpty}${secCap}</div>`;
   const newsCol = newsRows
     ? `<div><div style="${H}">News sentiment</div>${newsRows}</div>`
-    : `<div><div style="${H}">News sentiment</div>${newsEmpty}</div>`;
+    : newsHeads
+      ? `<div><div style="${H}">Recent headlines</div>${newsHeads}</div>`
+      : `<div><div style="${H}">News sentiment</div>${newsEmpty}</div>`;
   const fundCol = fundRows
     ? `<div><div style="${H}">Fundamental momentum</div>${fundRows}${fundGaps}</div>`
     : `<div><div style="${H}">Fundamental momentum</div>${fundEmpty}${fundGaps}</div>`;
@@ -3723,7 +3741,7 @@ const DA_SCORE_COLORS={valuation:'#a78bfa',growth:'#00e676',health:'#00d4ff',mom
 const DA_TIMING_KEY='gesh_da_run_ms';
 const DA_TIMING_KEEP=5;        // rolling window of observed runs
 const DA_TIMING_MIN=3;         // below this, make NO estimate rather than guess one
-const DA_DEADLINE_MS=300000;   // client backstop; the server's own 240s Claude timeout should fire first
+const DA_DEADLINE_MS=900000;   // match GESH_XAI_TIMEOUT_S; Grok deep analysis is 7–15 min, not Claude's ~240s
 
 function daReadTimings(){
   try{

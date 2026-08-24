@@ -1,4 +1,5 @@
 """Immutable provenance contract for one daily-analysis run."""
+
 from __future__ import annotations
 
 import json
@@ -16,7 +17,11 @@ DEGRADED_AFTER_S_DEFAULT = 3600.0
 
 
 def _parse_utc(value: datetime | str) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = (
+        value
+        if isinstance(value, datetime)
+        else datetime.fromisoformat(value.replace("Z", "+00:00"))
+    )
     if parsed.tzinfo is None:
         raise ValueError("provenance timestamps must be timezone-aware")
     return parsed.astimezone(UTC)
@@ -38,7 +43,9 @@ class RunManifest:
     def __post_init__(self) -> None:
         object.__setattr__(self, "snapshot_as_of", _parse_utc(self.snapshot_as_of))
         object.__setattr__(self, "started_at", _parse_utc(self.started_at))
-        copied = {str(symbol).upper(): _parse_utc(value) for symbol, value in self.quote_as_of.items()}
+        copied = {
+            str(symbol).upper(): _parse_utc(value) for symbol, value in self.quote_as_of.items()
+        }
         object.__setattr__(self, "quote_as_of", MappingProxyType(copied))
 
     @classmethod
@@ -81,6 +88,35 @@ class RunManifest:
             "degraded": self.degraded,
             "quote_as_of": {symbol: _iso(value) for symbol, value in self.quote_as_of.items()},
         }
+
+
+def chain_io_paths(base: Path, env: Mapping[str, str] | None = None) -> tuple[Path, Path, Path]:
+    """Resolve snapshot / engine_results / run_manifest paths.
+
+    Defaults are the daily-chain files under ``base``. Set ``GESH_SNAPSHOT_PATH``
+    and/or ``GESH_ENGINE_RESULTS`` to run the same scripts against an isolated
+    book without clobbering the owner snapshot. ``GESH_RUN_MANIFEST`` overrides
+    the manifest path; otherwise an isolated engine-results file keeps its
+    manifest next to it.
+    """
+    e = env if env is not None else os.environ
+    snap = (
+        Path(e["GESH_SNAPSHOT_PATH"])
+        if e.get("GESH_SNAPSHOT_PATH")
+        else base / "live_portfolio_snapshot.json"
+    )
+    eng = (
+        Path(e["GESH_ENGINE_RESULTS"])
+        if e.get("GESH_ENGINE_RESULTS")
+        else base / "engine_results.json"
+    )
+    if e.get("GESH_RUN_MANIFEST"):
+        man = Path(e["GESH_RUN_MANIFEST"])
+    elif e.get("GESH_ENGINE_RESULTS"):
+        man = eng.with_name("run_manifest.json")
+    else:
+        man = base / "run_manifest.json"
+    return snap, eng, man
 
 
 def atomic_write_json(path: str | Path, payload: Mapping[str, Any]) -> None:
@@ -131,7 +167,7 @@ def manifest_from_snapshot(
         if not (isinstance(item, Mapping) and item.get("quote_as_of")):
             continue
         try:
-            _parse_utc(item["quote_as_of"])   # validate only; store raw for create()
+            _parse_utc(item["quote_as_of"])  # validate only; store raw for create()
         except (ValueError, TypeError, AttributeError):
             continue
         quote_times[symbol] = item["quote_as_of"]

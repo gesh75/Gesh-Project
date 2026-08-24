@@ -42,7 +42,12 @@ BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE))
 os.chdir(BASE)
 
-from run_manifest import atomic_write_json, manifest_from_snapshot, snapshot_degraded_info
+from run_manifest import (
+    atomic_write_json,
+    chain_io_paths,
+    manifest_from_snapshot,
+    snapshot_degraded_info,
+)
 
 try:
     from dotenv import load_dotenv
@@ -52,7 +57,7 @@ except Exception:
     pass
 
 # ── Load fresh snapshot ───────────────────────────────────────────────────────
-snap_path = BASE / "live_portfolio_snapshot.json"
+snap_path, engine_out, manifest_out = chain_io_paths(BASE)
 with open(snap_path) as f:
     snap = json.load(f)
 
@@ -78,7 +83,7 @@ def _utcnow() -> str:
 # empty. Keys this run produces are overwritten below; everything else survives.
 results = {}
 try:
-    with open(BASE / "engine_results.json") as _f:
+    with open(engine_out) as _f:
         results = json.load(_f)
 except Exception:
     results = {}
@@ -397,11 +402,15 @@ try:
         tax_report = _enrich_lots(tax_report, holdings)
         _cov = tax_report.get("lot_coverage") or {}
         _warn = tax_report.get("purchase_wash_warnings") or []
-        print(f"  lot coverage: {_cov.get('available', 0)}/{_cov.get('checked', 0)} symbols"
-              f" · purchase-side wash warnings: {len(_warn)}")
+        print(
+            f"  lot coverage: {_cov.get('available', 0)}/{_cov.get('checked', 0)} symbols"
+            f" · purchase-side wash warnings: {len(_warn)}"
+        )
         for _w in _warn:
-            print(f"    ⚠ {_w['ticker']}: bought {_w['bought_days_ago']}d ago —"
-                  f" wash risk, safe in {_w['days_until_safe']}d")
+            print(
+                f"    ⚠ {_w['ticker']}: bought {_w['bought_days_ago']}d ago —"
+                f" wash risk, safe in {_w['days_until_safe']}d"
+            )
     except Exception as _e:
         print(f"  lot enrichment skipped (non-fatal): {_e}")
 
@@ -552,7 +561,9 @@ try:
             _r = compute_fair_value(_sym)
             if _r.get("error"):
                 dcf_results[_sym] = {
-                    "available": False, "error": _r["error"], "as_of": _dcf_as_of,
+                    "available": False,
+                    "error": _r["error"],
+                    "as_of": _dcf_as_of,
                 }
             else:
                 dcf_results[_sym] = {
@@ -571,7 +582,9 @@ try:
                 "as_of": _dcf_as_of,
             }
     _ok = sum(1 for v in dcf_results.values() if v.get("available"))
-    print(f"  dcf: {_ok}/{len(dcf_results)} computed, {len(dcf_results) - _ok} refused (named reasons)")
+    print(
+        f"  dcf: {_ok}/{len(dcf_results)} computed, {len(dcf_results) - _ok} refused (named reasons)"
+    )
 except Exception as e:
     print(f"  dcf ERROR: {e}")
     dcf_results = {}
@@ -584,11 +597,11 @@ results["regime_summary"] = regime_summary
 # ── Save ──────────────────────────────────────────────────────────────────────
 # Atomic write (temp + replace): the :9000 server reads this file while the
 # chain writes it — a bare open('w') exposes a truncated JSON mid-write.
-out = BASE / "engine_results.json"
+out = engine_out
 atomic_write_json(out, results)
 # [CLAUDE V6] publish the standalone manifest from the SAME final object so the pair
 # (run_manifest.json + engine_results.json['run_manifest']) is only ever written together.
-atomic_write_json(BASE / "run_manifest.json", results["run_manifest"])
+atomic_write_json(manifest_out, results["run_manifest"])
 
 print(f"\n{_t()} [engines] Done — saved to {out}")
 print(f"[engines] Keys: {list(results.keys())}")

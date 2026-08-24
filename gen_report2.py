@@ -199,6 +199,14 @@ fetch_at = snap.get("fetched_at", "")[:19].replace("T", " ")
 # Degraded-run provenance banner — surfaced when the chain ran on a stale
 # snapshot (run_engines2/run_ai2 stamp degraded/age/source): research-only,
 # no paper records were created for this run.
+notes_banner_html = ""
+_snap_notes = snap.get("notes") if isinstance(snap, dict) else None
+if _snap_notes:
+    notes_banner_html = (
+        '<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
+        f"{_html(str(_snap_notes))}</div>"
+    )
+
 degraded_banner_html = ""
 if eng.get("degraded"):
     _age_s = eng.get("snapshot_age_seconds")
@@ -699,30 +707,37 @@ else:
     # layer knows it.
     _lot_views = tax_report.get("lots_by_symbol") or {}
     _losing = len(_lot_views)
-    _detail = (f" {_losing} position(s) are at a loss but below the threshold."
-               if _losing else "")
-    tax_html = ('<div style="color:#666;font-style:italic">No position\'s unrealized '
-                f'loss reaches the $500 harvest threshold.{_html(_detail)}</div>')
+    _detail = f" {_losing} position(s) are at a loss but below the threshold." if _losing else ""
+    tax_html = (
+        '<div style="color:#666;font-style:italic">No position\'s unrealized '
+        f"loss reaches the $500 harvest threshold.{_html(_detail)}</div>"
+    )
 
 # Purchase-side wash-sale warnings (lot layer). The base scan only tracks prior
 # harvest SALES, so these are invisible to it — surface them explicitly.
 _wash_warn = tax_report.get("purchase_wash_warnings") or []
 if _wash_warn:
-    tax_html += ('<div style="margin-top:10px;padding:8px;border-left:3px solid #f0b429;'
-                 'background:#1a1508"><div style="color:#f0b429;font-weight:600;'
-                 'margin-bottom:4px">⚠ Wash-sale exposure from recent purchases</div>')
+    tax_html += (
+        '<div style="margin-top:10px;padding:8px;border-left:3px solid #f0b429;'
+        'background:#1a1508"><div style="color:#f0b429;font-weight:600;'
+        'margin-bottom:4px">⚠ Wash-sale exposure from recent purchases</div>'
+    )
     for _w in _wash_warn:
-        tax_html += (f'<div class="tax-item"><span>{_html(_w["ticker"])}</span>'
-                     f'<span style="color:#f0b429">bought {int(_w["bought_days_ago"])}d ago '
-                     f'· safe in {int(_w["days_until_safe"])}d</span></div>')
-    tax_html += '</div>'
+        tax_html += (
+            f'<div class="tax-item"><span>{_html(_w["ticker"])}</span>'
+            f'<span style="color:#f0b429">bought {int(_w["bought_days_ago"])}d ago '
+            f"· safe in {int(_w['days_until_safe'])}d</span></div>"
+        )
+    tax_html += "</div>"
 
 _lot_cov = tax_report.get("lot_coverage") or {}
 if _lot_cov.get("unavailable"):
-    tax_html += (f'<div style="margin-top:6px;color:#888;font-size:11px">Lot data '
-                 f'unavailable for {int(_lot_cov["unavailable"])} of '
-                 f'{int(_lot_cov.get("checked", 0))} symbol(s) — wash-sale status '
-                 f'unknown, not clear.</div>')
+    tax_html += (
+        f'<div style="margin-top:6px;color:#888;font-size:11px">Lot data '
+        f"unavailable for {int(_lot_cov['unavailable'])} of "
+        f"{int(_lot_cov.get('checked', 0))} symbol(s) — wash-sale status "
+        f"unknown, not clear.</div>"
+    )
 
 # ─── Yield tiers ──────────────────────────────────────────────────────────────
 tiers = yield_data.get("tiers", {}) if isinstance(yield_data, dict) else {}
@@ -905,6 +920,7 @@ html = f"""<!DOCTYPE html>
   </div>
 
   {degraded_banner_html}
+  {notes_banner_html}
 
   <!-- Ticker tape -->
   <div class="tape">{tape_html}</div>

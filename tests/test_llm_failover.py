@@ -104,8 +104,16 @@ def test_coerce_fills_missing_required_keys_with_typed_blanks():
     out = llm_failover.coerce_to_schema({"portfolio_score": 70}, _SCHEMA)
     assert out["portfolio_score"] == 70
     assert out["portfolio_verdict"] == ""
-    assert out["risk_score"] == 0
+    assert out["risk_score"] is None
     assert out["holdings_analysis"] == []
+
+
+def test_coerce_omitted_numeric_is_none_not_zero():
+    """A missing score must not render as 0 / 100 (gap F-11)."""
+    out = llm_failover.coerce_to_schema({}, _SCHEMA)
+    assert out["portfolio_score"] is None
+    assert out["risk_score"] is None
+    assert out["portfolio_verdict"] == ""
 
 
 def test_coerce_recurses_into_array_items():
@@ -183,9 +191,7 @@ def test_gateway_fails_over_when_anthropic_credits_are_exhausted(monkeypatch, tm
                 return _Stream()
 
     monkeypatch.setattr(llm_gateway, "create_client", lambda: _Client())
-    _install_provider(
-        monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"})
-    )
+    _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))
     gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
     msg = gw.stream(
         operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **_kwargs()
@@ -219,7 +225,7 @@ def test_gateway_fails_over_when_anthropic_unreachable(monkeypatch, tmp_path):
         msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
     )
     assert out["portfolio_score"] == 64
-    assert out["risk_score"] == 0  # coerced, not missing
+    assert out["risk_score"] is None  # omitted numeric is blank, not a fake 0
     assert llm_failover.FAILOVER_COUNT == 1
 
 
@@ -295,6 +301,7 @@ def test_call_xai_reads_chat_completions_content(monkeypatch):
         seen["url"] = url
         seen["headers"] = kwargs.get("headers")
         seen["json"] = kwargs.get("json")
+        seen["timeout"] = kwargs.get("timeout")
         return _Resp()
 
     monkeypatch.setattr(llm_failover.httpx, "post", fake_post)
@@ -303,6 +310,57 @@ def test_call_xai_reads_chat_completions_content(monkeypatch):
     assert seen["url"] == "https://api.x.ai/v1/chat/completions"
     assert seen["headers"]["Authorization"] == "Bearer xai-test-not-a-real-key"
     assert seen["json"]["model"] == "grok-4.6"
+    assert seen["timeout"] == llm_failover._XAI_TIMEOUT_S
+
+
+def test_call_xai_news_sentiment_uses_fast_timeout(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    def fake_post(url, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        return _Resp()
+
+    monkeypatch.setattr(llm_failover.httpx, "post", fake_post)
+    llm_failover.call_xai("score this", operation="news_sentiment")
+    assert seen["timeout"] == llm_failover._XAI_FAST_TIMEOUT_S
+    assert seen["timeout"] <= 30
+
+
+def test_fast_ops_skip_the_grok_cli(monkeypatch):
+    """News/SEC/fundamentals must not fall through to a 900s grok CLI loop."""
+    called: list[str] = []
+
+    def grok_call(prompt):
+        called.append("grok")
+        raise AssertionError("grok CLI must not run for news_sentiment")
+
+    def xai_call(prompt):
+        called.append("xai")
+        return json.dumps(
+            {
+                "portfolio_score": 1,
+                "portfolio_verdict": "HOLD",
+                "risk_score": 1,
+                "holdings_analysis": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        llm_failover,
+        "_PROVIDERS",
+        {"grok": (lambda: True, grok_call), "xai": (lambda: True, xai_call)},
+    )
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "grok,xai")
+    llm_failover.attempt(operation="news_sentiment", max_tokens=200, **_kwargs())
+    assert called == ["xai"]
 
 
 def test_call_xai_raises_on_http_error_without_leaking_the_key(monkeypatch):

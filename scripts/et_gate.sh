@@ -38,19 +38,21 @@ _et_gate_minutes() { # "HH:MM" -> minutes since midnight
     echo $(( 10#$hh * 60 + 10#$mm ))
 }
 
-# et_gate_require TARGET_HHMM TOLERANCE_MIN [DAYSPEC]
-#   DAYSPEC: "mon-fri" (default), "any", or a single digit 1..7
-# Exits 0 (silently, without running the caller's work) when outside the window.
-et_gate_require() {
+# et_gate_in_window TARGET_HHMM TOLERANCE_MIN [DAYSPEC]
+#   Same window/day checks as et_gate_require, but does NOT write a stamp and
+#   does NOT exit. Return 0 = in window; 1 = skip (prints the same reason line).
+#   Use this when the caller may still need a later tick today (lock wait,
+#   missing report) and must not burn the dated stamp yet.
+et_gate_in_window() {
     local target="$1" tol="${2:-15}" dayspec="${3:-mon-fri}"
     local label="${ET_GATE_LABEL:-$(basename "${BASH_SOURCE[1]:-$0}")}"
 
     local dow; dow="$(et_gate_dow_et)"
     case "$dayspec" in
-        mon-fri) [ "$dow" -le 5 ] || { echo "et_gate[$label]: $(et_gate_today_et) is a weekend in ET — skipping"; exit 0; } ;;
+        mon-fri) [ "$dow" -le 5 ] || { echo "et_gate[$label]: $(et_gate_today_et) is a weekend in ET — skipping"; return 1; } ;;
         any)     : ;;
-        [1-7])   [ "$dow" = "$dayspec" ] || { echo "et_gate[$label]: ET weekday $dow != $dayspec — skipping"; exit 0; } ;;
-        *)       echo "et_gate[$label]: bad dayspec '$dayspec'" >&2; exit 1 ;;
+        [1-7])   [ "$dow" = "$dayspec" ] || { echo "et_gate[$label]: ET weekday $dow != $dayspec — skipping"; return 1; } ;;
+        *)       echo "et_gate[$label]: bad dayspec '$dayspec'" >&2; return 1 ;;
     esac
 
     local now; now="$(et_gate_now_et)"
@@ -59,8 +61,19 @@ et_gate_require() {
     diff=$(( now_m - tgt_m )); [ "$diff" -lt 0 ] && diff=$(( -diff ))
     if [ "$diff" -gt "$tol" ]; then
         echo "et_gate[$label]: ${now} ET is outside ${target} ET +/-${tol}min — skipping"
-        exit 0
+        return 1
     fi
+    return 0
+}
+
+# et_gate_require TARGET_HHMM TOLERANCE_MIN [DAYSPEC]
+#   DAYSPEC: "mon-fri" (default), "any", or a single digit 1..7
+# Exits 0 (silently, without running the caller's work) when outside the window.
+et_gate_require() {
+    local target="$1" tol="${2:-15}" dayspec="${3:-mon-fri}"
+    local label="${ET_GATE_LABEL:-$(basename "${BASH_SOURCE[1]:-$0}")}"
+
+    et_gate_in_window "$target" "$tol" "$dayspec" || exit 0
 
     # Once-per-ET-day: the cadence fires repeatedly inside the tolerance window.
     mkdir -p "$ET_GATE_STAMP_DIR" 2>/dev/null || true
@@ -72,5 +85,32 @@ et_gate_require() {
     : > "$stamp"
     # Keep the directory bounded; stamps are worthless after a week.
     find "$ET_GATE_STAMP_DIR" -type f -mtime +7 -delete 2>/dev/null || true
-    echo "et_gate[$label]: ${now} ET is within ${target} ET +/-${tol}min — running"
+    echo "et_gate[$label]: $(et_gate_now_et) ET is within ${target} ET +/-${tol}min — running"
+}
+
+# et_gate_file_is_today_et PATH [MIN_BYTES]
+#   0 if PATH exists, is at least MIN_BYTES (default 0), and its mtime calendar
+#   date in America/New_York is today. 1 otherwise. Does NOT write a stamp —
+#   callers that need "retry until the 10:30 chain finishes" must check this
+#   BEFORE et_gate_require, or a 10:30 tick inside a wide window burns the day.
+et_gate_file_is_today_et() {
+    local path="$1" min="${2:-0}"
+    [ -n "$path" ] && [ -f "$path" ] || return 1
+    python3 -c '
+import os, sys
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+path, min_b = sys.argv[1], int(sys.argv[2])
+try:
+    st = os.stat(path)
+except OSError:
+    raise SystemExit(1)
+if st.st_size < min_b:
+    raise SystemExit(1)
+et = ZoneInfo("America/New_York")
+mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).astimezone(et).date()
+today = datetime.now(et).date()
+raise SystemExit(0 if mtime == today else 1)
+' "$path" "$min"
 }

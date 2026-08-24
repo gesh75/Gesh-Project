@@ -25,8 +25,9 @@ report the limitation and stop rather than weakening this boundary.
 
 **Project path:** the current sandbox checkout (`git rev-parse --show-toplevel`)
 **Orchestrator:** `run_daily_analysis.sh` (~3–6 min, logs to `/tmp/gesh_fullchain.log`)
-**Also scheduled:** launchd `com.gesh.daily-analysis` runs it 10:30 ET weekdays —
-check the log first; today's run may already exist.
+**Also scheduled:** launchd `com.gesh.daily-analysis` runs it 10:30 ET weekdays;
+`com.gesh.daily-report` publishes `gesh_report.html` at 10:45 ET (retries the
+chain if today's file is missing). Check the log first; today's run may already exist.
 
 ## Step 1 — Check / run the chain
 

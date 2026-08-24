@@ -14,8 +14,15 @@ LOG=/tmp/gesh_daily_narrate.log
 TRADING="${GESH_TRADING_HOME:-$HOME/Projects/gesh-project-trading}"
 
 ET_GATE_LABEL=daily-narrate
-# shellcheck source=../../gesh-project-trading/scripts/et_gate.sh
-source "$TRADING/scripts/et_gate.sh"
+# Product et_gate (not trading): et_gate_file_is_today_et lives here.
+# shellcheck source=et_gate.sh
+source "$REPO/scripts/et_gate.sh"
+# 10:50±20 includes 10:30. Window-check first (no stamp), then report, then stamp.
+et_gate_in_window "10:50" 20 "mon-fri" || exit 0
+if ! et_gate_file_is_today_et "$REPO/gesh_report.html" 60000; then
+    echo "et_gate[daily-narrate]: gesh_report.html is not today's (>=60KB) — skip without stamping"
+    exit 0
+fi
 et_gate_require "10:50" 20 "mon-fri"
 
 _tg() {

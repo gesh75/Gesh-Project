@@ -650,7 +650,7 @@ async def _auth_gate_middleware(request: Request, call_next):
 
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
 # Raw proof and cockpit pages expose paper sizing and P&L — owner only.
-_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage", "/track-record")
+_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage")
 # Customer research endpoints whose bodies carry NO owner dollars — single-ticker AI
 # research cards (public per-share fair value / price forecasts, not the owner's book).
 # Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
@@ -1451,7 +1451,8 @@ padding:11px;font-weight:700;font-size:14px;cursor:pointer}
 <script>document.getElementById('f').addEventListener('submit',async function(ev){ev.preventDefault();
 var r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({email:ev.target.email.value,password:ev.target.password.value})});
-if(r.ok){location.href='/';}else{document.getElementById('e').textContent='Invalid email or password.';}});
+if(r.ok){location.href='/';}else if(r.status===429){document.getElementById('e').textContent='Too many attempts — try again shortly.';}else{document.getElementById('e').textContent='Invalid email or password.';}});
+(function(){var q=new URLSearchParams(location.search).get('e');if(q==='expired'){document.getElementById('e').textContent='This sign-in link expired — request a new one.';}})();
 document.getElementById('ml').addEventListener('click',async function(ev){ev.preventDefault();
 var em=document.querySelector('input[name=email]').value;
 if(!em){document.getElementById('e').textContent='Enter your email first.';return;}
@@ -1918,7 +1919,8 @@ async def billing_webhook(request: Request):
 # ─── Signal-accuracy proof + public legal pages ──────────────────────────────
 @app.get("/track-record", response_class=HTMLResponse)
 def track_record_page():
-    """Owner-only proof page rendering raw closed-trade stats from the tracker."""
+    """Public proof page: closed paper-trade stats from the tracker. No live RH
+    holdings. In PUBLIC_PREFIXES; never paywalled."""
     try:
         import proof_page
 
@@ -3844,7 +3846,9 @@ def long_term_macro_cached():
             hit = _ltm_cache.get("v")
         cached = bool(hit and (time.monotonic() - hit[0]) < _LTM_TTL_SEC)
         if not cached:
-            raise HTTPException(status_code=503, detail="Long-term macro cache is not available")
+            # Honest empty, not a 503: the dashboard polls this on every refresh
+            # and a 503 reads as "the page is broken" rather than "not computed yet".
+            return {"status": "unavailable", "cached": False, "data": None}
         data = hit[1]
         out = {"status": "ok", "data": data, "cached": True}
         if isinstance(data, dict) and data.get("fetched_at"):
@@ -6252,7 +6256,10 @@ def _run_book_scanner(symbols: list[str], interval: str, period: str, min_rr: fl
     except Exception as e:  # noqa: BLE001
         logger.warning("customer scanner consolidation leg failed: %s", e)
         cz = {
-            "found": [], "no_zone": [], "errors": [], "summary": "",
+            "found": [],
+            "no_zone": [],
+            "errors": [],
+            "summary": "",
             "error": "price data unavailable",
         }
 
@@ -6321,6 +6328,52 @@ async def mybook_scanner(request: Request):
     return _ticker_get_store(_MYBOOK_SCANNER_BUCKET, key, {"status": "ok", "data": data})
 
 
+def _sec_row_usable(row: dict) -> bool:
+    """True when the stored filing analysis is a real verdict, not a failed LLM parse.
+
+    `action_signal=PARSE_ERROR` / `availability=UNAVAILABLE` are written when Claude
+    (or a failover) cannot read the filing. Serving that string as a customer
+    signal makes the Intelligence pane look broken and invents a market view.
+    """
+    if not isinstance(row, dict):
+        return False
+    analysis = row.get("analysis") if isinstance(row.get("analysis"), dict) else {}
+    if str(analysis.get("availability") or "").upper() == "UNAVAILABLE":
+        return False
+    sig = str(row.get("action_signal") or analysis.get("action_signal") or "").upper()
+    return sig not in {"PARSE_ERROR", "UNAVAILABLE"}
+
+
+def _customer_sec_card(raw: dict) -> dict:
+    """Allow-listed filing card for the customer pane. Never ships PARSE_ERROR
+    or owner-only 'run agents for Claude' copy."""
+    form = str((raw or {}).get("form_type") or "")
+    date = str((raw or {}).get("filing_date") or "")[:10]
+    analysis = raw.get("analysis") if isinstance((raw or {}).get("analysis"), dict) else {}
+    summary = str(analysis.get("summary") or "").strip()
+    placeholder = (not summary) or "claude" in summary.lower() or "run agents" in summary.lower()
+    if placeholder:
+        summary = f"Recent {form} on EDGAR ({date})." if form else "Recent filing on EDGAR."
+    out: dict = {
+        "symbol": str((raw or {}).get("symbol") or "").upper(),
+        "form_type": form,
+        "filing_date": (raw or {}).get("filing_date"),
+        "filing_url": (raw or {}).get("filing_url"),
+        "analysis": {"summary": summary},
+    }
+    # Mechanical EDGAR cards stamp NEUTRAL/LOW with no analysis. That is a fake
+    # verdict — omit signal/urgency whenever we rewrote the owner placeholder.
+    if placeholder:
+        return out
+    sig = (raw or {}).get("action_signal") or analysis.get("action_signal")
+    urg = (raw or {}).get("urgency")
+    if str(sig or "").upper() not in {"", "PARSE_ERROR", "UNAVAILABLE"}:
+        out["action_signal"] = sig
+    if str(urg or "").upper() not in {"", "UNKNOWN"}:
+        out["urgency"] = urg
+    return out
+
+
 def _customer_sec_block(symbols: list[str], days: int) -> dict:
     """Recent SEC filings for the customer's symbols.
 
@@ -6328,19 +6381,82 @@ def _customer_sec_block(symbols: list[str], days: int) -> dict:
     LLM-free EDGAR metadata discovery when the DB has nothing — no Claude call on
     either path. Rows are re-filtered against the entitled set because the stored
     table is symbol-keyed and shared with the owner's runs.
+
+    PARSE_ERROR / UNAVAILABLE stored rows do not count as coverage: they are the
+    failed-LLM leftover that made the customer Intelligence pane look broken.
+    Those symbols fall through to `discover_filing_cards` (mechanical EDGAR).
     """
+    import sec_agent
+
     scoped = symbols[:MYBOOK_INTEL_SEC_MAX_SYMBOLS]
     allowed = set(scoped)
-    rows = get_filing_history(scoped, days=max(days, MYBOOK_INTEL_SEC_MIN_DAYS)) if scoped else []
+    lookback = max(days, MYBOOK_INTEL_SEC_MIN_DAYS)
+    rows = get_filing_history(scoped, days=lookback) if scoped else []
+    usable = [
+        _customer_sec_card(r)
+        for r in (rows or [])
+        if str((r or {}).get("symbol") or "").upper() in allowed and _sec_row_usable(r)
+    ]
+    have = {str(r.get("symbol") or "").upper() for r in usable}
+    missing = [s for s in scoped if s not in have]
+    if missing:
+        try:
+            discovered = sec_agent.discover_filing_cards(missing, days_back=lookback)
+        except Exception as e:  # noqa: BLE001 — mechanical fallback must not 500
+            logger.warning("customer intelligence EDGAR discovery failed: %s", e)
+            discovered = []
+        for card in discovered or []:
+            sym = str((card or {}).get("symbol") or "").upper()
+            if sym in allowed and sym not in have:
+                usable.append(_customer_sec_card(card))
+                have.add(sym)
     return {
-        "results": [
-            r for r in (rows or []) if str((r or {}).get("symbol") or "").upper() in allowed
-        ],
+        "results": usable,
         "symbols": scoped,
         "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
         "truncated": len(symbols) > len(scoped),
-        "days": max(days, MYBOOK_INTEL_SEC_MIN_DAYS),
+        "days": lookback,
     }
+
+
+def _customer_news_headlines(symbols: list[str]) -> list[dict]:
+    """Mechanical headlines (Alpaca → RSS → stored articles). No LLM, no scores."""
+    import news_agent
+
+    out: list[dict] = []
+    cap, per = 12, 3
+    for sym in symbols:
+        items: list = []
+        for fetch in (
+            news_agent._fetch_alpaca_news,
+            news_agent._fetch_all_news,
+            news_agent.get_cached_articles,
+        ):
+            if items:
+                break
+            try:
+                items = list(fetch(sym) or [])
+            except Exception:  # noqa: BLE001 — one feed down must not blank the pane
+                items = []
+        n = 0
+        for it in items:
+            title = str((it or {}).get("title") or "").strip()
+            if not title:
+                continue
+            out.append(
+                {
+                    "symbol": sym,
+                    "title": title[:200],
+                    "source": str((it or {}).get("source") or "")[:80],
+                    "published": str((it or {}).get("published") or "")[:40],
+                }
+            )
+            n += 1
+            if n >= per or len(out) >= cap:
+                break
+        if len(out) >= cap:
+            break
+    return out
 
 
 def _customer_news_block(symbols: list[str], days: int) -> dict:
@@ -6351,6 +6467,9 @@ def _customer_news_block(symbols: list[str], days: int) -> dict:
     impact, article_count + as_of): the raw model analysis is owner-side research,
     not a customer field. A row whose run analyzed ZERO articles is dropped rather
     than reported — sentiment over no articles is fabricated by definition.
+
+    An empty score cache is NOT NEUTRAL / 0.0 — that is a fabricated measurement.
+    Mechanical headlines still fill the pane so "no Claude" is not "no news".
     """
     allowed = set(symbols)
     rows = get_news_history(symbols, days=days) if symbols else []
@@ -6360,8 +6479,19 @@ def _customer_news_block(symbols: list[str], days: int) -> dict:
         if sym not in allowed:
             continue
         analysis = r.get("analysis") if isinstance(r.get("analysis"), dict) else {}
-        count = analysis.get("article_count") or 0
-        if not count:
+        raw_count = analysis.get("article_count")
+        if raw_count is None:
+            arts = analysis.get("articles")
+            count = len(arts) if isinstance(arts, list) else 0
+        else:
+            try:
+                count = int(raw_count)
+            except (TypeError, ValueError):
+                count = 0
+        if count <= 0:
+            continue
+        score = r.get("sentiment_score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
             continue
         out.append(
             {
@@ -6374,11 +6504,26 @@ def _customer_news_block(symbols: list[str], days: int) -> dict:
             }
         )
     scores = [x["score"] for x in out if isinstance(x["score"], (int, float))]
-    avg = round(sum(scores) / len(scores), 1) if scores else 0.0
-    # An empty cache is NEUTRAL, never bullish — same thresholds as the owner's
-    # /api/agents/news/history so the two surfaces cannot disagree.
-    mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
-    return {"results": out, "avg_score": avg, "market_mood": mood, "cached": True}
+    avg = round(sum(scores) / len(scores), 1) if scores else None
+    mood = None
+    if scores:
+        mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
+    headlines: list[dict] = []
+    if not out:
+        try:
+            headlines = _customer_news_headlines(list(symbols))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("customer intelligence headlines failed: %s", e)
+            headlines = []
+    payload: dict = {
+        "results": out,
+        "avg_score": avg,
+        "cached": True,
+        "headlines": headlines,
+    }
+    if mood is not None:
+        payload["market_mood"] = mood
+    return payload
 
 
 def _customer_fundamentals_block(symbols: list[str]) -> dict:
@@ -6423,9 +6568,14 @@ def _run_book_intelligence(symbols: list[str], days: int) -> dict:
     """
     legs: dict[str, dict] = {}
     empty = {
-        "sec": {"results": [], "symbols": [], "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
-                "truncated": False, "days": days},
-        "news": {"results": [], "avg_score": 0.0, "market_mood": "NEUTRAL", "cached": True},
+        "sec": {
+            "results": [],
+            "symbols": [],
+            "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
+            "truncated": False,
+            "days": days,
+        },
+        "news": {"results": [], "avg_score": None, "cached": True, "headlines": []},
         "fundamentals": {"results": [], "errors": []},
     }
     builders = {
@@ -6462,11 +6612,9 @@ async def mybook_intelligence(request: Request):
 
     include_watchlist = body.get("include_watchlist", True) is not False
     days = int(_clamped_float(body.get("days", 7), default=7.0, low=1.0, high=90.0))
-    symbols, requested = _customer_scan_symbols(
-        email, MYBOOK_INTEL_MAX_SYMBOLS, include_watchlist
-    )
+    symbols, requested = _customer_scan_symbols(email, MYBOOK_INTEL_MAX_SYMBOLS, include_watchlist)
 
-    key = _book_scan_cache_key(email, ",".join(symbols), requested, days)
+    key = _book_scan_cache_key(email, "intel-v2", ",".join(symbols), requested, days)
     cached = _ticker_get_cached(_MYBOOK_INTEL_BUCKET, key)
     if cached:
         return cached
@@ -6536,7 +6684,7 @@ def _render_radar_block(radar: object) -> str:
 
     raw_weights = radar.get("existing_sector_weights")
     weights: list[tuple[str, float]] = []
-    for sec, w in (raw_weights.items() if isinstance(raw_weights, dict) else ()):
+    for sec, w in raw_weights.items() if isinstance(raw_weights, dict) else ():
         try:
             weights.append((str(sec), float(w)))
         except (TypeError, ValueError):

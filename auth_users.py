@@ -63,6 +63,9 @@ PUBLIC_PREFIXES = (
     "/pricing", "/api/billing/webhook", "/billing/success",
     # Email opt-out links (link-in-email, HMAC-token-gated — not cookie-gated).
     "/alerts/unsubscribe", "/digest/unsubscribe",
+    # Signal-accuracy proof page — the #1 sales asset. Never paywalled
+    # (CLAUDE.md). Prefix match is path-bounded so /track-record-evil stays gated.
+    "/track-record",
 )
 
 

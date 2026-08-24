@@ -46,6 +46,28 @@ def _render(tmp_path: Path, engine: dict) -> str:
     return output.read_text()
 
 
+def test_snapshot_notes_render_as_banner_not_invented_numbers(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 100.0, "cash": 0.0, "portfolio_equity": 100.0},
+            "snapshot": {
+                "fetched_at": "2026-08-23T00:00:00Z",
+                "notes": "COST BASIS UNKNOWN — mark=avg.",
+            },
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    assert "COST BASIS UNKNOWN — mark=avg." in report
+    assert "override-banner" in report
+
+
 def test_cvar_card_derives_percent_from_dollars_when_pct_key_absent(tmp_path):
     # Measured 2026-08-21 book: $1,608.63 / $34,799.63 = 4.62% → rendered .1f.
     report = _render(

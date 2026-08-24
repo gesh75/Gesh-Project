@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from run_manifest import RunManifest, atomic_write_json, report_output_path
+from run_manifest import RunManifest, atomic_write_json, chain_io_paths, report_output_path
 
 UTC = timezone.utc
 
@@ -48,12 +48,36 @@ def test_manifest_round_trip_and_atomic_embedding(tmp_path: Path) -> None:
     assert saved["quote_as_of"]["NVDA"].endswith("Z")
 
 
+def test_chain_io_paths_default_to_owner_files(tmp_path: Path) -> None:
+    snap, eng, man = chain_io_paths(tmp_path, env={})
+    assert snap == tmp_path / "live_portfolio_snapshot.json"
+    assert eng == tmp_path / "engine_results.json"
+    assert man == tmp_path / "run_manifest.json"
+
+
+def test_chain_io_paths_isolated_engine_results_keeps_manifest_beside_it(tmp_path: Path) -> None:
+    isolated = tmp_path / "friend" / "engine_results.json"
+    snap, eng, man = chain_io_paths(
+        tmp_path,
+        env={
+            "GESH_SNAPSHOT_PATH": str(tmp_path / "friend" / "snapshot.json"),
+            "GESH_ENGINE_RESULTS": str(isolated),
+        },
+    )
+    assert snap == tmp_path / "friend" / "snapshot.json"
+    assert eng == isolated
+    assert man == tmp_path / "friend" / "run_manifest.json"
+
+
 def test_degraded_report_can_never_replace_current_report(tmp_path: Path) -> None:
     current = tmp_path / "gesh_report.html"
     eng = {"run_manifest": {"run_id": "abc-123", "degraded": True}}
     assert report_output_path(tmp_path, eng, requested=current) == (
         tmp_path / "gesh_report.degraded.abc-123.html"
     )
-    assert report_output_path(
-        tmp_path, {"run_manifest": {"run_id": "abc-123", "degraded": False}}, requested=current
-    ) == current
+    assert (
+        report_output_path(
+            tmp_path, {"run_manifest": {"run_id": "abc-123", "degraded": False}}, requested=current
+        )
+        == current
+    )

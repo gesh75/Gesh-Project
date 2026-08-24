@@ -24,7 +24,7 @@ cards are LaunchAgents on this Mac:
 |---|---|---|---|
 | Gesh crypto analysis | `com.gesh.crypto-reader` | 02/06/14/18/22 | **no** — stdlib reader + Telegram |
 | Gesh autopilot daily | `com.gesh.autopilot-health` | weekdays 08:25 | **no** — kickstart + Telegram only if down |
-| Gesh daily portfolio analysis | `com.gesh.daily-analysis` (chain) + `com.gesh.daily-narrate` | 10:30 chain, 10:50 briefing | Grok **last mile only**, never fatal |
+| Gesh daily portfolio analysis | `com.gesh.daily-analysis` (chain) + `com.gesh.daily-report` + `com.gesh.daily-narrate` | 10:30 chain, 10:45 HTML report, 10:50 briefing | Grok **last mile + step 3/5 failover**, never fatal on narration |
 | Gesh weekly tracker review | native Fri 09:00 autopilot job + `com.gesh.weekly-narrate` | Fri 10:00 briefing | Grok **last mile only**, never fatal |
 
 The C2 missing-key failover **is committed** (`263472f`, PR #239). The PATH hole that hid
@@ -45,6 +45,7 @@ and merging PR #239 so `main` matches this checkout.
 | `com.gesh.daily-analysis` | loaded, last exit 0 (`StartInterval 600` + ET gate) |
 | `com.gesh.crypto-reader` | loaded, last exit 0 |
 | `com.gesh.autopilot-health` | loaded, last exit 0 |
+| `com.gesh.daily-report` | loaded — 10:45 ET `gesh_report.html` publish/retry |
 | `com.gesh.daily-narrate` | loaded, last exit 0 |
 | `com.gesh.weekly-narrate` | loaded, last exit 0 |
 | `com.gesh.dashboard-snapshot` | loaded, last exit 0 |
@@ -68,10 +69,13 @@ LAYER 1 — HOST / DETERMINISTIC          ← model-free. Survives without Claud
     com.gesh.trading.autopilot  KeepAlive, 14 jobs → gesh_tracker.db
     com.gesh.daily-analysis     StartInterval 600 + ET gate → run_daily_analysis.sh
                                                     ↑ step 3/5 is the ONLY LLM call in layer 1
+    com.gesh.daily-report       StartInterval 600 + 10:45 ET gate → gesh_report.html
+                                                    (wait on 10:30 lock; retry chain if no today's report)
 
 LAYER 2 — NARRATION / HEALTH            ← was Cowork; now launchd (2026-08-22)
     com.gesh.crypto-reader       stdlib reader --telegram
     com.gesh.autopilot-health    kickstart if down
+    com.gesh.daily-report        gesh_report.html publish / chain retry
     com.gesh.daily-narrate       grok --prompt-file (best-effort)
     com.gesh.weekly-narrate      grok --prompt-file (best-effort)
 ```
@@ -115,7 +119,9 @@ launchd here is Europe/Sofia; the script decides in `America/New_York` via
 | | |
 |---|---|
 | Chain | `com.gesh.daily-analysis` → `scripts/daily_analysis_et.sh` → `run_daily_analysis.sh` (10:30 ET weekdays) |
-| Narration | `com.gesh.daily-narrate` → `scripts/narrate_daily_et.sh` (10:50 ET weekdays) |
+| HTML report | `com.gesh.daily-report` → `scripts/daily_report_et.sh` (10:45 ET weekdays) — waits for the 10:30 lock, Telegrams if `gesh_report.html` is today's ≥60KB, otherwise reruns the chain |
+| Narration | `com.gesh.daily-narrate` → `scripts/narrate_daily_et.sh` (10:50 ET weekdays) — does **not** stamp until today's report exists |
+| Report log | `/tmp/gesh_daily_report.log` |
 | Narration log | `/tmp/gesh_daily_narrate.log` |
 | Contract | `.claude/skills/daily-portfolio-analysis/SKILL.md` — inlined into the grok prompt, not discovered from `~/.grok/skills/` |
 
@@ -226,7 +232,7 @@ grok models
 cd ~/Projects/gesh-project
 env -u ANTHROPIC_API_KEY ./venv/bin/python -c \
   "import llm_failover as f; print(f.grok_available(), f.call_grok('Reply exactly: OK'))"
-launchctl list | grep -E 'crypto.scheduler|crypto-reader|trading.autopilot|autopilot-health|daily-analysis|daily-narrate|weekly-narrate|dashboard-snapshot'
+launchctl list | grep -E 'crypto.scheduler|crypto-reader|trading.autopilot|autopilot-health|daily-analysis|daily-report|daily-narrate|weekly-narrate|dashboard-snapshot'
 ```
 
 Watch:
@@ -234,8 +240,9 @@ Watch:
 1. **08:25** — `/tmp/gesh_autopilot_health.log` (`HEALTHY — no action` is the good line).
 2. **~10:30** — `tail -f ~/Projects/gesh-project/.logs/gesh_fullchain.log`. **Step 3/5 is
    the migration test.** Survives with no Anthropic key → cutover worked.
-3. **~10:50** — `/tmp/gesh_daily_narrate.log` (best-effort; a grok fail is not a chain fail).
-4. **13:35 / 17:35** (and 02/06/22) — `/tmp/gesh_crypto_reader.log`.
+3. **~10:45** — `/tmp/gesh_daily_report.log` (`today's gesh_report.html is ready` or a chain retry).
+4. **~10:50** — `/tmp/gesh_daily_narrate.log` (best-effort; a grok fail is not a chain fail).
+5. **13:35 / 17:35** (and 02/06/22) — `/tmp/gesh_crypto_reader.log`.
 
 If step 3/5 exits 1: `grok_available()` first. Dead `~/.grok/auth.json` drops to Gemini.
 
