@@ -287,12 +287,12 @@ def coerce_to_schema(payload: Any, schema: dict[str, Any]) -> Any:
         try:
             return round(float(payload))
         except (TypeError, ValueError):
-            return 0
+            return None
     if node_type == "number":
         try:
             return float(payload)
         except (TypeError, ValueError):
-            return 0.0
+            return None
     if node_type == "string" and not isinstance(payload, str):
         return str(payload)
     return payload
@@ -413,6 +413,21 @@ def _xai_timeout_s(operation: str = "") -> float:
     return _XAI_TIMEOUT_S
 
 
+def _xai_http_error_summary(response: Any) -> str:
+    """Status + optional error type/code. Never the raw body (may echo prompts)."""
+    kind = ""
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            kind = str(err.get("type") or err.get("code") or "")[:80]
+    suffix = f" ({kind})" if kind else ""
+    return f"xAI HTTP {response.status_code}{suffix}"
+
+
 def call_xai(prompt: str, *, operation: str = "") -> str:
     """SpaceXAI Chat Completions. Key from env only — never logged."""
     key = os.getenv("XAI_API_KEY") or ""
@@ -436,7 +451,7 @@ def call_xai(prompt: str, *, operation: str = "") -> str:
     except Exception as exc:
         raise FailoverUnavailable(f"xAI request failed: {type(exc).__name__}") from exc
     if response.status_code >= 400:
-        raise FailoverUnavailable(f"xAI HTTP {response.status_code}: {response.text[:240]}")
+        raise FailoverUnavailable(_xai_http_error_summary(response))
     try:
         data = response.json()
     except Exception as exc:
