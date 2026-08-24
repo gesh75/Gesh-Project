@@ -5141,6 +5141,21 @@ def mybook_consensus(request: Request):
 _MYBOOK_TTL = 900  # 15 min
 _mybook_cache: dict[str, tuple[float, str, dict]] = {}
 _mybook_lock = threading.Lock()
+# The dashboard polls POST /api/mybook/analyze every 3s. After a failed job we
+# enqueue at most one automatic retry per (user, book) per cooldown so an
+# outage cannot stampede LLM providers or quota.
+_MYBOOK_FAIL_RETRY_COOLDOWN_S = 300.0
+_MYBOOK_FAIL_RETRY_AT: dict[tuple[str, str], float] = {}
+
+
+def _allow_mybook_fail_retry(user_id: str, fingerprint: str, *, now: float | None = None) -> bool:
+    now = time.monotonic() if now is None else now
+    key = (str(user_id), str(fingerprint))
+    last = _MYBOOK_FAIL_RETRY_AT.get(key)
+    if last is not None and (now - last) < _MYBOOK_FAIL_RETRY_COOLDOWN_S:
+        return False
+    _MYBOOK_FAIL_RETRY_AT[key] = now
+    return True
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -5564,8 +5579,15 @@ async def mybook_analyze(request: Request):
                 raise HTTPException(
                     status_code=404, detail="No market data for any symbol on your book"
                 )
-            # A failed generation is over. Do not 500 the poll — enqueue a new
-            # run so "Analyze My Portfolio" recovers in one click after an LLM outage.
+            # A failed generation is over. Do not 500 the poll — enqueue ONE
+            # automatic retry so a single Analyze click survives a transient
+            # outage. Further polls in the 3s loop must 503 rather than
+            # reserve another live LLM slot.
+            if not _allow_mybook_fail_retry(user_id, fp):
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI provider temporarily unavailable",
+                )
         elif latest.get("status") == "done" and latest.get("result") is not None:
             auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
             return {"status": "ok", "cached": False, "data": latest["result"]}

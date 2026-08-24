@@ -305,6 +305,39 @@ def test_analyze_book_different_book_while_running_is_202_no_double_spend(client
     assert counters["llm"] == 0                       # no second worker → no double spend
 
 
+def test_failed_analyze_poll_retries_once_then_stops(client, monkeypatch, au):
+    """The dashboard polls POST /api/mybook/analyze every 3s. A failed job may
+    recover once (one Analyze click survives a transient outage) but must not
+    reserve another live LLM slot on every subsequent poll."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    submitted: list[str] = []
+
+    def _submit(email, user_id, job_id, fp, positions, ew):
+        submitted.append(job_id)
+        return True
+
+    monkeypatch.setattr(server, "_submit_mybook_job", _submit)
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 10})
+    fp = server._book_fingerprint(au.get_positions("cust@x.com"))
+    user_id = au.resolve_user_id("cust@x.com")
+    first_id = "job-failed-once"
+    assert au.start_mybook_job(user_id, first_id, fp, "book_analysis", 10)["accepted"]
+    assert au.finish_mybook_job(user_id, first_id, fp, "failed", error_code="llm_down")
+
+    first = c.post("/api/mybook/analyze", json={})
+    assert first.status_code == 202
+    assert len(submitted) == 1
+    retry_id = submitted[0]
+    assert au.finish_mybook_job(user_id, retry_id, fp, "failed", error_code="llm_down")
+
+    second = c.post("/api/mybook/analyze", json={})
+    assert second.status_code == 503
+    assert "temporarily unavailable" in str(second.json().get("detail", "")).lower()
+    assert submitted == [retry_id]
+
+
 # ─── watchlist → book bulk import ─────────────────────────────────────────────
 
 def test_import_watchlist_adds_missing_skips_existing(client, monkeypatch, au):
