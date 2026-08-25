@@ -215,7 +215,7 @@ def run_monte_carlo(
       calibration ("ok"|"degraded"), calibration_degraded_symbols,
       regime, regime_multiplier,
       median, mean, p5, p25, p75, p95,
-      var_95, cvar_95, var_95_pct,
+      var_95, cvar_95, var_95_pct, cvar_95_pct,
       prob_profit_pct, prob_loss_10pct, prob_loss_20pct,
       buckets: [{label, center, pct}],
       per_symbol: [{symbol, ewma_vol_daily_pct, weight_pct}]
@@ -327,6 +327,7 @@ def run_monte_carlo(
         "var_95":            round(var95, 2),
         "cvar_95":           round(cvar95, 2),
         "var_95_pct":        round(var95 / total_equity * 100, 2),
+        "cvar_95_pct":       round(cvar95 / total_equity * 100, 2),
         "prob_profit_pct":   round(prob_profit * 100, 1),
         "prob_loss_10pct":   round(prob_loss_10 * 100, 1),
         "prob_loss_20pct":   round(prob_loss_20 * 100, 1),
