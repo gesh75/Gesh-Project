@@ -10,6 +10,7 @@ would ship as a silently wrong `live_portfolio_snapshot.json`.
 F-05 (a missing quote priced at $0) is already the subject of open PR #248 —
 these tests do not lock that bug in, and they do not require the fix.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,10 +42,14 @@ def _raw(
             "pending_deposits": pending,
             "total_value": total_value,
         },
-        "positions": positions if positions is not None else [
+        "positions": positions
+        if positions is not None
+        else [
             {"symbol": "NVDA", "quantity": "10", "average_buy_price": "100.00"},
         ],
-        "quotes": quotes if quotes is not None else [
+        "quotes": quotes
+        if quotes is not None
+        else [
             {
                 "quote": {
                     "symbol": "NVDA",
@@ -84,46 +89,59 @@ def test_nested_quote_unwrap_and_holding_identity(tmp_path):
 
 
 def test_flat_quote_shape_is_tolerated(tmp_path):
-    raw = _raw(quotes=[{
-        "symbol": "NVDA",
-        "last_trade_price": "200.00",
-        "previous_close": "190.00",
-    }])
+    raw = _raw(
+        quotes=[
+            {
+                "symbol": "NVDA",
+                "last_trade_price": "200.00",
+                "previous_close": "190.00",
+            }
+        ]
+    )
     snap = _build(tmp_path, raw)
     assert snap["holdings"][0]["price"] == pytest.approx(200.0)
 
 
 def test_last_non_reg_trade_price_used_when_last_trade_missing(tmp_path):
-    raw = _raw(quotes=[{
-        "quote": {
-            "symbol": "NVDA",
-            "last_non_reg_trade_price": "199.50",
-            "previous_close": "190.00",
-        }
-    }])
+    raw = _raw(
+        quotes=[
+            {
+                "quote": {
+                    "symbol": "NVDA",
+                    "last_non_reg_trade_price": "199.50",
+                    "previous_close": "190.00",
+                }
+            }
+        ]
+    )
     snap = _build(tmp_path, raw)
     assert snap["holdings"][0]["price"] == pytest.approx(199.50)
     assert snap["holdings"][0]["equity"] == pytest.approx(1995.0)
 
 
 def test_zero_and_negative_quantity_positions_are_skipped(tmp_path):
-    raw = _raw(positions=[
-        {"symbol": "ZERO", "quantity": "0", "average_buy_price": "10"},
-        {"symbol": "NEG", "quantity": "-2", "average_buy_price": "10"},
-        {"symbol": "NVDA", "quantity": "10", "average_buy_price": "100.00"},
-    ], quotes=[
-        {"quote": {"symbol": "ZERO", "last_trade_price": "5"}},
-        {"quote": {"symbol": "NEG", "last_trade_price": "5"}},
-        {"quote": {"symbol": "NVDA", "last_trade_price": "200.00", "previous_close": "190.00"}},
-    ])
+    raw = _raw(
+        positions=[
+            {"symbol": "ZERO", "quantity": "0", "average_buy_price": "10"},
+            {"symbol": "NEG", "quantity": "-2", "average_buy_price": "10"},
+            {"symbol": "NVDA", "quantity": "10", "average_buy_price": "100.00"},
+        ],
+        quotes=[
+            {"quote": {"symbol": "ZERO", "last_trade_price": "5"}},
+            {"quote": {"symbol": "NEG", "last_trade_price": "5"}},
+            {"quote": {"symbol": "NVDA", "last_trade_price": "200.00", "previous_close": "190.00"}},
+        ],
+    )
     snap = _build(tmp_path, raw)
     assert [h["symbol"] for h in snap["holdings"]] == ["NVDA"]
 
 
 def test_zero_average_cost_does_not_invent_percent_change(tmp_path):
-    raw = _raw(positions=[
-        {"symbol": "NVDA", "quantity": "10", "average_buy_price": "0"},
-    ])
+    raw = _raw(
+        positions=[
+            {"symbol": "NVDA", "quantity": "10", "average_buy_price": "0"},
+        ]
+    )
     snap = _build(tmp_path, raw)
     assert snap["holdings"][0]["percent_change"] == 0
 
@@ -177,9 +195,13 @@ def test_missing_total_value_uses_positions_plus_deployable(tmp_path):
 
 
 def test_previous_close_falls_back_to_last_price(tmp_path):
-    raw = _raw(quotes=[{
-        "quote": {"symbol": "NVDA", "last_trade_price": "200.00"},
-    }])
+    raw = _raw(
+        quotes=[
+            {
+                "quote": {"symbol": "NVDA", "last_trade_price": "200.00"},
+            }
+        ]
+    )
     snap = _build(tmp_path, raw)
     # prev_eq_positions = 200 * 10; + deployable 1500
     assert snap["equity_summary"]["adjusted_equity_previous_close"] == pytest.approx(3500.0)

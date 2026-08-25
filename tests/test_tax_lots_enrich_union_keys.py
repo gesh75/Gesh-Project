@@ -10,6 +10,7 @@ module exists to prevent.
 Lives in its own file so it does not collide with open coverage PR #247
 (which edits `tests/test_tax_lots_enrich.py`).
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -21,9 +22,13 @@ TODAY = date(2026, 8, 21)
 
 def _lot(lot_id, qty, cps, price, open_date, term="st", selectable=True):
     return {
-        "lot_id": lot_id, "quantity": qty, "cost_per_share": cps,
-        "cost_basis": round(qty * cps, 2), "open_date": open_date,
-        "term": term, "selectable": selectable,
+        "lot_id": lot_id,
+        "quantity": qty,
+        "cost_per_share": cps,
+        "cost_basis": round(qty * cps, 2),
+        "open_date": open_date,
+        "term": term,
+        "selectable": selectable,
         "current_price": price,
         "unrealized_usd": round((price - cps) * qty, 2),
         "unrealized_pct": round((price / cps - 1) * 100, 2),
