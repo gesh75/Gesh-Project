@@ -1973,12 +1973,19 @@ def api_congress_symbol(symbol: str):
 
 
 @app.get("/terms", response_class=HTMLResponse)
-@app.get("/disclaimer", response_class=HTMLResponse)
 def terms_page():
-    """Public Terms of Service & Disclaimer (internal compliance notes stripped)."""
+    """Public Terms of Service (internal compliance notes stripped)."""
     import legal_pages
 
     return legal_pages.render_terms_html()
+
+
+@app.get("/disclaimer", response_class=HTMLResponse)
+def disclaimer_page():
+    """Short public disclaimer — research/education only, not advice."""
+    import legal_pages
+
+    return legal_pages.render_disclaimer_html()
 
 
 @app.get("/api/account/export")
@@ -2055,10 +2062,8 @@ async def account_delete(request: Request):
 def privacy_page():
     """Public Privacy Policy (hub item L1).
 
-    Published as an honest DRAFT pending counsel review: the product already
-    collects emails, customer-entered positions, and usage metering, and until
-    now had NO published policy at all. Public (in PUBLIC_PREFIXES) because a
-    policy nobody can read before signing up is not a published policy."""
+    Public (in PUBLIC_PREFIXES) because a policy nobody can read before signing
+    up is not a published policy."""
     import legal_pages
 
     return legal_pages.render_privacy_html()
@@ -6859,7 +6864,40 @@ def _render_book_report(email: str) -> str:
             f"<td style='padding:6px 12px;color:#555'>{e(s.get('assessment', ''))}</td></tr>"
             for s in (d.get("sector_breakdown") or [])
         )
-        sector_block = (f"<h2>Sector breakdown</h2><table>{sectors}</table>") if sectors else ""
+        sector_block = (f"<h2>Sector mix</h2><table>{sectors}</table>") if sectors else ""
+        # The actual customer benefit is seeing the book — e.g. 44% in one sector —
+        # before any model tag. Build that line from analysis sectors or radar weights.
+        top_sector_html = ""
+        _sec_w: list[tuple[str, float]] = []
+        for s in d.get("sector_breakdown") or []:
+            if not isinstance(s, dict):
+                continue
+            try:
+                _sec_w.append((str(s.get("sector") or ""), float(s.get("allocation_pct") or 0)))
+            except (TypeError, ValueError):
+                continue
+        if not _sec_w:
+            _raw_w = (saved.get("radar") or {}).get("existing_sector_weights")
+            if isinstance(_raw_w, dict):
+                for sec, w in _raw_w.items():
+                    try:
+                        wf = float(w)
+                    except (TypeError, ValueError):
+                        continue
+                    _sec_w.append((str(sec), wf * 100.0 if wf <= 1.5 else wf))
+        if _sec_w:
+            _sec_w.sort(key=lambda kv: kv[1], reverse=True)
+            _ts, _tw = _sec_w[0]
+            _flag = (
+                " — more than 40% in one sector."
+                if _tw >= 40
+                else "."
+            )
+            top_sector_html = (
+                "<p style='color:#111;line-height:1.6;font-size:16px'><b>What this book is:</b> "
+                f"{e(f'{_tw:.1f}% {_ts}')}{_flag} "
+                "That is a measurement of the positions you entered, not a trade instruction.</p>"
+            )
         # Conclusions first, mechanics folded (plan T2): each engine section LEADS
         # with one plain-language line; the raw tables stay complete but move
         # behind <details>. Nothing is deleted — fold, don't remove.
@@ -6873,11 +6911,21 @@ def _render_book_report(email: str) -> str:
             default=None,
         )
         n_adj = len(adjustments)
-        kelly_conclusion = f"{n_adj} sizing adjustment{'s' if n_adj != 1 else ''} suggested" + (
-            f" — largest: {e(str(top_adj.get('symbol', '')))} {e(str(top_adj.get('action', '')))}."
-            if top_adj
-            else "."
-        )
+        _n_txt = "1 name differs" if n_adj == 1 else f"{n_adj} names differ"
+        if top_adj:
+            _gap_sym = e(str(top_adj.get("symbol", "")))
+            _now = float(top_adj.get("current_pct") or 0)
+            _opt = float(top_adj.get("optimal_pct") or 0)
+            kelly_conclusion = (
+                f"Kelly formula vs current weights: {_n_txt} from the formula"
+                f" — largest gap: {_gap_sym} now {_now:.1f}% vs formula {_opt:.1f}%."
+                " Educational math, not an order."
+            )
+        else:
+            kelly_conclusion = (
+                f"Kelly formula vs current weights: {_n_txt} from the formula."
+                " Educational math, not an order."
+            )
         mc_var = mc.get("var_95", 0) or 0
         # The headline pairs the SAVED analysis's VaR dollars with TODAY'S live
         # book total — when the analysis is stale that mix understates risk, so
@@ -6903,12 +6951,15 @@ def _render_book_report(email: str) -> str:
             else ""
         )
         body = f"""
-  <h2>AI Verdict: {e(str(d.get("portfolio_verdict", "—")))}</h2>
+  <h2>What this book is</h2>
+  {top_sector_html or "<p style='color:#666'>Sector mix unavailable for this run.</p>"}
+  {sector_block}
+  <h2>Model commentary</h2>
+  <p style='color:#111;line-height:1.6'><b>{e(str(d.get("portfolio_verdict", "—")))}</b></p>
   <table>{row("Portfolio score", d.get("portfolio_score", "—"))}{row("Risk score", d.get("risk_score", "—"))}
   {row("Diversification", d.get("diversification_score", "—"))}{row("Portfolio type", d.get("portfolio_type", "—"))}</table>
   {ctx_html}
   {("<h2>Key risks</h2><ul>" + risks + "</ul>") if risks else ""}
-  {sector_block}
   <h2>Risk check</h2><p style='color:#111;line-height:1.6'><b>{mc_conclusion}</b></p>
   <details><summary>How this was computed — Monte Carlo ({e(str(mc.get("horizon_days") or 21))} trading days)</summary>
   <table>{row("Median outcome", "$" + format(mc.get("median", 0) or 0, ",.0f"))}
@@ -6931,7 +6982,7 @@ details{{margin:8px 0;page-break-inside:avoid}}details summary{{cursor:pointer;c
 @media print{{a{{display:none}}details{{display:block}}details>*{{display:block}}}}</style></head><body>
 <div style='border-bottom:3px solid #111;padding-bottom:10px;display:flex;justify-content:space-between;align-items:baseline'>
 <h1>GESH <span style='font-weight:300'>Portfolio Report</span></h1>
-<span style='color:#666;font-size:13px'>AI portfolio intelligence · 11-node consensus · verified signals</span></div>
+<span style='color:#666;font-size:13px'>See what's in the book · educational model output · not advice</span></div>
 <p style='color:#666'>Prepared for {e(email)} · {_dt.now(_tz.utc).strftime("%Y-%m-%d %H:%M")} UTC</p>
 <h2>Positions</h2>
 <table><tr style='border-bottom:1px solid #ccc'><th style='padding:6px 12px;text-align:left'>Symbol</th>

@@ -1032,7 +1032,11 @@ def test_report_leads_with_conclusions_and_folds_mechanics(client, monkeypatch, 
     au.save_book_analysis("cust@x.com", {
         "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),  # genuinely fresh
         "analysis": {"portfolio_verdict": "HOLD", "market_context": "ctx",
-                     "holdings_analysis": [], "portfolio_risks": []},
+                     "holdings_analysis": [], "portfolio_risks": [],
+                     "sector_breakdown": [
+                         {"sector": "Healthcare", "allocation_pct": 43.8, "assessment": "heavy"},
+                         {"sector": "Technology", "allocation_pct": 12.0, "assessment": "ok"},
+                     ]},
         "monte_carlo": {"median": 2100.0, "p5": 1500.0, "p95": 2600.0,
                         "var_95": 300.0, "horizon_days": 21},
         "kelly": {"holdings": [{"symbol": "NVDA", "action": "TRIM",
@@ -1041,7 +1045,12 @@ def test_report_leads_with_conclusions_and_folds_mechanics(client, monkeypatch, 
     text = c.get("/mybook/report").text
     assert "Worst plausible" in text and "$300" in text      # conclusion line
     assert "<details>" in text and "How this was computed" in text
-    assert "1 sizing adjustment" in text and "NVDA TRIM" in text
+    assert "What this book is" in text and "43.8% Healthcare" in text
+    assert "more than 40%" in text
+    assert "1 name differs from the formula" in text
+    assert "largest gap: NVDA" in text
+    assert "Educational math, not an order" in text
+    assert "NVDA · TRIM" in text
     # mechanics still present, just folded
     assert "Median outcome" in text
     # fresh book: the headline must NOT carry the staleness caveat (finding 3)
@@ -1061,7 +1070,7 @@ def test_report_conclusions_survive_empty_engines(client, monkeypatch, au):
         "monte_carlo": {}, "kelly": {}})
     r = c.get("/mybook/report")
     assert r.status_code == 200
-    assert "0 sizing adjustments" in r.text
+    assert "0 names differ from the formula" in r.text
     assert "How this was computed" in r.text
 
 
@@ -1150,9 +1159,9 @@ def test_report_kelly_headline_names_largest_delta_not_first_row(client, monkeyp
         ]},
         "book": {"positions": [{"symbol": "NVDA"}], "unpriced": []}})
     text = c.get("/mybook/report").text
-    assert "2 sizing adjustments" in text
-    assert "largest: AAPL ADD" in text
-    assert "largest: NVDA TRIM" not in text
+    assert "2 names differ from the formula" in text
+    assert "largest gap: AAPL" in text
+    assert "largest gap: NVDA" not in text
 
 
 def test_report_mc_conclusion_carries_stale_caveat(client, monkeypatch, au):

@@ -46,6 +46,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 # ─── the specific leak ────────────────────────────────────────────────────────
 
+
 def test_the_geoblocking_decision_note_is_not_served(client):
     """The exact string found live. Named explicitly so it can never come back."""
     body = client.get("/privacy").text
@@ -58,12 +59,18 @@ def test_no_author_decision_notes_survive(client):
     """Any bracketed instruction addressed to the author, in any casing."""
     body = client.get("/privacy").text.lower()
 
-    for leak in ("[decide:", "if you add analytics", "if required by applicable law",
-                 "e.g., 12 months", "strictly-necessary cookies"):
+    for leak in (
+        "[decide:",
+        "if you add analytics",
+        "if required by applicable law",
+        "e.g., 12 months",
+        "strictly-necessary cookies",
+    ):
         assert leak not in body, f"author note served publicly: {leak}"
 
 
 # ─── the real source file, not synthetic strings ──────────────────────────────
+
 
 def test_every_bracket_token_in_the_real_draft_is_detected():
     """The bug in one line: the ORIGINAL tests only used synthetic ALL-CAPS input,
@@ -75,9 +82,11 @@ def test_every_bracket_token_in_the_real_draft_is_detected():
     detected = set(legal_pages.unfilled_placeholders(md))
 
     import re
+
     every_bracket = {
-        m for m in re.findall(r"\[[^\]\n]+\]", md)
-        if not re.search(re.escape(m) + r"\(", md)      # exclude markdown links
+        m
+        for m in re.findall(r"\[[^\]\n]+\]", md)
+        if not re.search(re.escape(m) + r"\(", md)  # exclude markdown links
     }
     missed = every_bracket - detected
     assert not missed, f"unfilled placeholders NOT detected (would be served): {sorted(missed)}"
@@ -97,7 +106,10 @@ def test_markdown_links_are_still_not_flagged():
     """Must not regress into flagging legitimate prose."""
     import legal_pages
 
-    assert legal_pages.unfilled_placeholders("See [the terms](/terms) and [our policy](/privacy).") == []
+    assert (
+        legal_pages.unfilled_placeholders("See [the terms](/terms) and [our policy](/privacy).")
+        == []
+    )
 
 
 def test_rendered_body_contains_no_square_bracket_spans(client):
@@ -106,7 +118,7 @@ def test_rendered_body_contains_no_square_bracket_spans(client):
     import re
 
     html = client.get("/privacy").text
-    body_only = html[html.index("Privacy Policy"):]
+    body_only = html[html.index("Privacy Policy") :]
     # the DRAFT banner legitimately lists pending items inside <code>…</code>
     body_only = re.sub(r"<code>.*?</code>", "", body_only, flags=re.S)
 
@@ -114,12 +126,18 @@ def test_rendered_body_contains_no_square_bracket_spans(client):
 
 
 def test_banner_still_discloses_that_items_are_pending(client):
-    """Redaction must not become concealment — the reader is still told the
-    document is incomplete."""
-    body = client.get("/privacy").text
+    """Redaction must not become concealment when placeholders remain.
+    A fully filled policy has nothing pending to disclose."""
+    import legal_pages
 
-    assert "DRAFT" in body
-    assert "pending" in body.lower()
+    remaining = legal_pages.unfilled_placeholders(
+        legal_pages._strip_author_note(legal_pages.PRIVACY_PATH.read_text())
+    )
+    body = client.get("/privacy").text
+    if remaining:
+        assert "pending" in body.lower()
+    else:
+        assert "DRAFT — pending legal review" not in body
 
 
 def test_substantive_policy_content_survives_redaction(client):

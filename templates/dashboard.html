@@ -761,14 +761,14 @@ body:not(.customer) .customer-only { display: none !important; }
         <button class="btn-analyze" onclick="mybookImportWatchlist()" title="Add every saved watchlist ticker (1 share each — edit after)">⬇ Import watchlist</button>
         <button class="btn-analyze" onclick="mybookClear()" title="Remove EVERY position from your book. Use this to wipe a symbols-only bulk import before adding real share counts.">🗑 Clear</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
-        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()" title="Run educational model research on this book (illustrative outputs only — not personalized advice)">🧠 Analyze My Portfolio</button>
+        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()" title="Measure what's in this book (sector mix, cash, risk range, model math). Educational output — not personalized advice)">🧠 See what's in this book</button>
       </div>
       <div id="mybook-form-error" role="alert" style="display:none;margin:0 0 10px;color:var(--red);font-size:13px"></div>
       <!-- L1: the AI data-flow disclosure, shown at the point of use. A privacy
            page alone does not put it in front of someone at the moment they act. -->
       <div id="gesh-ai-disclosure" style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.6">
         ℹ️ Running an analysis sends your symbols and entered holdings to third-party AI
-        providers (<b>Anthropic Claude</b>, <b>Google Gemini</b>) to generate the research.
+        providers (<b>Anthropic Claude</b>, <b>Google Gemini</b>, <b>xAI Grok</b>) to generate the research.
         Output is an AI opinion, not a calculation, and is <b>not investment advice</b>.
         See the <a href="/privacy" style="color:var(--accent)">Privacy Policy</a>.
       </div>
@@ -3387,9 +3387,9 @@ async function mybookRenderResult(d, box, meta){
   const kAdjTop=kAdj.reduce((b,k)=>{
     const dv=Math.abs((k.optimal_pct||0)-(k.current_pct||0));
     return (!b||dv>b.dv)?{sym:k.symbol,act:k.action||'',dv}:b;},null);
-  const kellyLead=(ky.error||!kh.length)?'Kelly sizing unavailable right now.'
-    :(kAdj.length+' sizing adjustment'+(kAdj.length!==1?'s':'')+' suggested'
-      +(kAdjTop?' — largest: '+kAdjTop.sym+' '+kAdjTop.act:'')+'.');
+  const kellyLead=(ky.error||!kh.length)?'Kelly formula unavailable right now.'
+    :('Kelly formula vs current weights: '+(kAdj.length===1?'1 name differs':kAdj.length+' names differ')+' from the formula'
+      +(kAdjTop?' — largest gap: '+kAdjTop.sym:'')+'. Educational math, not an order.');
   const risks=(a.portfolio_risks||[]).map(r=>{
     const dot=r.severity==='HIGH'?'var(--red)':r.severity==='MEDIUM'?'var(--yellow)':'var(--green)';
     return `<div style="display:flex;gap:6px;align-items:flex-start;margin-bottom:4px;font-size:13px"><span class="da-dot" style="background:${dot}"></span><span style="color:var(--muted2)">${daEsc(r.text||'')}</span></div>`;

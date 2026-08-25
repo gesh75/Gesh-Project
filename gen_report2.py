@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from html import escape as _esc  # the report body f-string is bound to `html`, so alias
 from pathlib import Path
 
+import report_share_plan
 from alpha_reporting import alpha_value_color, format_alpha_percent
 from run_manifest import report_output_path
 
@@ -347,6 +348,7 @@ def holding_card(h):
         <span>Now {curr_pct:.1f}%</span>
         <span style="color:#00d4ff">→ Optimal {opt_pct:.1f}%</span>
       </div>
+      <div style="font-size:11px;color:#ccc;margin:2px 0 4px">{_html(report_share_plan.holding_share_caption(h, kly, total))}</div>
       {pct_bar(curr_pct, 30)}
       <div class="hc-section-title" style="margin-top:10px">Volatility</div>
       <div style="font-size:11px;color:#aaa">GARCH {garch_display} &nbsp;|&nbsp; EWMA {ewma_display} annualised</div>
@@ -401,105 +403,10 @@ for rec in recs:
     </tr>"""
 
 
-# ─── Paper & risk-gate audit section (from run_paper_gate2, step 4/5) ─────────
-def _gate_audit_section(eng: dict) -> str:
-    gates = eng.get("gate_results") or []
-    plan = eng.get("action_plan") or []
-    paper = eng.get("paper_session") or {}
-    stats = eng.get("trade_stats") or {}
-    if not plan:
-        return ""
-    gate_by_sym = {(g.get("symbol"), g.get("action")): g for g in gates}
-    rows = ""
-    for a in plan:
-        g = gate_by_sym.get((a.get("symbol"), a.get("action")))
-        if g is not None:
-            verdict = (
-                "✅ APPROVED"
-                if g.get("approved")
-                else f"⛔ {_esc(str(g.get('reason') or 'rejected'))}"
-            )
-            v_col = "#00e87a" if g.get("approved") else "#ff3c5a"
-        elif a.get("action") == "HOLD":
-            verdict, v_col = "— override", "#888"
-        else:
-            verdict, v_col = "—", "#888"
-        rows += f"""<tr>
-      <td>{_esc(str(a.get("symbol", "?")))}</td>
-      <td>{_esc(str(a.get("action", "")))}</td>
-      <td style="text-align:right">{a.get("shares", 0)}</td>
-      <td style="color:#888;font-size:11px">{_esc(str(a.get("signal_reason", "")))}</td>
-      <td style="color:{v_col};font-size:11px">{verdict}</td>
-    </tr>"""
-    closed_n = len(paper.get("closed") or [])
-    created_n = len(paper.get("created") or [])
-    stat_bits = [f"{created_n} paper record(s) today", f"{closed_n} auto-closed"]
-    _pw = (stats.get("paper") or {}).get("win_rate_pct")
-    _rw = (stats.get("real") or {}).get("win_rate_pct")
-    if _pw is not None:
-        stat_bits.append(f"paper win-rate 7d: {_pw}%")
-    if _rw is not None:
-        stat_bits.append(f"real win-rate 7d: {_rw}%")
-    return f"""
-  <!-- Paper & Gate Audit -->
-  <div class="section-title">🛡️ Paper &amp; Risk-Gate Audit</div>
-  <div class="table-card" style="margin-bottom:16px">
-    <table class="action-table">
-      <thead><tr><th>Symbol</th><th>Action</th><th>Shares</th><th>Signal</th><th>8-Gate Verdict</th></tr></thead>
-      <tbody>{rows}</tbody>
-    </table>
-    <div style="color:#888;font-size:11px;padding:8px 4px 2px">{" · ".join(stat_bits)}</div>
-  </div>"""
-
-
-gate_audit_html = _gate_audit_section(eng)
-
-
-# ─── Signal-vs-gate reconciliation banner (added 2026-07-17) ─────────────────
-# Surfaces, in one line at the top, when ADD/BUY signals are blocked by the risk
-# gate — so "the plan says buy but nothing is actionable" can't hide in the table.
-def _signal_gate_banner(eng: dict) -> str:
-    plan = eng.get("action_plan") or []
-    gates = eng.get("gate_results") or []
-    if not plan:
-        return ""
-    gate_by = {(g.get("symbol"), g.get("action")): g for g in gates}
-    adds = {"BUY", "ADD"}
-    blocked, cleared, reason = [], [], ""
-    for a in plan:
-        if a.get("action") not in adds:
-            continue
-        g = gate_by.get((a.get("symbol"), a.get("action")))
-        if g is None:
-            continue
-        if g.get("approved"):
-            cleared.append(str(a.get("symbol", "?")))
-        else:
-            blocked.append(str(a.get("symbol", "?")))
-            if not reason and g.get("reason"):
-                reason = str(g.get("reason"))
-    if not (blocked or cleared):
-        return ""
-    cap = " (size &gt; 2% position cap)" if "cap" in reason.lower() else ""
-    if blocked and not cleared:
-        return (
-            '<div class="override-banner">⚠️ SIGNAL vs GATE — signals lean ADD on '
-            + f"{len(blocked)} name(s) ({_esc(', '.join(blocked))}), but the risk gate blocked "
-            + f"all of them{cap} — net actionable trades today: 0.</div>"
-        )
-    if blocked and cleared:
-        return (
-            '<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
-            + f"⚠️ SIGNAL vs GATE — {len(cleared)} ADD signal(s) cleared the gate "
-            + f"({_esc(', '.join(cleared))}); {len(blocked)} blocked ({_esc(', '.join(blocked))}){cap}.</div>"
-        )
-    return (
-        '<div class="override-banner" style="background:#00e87a15;border-color:#00e87a44;color:#00e87a">'
-        + f"✓ SIGNAL vs GATE — all {len(cleared)} planned ADD action(s) cleared the risk gate.</div>"
-    )
-
-
-signal_gate_banner_html = _signal_gate_banner(eng)
+# ─── Share plan + paper/gate audit (always visible, even on all-HOLD days) ──
+share_plan_section_html = report_share_plan.share_plan_html(eng)
+gate_audit_html = report_share_plan.gate_audit_html(eng)
+signal_gate_banner_html = report_share_plan.signal_gate_banner_html(eng)
 
 
 def _provider_banner(eng: dict) -> str:
@@ -975,6 +882,8 @@ html = f"""<!DOCTYPE html>
 
   {provider_banner_html}
   {signal_gate_banner_html}
+
+  {share_plan_section_html}
 
   <!-- AI Verdict -->
   <div class="ai-card">
