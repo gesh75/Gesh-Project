@@ -30,6 +30,11 @@ def test_report_does_not_default_missing_cvar_or_garch_to_zero():
     """Missing CVaR/GARCH used to render as a confident 0.0% (F-01 / F-02)."""
     src = (REPO_ROOT / "gen_report2.py").read_text()
     assert 'monte.get("cvar_95_pct", 0)' not in src
+    assert 'monte.get("var_95_pct", 0)' not in src
+    assert 'monte.get("prob_profit_pct", 0)' not in src
+    assert 'monte.get("median", 0)' not in src
     assert 'garch_annual_pct", 0) or 0' not in src
     assert "format_optional_percent" in src
+    assert "format_optional_usd" in src
     assert "cvar_95_pct(monte)" in src
+    assert "var_95_status" in src
