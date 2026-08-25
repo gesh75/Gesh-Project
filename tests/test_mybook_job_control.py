@@ -215,3 +215,15 @@ def test_release_usage_scoped_by_user_id(au):
     # the rightful tenant can release it
     assert au.release_usage("job-uid1", uid1) is True
     assert au.get_usage_reservation("job-uid1")["state"] == "released"
+
+
+def test_allow_mybook_fail_retry_cools_down_per_user_and_book():
+    import server
+
+    server._MYBOOK_FAIL_RETRY_AT.clear()
+    assert server._allow_mybook_fail_retry("u1", "fp-a", now=100.0) is True
+    assert server._allow_mybook_fail_retry("u1", "fp-a", now=101.0) is False
+    assert server._allow_mybook_fail_retry("u2", "fp-a", now=101.0) is True
+    assert server._allow_mybook_fail_retry("u1", "fp-b", now=101.0) is True
+    cooled = 100.0 + server._MYBOOK_FAIL_RETRY_COOLDOWN_S
+    assert server._allow_mybook_fail_retry("u1", "fp-a", now=cooled) is True

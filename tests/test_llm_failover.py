@@ -126,6 +126,13 @@ def test_coerce_casts_numeric_strings_to_int():
     assert out["portfolio_score"] == 88
 
 
+def test_coerce_invalid_numeric_is_none_not_zero():
+    """Garbage is not a measured 0 — same F-11 class as an omitted key."""
+    out = llm_failover.coerce_to_schema({"portfolio_score": "n/a", "risk_score": "nope"}, _SCHEMA)
+    assert out["portfolio_score"] is None
+    assert out["risk_score"] is None
+
+
 # ── Duck-typed message ───────────────────────────────────────────────────────
 
 
@@ -377,6 +384,26 @@ def test_call_xai_raises_on_http_error_without_leaking_the_key(monkeypatch):
     with pytest.raises(llm_failover.FailoverUnavailable, match="xAI HTTP 401") as ei:
         llm_failover.call_xai("hi")
     assert "xai-secret-key-must-not-leak" not in str(ei.value)
+    assert "unauthorized" not in str(ei.value)
+
+
+def test_call_xai_http_error_does_not_log_raw_body(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+
+    class _Resp:
+        status_code = 400
+        text = "PROMPT ECHO: Analyze this private book NVDA 12 shares"
+
+        def json(self):
+            return {"error": {"type": "invalid_request_error", "message": self.text}}
+
+    monkeypatch.setattr(llm_failover.httpx, "post", lambda *a, **k: _Resp())
+    with pytest.raises(llm_failover.FailoverUnavailable) as ei:
+        llm_failover.call_xai("Analyze this private book")
+    msg = str(ei.value)
+    assert msg == "xAI HTTP 400 (invalid_request_error)"
+    assert "PROMPT ECHO" not in msg
+    assert "NVDA 12 shares" not in msg
 
 
 def test_build_prompt_embeds_schema_and_forbids_tools():
