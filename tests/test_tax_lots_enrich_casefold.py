@@ -7,6 +7,7 @@ Robinhood/customer symbol plus an uppercase report ticker produced
 
 Lives in its own file so it does not collide with open coverage PRs #247 / #250.
 """
+
 from __future__ import annotations
 
 from datetime import date
