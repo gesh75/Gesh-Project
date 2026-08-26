@@ -158,7 +158,7 @@ def enrich(report: dict, holdings: list[dict], *, loader=None,
     out = dict(report)
     price_by_sym = {}
     for h in holdings or []:
-        sym = h.get("symbol")
+        sym = (h.get("symbol") or "").upper()
         px = h.get("price") or h.get("current_price")
         if sym and px:
             price_by_sym[sym] = float(px)
