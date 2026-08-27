@@ -192,6 +192,9 @@ def test_share_plan_rows_follow_kelly_add_and_trim():
     assert by["GTLB"]["shares"] == 13
     assert by["RTX"]["size_action"] == "TRIM"
     assert by["RTX"]["shares"] == 2
+    html = share_plan_html(eng)
+    assert 'style="color:#00e87a;font-weight:700">ADD<' in html
+    assert 'style="color:#ff3c5a;font-weight:700">TRIM<' in html
 
 
 def test_share_plan_summary_counts_names_and_shares():
@@ -212,6 +215,8 @@ def test_share_plan_html_easy_columns_in_order():
     assert ">Kelly band<" not in html
     assert "drift 13 sh" in html
     assert "not gated — Kelly HOLD band" in html
+    assert "color:#f0b429" in html
+    assert "font-weight:700" in html
 
 
 def test_kelly_hold_with_whole_share_gap_is_not_labeled_gated():
@@ -360,6 +365,8 @@ def test_share_plan_approves_when_plan_shares_match_display():
     chunk = html[max(0, i - 120) : i + 500]
     assert "APPROVED" in chunk
     assert "ADD" in chunk
+    assert "color:#00e87a" in chunk
+    assert "font-weight:700" in chunk
 
 
 def test_optimal_pct_zero_renders_zero_not_na():

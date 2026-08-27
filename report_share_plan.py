@@ -203,6 +203,22 @@ def share_plan_summary(rows: list[dict]) -> dict:
     }
 
 
+_ACTION_COLORS = {"ADD": "#00e87a", "TRIM": "#ff3c5a", "HOLD": "#f0b429"}
+
+
+def _gate_cell_style(status: str) -> str:
+    """APPROVED must not share the 11px gray used for captions — that hid it."""
+    raw = status or ""
+    upper = raw.upper()
+    if upper.startswith("APPROVED"):
+        return "color:#00e87a;font-size:13px;font-weight:700"
+    if upper.startswith("REJECTED") or "NOT EVALUATED" in upper:
+        return "color:#ff3c5a;font-size:12px;font-weight:700"
+    if "HOLD" in upper:
+        return "color:#f0b429;font-size:12px;font-weight:600"
+    return "color:#888;font-size:11px"
+
+
 def _gate_status(row: dict, eng: dict) -> str:
     """Dollar-drift ADD/TRIM is not APPROVED unless the gate actually ran."""
     plan = eng.get("action_plan") or []
@@ -244,11 +260,10 @@ def share_plan_html(eng: dict) -> str:
     if not rows:
         return ""
     summary = share_plan_summary(rows)
-    colors = {"ADD": "#00e87a", "TRIM": "#ff3c5a", "HOLD": "#888"}
     body = ""
     for r in rows:
         act = r["size_action"]
-        col = colors.get(act, "#888")
+        col = _ACTION_COLORS.get(act, "#888")
         sh_cell = "N/A" if r["shares"] is None else f"{_fmt_shares(r['shares'])} sh"
         if (
             r["size_action"] == "HOLD"
@@ -280,7 +295,7 @@ def share_plan_html(eng: dict) -> str:
             f'<td style="text-align:right;font-weight:700">{sh_html}</td>'
             f"<td>{_esc(now)}</td>"
             f"<td>{_esc(kel)}</td>"
-            f'<td style="color:#888;font-size:11px">{_esc(status)}</td>'
+            f'<td style="{_gate_cell_style(status)}">{_esc(status)}</td>'
             "</tr>"
         )
     note = (
@@ -300,7 +315,7 @@ def share_plan_html(eng: dict) -> str:
       ADD <b style="color:#00e87a">{summary["add_names"]}</b> names /
       <b style="color:#00e87a">{_fmt_shares(summary["add_shares"])} sh</b>
       &nbsp;·&nbsp;
-      HOLD <b>{summary["hold_names"]}</b> names
+      HOLD <b style="color:#f0b429">{summary["hold_names"]}</b> names
     </div>
     <table class="action-table">
       <thead><tr>
