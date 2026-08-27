@@ -112,6 +112,77 @@ def _order_target_pct(order: dict, holdings: list[dict], total_eq: float) -> flo
     return max(0.0, post / total_eq)
 
 
+CASH_BUFFER_USD = 500.0  # Rule 8: never deploy the last $500
+
+
+def build_action_plan(
+    holdings: list[dict],
+    kelly: Mapping[str, object] | None,
+    *,
+    total_eq: float,
+    cash: float,
+    rsi_by_sym: Mapping[str, float] | None = None,
+    open_paper_symbols: set[str] | None = None,
+) -> list[dict]:
+    """Kelly + override rules → daily paper action plan.
+
+    Rule 8: cash < $500 blocks ALL ADD/BUY.
+    Rule 5: RSI >= 70 turns ADD/BUY into HOLD.
+    An already-open daily-analysis paper position skips re-entry.
+    TRIM share counts are ceil'd then clamped to the held quantity so a
+    whole-share floor cannot drop a TRIM on a fractional position.
+    """
+    rsi_by_sym = {} if rsi_by_sym is None else rsi_by_sym
+    open_paper_symbols = set() if open_paper_symbols is None else open_paper_symbols
+    cash_blocked = cash < CASH_BUFFER_USD
+    action_plan: list[dict] = []
+
+    for h in holdings:
+        sym    = h.get('symbol')
+        price  = float(h.get('price') or h.get('current_price') or 0)
+        equity = float(h.get('equity') or 0)
+        k      = kelly.get(sym, {}) if isinstance(kelly, dict) else {}
+        k_act  = (k.get('action') or 'HOLD').upper()
+        opt    = float(k.get('optimal_pct') or 0)
+        if price <= 0 or not sym:
+            continue
+
+        if k_act in ('ADD', 'BUY'):
+            if sym.upper() in open_paper_symbols:
+                action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
+                                    'current_price': price,
+                                    'signal_reason': 'Skip: already holding an open daily-analysis paper position'})
+                continue
+            if cash_blocked:
+                action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
+                                    'current_price': price,
+                                    'signal_reason': 'Rule 8: cash < $500 — ADD blocked'})
+                continue
+            if rsi_by_sym.get(sym, 0) >= 70:
+                action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
+                                    'current_price': price,
+                                    'signal_reason': f'Rule 5: RSI={rsi_by_sym[sym]:.0f}>=70 — ADD overridden'})
+                continue
+            usd    = max(0.0, opt / 100 * total_eq - equity)
+            usd    = min(usd, max(0.0, cash - CASH_BUFFER_USD))   # keep the $500 buffer
+            shares = math.floor(usd / price)
+            if shares > 0:
+                action_plan.append({'symbol': sym, 'action': 'BUY', 'shares': shares,
+                                    'current_price': price,
+                                    'signal_reason': f'Kelly {k_act}: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%'})
+        elif k_act == 'TRIM':
+            usd    = max(0.0, equity - opt / 100 * total_eq)
+            shares = math.ceil(usd / price)
+            # Clamp to the actual (possibly fractional) position — a whole-share
+            # floor would silently drop TRIM signals on fractional holdings.
+            shares = min(float(shares), round(float(h.get('quantity') or 0), 4))
+            if shares > 0:
+                action_plan.append({'symbol': sym, 'action': 'TRIM', 'shares': shares,
+                                    'current_price': price,
+                                    'signal_reason': f'Kelly TRIM: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%'})
+    return action_plan
+
+
 def gate_and_execute(
     executable: list[dict],
     holdings: list[dict],
@@ -238,16 +309,11 @@ def main(results_path: str | Path | None = None) -> int:
 
     print(f"{_t()} [gate] holdings={len(holdings)}  total=${total_eq:,.2f}  cash=${cash:.2f}")
 
-    # ── Build the action plan from Kelly + override rules ─────────────────────
-    # Rule 8: cash < $500 blocks ALL ADD/BUY. Rule 5: RSI >= 70 turns ADD into HOLD.
-    cash_blocked = cash < 500.0
-    action_plan: list[dict] = []
-
     # ── Auto-close FIRST, then build the set of still-open paper positions ────
     # Running the close before the plan means a symbol that stops out today is no
     # longer "open" and can be legitimately re-entered if Kelly still says ADD.
-    # The skip-if-open guard (below) then prevents the daily chain from stacking a
-    # fresh duplicate entry on top of a position it already holds every weekday.
+    # The skip-if-open guard (inside build_action_plan) then prevents the daily
+    # chain from stacking a fresh duplicate entry on a position it already holds.
     paper_block: dict = {'closed': [], 'created': [], 'error': None}
     open_paper_symbols: set[str] = set()
     try:
@@ -265,49 +331,12 @@ def main(results_path: str | Path | None = None) -> int:
     except Exception as e:
         print(f"{_t()} [gate] auto-close / open-set failed (non-fatal): {e}")
 
-    for h in holdings:
-        sym    = h.get('symbol')
-        price  = float(h.get('price') or h.get('current_price') or 0)
-        equity = float(h.get('equity') or 0)
-        k      = kelly.get(sym, {}) if isinstance(kelly, dict) else {}
-        k_act  = (k.get('action') or 'HOLD').upper()
-        opt    = float(k.get('optimal_pct') or 0)
-        if price <= 0 or not sym:
-            continue
-
-        if k_act in ('ADD', 'BUY'):
-            if sym.upper() in open_paper_symbols:
-                action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
-                                    'current_price': price,
-                                    'signal_reason': 'Skip: already holding an open daily-analysis paper position'})
-                continue
-            if cash_blocked:
-                action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
-                                    'current_price': price,
-                                    'signal_reason': 'Rule 8: cash < $500 — ADD blocked'})
-                continue
-            if rsi_by_sym.get(sym, 0) >= 70:
-                action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
-                                    'current_price': price,
-                                    'signal_reason': f'Rule 5: RSI={rsi_by_sym[sym]:.0f}>=70 — ADD overridden'})
-                continue
-            usd    = max(0.0, opt / 100 * total_eq - equity)
-            usd    = min(usd, max(0.0, cash - 500.0))   # keep the $500 buffer
-            shares = math.floor(usd / price)
-            if shares > 0:
-                action_plan.append({'symbol': sym, 'action': 'BUY', 'shares': shares,
-                                    'current_price': price,
-                                    'signal_reason': f'Kelly {k_act}: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%'})
-        elif k_act == 'TRIM':
-            usd    = max(0.0, equity - opt / 100 * total_eq)
-            shares = math.ceil(usd / price)
-            # Clamp to the actual (possibly fractional) position — a whole-share
-            # floor would silently drop TRIM signals on fractional holdings.
-            shares = min(float(shares), round(float(h.get('quantity') or 0), 4))
-            if shares > 0:
-                action_plan.append({'symbol': sym, 'action': 'TRIM', 'shares': shares,
-                                    'current_price': price,
-                                    'signal_reason': f'Kelly TRIM: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%'})
+    action_plan = build_action_plan(
+        holdings, kelly if isinstance(kelly, dict) else {},
+        total_eq=total_eq, cash=cash,
+        rsi_by_sym=rsi_by_sym,
+        open_paper_symbols=open_paper_symbols,
+    )
 
     executable = [a for a in action_plan if a['action'] in ('BUY', 'TRIM') and a['shares'] > 0]
     print(f"{_t()} [gate] action plan: {len(action_plan)} entries, {len(executable)} executable")
