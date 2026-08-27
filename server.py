@@ -2230,7 +2230,11 @@ def daily_report_page(request: Request):
             status_code=404, detail="No daily report yet — the 10:30 chain has not produced one."
         )
     try:
-        return HTMLResponse(report_path.read_text())
+        resp = HTMLResponse(report_path.read_text())
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
     except Exception as exc:
         raise _server_error(exc)
 

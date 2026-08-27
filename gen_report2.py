@@ -6,6 +6,9 @@ import os
 from datetime import datetime, timezone
 from html import escape as _esc  # the report body f-string is bound to `html`, so alias
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import report_share_plan
 from alpha_reporting import alpha_value_color, format_alpha_percent
@@ -68,6 +71,36 @@ def _cvar_95_display(monte: dict, fallback_equity: float) -> str:
     if eq_f <= 0:
         return "N/A"
     return f"{(cvar_f / eq_f) * 100:.1f}%"
+
+
+def _parse_iso(value: object):
+    """Parse an ISO timestamp to aware UTC-or-offset datetime. None if unreadable."""
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _fmt_et(dt: datetime | None) -> str:
+    """America/New_York wall clock. Never a UTC string that reads as the wrong day."""
+    if dt is None:
+        return "unknown"
+    local = dt.astimezone(_ET)
+    hour = local.strftime("%I").lstrip("0") or "0"
+    return (
+        f"{local.strftime('%A')}, {local.day} {local.strftime('%b %Y')} · "
+        f"{hour}{local.strftime(':%M %p')} ET"
+    )
 
 
 def _json_script(value):
@@ -202,8 +235,26 @@ def snowflake_bar(val, label, max_val=100):
     <span class="sf-val">{int(val or 0)}</span></div>"""
 
 
-now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-fetch_at = snap.get("fetched_at", "")[:19].replace("T", " ")
+now_dt = datetime.now(timezone.utc)
+snap_dt = _parse_iso(snap.get("fetched_at"))
+asof_dt = snap_dt or now_dt
+asof_et = asof_dt.astimezone(_ET)
+now_str = _fmt_et(now_dt)
+fetch_at = _fmt_et(snap_dt)
+now_iso = now_dt.isoformat()
+snap_iso = snap_dt.isoformat() if snap_dt else ""
+masthead_dow = asof_et.strftime("%A")
+masthead_date = f"{asof_et.day} {asof_et.strftime('%B %Y')}"
+masthead_clock = f"{(asof_et.strftime('%I').lstrip('0') or '0')}{asof_et.strftime(':%M %p')} ET"
+title_day = asof_et.strftime("%Y-%m-%d")
+stale_write_html = ""
+if snap_dt is not None and snap_dt.astimezone(_ET).date() != now_dt.astimezone(_ET).date():
+    stale_write_html = (
+        '<div class="asof-live is-stale" id="asof-write">'
+        "This briefing’s book is "
+        f"<b>{_html(fetch_at)}</b> — the file was written {_html(now_str)}. "
+        "Not a new session.</div>"
+    )
 
 # Degraded-run provenance banner — surfaced when the chain ran on a stale
 # snapshot (run_engines2/run_ai2 stamp degraded/age/source): research-only,
@@ -415,25 +466,6 @@ for rec in recs:
 share_plan_section_html = report_share_plan.share_plan_html(eng)
 gate_audit_html = report_share_plan.gate_audit_html(eng)
 signal_gate_banner_html = report_share_plan.signal_gate_banner_html(eng)
-
-
-def _parse_iso(value: object):
-    from datetime import datetime, timezone
-
-    if not value:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 def _provider_banner(eng: dict) -> str:
@@ -753,40 +785,52 @@ cash_col = "#ff3c5a" if cash < 500 else "#00e87a"
 
 # ─── Full HTML ────────────────────────────────────────────────────────────────
 html = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-generated-iso="{_html(now_iso)}" data-snapshot-iso="{_html(snap_iso)}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GESH Financial — Daily Report {now_str[:10]}</title>
+<meta http-equiv="Cache-Control" content="no-store">
+<title>GESH · {title_day} ET</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
-  body{{background:#080d14;color:#e0e0e0;font-family:'JetBrains Mono','Courier New',monospace;font-size:13px;min-height:100vh}}
-  a{{color:#00d4ff;text-decoration:none}}
-
-  /* Layout */
-  .container{{max-width:1400px;margin:0 auto;padding:16px}}
-  .header{{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1a2840;margin-bottom:16px}}
-  .header h1{{font-size:20px;color:#00d4ff;letter-spacing:2px}}
-  .header .ts{{color:#555;font-size:11px}}
+  :root{{
+    --ink:#e8e4d4;--mute:#8a8474;--paper:#12160f;--panel:#1a1f16;
+    --line:#3a3628;--cyan:#5ad0c8;--gain:#7dce7a;--loss:#e07070;--copper:#c4a574;
+  }}
+  body{{background:var(--paper);color:var(--ink);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:15px;line-height:1.45;min-height:100vh}}
+  a{{color:var(--cyan);text-decoration:none}}
+  .container{{max-width:1120px;margin:0 auto;padding:28px 22px 64px}}
+  .masthead{{border-bottom:2px solid var(--copper);padding-bottom:22px;margin-bottom:18px}}
+  .masthead-kicker{{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--copper)}}
+  .masthead-kicker b{{color:var(--cyan);letter-spacing:.28em;font-weight:700;white-space:nowrap}}
+  .masthead-dow{{font-family:Palatino,"Iowan Old Style","Palatino Linotype",Georgia,serif;font-size:13px;letter-spacing:.28em;text-transform:uppercase;color:var(--mute);margin-top:18px}}
+  .masthead-date{{font-family:Palatino,"Iowan Old Style","Palatino Linotype",Georgia,serif;font-size:clamp(34px,6vw,56px);font-weight:700;line-height:1;letter-spacing:-.02em;margin:4px 0 8px}}
+  .masthead-clock{{font-size:14px;color:var(--mute)}}
+  .masthead-pnl{{margin-top:16px;display:flex;flex-wrap:wrap;gap:18px 32px;align-items:end}}
+  .masthead-pnl .fig{{font-family:Palatino,Georgia,serif;font-size:28px;font-weight:700}}
+  .masthead-pnl .lbl{{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);display:block;margin-bottom:2px}}
+  .asof-live{{display:none;background:#5a2018;color:#f3d0c8;border:1px solid #e07070;padding:12px 14px;margin:0 0 16px;font-size:14px}}
+  .asof-live.is-stale,.asof-live[data-show]{{display:block}}
+  body.is-stale .masthead-date{{color:var(--loss)}}
 
   /* Ticker tape */
-  .tape{{background:#0a1628;border:1px solid #1a2840;border-radius:6px;padding:10px 16px;margin-bottom:16px;overflow:hidden;white-space:nowrap;font-size:12px}}
+  .tape{{background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin-bottom:16px;overflow:hidden;white-space:nowrap;font-size:12px;font-variant-numeric:tabular-nums}}
   .tape-item{{margin-right:4px}}
 
   /* Stats grid */
-  .stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}}
-  .stat-card{{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:14px;text-align:center}}
-  .stat-card .sv{{font-size:26px;font-weight:700;margin:4px 0}}
-  .stat-card .sl{{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px}}
+  .stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);margin-bottom:16px;border:1px solid var(--line)}}
+  .stat-card{{background:var(--panel);padding:14px;text-align:left}}
+  .stat-card .sv{{font-family:Palatino,Georgia,serif;font-size:26px;font-weight:700;margin:4px 0;font-variant-numeric:tabular-nums}}
+  .stat-card .sl{{font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:1px}}
 
   /* Verdict / AI card */
-  .ai-card{{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:16px;margin-bottom:16px}}
-  .ai-card h3{{color:#00d4ff;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}}
-  .ai-text{{color:#bbb;font-size:12px;line-height:1.7}}
+  .ai-card{{background:var(--panel);border:1px solid var(--line);padding:16px;margin-bottom:16px}}
+  .ai-card h3{{color:var(--copper);font-size:12px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.14em;font-weight:600}}
+  .ai-text{{color:var(--ink);font-size:14px;line-height:1.65}}
 
   /* Override banner */
-  .override-banner{{background:#ff3c5a15;border:1px solid #ff3c5a44;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#ff7c9a}}
+  .override-banner{{background:#3a2018;border:1px solid #e0707066;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#f3d0c8}}
 
   /* Holdings cards */
   .section-title{{font-size:12px;color:#555;text-transform:uppercase;letter-spacing:2px;margin:20px 0 10px}}
@@ -863,24 +907,38 @@ html = f"""<!DOCTYPE html>
   .yi-risk{{color:#555;font-size:10px}}
 
   /* Footer */
-  .footer{{text-align:center;color:#333;font-size:10px;padding:24px 0;border-top:1px solid #1a2840;margin-top:24px}}
+  .footer{{text-align:center;color:var(--mute);font-size:11px;padding:28px 0;border-top:1px solid var(--line);margin-top:28px}}
+  @media(max-width:640px){{.masthead-date{{font-size:32px}}}}
 </style>
 </head>
 <body>
 <div class="container">
 
-  <!-- Header -->
-  <div class="header">
-    <div>
-      <h1>⚡ GESH FINANCIAL</h1>
-      <div style="font-size:11px;color:#00d4ff;margin-top:2px">AI-Powered Portfolio Observability &nbsp;|&nbsp; {_html(port_type)}</div>
+  <header class="masthead">
+    <div class="masthead-kicker">
+      <b>GESH FINANCIAL</b>
+      <span>Daily book · America/New_York</span>
     </div>
-    <div class="ts" style="text-align:right">
-      <div style="font-size:12px;color:{day_gain_col}">${day_gain_usd:+,.2f} ({day_gain_pct:+.2f}%) today</div>
-      <div>Generated {now_str}</div>
-      <div>Data: {fetch_at} UTC</div>
+    <div class="masthead-dow">{_html(masthead_dow)}</div>
+    <div class="masthead-date">{_html(masthead_date)}</div>
+    <div class="masthead-clock">Book snapshot {_html(masthead_clock)} · written {_html(now_str)}</div>
+    <div class="masthead-pnl">
+      <div>
+        <span class="lbl">vs prior close</span>
+        <span class="fig" style="color:{day_gain_col}">${day_gain_usd:+,.2f} ({day_gain_pct:+.2f}%)</span>
+      </div>
+      <div>
+        <span class="lbl">Book</span>
+        <span class="fig">${total:,.0f}</span>
+      </div>
+      <div>
+        <span class="lbl">clock</span>
+        <span class="fig" style="font-size:20px;color:var(--mute)">{_html(masthead_clock)}</span>
+      </div>
     </div>
-  </div>
+  </header>
+  <div class="asof-live" id="asof-live" role="status"></div>
+  {stale_write_html}
 
   {degraded_banner_html}
   {notes_banner_html}
@@ -922,8 +980,8 @@ html = f"""<!DOCTYPE html>
       <div class="sv" style="color:#00d4ff">{mc_median_display}</div>
     </div>
     <div class="stat-card">
-      <div class="sl">Cash / Buying Power</div>
-      <div class="sv" style="color:{cash_col}">${cash:,.0f}</div>
+      <div class="sl">Deployable cash</div>
+      <div class="sv" style="color:{cash_col}">${float(_eqs_hdr.get("deployable") if _eqs_hdr.get("deployable") is not None else cash):,.0f}</div>
       <div style="font-size:9px;color:{cash_col}">{"⚠️ BELOW $500 BUFFER" if cash < 500 else "✓ OK"}</div>
     </div>
     <div class="stat-card">
@@ -1026,7 +1084,7 @@ html = f"""<!DOCTYPE html>
   <!-- Footer -->
   <div class="footer">
     NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY<br>
-    GESH Financial Observability v2.1 &nbsp;|&nbsp; Generated {now_str} &nbsp;|&nbsp; Data via Robinhood API + yfinance + Claude AI<br>
+    GESH daily book &nbsp;|&nbsp; Snapshot {_html(fetch_at)} &nbsp;|&nbsp; Written {_html(now_str)}<br>
     PAPER_MODE=true by default &nbsp;|&nbsp; All trading decisions remain the user's responsibility
   </div>
 
@@ -1077,6 +1135,21 @@ new Chart(document.getElementById('kellyChart').getContext('2d'), {{
     }}
   }}
 }});
+
+(function(){{
+  var bar = document.getElementById('asof-live');
+  if (!bar) return;
+  var iso = document.documentElement.getAttribute('data-snapshot-iso')
+          || document.documentElement.getAttribute('data-generated-iso');
+  var t = Date.parse(iso || '');
+  if (!t) return;
+  var hours = Math.floor((Date.now() - t) / 36e5);
+  if (hours < 20) return;
+  bar.className = 'asof-live is-stale';
+  bar.setAttribute('data-show', '1');
+  bar.textContent = 'This file is ' + hours + ' hours old. Hard-reload (Cmd-Shift-R). If the masthead date does not move, the 10:30 ET chain has not published.';
+  document.body.classList.add('is-stale');
+}})();
 </script>
 </body>
 </html>"""

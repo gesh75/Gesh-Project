@@ -294,3 +294,48 @@ def test_missing_ai_timestamp_gets_a_missing_banner(tmp_path):
         },
     )
     assert "AI NARRATIVE MISSING" in report
+
+
+def test_masthead_uses_snapshot_et_not_utc_clock(tmp_path):
+    """file:// tabs were read as 'the 25th' because Generated was UTC."""
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "snapshot": {"fetched_at": "2026-08-25T15:05:00+00:00"},
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    assert "25 August 2026" in report
+    assert "11:05 AM ET" in report
+    assert "Generated 2026-08-25 15:05 UTC" not in report
+    assert "Data: 2026-08-25" not in report
+    assert 'data-snapshot-iso="2026-08-25T15:05:00+00:00"' in report
+    assert "vs prior close" in report
+    assert 'id="asof-live"' in report
+    assert "Cmd-Shift-R" in report
+
+
+def test_prior_et_day_snapshot_is_labeled_not_today(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "snapshot": {"fetched_at": "2026-08-25T15:05:00+00:00"},
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    assert 'id="asof-write"' in report
+    assert "Not a new session" in report

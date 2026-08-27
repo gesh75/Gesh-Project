@@ -85,10 +85,10 @@ def test_ten_thirty_chain_wrapper_stays_primary() -> None:
     assert "et_gate_require" not in body
     assert "et_gate_export_chain_llm" in body
     gate = ET_GATE.read_text()
-    assert 'GESH_CHAIN_LLM_FAILOVER:-xai,gemini,grok' in gate
-    assert 'GESH_CHAIN_GROK_TIMEOUT_S:-180' in gate
-    assert 'GESH_CHAIN_XAI_TIMEOUT_S:-480' in gate
-    assert 'GESH_CHAIN_GEMINI_TIMEOUT_S:-180' in gate
+    assert "GESH_CHAIN_LLM_FAILOVER:-xai,gemini,grok" in gate
+    assert "GESH_CHAIN_GROK_TIMEOUT_S:-180" in gate
+    assert "GESH_CHAIN_XAI_TIMEOUT_S:-480" in gate
+    assert "GESH_CHAIN_GEMINI_TIMEOUT_S:-180" in gate
 
 
 def test_chain_script_does_not_abort_on_ai_failure() -> None:
@@ -181,6 +181,14 @@ if et_gate_already_stamped; then echo stamped-after; fi
     assert "clean" in proc.stdout
     assert "stamped-after" in proc.stdout
     assert "stamped-before" not in proc.stdout
+
+
+def test_report_http_route_disables_caching() -> None:
+    text = (ROOT / "server.py").read_text()
+    start = text.find("def daily_report_page")
+    chunk = text[start : start + 1800]
+    assert "no-store" in chunk
+    assert "gesh_report.html" in chunk
 
 
 def test_daily_report_script_mode_bits_are_owner_executable() -> None:
