@@ -21,9 +21,11 @@ import llm_gateway
 
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch, tmp_path):
+    llm_gateway.reset_gateway()
     monkeypatch.setattr(llm_failover, "FAILOVER_COUNT", 0, raising=False)
     monkeypatch.setattr(llm_failover, "LAST_FAILOVER", None, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("GESH_LLM_SKIP_ANTHROPIC", raising=False)
     yield
     llm_gateway.reset_gateway()
 
@@ -210,6 +212,86 @@ def test_gateway_fails_over_when_anthropic_credits_are_exhausted(monkeypatch, tm
     assert llm_failover.FAILOVER_COUNT == 1
 
 
+def test_second_call_skips_anthropic_after_credit_400(monkeypatch, tmp_path):
+    """A billed-out key will not recover later in the same process."""
+    hits = {"n": 0}
+
+    class _Stream:
+        def __enter__(self):
+            hits["n"] += 1
+            raise _credit_exhausted()
+
+        def __exit__(self, *a):
+            return False
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**k):
+                hits["n"] += 1
+                raise _credit_exhausted()
+
+            @staticmethod
+            def stream(**k):
+                return _Stream()
+
+    monkeypatch.setattr(llm_gateway, "create_client", lambda: _Client())
+    _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))
+    gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
+    kwargs = _kwargs()
+    gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **kwargs
+    )
+    assert hits["n"] == 1
+    gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **kwargs
+    )
+    assert hits["n"] == 1
+    assert llm_failover.FAILOVER_COUNT == 2
+
+
+def test_skip_anthropic_env_goes_straight_to_failover(monkeypatch, tmp_path):
+    monkeypatch.setenv("GESH_LLM_SKIP_ANTHROPIC", "1")
+
+    def _boom():
+        raise AssertionError("Anthropic must not be contacted")
+
+    monkeypatch.setattr(llm_gateway, "create_client", _boom)
+    _install_provider(monkeypatch, json.dumps({"portfolio_score": 70, "portfolio_verdict": "HOLD"}))
+    gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
+    msg = gw.create(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **_kwargs()
+    )
+    out = llm_contracts.extract_tool_input(
+        msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
+    )
+    assert out["portfolio_score"] == 70
+    assert llm_failover.FAILOVER_COUNT == 1
+
+
+def test_call_gemini_forwards_deep_analysis_token_budget(monkeypatch):
+    seen: dict = {}
+
+    def fake_generate(
+        prompt, model="", max_tokens=1024, response_mime_type=None, timeout_s=None, **k
+    ):
+        seen["max_tokens"] = max_tokens
+        seen["mime"] = response_mime_type
+        seen["model"] = model
+        seen["timeout_s"] = timeout_s
+        return json.dumps({"portfolio_score": 71, "portfolio_verdict": "HOLD"})
+
+    stub = type("Agent", (), {"_generate": staticmethod(fake_generate)})()
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-not-a-real-key")
+    monkeypatch.setenv("GESH_GEMINI_TIMEOUT_S", "180")
+    monkeypatch.setitem(sys.modules, "gemini_agent", stub)
+    out = llm_failover.call_gemini("analyze", max_tokens=24000)
+    assert json.loads(out)["portfolio_score"] == 71
+    assert seen["max_tokens"] == 24000
+    assert seen["mime"] == "application/json"
+    assert seen["timeout_s"] == 180.0
+
+
 def test_grok_executable_finds_home_local_bin_when_not_on_path(monkeypatch, tmp_path):
     grok = tmp_path / "grok"
     grok.write_text("#!/bin/sh\n")
@@ -317,7 +399,67 @@ def test_call_xai_reads_chat_completions_content(monkeypatch):
     assert seen["url"] == "https://api.x.ai/v1/chat/completions"
     assert seen["headers"]["Authorization"] == "Bearer xai-test-not-a-real-key"
     assert seen["json"]["model"] == "grok-4.6"
+    assert seen["json"]["response_format"] == {"type": "json_object"}
+    assert "max_tokens" not in seen["json"]
     assert seen["timeout"] == llm_failover._XAI_TIMEOUT_S
+
+
+def test_call_xai_forwards_max_tokens(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    def fake_post(url, **kwargs):
+        seen["json"] = kwargs.get("json")
+        return _Resp()
+
+    monkeypatch.setattr(llm_failover.httpx, "post", fake_post)
+    llm_failover.call_xai("return json", max_tokens=24000)
+    assert seen["json"]["max_tokens"] == 24000
+
+
+def test_xai_timeout_honours_env_at_call_time(monkeypatch):
+    monkeypatch.setenv("GESH_XAI_TIMEOUT_S", "480")
+    assert llm_failover.xai_timeout_s() == 480.0
+    monkeypatch.delenv("GESH_XAI_TIMEOUT_S", raising=False)
+    assert llm_failover.xai_timeout_s() == llm_failover._XAI_TIMEOUT_S
+
+
+def test_grok_timeout_honours_env_at_call_time(monkeypatch):
+    monkeypatch.setenv("GESH_GROK_TIMEOUT_S", "180")
+    assert llm_failover.grok_timeout_s() == 180.0
+    monkeypatch.delenv("GESH_GROK_TIMEOUT_S", raising=False)
+    assert llm_failover.grok_timeout_s() == llm_failover._GROK_TIMEOUT_S
+
+
+def test_attempt_forwards_max_tokens_to_the_provider(monkeypatch):
+    seen: dict = {}
+
+    def stub(prompt, operation="", max_tokens=None):
+        seen["max_tokens"] = max_tokens
+        seen["operation"] = operation
+        return json.dumps(
+            {
+                "portfolio_score": 64,
+                "portfolio_verdict": "HOLD",
+                "risk_score": 40,
+                "holdings_analysis": [],
+            }
+        )
+
+    providers = dict(llm_failover._PROVIDERS)
+    providers["stub"] = (lambda: True, stub)
+    monkeypatch.setattr(llm_failover, "_PROVIDERS", providers)
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "stub")
+    llm_failover.attempt(operation="deep_analyze_portfolio", max_tokens=24000, **_kwargs())
+    assert seen["max_tokens"] == 24000
+    assert seen["operation"] == "deep_analyze_portfolio"
 
 
 def test_call_xai_news_sentiment_uses_fast_timeout(monkeypatch):

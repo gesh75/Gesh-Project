@@ -98,6 +98,19 @@ et_gate_require() {
     echo "et_gate[$label]: $(et_gate_now_et) ET is within ${target} ET +/-${tol}min — running"
 }
 
+# Scheduled 10:30 / 10:45 LLM routing. Hand-runs of run_daily_analysis.sh honour
+# .env GESH_LLM_FAILOVER; python-dotenv does not override these exports.
+#
+# Order: xAI HTTP grok-4.6 (quality, no CLI lock) → Gemini Flash (fast) →
+# Grok CLI last with a SHORT timeout so it cannot hold the chain lock 15–20 min
+# the way 2026-08-26 10:16 did. Timeouts are read at call time in llm_failover.
+et_gate_export_chain_llm() {
+    export GESH_LLM_FAILOVER="${GESH_CHAIN_LLM_FAILOVER:-xai,gemini,grok}"
+    export GESH_GROK_TIMEOUT_S="${GESH_CHAIN_GROK_TIMEOUT_S:-180}"
+    export GESH_XAI_TIMEOUT_S="${GESH_CHAIN_XAI_TIMEOUT_S:-480}"
+    export GESH_GEMINI_TIMEOUT_S="${GESH_CHAIN_GEMINI_TIMEOUT_S:-180}"
+}
+
 # et_gate_file_is_today_et PATH [MIN_BYTES]
 #   0 if PATH exists, is at least MIN_BYTES (default 0), and its mtime calendar
 #   date in America/New_York is today. 1 otherwise. Does NOT write a stamp —

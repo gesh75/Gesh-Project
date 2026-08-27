@@ -54,11 +54,7 @@ if et_gate_already_stamped; then
 fi
 echo "et_gate[$ET_GATE_LABEL]: $(et_gate_now_et) ET is within ${DAILY_ANALYSIS_ET:-10:30} ET +/-${DAILY_ANALYSIS_TOL:-20}min — running"
 
-# Grok CLI deep analysis is ~15–20 min (measured 2026-08-26 evening: 1729s) and
-# overflows the 10:45 publisher wait. Gemini Flash is typically <2 min. The
-# scheduled path prefers Gemini first; a hand-run of run_daily_analysis.sh still
-# honours .env GESH_LLM_FAILOVER. load_dotenv does not override this export.
-export GESH_LLM_FAILOVER="${GESH_CHAIN_LLM_FAILOVER:-gemini,grok}"
+et_gate_export_chain_llm
 export GESH_ET_GATE_STAMP="$(et_gate_stamp_path)"
 
 cd "$REPO" || { echo "FATAL: cannot cd $REPO" >&2; exit 1; }

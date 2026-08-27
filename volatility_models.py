@@ -133,7 +133,11 @@ def garch_portfolio_vol(
     Weighted portfolio volatility using GARCH(1,1) per-symbol forecasts.
 
     Returns None if arch is not installed (monte_carlo.py will fall back to EWMA).
-    Returns the weighted average of per-symbol GARCH σ forecasts.
+    Returns the weighted average of per-symbol GARCH σ forecasts **only when
+    every holding with returns actually fitted GARCH**. A short-sample /
+    fit-failed / out-of-range name is not dropped-and-reweighted — Monte Carlo
+    would otherwise stamp vol_method=GARCH(1,1) on a subset of the book.
+    Incomplete coverage returns None (EWMA-Corr stays the MC input).
     Note: ignores cross-correlations (conservative approximation).
     """
     try:
@@ -154,7 +158,9 @@ def garch_portfolio_vol(
         sym = h["symbol"]
         wt = h["equity"] / total_equity
         ret = log_returns_df[sym].dropna()
-        sig = garch_vol(ret)
+        sig, estimator = garch_vol_detail(ret)
+        if estimator != GARCH_ESTIMATOR:
+            return None
         weighted_vol += wt * sig
         total_weight += wt
 

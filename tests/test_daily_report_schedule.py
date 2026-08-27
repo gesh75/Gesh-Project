@@ -67,6 +67,13 @@ def test_daily_report_wrapper_is_weekday_1045_et_and_executable() -> None:
     assert 0 <= in_window < require
     assert 0 <= ready < retry
     assert 'source "$REPO/scripts/et_gate.sh"' in body
+    # Recovery path must inherit the scheduled LLM order and must NOT stamp
+    # before exec — 2026-08-26 burned the day on a failed retry.
+    no_fresh = body.find("no fresh")
+    assert no_fresh > 0
+    assert "et_gate_export_chain_llm" in body[no_fresh:]
+    assert "et_gate_require" not in body[no_fresh:]
+    assert "GESH_ET_GATE_STAMP" in body[no_fresh:]
 
 
 def test_ten_thirty_chain_wrapper_stays_primary() -> None:
@@ -76,7 +83,12 @@ def test_ten_thirty_chain_wrapper_stays_primary() -> None:
     assert "et_gate_already_stamped" in body
     assert "GESH_ET_GATE_STAMP" in body
     assert "et_gate_require" not in body
-    assert "gemini,grok" in text
+    assert "et_gate_export_chain_llm" in body
+    gate = ET_GATE.read_text()
+    assert 'GESH_CHAIN_LLM_FAILOVER:-xai,gemini,grok' in gate
+    assert 'GESH_CHAIN_GROK_TIMEOUT_S:-180' in gate
+    assert 'GESH_CHAIN_XAI_TIMEOUT_S:-480' in gate
+    assert 'GESH_CHAIN_GEMINI_TIMEOUT_S:-180' in gate
 
 
 def test_chain_script_does_not_abort_on_ai_failure() -> None:

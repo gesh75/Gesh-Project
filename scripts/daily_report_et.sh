@@ -78,6 +78,9 @@ http://127.0.0.1:9000/report"
     fi
 
     echo "no fresh gesh_report.html — running the chain (10:30 miss or step 3/5 fail)"
-    et_gate_require "$TARGET_ET" "$TOL" mon-fri
+    # Do not et_gate_require here: a failed retry would burn the day. The chain
+    # writes GESH_ET_GATE_STAMP only after a usable report.
+    et_gate_export_chain_llm
+    export GESH_ET_GATE_STAMP="$(et_gate_stamp_path)"
     exec /bin/bash "$REPO/run_daily_analysis.sh"
 } >>"$LOG" 2>&1

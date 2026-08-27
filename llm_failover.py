@@ -29,6 +29,7 @@ degrade in llm_gateway.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -50,14 +51,14 @@ LAST_FAILOVER: dict[str, Any] | None = None
 
 _DEFAULT_ORDER: Final[str] = "xai,grok,gemini"
 _GROK_MODEL: Final[str] = os.getenv("GESH_GROK_MODEL", "grok-4.6")
-_GROK_TIMEOUT_S: Final[float] = float(os.getenv("GESH_GROK_TIMEOUT_S", "900"))
+_GROK_TIMEOUT_S: Final[float] = 900.0  # default; grok_timeout_s() reads env at call time
 _GROK_MAX_TURNS: Final[str] = os.getenv("GESH_GROK_MAX_TURNS", "4")
 _XAI_URL: Final[str] = "https://api.x.ai/v1/chat/completions"
 _XAI_MODEL: Final[str] = os.getenv("GESH_XAI_MODEL", "grok-4.6")
-_XAI_TIMEOUT_S: Final[float] = float(os.getenv("GESH_XAI_TIMEOUT_S", "900"))
+_XAI_TIMEOUT_S: Final[float] = 900.0  # default; xai_timeout_s() reads env at call time
 # Interactive intel (news/SEC/fundamentals) must not inherit the 15-minute deep
 # analysis budget. One hung grok-4.6 call per ticker froze Company Intelligence.
-_XAI_FAST_TIMEOUT_S: Final[float] = float(os.getenv("GESH_XAI_FAST_TIMEOUT_S", "20"))
+_XAI_FAST_TIMEOUT_S: Final[float] = 20.0
 _FAST_OPS: Final[frozenset[str]] = frozenset({"news_sentiment", "sec_filing", "fundamental_scan"})
 # gemini-2.5-pro 404s for new API users ("no longer available"). Flash is the
 # live default; the id is env-overridable and a 404 degrades to the lite model
@@ -328,7 +329,23 @@ def grok_available() -> bool:
     return Path.home().joinpath(".grok", "auth.json").exists() or bool(os.getenv("XAI_API_KEY"))
 
 
-def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
+def grok_timeout_s() -> float:
+    """GESH_GROK_TIMEOUT_S at call time so the 10:30 wrapper can cap the CLI."""
+    return _env_float("GESH_GROK_TIMEOUT_S", _GROK_TIMEOUT_S)
+
+
+def gemini_timeout_s() -> float:
+    """GESH_GEMINI_TIMEOUT_S at call time — SDK default is wait-forever."""
+    return _env_float("GESH_GEMINI_TIMEOUT_S", 180.0)
+
+
+def call_grok(
+    prompt: str,
+    *,
+    timeout_s: float | None = None,
+    operation: str = "",  # noqa: ARG001 — shared provider signature
+    max_tokens: int | None = None,  # noqa: ARG001
+) -> str:
     """Run the Grok CLI headless and return its final text answer.
 
     The prompt goes through --prompt-file: a deep-analysis prompt is tens of KB
@@ -339,7 +356,8 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
     if grok_bin is None:
         raise FailoverUnavailable("grok CLI not on PATH")
 
-    timeout_s = timeout_s or _GROK_TIMEOUT_S
+    if timeout_s is None:
+        timeout_s = grok_timeout_s()
     with tempfile.TemporaryDirectory(prefix="gesh-failover.") as workdir:
         prompt_path = Path(workdir) / "prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
@@ -407,10 +425,24 @@ def xai_available() -> bool:
     return bool(os.getenv("XAI_API_KEY"))
 
 
-def _xai_timeout_s(operation: str = "") -> float:
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def xai_timeout_s(operation: str = "") -> float:
     if operation in _FAST_OPS:
-        return _XAI_FAST_TIMEOUT_S
-    return _XAI_TIMEOUT_S
+        return _env_float("GESH_XAI_FAST_TIMEOUT_S", _XAI_FAST_TIMEOUT_S)
+    return _env_float("GESH_XAI_TIMEOUT_S", _XAI_TIMEOUT_S)
+
+
+def _xai_timeout_s(operation: str = "") -> float:
+    return xai_timeout_s(operation)
 
 
 def _xai_http_error_summary(response: Any) -> str:
@@ -428,12 +460,30 @@ def _xai_http_error_summary(response: Any) -> str:
     return f"xAI HTTP {response.status_code}{suffix}"
 
 
-def call_xai(prompt: str, *, operation: str = "") -> str:
-    """SpaceXAI Chat Completions. Key from env only — never logged."""
+def call_xai(
+    prompt: str,
+    *,
+    operation: str = "",
+    max_tokens: int | None = None,
+) -> str:
+    """SpaceXAI Chat Completions. Key from env only — never logged.
+
+    ``response_format=json_object`` is the xAI structured-output path
+    (docs.x.ai structured outputs). Deep analysis used to get unconstrained
+    prose, then ``coerce_to_schema`` filled omitted scores with blanks.
+    """
     key = os.getenv("XAI_API_KEY") or ""
     if not key:
         raise FailoverUnavailable("XAI_API_KEY unset")
     model = os.getenv("GESH_XAI_MODEL") or _XAI_MODEL
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    if max_tokens is not None and int(max_tokens) > 0:
+        body["max_tokens"] = int(max_tokens)
     try:
         response = httpx.post(
             _XAI_URL,
@@ -441,11 +491,7 @@ def call_xai(prompt: str, *, operation: str = "") -> str:
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-            },
+            json=body,
             timeout=_xai_timeout_s(operation),
         )
     except Exception as exc:
@@ -482,7 +528,36 @@ def _is_missing_gemini_model(exc: BaseException) -> bool:
     return "404" in text or "not_found" in text or "no longer available" in text
 
 
-def call_gemini(prompt: str) -> str:
+def _gemini_generate(agent: Any, prompt: str, model: str, max_tokens: int) -> str:
+    """Call gemini_agent._generate with the deep-analysis budget when supported.
+
+    Test stubs only take ``prompt, model=``. The real agent accepts
+    ``max_tokens`` and ``response_mime_type``; inspect the signature so a
+    TypeError from the SDK is not mistaken for a stub mismatch (and then
+    silently drop the 24k token budget).
+    """
+    fn = agent._generate
+    kwargs: dict[str, Any] = {"model": model}
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        params = {}
+    has_var = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if "max_tokens" in params or has_var:
+        kwargs["max_tokens"] = max_tokens
+    if "response_mime_type" in params or has_var:
+        kwargs["response_mime_type"] = "application/json"
+    if "timeout_s" in params or has_var:
+        kwargs["timeout_s"] = gemini_timeout_s()
+    return fn(prompt, **kwargs)
+
+
+def call_gemini(
+    prompt: str,
+    *,
+    operation: str = "",  # noqa: ARG001 — shared provider signature
+    max_tokens: int | None = None,
+) -> str:
     if not gemini_available():
         raise FailoverUnavailable("GEMINI_API_KEY unset")
     try:
@@ -495,10 +570,15 @@ def call_gemini(prompt: str) -> str:
     if fallback not in models:
         models.append(fallback)
 
+    # gemini_agent._generate defaults to 1024 output tokens — enough for news
+    # scoring, nowhere near deep_analyze_portfolio (max_tokens=24000). A Gemini
+    # failover with the default truncates the JSON and the report fills blanks.
+    out_tokens = int(max_tokens) if max_tokens and int(max_tokens) > 0 else 8192
+
     last_exc: BaseException | None = None
     for model in models:
         try:
-            text = gemini_agent._generate(prompt, model=model)
+            text = _gemini_generate(gemini_agent, prompt, model, out_tokens)
         except Exception as exc:
             last_exc = exc
             if (
@@ -540,6 +620,25 @@ def enabled() -> bool:
 # ── Entry point used by llm_gateway ──────────────────────────────────────────
 
 
+def _invoke_provider(call: Any, prompt: str, *, operation: str, max_tokens: int) -> str:
+    """Call a failover provider, adding kwargs the callable actually accepts.
+
+    Test stubs are ``lambda prompt: text``. A bare TypeError retry would swallow
+    SDK bugs and drop the 24k deep-analysis budget this path exists to forward.
+    """
+    kwargs: dict[str, Any] = {}
+    try:
+        params = inspect.signature(call).parameters
+    except (TypeError, ValueError):
+        params = {}
+    has_var = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if "operation" in params or has_var:
+        kwargs["operation"] = operation
+    if "max_tokens" in params or has_var:
+        kwargs["max_tokens"] = max_tokens
+    return call(prompt, **kwargs)
+
+
 def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessage:
     """Try each configured provider; return the first Anthropic-shaped success."""
     global FAILOVER_COUNT, LAST_FAILOVER
@@ -570,7 +669,7 @@ def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessag
                 operation,
                 name,
             )
-            text = call(prompt, operation=operation) if call is call_xai else call(prompt)
+            text = _invoke_provider(call, prompt, operation=operation, max_tokens=max_tokens)
             payload = extract_json_object(text)
             payload = coerce_to_schema(payload, schema)
             if not isinstance(payload, dict) or not payload:
