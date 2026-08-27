@@ -33,7 +33,10 @@ def _seed_owner_equity_history(symbol: str, equities: list[float]) -> None:
     """Write a real owner-keyed curve into the per-test throwaway DB."""
     import db
 
-    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # Anchor to "now" so get_equity_history(..., days=30) cannot drop the
+    # seed as stale. A fixed 2026-01-01 series would sit outside that window
+    # by late August and make the owner control assertion vacuous.
+    start = datetime.now(timezone.utc) - timedelta(days=len(equities))
     with db._conn() as con:
         con.executemany(
             "INSERT INTO equity_snapshots "
