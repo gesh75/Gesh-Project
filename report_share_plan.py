@@ -146,13 +146,21 @@ def share_plan_rows(eng: dict) -> list[dict]:
         now = _first_finite(k, "current_pct")
         if now is None and equity is not None and total > 0:
             now = equity / total * 100.0
-        shares, size_action = share_count(delta_usd=delta, price=price, quantity=qty)
+        shares, lot_action = share_count(delta_usd=delta, price=price, quantity=qty)
         raw_act = k.get("action")
         kelly_action = str(raw_act).upper() if raw_act else "HOLD"
+        # Dollar gap is not an order when Kelly's own band says HOLD/AVOID.
+        # Painting those rows as ADD made a 22-name "buy $50–$200 of everything"
+        # chore out of in-band drift (2026-08-27).
+        if kelly_action in ("HOLD", "AVOID") and lot_action in ("ADD", "TRIM"):
+            size_action = "HOLD"
+        else:
+            size_action = lot_action
         rows.append(
             {
                 "symbol": str(sym),
                 "size_action": size_action,
+                "lot_action": lot_action,
                 "shares": shares,
                 "delta_usd": _finite_float(delta),
                 "now_pct": now,
@@ -223,8 +231,9 @@ def _gate_status(row: dict, eng: dict) -> str:
             return f"REJECTED — {g.get('reason') or 'rejected'}"
         if act == "HOLD":
             return "not gated — pre-gate HOLD"
-    if row["size_action"] in ("ADD", "TRIM") and (row["shares"] or 0) not in (None, 0):
-        if row["kelly_action"] == "HOLD":
+    lot = row.get("lot_action") or row["size_action"]
+    if lot in ("ADD", "TRIM") and (row["shares"] or 0) not in (None, 0):
+        if row["kelly_action"] in ("HOLD", "AVOID") or row["size_action"] == "HOLD":
             return "not gated — Kelly HOLD band"
         return "not gated"
     return "not gated — HOLD"
@@ -241,6 +250,12 @@ def share_plan_html(eng: dict) -> str:
         act = r["size_action"]
         col = colors.get(act, "#888")
         sh_cell = "N/A" if r["shares"] is None else f"{_fmt_shares(r['shares'])} sh"
+        if (
+            r["size_action"] == "HOLD"
+            and r.get("lot_action") in ("ADD", "TRIM")
+            and r["shares"] not in (None, 0)
+        ):
+            sh_cell = f"drift {sh_cell}"
         d = r["delta_usd"]
         if d is None:
             d_cell = "N/A"
@@ -269,10 +284,10 @@ def share_plan_html(eng: dict) -> str:
             "</tr>"
         )
     note = (
-        "Shares size the dollar gap to Kelly %. ADD = floor(Δ$/price) in whole "
-        "shares when ≥1 share, else a 4-decimal lot. TRIM = ceil, clamped to "
-        "quantity. HOLD when the lot rounds to 0. Gate = APPROVED only when "
-        "that share count cleared the risk gate."
+        "Action follows Kelly’s 0.6× / 1.3× band, not the leftover dollar gap. "
+        "HOLD + “drift” is in-band noise — not an order. ADD/TRIM are the names "
+        "Kelly actually wants resized. Gate = APPROVED only when that share "
+        "count cleared the risk gate."
     )
     return f"""
   <!-- Action plan -->

@@ -169,23 +169,38 @@ def _engine() -> dict:
 def test_share_plan_rows_classify_add_trim_hold():
     rows = share_plan_rows(_engine())
     by = {r["symbol"]: r for r in rows}
-    assert by["GTLB"]["size_action"] == "ADD"
+    # Kelly HOLD: leftover $ is drift, not an ADD/TRIM order.
+    assert by["GTLB"]["kelly_action"] == "HOLD"
+    assert by["GTLB"]["lot_action"] == "ADD"
+    assert by["GTLB"]["size_action"] == "HOLD"
     assert by["GTLB"]["shares"] == 13
-    assert by["RTX"]["size_action"] == "TRIM"
+    assert by["RTX"]["lot_action"] == "TRIM"
+    assert by["RTX"]["size_action"] == "HOLD"
     assert by["RTX"]["shares"] == 2
-    assert by["NVDA"]["size_action"] == "ADD"
+    assert by["NVDA"]["size_action"] == "HOLD"
     assert by["NVDA"]["shares"] == 0.1433
     assert by["JMKE"]["shares"] is None
     assert by["JMKE"]["size_action"] == "HOLD"
 
 
+def test_share_plan_rows_follow_kelly_add_and_trim():
+    eng = _engine()
+    eng["kelly"]["GTLB"]["action"] = "ADD"
+    eng["kelly"]["RTX"]["action"] = "TRIM"
+    by = {r["symbol"]: r for r in share_plan_rows(eng)}
+    assert by["GTLB"]["size_action"] == "ADD"
+    assert by["GTLB"]["shares"] == 13
+    assert by["RTX"]["size_action"] == "TRIM"
+    assert by["RTX"]["shares"] == 2
+
+
 def test_share_plan_summary_counts_names_and_shares():
     summary = share_plan_summary(share_plan_rows(_engine()))
-    assert summary["trim_names"] == 1
-    assert summary["trim_shares"] == 2
-    assert summary["add_names"] == 2
-    assert summary["add_shares"] == 13.1433
-    assert summary["hold_names"] == 1  # JMKE unknown
+    assert summary["trim_names"] == 0
+    assert summary["trim_shares"] == 0
+    assert summary["add_names"] == 0
+    assert summary["add_shares"] == 0
+    assert summary["hold_names"] == 4
 
 
 def test_share_plan_html_easy_columns_in_order():
@@ -195,6 +210,8 @@ def test_share_plan_html_easy_columns_in_order():
     assert all(i >= 0 for i in found), found
     assert found == sorted(found)
     assert ">Kelly band<" not in html
+    assert "drift 13 sh" in html
+    assert "not gated — Kelly HOLD band" in html
 
 
 def test_kelly_hold_with_whole_share_gap_is_not_labeled_gated():
@@ -238,8 +255,8 @@ def test_empty_action_plan_still_renders_paper_close():
 def test_signal_banner_on_empty_plan_names_share_counts_and_close():
     html = signal_gate_banner_html(_engine())
     assert html.strip() != ""
-    assert "13" in html  # ADD shares
-    assert "2" in html  # TRIM shares
+    assert "HOLD 4" in html
+    assert "Gated executable: 0" in html
     assert "SCHW" in html
     assert "0" in html  # gated executable
 
@@ -332,13 +349,17 @@ def test_share_plan_does_not_approve_mismatched_share_count():
 
 def test_share_plan_approves_when_plan_shares_match_display():
     eng = _engine()
+    eng["kelly"]["GTLB"]["action"] = "ADD"
     eng["action_plan"] = [
         {"symbol": "GTLB", "action": "BUY", "shares": 13, "signal_reason": "Kelly ADD"}
     ]
     eng["gate_results"] = [{"symbol": "GTLB", "action": "BUY", "approved": True, "reason": "ok"}]
     html = share_plan_html(eng)
-    gtlb = html[html.find("GTLB") : html.find("GTLB") + 800]
-    assert "APPROVED" in gtlb
+    i = html.find(">GTLB<")
+    assert i >= 0
+    chunk = html[max(0, i - 120) : i + 500]
+    assert "APPROVED" in chunk
+    assert "ADD" in chunk
 
 
 def test_optimal_pct_zero_renders_zero_not_na():
