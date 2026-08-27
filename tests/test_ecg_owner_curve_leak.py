@@ -105,9 +105,7 @@ def test_control_seeded_owner_curve_trips_the_gate(env, monkeypatch, falling_own
     states = (body.get("data") or {}).get("states") or []
     nvda = next((s for s in states if s.get("symbol") == OWNER_HELD_SYMBOL), None)
     assert nvda is not None, f"owner ECG did not score {OWNER_HELD_SYMBOL}: {body}"
-    assert nvda.get("state") in ("COOLING", "SUSPENDED"), (
-        f"seed produced no drawdown state: {nvda}"
-    )
+    assert nvda.get("state") in ("COOLING", "SUSPENDED"), f"seed produced no drawdown state: {nvda}"
     assert float(nvda.get("drawdown_pct") or 0) < -30, f"expected a deep drawdown, got {nvda}"
 
 
@@ -127,9 +125,7 @@ def test_customer_ecg_never_reads_owner_equity_snapshots(env, monkeypatch, falli
     assert called == [], f"owner history was read for {called}"
 
 
-def test_owner_drawdown_never_appears_in_the_customer_body(
-    env, monkeypatch, falling_owner_curve
-):
+def test_owner_drawdown_never_appears_in_the_customer_body(env, monkeypatch, falling_owner_curve):
     """Assert on the wire format — that is what a paying subscriber receives."""
     server = env
     client = _client(server, monkeypatch, CUSTOMER_EMAIL, owner=False)
