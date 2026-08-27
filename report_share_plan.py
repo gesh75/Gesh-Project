@@ -1,11 +1,12 @@
 """Kelly share-count table and paper/gate audit HTML for gen_report2.
 
-ADD = floor(|delta_usd| / price). TRIM = ceil(|delta_usd| / price), clamped
-to quantity. Missing price or delta → shares is None (N/A), never a fabricated
+ADD = floor(|delta_usd| / price) in whole shares when the gap is ≥1 share,
+otherwise a 4-decimal fractional lot (Robinhood). TRIM = ceil, clamped to
+quantity. Missing price or delta → shares is None (N/A), never a fabricated
 0 that reads as a measured do-nothing.
 
-A whole-share dollar gap is not a risk-gated order when Kelly's own action is
-HOLD (the 0.6× / 1.3× band). The table shows the size; Gate says "not gated".
+A sized dollar gap is not a risk-gated order when Kelly's own action is HOLD
+(the 0.6× / 1.3× band). The table shows the size; Gate says "not gated".
 """
 
 from __future__ import annotations
@@ -47,6 +48,19 @@ def _whole_or_float(n: float) -> int | float:
     return n
 
 
+_SHARE_DECIMALS = 4
+_SHARE_SCALE = 10**_SHARE_DECIMALS
+_MIN_SHARES = 1 / _SHARE_SCALE
+
+
+def _floor_lot(raw: float) -> float:
+    return math.floor(raw * _SHARE_SCALE) / _SHARE_SCALE
+
+
+def _ceil_lot(raw: float) -> float:
+    return math.ceil(raw * _SHARE_SCALE) / _SHARE_SCALE
+
+
 def share_count(
     *,
     delta_usd: Any,
@@ -57,19 +71,21 @@ def share_count(
     p = _finite_float(price)
     if d is None or p is None or p <= 0:
         return None, "HOLD"
-    if abs(d) < 1e-12 or abs(d) / p < 1.0:
+    if abs(d) < 1e-12:
         return 0, "HOLD"
+    raw = abs(d) / p
     if d > 0:
-        return int(math.floor(d / p)), "ADD"
-    sh = math.ceil(abs(d) / p)
+        sh = float(int(math.floor(raw))) if raw >= 1.0 else _floor_lot(raw)
+        if sh < _MIN_SHARES:
+            return 0, "HOLD"
+        return _whole_or_float(sh), "ADD"
+    sh = float(int(math.ceil(raw))) if raw >= 1.0 else _ceil_lot(raw)
     qty = _finite_float(quantity)
     if qty is not None and qty >= 0:
-        sh = min(float(sh), round(qty, 4))
-    if sh < 1.0:
+        sh = min(float(sh), round(qty, _SHARE_DECIMALS))
+    if sh < _MIN_SHARES:
         return 0, "HOLD"
-    if float(sh) == int(sh):
-        return int(sh), "TRIM"
-    return sh, "TRIM"
+    return _whole_or_float(sh), "TRIM"
 
 
 def _first_finite(mapping: dict, *keys: str) -> float | None:
@@ -234,26 +250,33 @@ def share_plan_html(eng: dict) -> str:
         now = f"{r['now_pct']:.1f}%" if r["now_pct"] is not None else "N/A"
         kel = f"{r['kelly_pct']:.1f}%" if r["kelly_pct"] is not None else "N/A"
         status = _gate_status(r, eng)
+        if r["shares"] is None:
+            sh_html = "N/A"
+        else:
+            sh_html = _esc(sh_cell)
+            if d_cell != "N/A":
+                sh_html += (
+                    f'<div style="font-size:10px;font-weight:400;color:#888">{_esc(d_cell)}</div>'
+                )
         body += (
             "<tr>"
-            f"<td>{_esc(r['symbol'])}</td>"
             f'<td style="color:{col};font-weight:700">{_esc(act)}</td>'
-            f'<td style="text-align:right;font-weight:700">{_esc(sh_cell)}</td>'
-            f'<td style="text-align:right">{_esc(d_cell)}</td>'
+            f"<td>{_esc(r['symbol'])}</td>"
+            f'<td style="text-align:right;font-weight:700">{sh_html}</td>'
             f"<td>{_esc(now)}</td>"
             f"<td>{_esc(kel)}</td>"
-            f'<td style="color:#888;font-size:11px">{_esc(r["kelly_action"])}</td>'
             f'<td style="color:#888;font-size:11px">{_esc(status)}</td>'
             "</tr>"
         )
     note = (
-        "Share counts size the dollar gap to Kelly %. ADD = floor(Δ$/price), "
-        "TRIM = ceil(Δ$/price). Kelly's own ADD/TRIM band is 0.6× / 1.3× of "
-        "target — a HOLD-band row is not a risk-gated order."
+        "Shares size the dollar gap to Kelly %. ADD = floor(Δ$/price) in whole "
+        "shares when ≥1 share, else a 4-decimal lot. TRIM = ceil, clamped to "
+        "quantity. HOLD when the lot rounds to 0. Gate = APPROVED only when "
+        "that share count cleared the risk gate."
     )
     return f"""
-  <!-- Kelly Share Plan -->
-  <div class="section-title">📐 Kelly Share Plan</div>
+  <!-- Action plan -->
+  <div class="section-title">⚡ Action plan</div>
   <div class="table-card" style="margin-bottom:16px">
     <div style="padding:8px 10px 4px;font-size:13px;color:#e0e0e0">
       TRIM <b style="color:#ff3c5a">{summary["trim_names"]}</b> names /
@@ -266,8 +289,8 @@ def share_plan_html(eng: dict) -> str:
     </div>
     <table class="action-table">
       <thead><tr>
-        <th>Symbol</th><th>Action</th><th>Shares</th><th>$</th>
-        <th>Now %</th><th>Kelly %</th><th>Kelly band</th><th>Gate</th>
+        <th>Action</th><th>Symbol</th><th>Shares</th>
+        <th>Now</th><th>Kelly</th><th>Gate</th>
       </tr></thead>
       <tbody>{body}</tbody>
     </table>

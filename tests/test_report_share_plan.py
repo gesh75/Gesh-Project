@@ -42,19 +42,32 @@ def test_share_count_trim_uses_ceil():
 
 def test_share_count_hold_when_gap_is_under_one_share():
     shares, action = share_count(delta_usd=30.07, price=209.81, quantity=7.24)
+    assert action == "ADD"
+    assert shares == 0.1433
+
+
+def test_share_count_tmo_shaped_subshare_add_is_not_hold_zero():
+    # TMO 2026-08-26: +$566.90 / $633.96 = 0.8942 → ADD 0.8942, not HOLD 0
+    shares, action = share_count(delta_usd=566.90, price=633.96, quantity=1.563)
+    assert action == "ADD"
+    assert shares == 0.8942
+
+
+def test_share_count_penny_gap_is_hold_zero():
+    shares, action = share_count(delta_usd=0.02, price=400.0, quantity=2.0)
     assert action == "HOLD"
     assert shares == 0
 
 
-def test_share_count_trim_under_one_share_is_hold_not_ceil_one():
-    # DELL-shaped: -$350.84 / $435.91 = 0.80 → HOLD 0, not TRIM 1
+def test_share_count_trim_under_one_share_is_fractional_not_ceil_one():
+    # DELL-shaped: -$350.84 / $435.91 = 0.8048 → TRIM 0.8049 (4-decimal ceil)
     shares, action = share_count(delta_usd=-350.84, price=435.91, quantity=4.359)
-    assert action == "HOLD"
-    assert shares == 0
-    # Tiny -$8 / $62.60 would otherwise ceil to TRIM 1 of ~$63
+    assert action == "TRIM"
+    assert shares == 0.8049
+    # Tiny -$8 / $62.60 is 0.1283 sh, not a fabricated whole share
     shares, action = share_count(delta_usd=-8.03, price=62.60, quantity=24.88)
-    assert action == "HOLD"
-    assert shares == 0
+    assert action == "TRIM"
+    assert shares == 0.1283
 
 
 def test_share_count_trim_clamps_to_quantity():
@@ -160,8 +173,8 @@ def test_share_plan_rows_classify_add_trim_hold():
     assert by["GTLB"]["shares"] == 13
     assert by["RTX"]["size_action"] == "TRIM"
     assert by["RTX"]["shares"] == 2
-    assert by["NVDA"]["size_action"] == "HOLD"
-    assert by["NVDA"]["shares"] == 0
+    assert by["NVDA"]["size_action"] == "ADD"
+    assert by["NVDA"]["shares"] == 0.1433
     assert by["JMKE"]["shares"] is None
     assert by["JMKE"]["size_action"] == "HOLD"
 
@@ -170,9 +183,18 @@ def test_share_plan_summary_counts_names_and_shares():
     summary = share_plan_summary(share_plan_rows(_engine()))
     assert summary["trim_names"] == 1
     assert summary["trim_shares"] == 2
-    assert summary["add_names"] == 1
-    assert summary["add_shares"] == 13
-    assert summary["hold_names"] == 2  # NVDA 0sh + JMKE unknown
+    assert summary["add_names"] == 2
+    assert summary["add_shares"] == 13.1433
+    assert summary["hold_names"] == 1  # JMKE unknown
+
+
+def test_share_plan_html_easy_columns_in_order():
+    html = share_plan_html(_engine())
+    headers = ("Action", "Symbol", "Shares", "Now", "Kelly", "Gate")
+    found = [html.find(f">{name}<") for name in headers]
+    assert all(i >= 0 for i in found), found
+    assert found == sorted(found)
+    assert ">Kelly band<" not in html
 
 
 def test_kelly_hold_with_whole_share_gap_is_not_labeled_gated():
@@ -180,16 +202,17 @@ def test_kelly_hold_with_whole_share_gap_is_not_labeled_gated():
     assert "GTLB" in html
     assert "13 sh" in html
     assert "ADD" in html
-    assert "not gated" in html.lower()
-    assert "APPROVED" not in html
-    assert "Kelly HOLD" in html
+    gtlb = html[html.find("GTLB") - 80 : html.find("GTLB") + 400]
+    assert "not gated" in gtlb.lower()
+    assert "APPROVED" not in gtlb
+    assert "Kelly HOLD" in gtlb
 
 
-def test_share_plan_html_lists_hold_zero_shares():
+def test_share_plan_html_lists_hold_when_delta_is_missing():
     html = share_plan_html(_engine())
-    assert "NVDA" in html
+    assert "JMKE" in html
     assert "HOLD" in html
-    assert "0 sh" in html or ">0<" in html
+    assert "N/A" in html
 
 
 def test_share_plan_html_escapes_symbol():
@@ -257,7 +280,7 @@ def _render(tmp_path: Path, engine: dict) -> str:
 
 def test_full_report_includes_share_plan_and_paper_close(tmp_path):
     report = _render(tmp_path, _engine())
-    assert "Kelly Share Plan" in report
+    assert "Action plan" in report
     assert "GTLB" in report
     assert "ADD" in report
     assert "TRIM" in report
@@ -265,7 +288,8 @@ def test_full_report_includes_share_plan_and_paper_close(tmp_path):
     assert "Paper" in report
     assert "SCHW" in report
     # Must not claim the dollar-drift ADD was gate-cleared.
-    gtlb_chunk = report[report.find("Kelly Share Plan") : report.find("Kelly Share Plan") + 4000]
+    start = report.find("Action plan")
+    gtlb_chunk = report[start : start + 4000]
     assert "APPROVED" not in gtlb_chunk or "not gated" in gtlb_chunk.lower()
 
 

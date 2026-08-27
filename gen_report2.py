@@ -925,11 +925,12 @@ html = f"""<!DOCTYPE html>
   <div class="section-title">🌡️ Market Regime</div>
   <div class="regime-grid">{regime_cards_html}</div>
 
-  <!-- Action Table -->
-  <div class="section-title">⚡ Prioritised Action Plan</div>
+  <!-- AI notes — prose, not share counts -->
+  <div class="section-title">📝 AI notes</div>
+  <div style="color:#888;font-size:11px;margin:-6px 0 8px">Narrative only — share counts are in the Action plan at the top. Not orders.</div>
   <div class="table-card" style="margin-bottom:16px">
     <table class="action-table">
-      <thead><tr><th>Priority</th><th>Action</th><th>Rationale</th></tr></thead>
+      <thead><tr><th>Priority</th><th>Note</th><th>Rationale</th></tr></thead>
       <tbody>{action_rows}</tbody>
     </table>
   </div>
@@ -951,6 +952,7 @@ html = f"""<!DOCTYPE html>
         <thead><tr><th>Symbol</th><th>GARCH</th><th>EWMA</th><th>Diff</th></tr></thead>
         <tbody>{vol_rows}</tbody>
       </table>
+      <div style="color:#888;font-size:11px;padding:8px 4px 2px">GARCH N/A means the (1,1) fit did not run (short sample, or <code>arch</code> missing). EWMA is not relabelled as GARCH.</div>
     </div>
     <div class="table-card">
       <div class="chart-title">Alpha vs Benchmarks (1M)</div>
