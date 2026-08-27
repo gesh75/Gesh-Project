@@ -53,7 +53,8 @@ def test_daily_report_wrapper_is_weekday_1045_et_and_executable() -> None:
     assert os.access(SCRIPT, os.X_OK)
     assert 'et_gate_in_window "$TARGET_ET" "$TOL" mon-fri' in body
     assert "${DAILY_REPORT_ET:-10:45}" in text
-    assert "${DAILY_REPORT_TOL:-12}" in text
+    assert "${DAILY_REPORT_TOL:-90}" in text
+    assert "${DAILY_REPORT_WAIT_S:-2400}" in text
     assert "mon-fri" in text
     assert "run_daily_analysis.sh" in text
     assert "gesh_report.html" in text
@@ -70,7 +71,25 @@ def test_daily_report_wrapper_is_weekday_1045_et_and_executable() -> None:
 
 def test_ten_thirty_chain_wrapper_stays_primary() -> None:
     text = CHAIN_WRAPPER.read_text()
-    assert 'et_gate_require "${DAILY_ANALYSIS_ET:-10:30}"' in text
+    body = _strip_shell_comments(text)
+    assert "et_gate_in_window" in body
+    assert "et_gate_already_stamped" in body
+    assert "GESH_ET_GATE_STAMP" in body
+    assert "et_gate_require" not in body
+    assert "gemini,grok" in text
+
+
+def test_chain_script_does_not_abort_on_ai_failure() -> None:
+    text = (ROOT / "run_daily_analysis.sh").read_text()
+    body = _strip_shell_comments(text)
+    assert "FATAL: run_ai2 failed" not in body
+    assert "AI_FAILED=1" in body
+    assert "run_ai2.py" in body
+    assert "gen_report2.py" in body
+    ai = body.find("run_ai2.py")
+    gen = body.find("gen_report2.py")
+    assert 0 <= ai < gen
+    assert "GESH_ET_GATE_STAMP" in body
 
 
 def test_narrate_does_not_consume_stamp_before_todays_report() -> None:
@@ -129,6 +148,27 @@ def test_et_gate_in_window_does_not_write_a_stamp(tmp_path: Path) -> None:
     )
     assert "rc:1" in proc.stdout or "rc:0" in proc.stdout
     assert list(tmp_path.iterdir()) == []
+
+
+def test_et_gate_already_stamped_then_commit(tmp_path: Path) -> None:
+    env = {**os.environ, "ET_GATE_STAMP_DIR": str(tmp_path), "ET_GATE_LABEL": "daily-analysis-test"}
+    script = f"""
+source "{ET_GATE}"
+if et_gate_already_stamped; then echo stamped-before; else echo clean; fi
+path=$(et_gate_stamp_path)
+: > "$path"
+if et_gate_already_stamped; then echo stamped-after; fi
+"""
+    proc = subprocess.run(
+        ["/bin/bash", "-c", script],
+        check=True,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert "clean" in proc.stdout
+    assert "stamped-after" in proc.stdout
+    assert "stamped-before" not in proc.stdout
 
 
 def test_daily_report_script_mode_bits_are_owner_executable() -> None:

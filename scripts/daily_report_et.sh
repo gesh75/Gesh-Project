@@ -6,13 +6,14 @@
 #
 # Layer 1 (com.gesh.daily-analysis) still STARTS the chain at 10:30 ET. Measured
 # 2026-08-21: CHAIN DONE 10:46:23 ET, 164KB report. This job:
-#   1. waits if the 10:30 chain still holds the lock
+#   1. waits if the 10:30 chain still holds the lock (Grok failover ~15–20 min)
 #   2. if today's report is already >=60KB — Telegram "ready" and exit
-#   3. otherwise run the chain once (OPS-12 recovery: a failed 10:30 stamps
-#      daily-analysis and cannot retry; this label is a separate stamp)
+#   3. otherwise run the chain once. Window is 10:45±90 so a lock-wait that
+#      overruns the old ±12 still recovers (2026-08-26: waited 720s then 10:58
+#      was outside the window and yesterday's HTML stayed).
 #
 # Do NOT call et_gate_require until we publish or exec the chain. A lock-held
-# skip inside 10:45±12 must leave the stamp unset so 10:55 can still recover.
+# skip inside the window must leave the stamp unset so a later tick can recover.
 set -uo pipefail
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -23,9 +24,9 @@ LOCK=/tmp/gesh_daily_chain.lock
 REPORT="$REPO/gesh_report.html"
 TRADING="${GESH_TRADING_HOME:-$HOME/Projects/gesh-project-trading}"
 MIN_BYTES="${DAILY_REPORT_MIN_BYTES:-60000}"
-WAIT_S="${DAILY_REPORT_WAIT_S:-720}"
+WAIT_S="${DAILY_REPORT_WAIT_S:-2400}"
 TARGET_ET="${DAILY_REPORT_ET:-10:45}"
-TOL="${DAILY_REPORT_TOL:-12}"
+TOL="${DAILY_REPORT_TOL:-90}"
 
 ET_GATE_LABEL=daily-report
 # shellcheck source=et_gate.sh

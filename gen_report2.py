@@ -417,6 +417,25 @@ gate_audit_html = report_share_plan.gate_audit_html(eng)
 signal_gate_banner_html = report_share_plan.signal_gate_banner_html(eng)
 
 
+def _parse_iso(value: object):
+    from datetime import datetime, timezone
+
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _provider_banner(eng: dict) -> str:
     """Disclose when a non-Anthropic model authored this analysis.
 
@@ -430,14 +449,43 @@ def _provider_banner(eng: dict) -> str:
         return ""
     return (
         '<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
-        + f"⚠️ MODEL FAILOVER — Anthropic was unavailable; this analysis was produced by "
-        + f"<b>{_esc(provider)}</b>. Output was not grammar-constrained and any field the "
-        + "model omitted is blank rather than estimated. Engine numbers (regime, Kelly, "
-        + "Monte Carlo, gates) are unaffected — they are computed, not generated.</div>"
+        "⚠️ MODEL FAILOVER — Anthropic was unavailable; this analysis was produced by "
+        f"<b>{_esc(provider)}</b>. Output was not grammar-constrained and any field the "
+        "model omitted is blank rather than estimated. Engine numbers (regime, Kelly, "
+        "Monte Carlo, gates) are unaffected — they are computed, not generated.</div>"
     )
 
 
-provider_banner_html = _provider_banner(eng)
+def _ai_freshness_banner(eng: dict) -> str:
+    """When engines refreshed but the narrative is from an earlier run, say so.
+
+    2026-08-26: step 3/5 FATAL aborted before gen_report2, so the HTML still
+    showed 25 Aug P&L while Kelly/MC in engine_results.json were already today's.
+    Continuing the chain on AI failure only helps if the page discloses it.
+    """
+    snap = (eng.get("snapshot") or {}).get("fetched_at")
+    ai_at = eng.get("ai_result_ran_at")
+    snap_dt = _parse_iso(snap)
+    ai_dt = _parse_iso(ai_at)
+    if snap_dt is None:
+        return ""
+    if ai_dt is None:
+        return (
+            '<div class="override-banner">⚠️ AI NARRATIVE MISSING — engines (Kelly, '
+            "Monte Carlo, regime, vol) are from this snapshot; the prose cards are blank. "
+            "Not yesterday's frozen HTML.</div>"
+        )
+    if (snap_dt - ai_dt).total_seconds() > 3600:
+        return (
+            '<div class="override-banner">⚠️ AI NARRATIVE STALE — engines refreshed '
+            f"{_esc(str(snap)[:19])} UTC; last deep analysis "
+            f"{_esc(str(ai_at)[:19])} UTC. Dollar P&amp;L, Kelly, and vol are today's; "
+            "the AI verdict/cards may not be.</div>"
+        )
+    return ""
+
+
+provider_banner_html = _provider_banner(eng) + _ai_freshness_banner(eng)
 
 
 # ─── Diversification radar section (advisory-only, new non-held names) ────────

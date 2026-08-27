@@ -24,6 +24,16 @@ set -uo pipefail
 
 ET_GATE_STAMP_DIR="${ET_GATE_STAMP_DIR:-$HOME/.gesh/et_gate}"
 
+# Path of today's stamp for $ET_GATE_LABEL. Does not create the file.
+et_gate_stamp_path() {
+    echo "$ET_GATE_STAMP_DIR/${ET_GATE_LABEL:?}.$(et_gate_today_et)"
+}
+
+# 0 if today's stamp exists (this label already completed). 1 otherwise.
+et_gate_already_stamped() {
+    [ -e "$(et_gate_stamp_path)" ]
+}
+
 # et_gate_now_et -> HH:MM in America/New_York
 et_gate_now_et() { TZ=America/New_York date +%H:%M; }
 

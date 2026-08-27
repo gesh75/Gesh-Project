@@ -256,3 +256,41 @@ def test_measured_zero_ai_score_is_kept(tmp_path):
     assert "0/100" in report.split("AI Score", 1)[1][:200]
     assert "0/100" in report.split("AI Risk Opinion", 1)[1][:200]
     assert "0/100" in report.split("Diversification", 1)[1][:200]
+
+
+def test_stale_ai_narrative_gets_a_banner_not_yesterdays_silence(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "snapshot": {"fetched_at": "2026-08-26T14:16:35+00:00"},
+            "ai_result_ran_at": "2026-08-25T14:45:58+00:00",
+            "ai_result": {"portfolio_score": 66, "risk_score": 59},
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+        },
+    )
+    assert "AI NARRATIVE STALE" in report
+    assert "2026-08-26T14:16:35"[:16] in report or "2026-08-26T14:16" in report
+
+
+def test_missing_ai_timestamp_gets_a_missing_banner(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "snapshot": {"fetched_at": "2026-08-26T14:16:35+00:00"},
+            "ai_result": {},
+            "monte_carlo": {},
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+        },
+    )
+    assert "AI NARRATIVE MISSING" in report
