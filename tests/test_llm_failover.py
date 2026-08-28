@@ -197,6 +197,97 @@ def test_budget_exhaustion_triggers_failover():
     assert llm_gateway.LLMBudgetExceededError in llm_gateway._FAILOVER_TRIGGERS
 
 
+def _budget_exhausted_gateway(tmp_path, monkeypatch):
+    """Gateway whose first Anthropic reservation exceeds a half-reservation budget.
+
+    Admission happens in the ledger *before* the client is built, so a factory
+    that raises proves Anthropic was never reached.
+    """
+    monkeypatch.setattr(llm_gateway, "backoff_seconds", lambda *a, **k: 0)
+    reserved = llm_gateway.reserve_cost_microusd("claude-sonnet-4-6", 100)
+    budget_usd = (reserved / 1_000_000) * 0.5
+
+    def _must_not_call_anthropic():
+        raise AssertionError("budget admission must fail before create_client()")
+
+    return llm_gateway.Gateway(
+        db_path=tmp_path / "budget_failover.db",
+        client_factory=_must_not_call_anthropic,
+        budget_usd=budget_usd,
+        max_attempts=1,
+    )
+
+
+def test_budget_exhaustion_fails_over_instead_of_killing_the_chain(
+    monkeypatch, tmp_path
+):
+    """Daily Anthropic budget spent must hand off, not take step 3/5 with it.
+
+    Membership-only coverage (``test_budget_exhaustion_triggers_failover``)
+    cannot catch a regression that lists the exception but never reaches
+    ``llm_failover.attempt``.
+    """
+    calls: list = []
+    _fallback_ok(monkeypatch, calls)
+    gw = _budget_exhausted_gateway(tmp_path, monkeypatch)
+
+    result = gw.create(
+        operation="deep_analysis",
+        model="claude-sonnet-4-6",
+        max_tokens=100,
+        **_kwargs(),
+    )
+
+    assert calls == ["deep_analysis"], "fallback provider was never reached"
+    payload = llm_contracts.extract_tool_input(
+        result, expected_tool="return_portfolio_analysis", operation="deep_analysis"
+    )
+    assert payload["portfolio_verdict"] == "HOLD"
+
+
+def test_budget_exhaustion_raises_when_failover_disabled(monkeypatch, tmp_path):
+    """Empty ``GESH_LLM_FAILOVER`` is the opt-out; budget spent must still surface."""
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "")
+    calls: list = []
+
+    def _attempt(**kwargs):
+        calls.append(kwargs.get("operation"))
+        raise AssertionError("disabled failover must not call attempt()")
+
+    monkeypatch.setattr(llm_failover, "attempt", _attempt)
+    gw = _budget_exhausted_gateway(tmp_path, monkeypatch)
+
+    with pytest.raises(llm_gateway.LLMBudgetExceededError):
+        gw.create(
+            operation="deep_analysis",
+            model="claude-sonnet-4-6",
+            max_tokens=100,
+            **_kwargs(),
+        )
+    assert calls == []
+
+
+def test_budget_exhaustion_reraises_original_when_all_fallbacks_fail(
+    monkeypatch, tmp_path
+):
+    """A dead fallback must not launder the cause into FailoverUnavailable."""
+    monkeypatch.setattr(llm_failover, "enabled", lambda: True)
+
+    def _boom(*, operation, max_tokens, **kwargs):
+        raise llm_failover.FailoverUnavailable("all fallback providers failed")
+
+    monkeypatch.setattr(llm_failover, "attempt", _boom)
+    gw = _budget_exhausted_gateway(tmp_path, monkeypatch)
+
+    with pytest.raises(llm_gateway.LLMBudgetExceededError):
+        gw.create(
+            operation="deep_analysis",
+            model="claude-sonnet-4-6",
+            max_tokens=100,
+            **_kwargs(),
+        )
+
+
 def test_provider_order_defaults_to_grok_then_gemini(monkeypatch):
     monkeypatch.delenv("GESH_LLM_FAILOVER", raising=False)
     assert llm_failover.provider_order() == ["grok", "gemini"]
