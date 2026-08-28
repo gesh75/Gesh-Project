@@ -45,13 +45,24 @@ def _alert_con() -> sqlite3.Connection:
 
 
 def _consensus_for(symbols: list[str]) -> list[dict]:
-    """Best-effort consensus per symbol (serialized upstream by the yf lock)."""
+    """Best-effort consensus per symbol (serialized upstream by the yf lock).
+
+    MUST pass allow_ecg=False. This job snapshots the union of every customer's
+    watchlist+book into the shared `signal_history` table, which then feeds
+    GET /api/signals/history/{symbol}, flip emails, and the weekly digest.
+    node_ecg reads `equity_snapshots` (symbol-keyed, no user column) — the
+    OWNER's curve. With the default True, a customer holding a name the owner
+    also holds (NVDA, HOOD, …) received a verdict that voted the owner's
+    drawdown. Same leak class as GET /api/consensus/{symbol} (1ad42d7).
+    """
     import consensus as consensus_mod
     out = []
     for sym in symbols:
         try:
             r = consensus_mod.run_consensus_holding(
-                symbol=sym, equity=0, total_portfolio=1, avg_cost=0, current_price=0)
+                symbol=sym, equity=0, total_portfolio=1, avg_cost=0, current_price=0,
+                allow_ecg=False,
+            )
             if r and r.get("verdict"):
                 out.append({"symbol": sym, "verdict": r["verdict"],
                             "score": r.get("raw_score"), "confidence": r.get("confidence")})
