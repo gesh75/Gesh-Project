@@ -718,6 +718,7 @@ def run_consensus_portfolio(
     `allow_ecg` is forwarded to every holding — see run_consensus_holding.
     """
     import concurrent.futures
+    import contextvars
 
     def process_holding(h):
         sym   = h.get("symbol", "")
@@ -727,9 +728,20 @@ def run_consensus_portfolio(
         print(f"  CONSENSUS: {sym}...")
         return run_consensus_holding(sym, eq, total_portfolio, cost, price, allow_ecg=allow_ecg)
 
+    # ThreadPoolExecutor does not copy ContextVars. Customer HTTP/mybook
+    # requests set _ALLOW_AUTHENTICATED_RH=False on the caller thread; without
+    # a per-task snapshot the workers restore the owner robin_stocks pickle.
+    # Snapshot HERE (caller thread), then ctx.run() in the worker. One Context
+    # object is not thread-safe, so each holding gets its own copy.
+    work = [(contextvars.copy_context(), h) for h in holdings]
+
+    def _run(item):
+        ctx, h = item
+        return ctx.run(process_holding, h)
+
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(holdings) or 1, 8)) as executor:
-        results = list(executor.map(process_holding, holdings))
+        results = list(executor.map(_run, work))
 
     # Sort: strong buy first, strong sell last
     order = {"STRONG BUY": 0, "BUY": 1, "HOLD": 2, "SELL": 3, "STRONG SELL": 4, "INSUFFICIENT DATA": 5}

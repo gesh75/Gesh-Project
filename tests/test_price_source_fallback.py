@@ -252,6 +252,42 @@ def test_mybook_worker_disables_authenticated_rh_fallback(monkeypatch):
     assert price_source._ALLOW_AUTHENTICATED_RH.get() is True
 
 
+def test_consensus_pool_inherits_unauthenticated_rh_flag(monkeypatch):
+    """``run_consensus_portfolio`` fans out over a ThreadPoolExecutor.
+
+    Those workers used to see the process default (True) even when the caller
+    had entered ``unauthenticated_rh_fallback`` — so /api/mybook/consensus
+    still restored the owner pickle after a Yahoo 401. Each task must run
+    inside a snapshot of the caller context.
+    """
+    import consensus
+
+    seen: list[bool] = []
+
+    def _spy(*_a, **_k):
+        seen.append(price_source._ALLOW_AUTHENTICATED_RH.get())
+        raise RuntimeError("spy-stop")
+
+    monkeypatch.setattr(price_source, "yf_download", _spy)
+    holding = {
+        "symbol": "AAPL",
+        "equity": 100.0,
+        "average_buy_price": 1.0,
+        "current_price": 1.0,
+    }
+
+    with price_source.unauthenticated_rh_fallback():
+        consensus.run_consensus_portfolio([holding], 100.0)
+
+    assert seen, "pool worker never reached yf_download"
+    assert seen == [False] * len(seen)
+
+    seen.clear()
+    consensus.run_consensus_portfolio([holding], 100.0)
+    assert seen, "default pool worker never reached yf_download"
+    assert all(flag is True for flag in seen)
+
+
 def test_customer_safe_fallback_never_uses_authenticated_session(monkeypatch, fake_rh):
     """A request-scoped fallback cannot spend the owner's broker session quota."""
     _yahoo_dead(monkeypatch)
