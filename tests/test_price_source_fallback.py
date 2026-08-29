@@ -226,6 +226,32 @@ def test_owner_http_request_keeps_authenticated_rh_fallback(tmp_path, monkeypatc
     assert all(flag is True for flag in seen)
 
 
+def test_mybook_worker_disables_authenticated_rh_fallback(monkeypatch):
+    """The 202 mybook worker outlives the HTTP request.
+
+    Middleware resets ``_ALLOW_AUTHENTICATED_RH`` when it returns 202, so the
+    thread-pool job (payload + Kelly/MC/radar) would restore the owner pickle
+    unless the worker itself enters ``unauthenticated_rh_fallback``.
+    """
+    seen: list[bool] = []
+
+    def _spy(*_a, **_k):
+        seen.append(price_source._ALLOW_AUTHENTICATED_RH.get())
+        raise RuntimeError("spy-stop")
+
+    monkeypatch.setattr(server.auth_users, "mark_mybook_job_running", lambda *_a, **_k: True)
+    monkeypatch.setattr(server.auth_users, "finish_mybook_job", lambda *_a, **_k: True)
+    monkeypatch.setattr(server.auth_users, "release_usage", lambda *_a, **_k: None)
+    monkeypatch.setattr(server, "_customer_book_payload", _spy)
+
+    assert price_source._ALLOW_AUTHENTICATED_RH.get() is True
+    server._mybook_analyze_worker(
+        "cust@x.com", "user-1", "job-1", "fp", [{"symbol": "AAPL", "shares": 1}], False
+    )
+    assert seen == [False]
+    assert price_source._ALLOW_AUTHENTICATED_RH.get() is True
+
+
 def test_customer_safe_fallback_never_uses_authenticated_session(monkeypatch, fake_rh):
     """A request-scoped fallback cannot spend the owner's broker session quota."""
     _yahoo_dead(monkeypatch)

@@ -1307,8 +1307,9 @@ async def _customer_view_middleware(request: Request, call_next):
     # pickle. price_source defaults to the authenticated fallback (the daily
     # chain needs it); only /api/explainability opted into the restriction, so
     # /api/consensus/{symbol}, /api/mybook/*, /api/chart/*, etc. borrowed the
-    # owner session. One request-scoped wrap covers every customer path,
-    # including the mask-exempt ones below.
+    # owner session. One request-scoped wrap covers in-request customer paths,
+    # including the mask-exempt ones below. The 202 mybook worker outlives this
+    # context and wraps itself in `_mybook_analyze_worker`.
     from price_source import unauthenticated_rh_fallback
 
     with unauthenticated_rh_fallback():
@@ -5460,6 +5461,23 @@ def _mybook_analyze_worker(
     if not auth_users.mark_mybook_job_running(user_id, job_id, fp):
         auth_users.release_usage(job_id, user_id)  # [CLAUDE V5] tenant-scoped
         return
+    # The HTTP request already returned 202, so the middleware ContextVar is
+    # gone. This worker is the actual Yahoo→RH fallback caller for a customer
+    # book (payload + Kelly/MC/radar) and must not restore the owner pickle.
+    from price_source import unauthenticated_rh_fallback
+
+    with unauthenticated_rh_fallback():
+        _mybook_analyze_worker_body(email, user_id, job_id, fp, positions, ew)
+
+
+def _mybook_analyze_worker_body(
+    email: str,
+    user_id: str,
+    job_id: str,
+    fp: str,
+    positions: list[dict],
+    ew: bool,
+) -> None:
     try:
         payload = _customer_book_payload(positions, ew)
         if not payload["holdings"]:
