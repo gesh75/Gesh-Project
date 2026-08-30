@@ -115,12 +115,13 @@ def test_zero_entry_price_on_short_also_degrades_pct(trade_db):
 
 
 def test_paper_row_never_appears_in_live_history(trade_db):
-    live_id = _open(symbol="HOOD", paper=False)
-    paper_id = _open(symbol="HOOD", paper=True)
-    live = {r["id"] for r in tl.get_trade_history(is_paper=False)}
-    paper = {r["id"] for r in tl.get_trade_history(is_paper=True)}
-    assert live_id in live and paper_id not in live
-    assert paper_id in paper and live_id not in paper
+    """Tables have independent AUTOINCREMENT ids — isolate by symbol, not id."""
+    _open(symbol="HOOD", paper=False)
+    _open(symbol="CAT", paper=True)
+    live_syms = {r["symbol"] for r in tl.get_trade_history(is_paper=False)}
+    paper_syms = {r["symbol"] for r in tl.get_trade_history(is_paper=True)}
+    assert live_syms == {"HOOD"}
+    assert paper_syms == {"CAT"}
 
 
 def test_paper_close_does_not_write_live_pnl(trade_db):

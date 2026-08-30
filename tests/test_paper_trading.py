@@ -273,3 +273,14 @@ def test_close_paper_position_writes_to_paper_table(trade_db, allow_all):
     assert row["outcome"] == "WIN"
     assert row["realized_pnl"] == pytest.approx(80.0)
     assert tl.get_win_rate(is_paper=False)["total_trades"] == 0
+
+
+def test_price_fetch_exception_returns_empty_map(monkeypatch):
+    """A Yahoo/RH outage must skip the stop check — never invent a close price."""
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("feed down")
+
+    monkeypatch.setattr(pt.price_source, "locked_yf_download", _boom)
+    assert pt._fetch_current_prices(["NVDA"]) == {}
+    assert pt._fetch_current_prices([]) == {}
