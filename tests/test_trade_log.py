@@ -4,6 +4,13 @@ trade_log is the persistence layer for both live `trade_log` and `paper_trades`.
 A sign error, a leaked paper row into live stats, or a ZeroDivision on a
 corrupt $0 entry would silently invert the weekly review and the paper-vs-live
 edge. These tests pin the money math and the table fence with a throwaway DB.
+
+GFD-008 / PR #238 (APPROVED, still open): current ``main`` treats TRIM/SELL as
+short entries (inverted P&L and inverted stops). #238 changes ``close_trade``
+to long-only ``(exit - entry) * shares`` and makes paper TRIM/SELL FIFO-close
+open longs. These short-path assertions encode today's contract and will need
+to be rewritten when #238 lands — do not merge this file after #238 without
+rebasing those tests.
 """
 
 from __future__ import annotations
@@ -59,7 +66,7 @@ def test_long_add_uses_same_direction_as_buy(trade_db):
 
 
 def test_short_sell_close_below_entry_is_win(trade_db):
-    """TRIM/SELL are treated as short exits: profit when price falls."""
+    """TRIM/SELL are treated as short exits on current main (GFD-008 / #238)."""
     tid = _open(action="SELL", shares=10.0, entry=100.0)
     row = tl.close_trade(tid, exit_price=90.0)
     assert row["outcome"] == "WIN"
@@ -91,6 +98,20 @@ def test_pnl_just_outside_band_is_loss(trade_db):
     row = tl.close_trade(tid, exit_price=99.98)  # pnl = -0.02 < -0.01
     assert row["outcome"] == "LOSS"
     assert row["realized_pnl"] == pytest.approx(-0.02)
+
+
+def test_pnl_just_outside_band_is_win(trade_db):
+    tid = _open(action="BUY", shares=1.0, entry=100.0)
+    row = tl.close_trade(tid, exit_price=100.02)  # pnl = +0.02 > 0.01
+    assert row["outcome"] == "WIN"
+    assert row["realized_pnl"] == pytest.approx(0.02)
+
+
+def test_pnl_inside_band_on_the_win_side_is_breakeven(trade_db):
+    """Half-cent is inside |pnl| <= 0.01. Avoid exact 0.01 — float makes 100.01-100 > 0.01."""
+    tid = _open(action="BUY", shares=1.0, entry=100.0)
+    row = tl.close_trade(tid, exit_price=100.005)
+    assert row["outcome"] == "BREAKEVEN"
 
 
 def test_zero_entry_price_does_not_raise_and_pct_degrades_to_zero(trade_db):
@@ -134,6 +155,25 @@ def test_paper_close_does_not_write_live_pnl(trade_db):
     assert paper_stats["total_trades"] == 1
     assert paper_stats["wins"] == 1
     assert paper_stats["total_realized_pnl"] == pytest.approx(40.0)
+
+
+def test_close_does_not_cross_tables_when_autoincrement_ids_collide(trade_db):
+    """Both tables start at id=1 — is_paper must select the table, not the integer."""
+    live_id = _open(symbol="HOOD", action="BUY", shares=2.0, entry=50.0, paper=False)
+    paper_id = _open(symbol="CAT", action="BUY", shares=3.0, entry=80.0, paper=True)
+    assert live_id == paper_id == 1
+    tl.close_trade(live_id, exit_price=55.0, is_paper=False)
+    paper_row = tl.get_trade_by_id(paper_id, is_paper=True)
+    live_row = tl.get_trade_by_id(live_id, is_paper=False)
+    assert paper_row["outcome"] == "OPEN"
+    assert paper_row["realized_pnl"] is None
+    assert live_row["outcome"] == "WIN"
+    assert live_row["realized_pnl"] == pytest.approx(10.0)
+    tl.close_trade(paper_id, exit_price=70.0, is_paper=True)
+    assert tl.get_trade_by_id(live_id, is_paper=False)["realized_pnl"] == pytest.approx(10.0)
+    assert tl.get_trade_by_id(paper_id, is_paper=True)["realized_pnl"] == pytest.approx(-30.0)
+    assert tl.get_win_rate(is_paper=False)["total_trades"] == 1
+    assert tl.get_win_rate(is_paper=True)["total_trades"] == 1
 
 
 def test_symbol_is_uppercased_and_lookup_is_casefold(trade_db):

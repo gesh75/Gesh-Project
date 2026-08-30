@@ -4,6 +4,10 @@ The daily chain's paper book is the public proof of signal accuracy. These
 tests pin: non-executable rows are dropped, allocation blocks are recorded
 (not filled), Auto-trade is ignored in paper, stop/target math, long vs short
 auto-close, and the paper-vs-live edge verdicts that gate scaling live size.
+
+GFD-008 / PR #238: SELL/TRIM inverted stops and short auto-close below encode
+current ``main``. After #238 those actions FIFO-close longs and these tests
+must be rewritten.
 """
 
 from __future__ import annotations
