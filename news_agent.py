@@ -265,6 +265,23 @@ def _finite_sentiment_score(value: Any) -> bool:
     return math.isfinite(float(value))
 
 
+_FRED_MOODS = frozenset({"RISK_ON", "RISK_OFF", "NEUTRAL"})
+
+
+def _fred_overlay_signal(macro_ctx: Any) -> str:
+    """Read a typed FRED mood from get_macro_context() output.
+
+    regime.get_macro_context() currently documents no ``macro_signal`` key
+    (Fed/curve/CPI fields only). Missing or unknown values stay NEUTRAL so a
+    garbage print cannot invent RISK_ON/OFF. When the producer later emits a
+    typed signal, the overlay starts working without a second reader change.
+    """
+    if not isinstance(macro_ctx, dict):
+        return "NEUTRAL"
+    raw = macro_ctx.get("macro_signal", "NEUTRAL")
+    return raw if raw in _FRED_MOODS else "NEUTRAL"
+
+
 def blend_news_fred_mood(news_mood: str, fred_signal: str) -> str:
     """Combine news mood with the FRED macro overlay.
 
@@ -619,8 +636,7 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
     try:
         from regime import get_macro_context
 
-        macro_ctx = get_macro_context()
-        fred_signal = macro_ctx.get("macro_signal", "NEUTRAL")
+        fred_signal = _fred_overlay_signal(get_macro_context())
     except Exception:
         pass
 

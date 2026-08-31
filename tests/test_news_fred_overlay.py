@@ -141,6 +141,57 @@ def test_scan_news_fred_exception_leaves_news_mood(monkeypatch):
     assert out["market_mood"] == "RISK_ON"
 
 
+def test_fred_overlay_signal_accepts_only_typed_moods():
+    assert news_agent._fred_overlay_signal({"macro_signal": "RISK_OFF"}) == "RISK_OFF"
+    assert news_agent._fred_overlay_signal({"macro_signal": "RISK_ON"}) == "RISK_ON"
+    assert news_agent._fred_overlay_signal({"macro_signal": "NEUTRAL"}) == "NEUTRAL"
+    assert news_agent._fred_overlay_signal({"macro_signal": None}) == "NEUTRAL"
+    assert news_agent._fred_overlay_signal({"macro_signal": "INVERTED"}) == "NEUTRAL"
+    assert news_agent._fred_overlay_signal(None) == "NEUTRAL"
+    assert news_agent._fred_overlay_signal(["RISK_OFF"]) == "NEUTRAL"
+
+
+def test_scan_news_documented_fred_shape_without_macro_signal_stays_neutral(monkeypatch):
+    """get_macro_context() documents Fed/curve/CPI fields, not macro_signal.
+
+    An inverted curve + rising funds must not invent RISK_OFF until the producer
+    actually emits a typed mood. Tests that stub {macro_signal: ...} are not
+    this contract.
+    """
+    documented = {
+        "fed_funds_rate": 4.33,
+        "fed_funds_direction": "RISING",
+        "yield_curve_spread": -0.40,
+        "yield_curve_state": "INVERTED",
+        "cpi_yoy_pct": 3.1,
+        "inflation_trend": "ACCELERATING",
+        "macro_summary": "inverted",
+        "available": True,
+    }
+    monkeypatch.setattr(news_agent, "_fresh_sentiment", lambda *_a, **_k: None)
+    monkeypatch.setattr(news_agent, "_fetch_all_news", lambda *_a, **_k: [{"title": "t"}])
+    monkeypatch.setattr(
+        news_agent,
+        "analyze_news_sentiment",
+        lambda *_a, **_k: {
+            "availability": "OK",
+            "overall_sentiment": "POSITIVE",
+            "sentiment_score": 40,
+            "impact_level": "LOW",
+        },
+    )
+    monkeypatch.setattr(news_agent, "_save_sentiment", lambda *_a, **_k: None)
+    monkeypatch.setattr(news_agent, "_compute_rolling_score", lambda *_a, **_k: 40)
+    import regime
+
+    monkeypatch.setattr(regime, "get_macro_context", lambda: documented)
+    out = news_agent.scan_news(["AAPL"])
+    assert "macro_signal" not in documented
+    assert out["fred_signal"] == "NEUTRAL"
+    assert out["news_mood"] == "RISK_ON"
+    assert out["market_mood"] == "RISK_ON"
+
+
 def test_scan_news_missing_macro_signal_defaults_neutral(monkeypatch):
     monkeypatch.setattr(news_agent, "_fresh_sentiment", lambda *_a, **_k: None)
     monkeypatch.setattr(news_agent, "_fetch_all_news", lambda *_a, **_k: [{"title": "t"}])
