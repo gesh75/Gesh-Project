@@ -114,6 +114,26 @@ def test_customer_rh_flag_resets_after_context():
     assert price_source._ALLOW_AUTHENTICATED_RH.get() is True
 
 
+def test_customer_rh_session_blocked_fail_closed_on_lookup_error(monkeypatch):
+    """If the ContextVar cannot be read, do not spend the owner session."""
+    import market_data
+
+    class _Boom:
+        def get(self):
+            raise RuntimeError("contextvar down")
+
+    called: dict = {}
+    monkeypatch.setattr(price_source, "_ALLOW_AUTHENTICATED_RH", _Boom())
+    monkeypatch.setattr(
+        "robin_stocks.robinhood.stocks.get_ratings",
+        _spy_ratings(called),
+        raising=False,
+    )
+    assert market_data._customer_rh_session_blocked() is True
+    assert market_data.rh_analyst("NVDA") is None
+    assert called.get("ratings", 0) == 0
+
+
 def _customer_client(tmp_path, monkeypatch, *, owner: bool):
     from starlette.testclient import TestClient
 
@@ -139,15 +159,24 @@ def test_customer_analyst_endpoint_disables_authenticated_rh(tmp_path, monkeypat
     import market_data
 
     seen: list[bool] = []
+    called: dict = {}
+    real = market_data.rh_analyst
 
-    def _spy(*_a, **_k):
+    def _wrap(sym):
         seen.append(price_source._ALLOW_AUTHENTICATED_RH.get())
-        raise RuntimeError("spy-stop")
+        return real(sym)
 
-    monkeypatch.setattr(market_data, "rh_analyst", _spy)
+    monkeypatch.setattr(market_data, "rh_analyst", _wrap)
+    monkeypatch.setattr(
+        "robin_stocks.robinhood.stocks.get_ratings",
+        _spy_ratings(called),
+        raising=False,
+    )
+    monkeypatch.setattr(market_data, "get_analyst_targets", lambda *_a, **_k: {})
     client = _customer_client(tmp_path, monkeypatch, owner=False)
     client.get("/api/analyst/AAPL")
     assert seen == [False]
+    assert called.get("ratings", 0) == 0
 
 
 def test_customer_fundamentals_endpoint_disables_authenticated_rh(tmp_path, monkeypatch):
@@ -155,15 +184,26 @@ def test_customer_fundamentals_endpoint_disables_authenticated_rh(tmp_path, monk
     import market_data
 
     seen: list[bool] = []
+    called: dict = {}
+    real = market_data.rh_fundamentals
 
-    def _spy(*_a, **_k):
+    def _wrap(sym):
         seen.append(price_source._ALLOW_AUTHENTICATED_RH.get())
-        raise RuntimeError("spy-stop")
+        return real(sym)
 
-    monkeypatch.setattr(market_data, "rh_fundamentals", _spy)
+    monkeypatch.setattr(market_data, "rh_fundamentals", _wrap)
+    monkeypatch.setattr(
+        "robin_stocks.robinhood.stocks.get_fundamentals",
+        _spy_fundamentals(called),
+        raising=False,
+    )
+    import fundamental_agent
+
+    monkeypatch.setattr(fundamental_agent, "_fetch_fundamentals_batch", lambda *_a, **_k: [])
     client = _customer_client(tmp_path, monkeypatch, owner=False)
     client.get("/api/fundamentals/AAPL")
     assert seen == [False]
+    assert called.get("fundamentals", 0) == 0
 
 
 def test_owner_analyst_endpoint_keeps_authenticated_rh(tmp_path, monkeypatch):
@@ -171,12 +211,44 @@ def test_owner_analyst_endpoint_keeps_authenticated_rh(tmp_path, monkeypatch):
     import market_data
 
     seen: list[bool] = []
+    called: dict = {}
+    real = market_data.rh_analyst
 
-    def _spy(*_a, **_k):
+    def _wrap(sym):
         seen.append(price_source._ALLOW_AUTHENTICATED_RH.get())
-        raise RuntimeError("spy-stop")
+        return real(sym)
 
-    monkeypatch.setattr(market_data, "rh_analyst", _spy)
+    monkeypatch.setattr(market_data, "rh_analyst", _wrap)
+    monkeypatch.setattr(
+        "robin_stocks.robinhood.stocks.get_ratings",
+        _spy_ratings(called),
+        raising=False,
+    )
     client = _customer_client(tmp_path, monkeypatch, owner=True)
     client.get("/api/analyst/AAPL")
     assert seen == [True]
+    assert called.get("ratings", 0) == 1
+
+
+def test_owner_fundamentals_endpoint_keeps_authenticated_rh(tmp_path, monkeypatch):
+    pytest.importorskip("gesh_core")
+    import market_data
+
+    seen: list[bool] = []
+    called: dict = {}
+    real = market_data.rh_fundamentals
+
+    def _wrap(sym):
+        seen.append(price_source._ALLOW_AUTHENTICATED_RH.get())
+        return real(sym)
+
+    monkeypatch.setattr(market_data, "rh_fundamentals", _wrap)
+    monkeypatch.setattr(
+        "robin_stocks.robinhood.stocks.get_fundamentals",
+        _spy_fundamentals(called),
+        raising=False,
+    )
+    client = _customer_client(tmp_path, monkeypatch, owner=True)
+    client.get("/api/fundamentals/AAPL")
+    assert seen == [True]
+    assert called.get("fundamentals", 0) == 1
