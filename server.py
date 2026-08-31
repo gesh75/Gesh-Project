@@ -1303,6 +1303,20 @@ async def _customer_view_middleware(request: Request, call_next):
             request, 403, "Owner-only view", "This page is part of the operator console."
         )
 
+    # Customer-triggered Yahoo 401s must not restore the owner's robin_stocks
+    # pickle. price_source defaults to the authenticated fallback (the daily
+    # chain needs it); only /api/explainability opted into the restriction, so
+    # /api/consensus/{symbol}, /api/mybook/*, /api/chart/*, etc. borrowed the
+    # owner session. One request-scoped wrap covers in-request customer paths,
+    # including the mask-exempt ones below. The 202 mybook worker outlives this
+    # context and wraps itself in `_mybook_analyze_worker`.
+    from price_source import unauthenticated_rh_fallback
+
+    with unauthenticated_rh_fallback():
+        return await _customer_view_after_auth(request, call_next, path)
+
+
+async def _customer_view_after_auth(request: Request, call_next, path: str):
     # Public single-ticker research cards carry no owner dollars — serve RAW so their
     # per-share price prose is not redacted into uselessness for the customer.
     if any(path == p or path.startswith(p + "/") for p in _MASK_EXEMPT_PREFIXES):
@@ -5447,6 +5461,23 @@ def _mybook_analyze_worker(
     if not auth_users.mark_mybook_job_running(user_id, job_id, fp):
         auth_users.release_usage(job_id, user_id)  # [CLAUDE V5] tenant-scoped
         return
+    # The HTTP request already returned 202, so the middleware ContextVar is
+    # gone. This worker is the actual Yahoo→RH fallback caller for a customer
+    # book (payload + Kelly/MC/radar) and must not restore the owner pickle.
+    from price_source import unauthenticated_rh_fallback
+
+    with unauthenticated_rh_fallback():
+        _mybook_analyze_worker_body(email, user_id, job_id, fp, positions, ew)
+
+
+def _mybook_analyze_worker_body(
+    email: str,
+    user_id: str,
+    job_id: str,
+    fp: str,
+    positions: list[dict],
+    ew: bool,
+) -> None:
     try:
         payload = _customer_book_payload(positions, ew)
         if not payload["holdings"]:
@@ -6220,7 +6251,10 @@ def _run_book_scanner(symbols: list[str], interval: str, period: str, min_rr: fl
     except Exception as e:  # noqa: BLE001
         logger.warning("customer scanner consolidation leg failed: %s", e)
         cz = {
-            "found": [], "no_zone": [], "errors": [], "summary": "",
+            "found": [],
+            "no_zone": [],
+            "errors": [],
+            "summary": "",
             "error": "price data unavailable",
         }
 
@@ -6391,8 +6425,13 @@ def _run_book_intelligence(symbols: list[str], days: int) -> dict:
     """
     legs: dict[str, dict] = {}
     empty = {
-        "sec": {"results": [], "symbols": [], "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
-                "truncated": False, "days": days},
+        "sec": {
+            "results": [],
+            "symbols": [],
+            "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
+            "truncated": False,
+            "days": days,
+        },
         "news": {"results": [], "avg_score": 0.0, "market_mood": "NEUTRAL", "cached": True},
         "fundamentals": {"results": [], "errors": []},
     }
@@ -6430,9 +6469,7 @@ async def mybook_intelligence(request: Request):
 
     include_watchlist = body.get("include_watchlist", True) is not False
     days = int(_clamped_float(body.get("days", 7), default=7.0, low=1.0, high=90.0))
-    symbols, requested = _customer_scan_symbols(
-        email, MYBOOK_INTEL_MAX_SYMBOLS, include_watchlist
-    )
+    symbols, requested = _customer_scan_symbols(email, MYBOOK_INTEL_MAX_SYMBOLS, include_watchlist)
 
     key = _book_scan_cache_key(email, ",".join(symbols), requested, days)
     cached = _ticker_get_cached(_MYBOOK_INTEL_BUCKET, key)
@@ -6504,7 +6541,7 @@ def _render_radar_block(radar: object) -> str:
 
     raw_weights = radar.get("existing_sector_weights")
     weights: list[tuple[str, float]] = []
-    for sec, w in (raw_weights.items() if isinstance(raw_weights, dict) else ()):
+    for sec, w in raw_weights.items() if isinstance(raw_weights, dict) else ():
         try:
             weights.append((str(sec), float(w)))
         except (TypeError, ValueError):
