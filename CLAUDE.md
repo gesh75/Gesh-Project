@@ -688,6 +688,8 @@ The product is single-tenant (one Robinhood account); the alpha model is "10 use
 The customer product beyond "view the owner's research": self-serve research and
 portfolio analysis, fully isolated per user. Full runbook: `docs/CUSTOMER_SURFACE.md`.
 Live smoke after any deploy: `./venv/bin/python3 smoke_customer_surface.py [--with-llm]`.
+Customer HTTP (and the 202 mybook worker) must not restore the owner `robin_stocks`
+pickle after a Yahoo 401 — `unauthenticated_rh_fallback()` (PR #258).
 
 | Surface | Routes | Notes |
 |---|---|---|

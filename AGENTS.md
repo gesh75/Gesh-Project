@@ -21,6 +21,7 @@ Repository guide for coding agents working in `gesh75/Gesh-Project`.
 
 - Preserve customer/owner isolation at all times.
 - Never expose owner holdings, cash, account identifiers, recommendations, or private operational data to customers.
+- Customer requests must not restore or spend the owner's `robin_stocks` pickle. The #258 fence is `unauthenticated_rh_fallback()` on customer HTTP + the mybook worker; see `docs/CUSTOMER_SURFACE.md`.
 - Never fabricate financial values when source data is missing.
 - Prefer explicit typed failures over silent fallback or invented defaults.
 - Never weaken authentication, authorization, CSRF, Origin, cookie, session, tenant, or request-boundary checks.
