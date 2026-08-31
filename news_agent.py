@@ -265,6 +265,27 @@ def _finite_sentiment_score(value: Any) -> bool:
     return math.isfinite(float(value))
 
 
+def blend_news_fred_mood(news_mood: str, fred_signal: str) -> str:
+    """Combine news mood with the FRED macro overlay.
+
+    Empty evidence (UNAVAILABLE) is never overwritten — a macro print is not a
+    news mood. When both sides have a real signal and they disagree, lean
+    risk-off: RISK_ON + RISK_OFF → NEUTRAL. A NEUTRAL news book follows FRED.
+    RISK_OFF news already is the cautious side and is not upgraded by RISK_ON
+    FRED. A NEUTRAL / missing FRED print leaves the news mood unchanged.
+    """
+    if news_mood == "UNAVAILABLE":
+        return "UNAVAILABLE"
+    if fred_signal != "NEUTRAL":
+        if news_mood == "RISK_ON" and fred_signal == "RISK_OFF":
+            return "NEUTRAL"
+        if news_mood == "NEUTRAL" and fred_signal == "RISK_OFF":
+            return "RISK_OFF"
+        if news_mood == "NEUTRAL" and fred_signal == "RISK_ON":
+            return "RISK_ON"
+    return news_mood
+
+
 def analyze_news_sentiment(symbol: str, articles: list[dict]) -> dict[str, Any]:
     """Run Claude analysis on a batch of news articles for one symbol."""
     public = _public_articles(articles)
@@ -591,42 +612,26 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
     scores = [
         r["sentiment_score"] for r in results if _finite_sentiment_score(r.get("sentiment_score"))
     ]
+    # FRED overlay is fetched in both branches so `fred_signal` is always
+    # reported. Empty evidence still stays UNAVAILABLE — blend_news_fred_mood
+    # refuses to let a macro print invent a news mood.
+    fred_signal = "NEUTRAL"
+    try:
+        from regime import get_macro_context
+
+        macro_ctx = get_macro_context()
+        fred_signal = macro_ctx.get("macro_signal", "NEUTRAL")
+    except Exception:
+        pass
+
     if not scores:
         mood = "UNAVAILABLE"
         avg = None
-        combined_mood = "UNAVAILABLE"
-        fred_signal = "NEUTRAL"
-        try:
-            from regime import get_macro_context
-
-            macro_ctx = get_macro_context()
-            fred_signal = macro_ctx.get("macro_signal", "NEUTRAL")
-        except Exception:
-            pass
     else:
         avg = sum(scores) / len(scores)
         mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
 
-        # ── FRED macro overlay (replaces Polymarket — more reliable, no rate limits) ──
-        # Blend FRED macro signal with news mood: if they disagree, lean risk-off.
-        # Polymarket was removed: overlaps entirely with FRED macro in regime.py.
-        fred_signal = "NEUTRAL"
-        try:
-            from regime import get_macro_context
-
-            macro_ctx = get_macro_context()
-            fred_signal = macro_ctx.get("macro_signal", "NEUTRAL")
-        except Exception:
-            pass
-
-        combined_mood = mood
-        if fred_signal != "NEUTRAL":
-            if mood == "RISK_ON" and fred_signal == "RISK_OFF":
-                combined_mood = "NEUTRAL"  # conflicting — be cautious
-            elif mood == "NEUTRAL" and fred_signal == "RISK_OFF":
-                combined_mood = "RISK_OFF"
-            elif mood == "NEUTRAL" and fred_signal == "RISK_ON":
-                combined_mood = "RISK_ON"
+    combined_mood = blend_news_fred_mood(mood, fred_signal)
 
     return {
         "results": results,
