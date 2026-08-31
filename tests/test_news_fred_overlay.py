@@ -180,6 +180,7 @@ def test_scan_news_bool_score_is_not_a_mood(monkeypatch):
         },
     )
     monkeypatch.setattr(news_agent, "_save_sentiment", lambda *_a, **_k: None)
+    monkeypatch.setattr(news_agent, "_compute_rolling_score", lambda *_a, **_k: None)
     import regime
 
     monkeypatch.setattr(regime, "get_macro_context", lambda: {"macro_signal": "RISK_ON"})
