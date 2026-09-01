@@ -11,6 +11,7 @@ yfinance is stubbed before import so this file is stdlib + pytest only.
 
 from __future__ import annotations
 
+import inspect
 import sys
 import types
 
@@ -23,8 +24,12 @@ def _inst(name: str, apy: float) -> dict:
     return {"name": name, "apy": apy, "risk": "x"}
 
 
-def test_highest_defi_apy_is_never_the_recommendation():
-    """50% Aave must lose to a 5% T-bill because Tier 3 is not an input."""
+def test_picker_only_sees_tier1_and_tier2():
+    """The extracted picker has no Tier 3 argument — DeFi cannot win here.
+
+    The landscape-level pin (88% Aave still informational) lives in
+    test_landscape_recommendation_ignores_tier3_even_when_mocked_highest.
+    """
     rec, _proj = dy._recommend_safe_yield(
         tier1=[_inst("3-Month T-Bill (^IRX)", 5.0)],
         tier2=[_inst("SGOV (0-3mo T-Bill ETF)", 4.8)],
@@ -33,8 +38,7 @@ def test_highest_defi_apy_is_never_the_recommendation():
     )
     assert rec["instrument"] == "3-Month T-Bill (^IRX)"
     assert rec["apy"] == 5.0
-    assert "Aave" not in rec["instrument"]
-    assert "USDC" not in rec["reason"]
+    assert "tier3" not in inspect.signature(dy._recommend_safe_yield).parameters
 
 
 def test_best_of_tier1_and_tier2_wins():
