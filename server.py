@@ -500,6 +500,7 @@ from allocation_config import (
 from auth import login, logout
 from consensus import (
     MAX_CUSTOMER_CONSENSUS_SYMBOLS,
+    redact_owner_ecg,
     run_consensus_for_customer,
     run_consensus_portfolio,
 )
@@ -3690,8 +3691,19 @@ def deep_analysis_cached():
 
 
 @app.get("/api/consensus/cached", dependencies=[Depends(require_customer_or_owner)])
-def consensus_cached():
-    return _cached_response("consensus")
+def consensus_cached(request: Request):
+    """Serve the daily-chain consensus cache.
+
+    Customers are admitted (this is the published owner-research surface) but
+    the rows were computed with allow_ecg=True against the owner-keyed
+    equity_snapshots table. The dollar masker does not catch drawdown
+    percentages, so ECG votes/details must be stripped before the response
+    leaves the handler. Owner / wall-off sessions keep the raw node.
+    """
+    out = _cached_response("consensus")
+    if _is_owner_request(request):
+        return out
+    return redact_owner_ecg(out)
 
 
 @app.get("/api/dcf/cached", dependencies=[Depends(require_customer_or_owner)])
