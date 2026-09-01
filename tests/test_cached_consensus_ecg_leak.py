@@ -14,15 +14,59 @@ engine and so cannot be saved by that argument.
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
+import types
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
-import consensus
-
 OWNER_HELD_SYMBOL = "NVDA"
 OWNER_ECG_DETAIL = "ECG=SUSPENDED DD=-71.9% Streak=1"
+
+
+def _consensus():
+    """Load redact helpers without the gesh-core / yfinance boot path.
+
+    `consensus.py` imports yfinance, price_source, and agent_db→db at module
+    level. Helper assertions only need redact_owner_ecg; HTTP tests lazy-import
+    the real server when the full tree is present.
+    """
+    try:
+        import consensus as real
+
+        return real
+    except ModuleNotFoundError:
+        pass
+
+    name = "gesh_consensus_ecg_redact"
+    cached = sys.modules.get(name)
+    if cached is not None:
+        return cached
+
+    sys.modules.setdefault(
+        "yfinance", types.SimpleNamespace(Ticker=lambda *a, **k: types.SimpleNamespace(info={}))
+    )
+    sys.modules.setdefault(
+        "numpy", types.SimpleNamespace(ndarray=object, array=lambda *a, **k: None)
+    )
+    sys.modules.setdefault("price_source", types.ModuleType("price_source"))
+    sys.modules.setdefault("db", types.SimpleNamespace(DB_PATH="/tmp/gesh_ecg_redact.db"))
+    sys.modules.setdefault(
+        "agent_db", types.SimpleNamespace(agent_db_path=lambda: Path("/tmp/gesh_ecg_redact.db"))
+    )
+
+    src = Path(__file__).resolve().parents[1] / "consensus.py"
+    spec = importlib.util.spec_from_file_location(name, src)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+consensus = _consensus()
 
 
 def _iso_now() -> str:
@@ -45,8 +89,11 @@ def _leaky_row() -> dict:
 
 
 def _server():
-    import server
-
+    pytest.importorskip("starlette")
+    try:
+        import server
+    except ModuleNotFoundError as exc:
+        pytest.skip(f"server import requires full deps: {exc}")
     return server
 
 
@@ -163,3 +210,44 @@ def test_chain_per_symbol_shape_is_also_stripped(engine_file, customer_client):
     assert "DD=-" not in r.text
     holdings = r.json()["data"]["holdings"]
     assert holdings[0]["votes"]["ECG"] is None
+
+
+def test_looks_like_owner_ecg_detail_requires_drawdown_tokens():
+    """Do not treat every string that mentions ECG as owner-curve leakage."""
+    assert consensus._looks_like_owner_ecg_detail(OWNER_ECG_DETAIL) is True
+    assert consensus._looks_like_owner_ecg_detail("ECG=HEALTHY DD=-2.1%") is True
+    assert consensus._looks_like_owner_ecg_detail("ECG=SUSPENDED Streak=4") is True
+    assert consensus._looks_like_owner_ecg_detail("ECG node abstained — no history") is False
+    assert consensus._looks_like_owner_ecg_detail("coverage 80%") is False
+
+
+def test_redact_owner_ecg_strips_leftover_drawdown_in_narrative_fields():
+    """The daily chain sometimes copies node text into a summary/note field."""
+    src = {
+        "data": {
+            "holdings": [_leaky_row()],
+            "summary": f"NVDA {OWNER_ECG_DETAIL} — exit the name",
+        }
+    }
+    out = consensus.redact_owner_ecg(src)
+    assert OWNER_ECG_DETAIL not in json.dumps(out)
+    assert "DD=" not in out["data"]["summary"]
+    assert out["data"]["summary"] == consensus._ECG_DISABLED_DETAIL
+    assert src["data"]["summary"].startswith("NVDA ECG=")
+
+
+def test_redact_owner_ecg_cached_miss_is_a_noop():
+    """_cached_response returns {cached: False} when the chain has not run."""
+    miss = {"cached": False}
+    out = consensus.redact_owner_ecg(miss)
+    assert out == {"cached": False}
+    assert out is not miss
+
+
+def test_customer_empty_cache_does_not_500(engine_file, customer_client):
+    """No consensus key → {cached: False}, not a redact crash."""
+    engine_file.write_text(json.dumps({"kelly": {"status": "ok"}}))
+    r = customer_client.get("/api/consensus/cached")
+    assert r.status_code == 200, r.text
+    assert r.json().get("cached") is False
+    assert "DD=" not in r.text
