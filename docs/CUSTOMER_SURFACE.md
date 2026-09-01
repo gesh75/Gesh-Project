@@ -110,7 +110,7 @@ intervals return no RH bars. Yahoo remains primary.
 call `robin_stocks` directly and do not read `_ALLOW_AUTHENTICATED_RH`. They
 cannot *restore* a pickle (that is `_ensure_rh_session`), but if an owner
 session is already live in this process they can still spend it. Coverage for
-that leftover is a separate test draft, not this contract.
+that leftover is draft #261, not this contract.
 
 Pins: `tests/test_price_source_fallback.py` (customer GET sees False, owner GET
 sees True, mybook worker re-wraps, consensus pool inherits the flag, customer
