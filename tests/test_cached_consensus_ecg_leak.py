@@ -18,10 +18,8 @@ import json
 from datetime import datetime, timezone
 
 import pytest
-from starlette.testclient import TestClient
 
 import consensus
-import server
 
 OWNER_HELD_SYMBOL = "NVDA"
 OWNER_ECG_DETAIL = "ECG=SUSPENDED DD=-71.9% Streak=1"
@@ -46,8 +44,15 @@ def _leaky_row() -> dict:
     }
 
 
+def _server():
+    import server
+
+    return server
+
+
 @pytest.fixture()
 def engine_file(tmp_path, monkeypatch):
+    server = _server()
     eng = tmp_path / "engine_results.json"
     monkeypatch.setattr(server, "ENGINE_RESULTS", eng)
 
@@ -74,7 +79,10 @@ def cached_owner_consensus(engine_file):
     return engine_file
 
 
-def _client(monkeypatch, *, email: str, owner: bool) -> TestClient:
+def _client(monkeypatch, *, email: str, owner: bool):
+    from starlette.testclient import TestClient
+
+    server = _server()
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: email)
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
@@ -114,9 +122,7 @@ def test_redact_owner_ecg_does_not_mutate_input():
     assert src["votes"]["ECG"] == -1
 
 
-def test_customer_cached_consensus_strips_owner_drawdown(
-    cached_owner_consensus, customer_client
-):
+def test_customer_cached_consensus_strips_owner_drawdown(cached_owner_consensus, customer_client):
     r = customer_client.get("/api/consensus/cached")
     assert r.status_code == 200, r.text
     body = r.text
