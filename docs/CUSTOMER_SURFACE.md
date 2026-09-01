@@ -139,4 +139,4 @@ Restores the watchlist/book to their prior state. Exit ≠ 0 ⇒ something is ac
 | Analyst card 404 for an index/ETF | Correct — no analyst ratings exist; not a bug |
 | Report says "No analysis yet" | The user never ran a live analyze (or the persisted rows were pruned) — run Analyze My Portfolio once |
 | Customer consensus/chart after Yahoo 401 tries MFA / touches the owner pickle | Fence missed that path — HTTP should be inside `_customer_view_middleware`; the 202 mybook worker must wrap itself; consensus pool must `copy_context()` |
-| Fundamentals/analyst cards still hit RH while Yahoo is dark | Those two cards call `robin_stocks` directly (`market_data.rh_*`) and are **outside** the #258 ContextVar. An already-live owner session in this process can still be spent |
+| Fundamentals/analyst cards still hit RH while Yahoo is dark | Those two cards call `robin_stocks` directly (`market_data.rh_*`) and are **outside** the #258 ContextVar. An already-live owner session in this process can still be spent. Draft #261 closes the leftover. |
