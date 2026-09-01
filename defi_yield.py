@@ -127,6 +127,40 @@ def get_defi_yields() -> dict[str, Any]:
     return results
 
 
+# ─── Recommendation (Tier 1/2 only — DeFi is never primary) ───────────────────
+
+def _recommend_safe_yield(
+    tier1: list[dict[str, Any]],
+    tier2: list[dict[str, Any]],
+    cash_usd: float,
+    tbill: float,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Pick the highest-APY Tier 1/2 instrument. Tier 3 (DeFi) is never an input."""
+    all_safe = sorted(tier1 + tier2, key=lambda x: x["apy"], reverse=True)
+    best = all_safe[0] if all_safe else {"name": "T-Bill", "apy": tbill}
+    monthly_income = round(cash_usd * best["apy"] / 100 / 12, 2) if cash_usd > 0 else 0.0
+
+    recommendation = {
+        "instrument":        best["name"],
+        "apy":               best["apy"],
+        "monthly_income_usd":monthly_income,
+        "annual_income_usd": round(monthly_income * 12, 2),
+        "reason": (
+            f"{best['name']} currently offers {best['apy']:.2f}% APY — "
+            f"the highest risk-adjusted yield on idle cash."
+        ),
+    }
+
+    projection = []
+    for mo in range(1, 7):
+        projection.append({
+            "month":      mo,
+            "income_usd": round(cash_usd * best["apy"] / 100 / 12 * mo, 2),
+            "cumulative": round(cash_usd * (1 + best["apy"] / 100 / 12) ** mo - cash_usd, 2),
+        })
+    return recommendation, projection
+
+
 # ─── Main landscape ───────────────────────────────────────────────────────────
 
 def get_yield_landscape(cash_usd: float = 0.0) -> dict[str, Any]:
@@ -179,29 +213,7 @@ def get_yield_landscape(cash_usd: float = 0.0) -> dict[str, Any]:
         })
 
     # Recommendation — best Tier 1/2 option (never recommend DeFi as primary)
-    all_safe = sorted(tier1 + tier2, key=lambda x: x["apy"], reverse=True)
-    best = all_safe[0] if all_safe else {"name": "T-Bill", "apy": tbill}
-    monthly_income = round(cash_usd * best["apy"] / 100 / 12, 2) if cash_usd > 0 else 0.0
-
-    recommendation = {
-        "instrument":        best["name"],
-        "apy":               best["apy"],
-        "monthly_income_usd":monthly_income,
-        "annual_income_usd": round(monthly_income * 12, 2),
-        "reason": (
-            f"{best['name']} currently offers {best['apy']:.2f}% APY — "
-            f"the highest risk-adjusted yield on idle cash."
-        ),
-    }
-
-    # Monthly projection table (6 months)
-    projection = []
-    for mo in range(1, 7):
-        projection.append({
-            "month":      mo,
-            "income_usd": round(cash_usd * best["apy"] / 100 / 12 * mo, 2),
-            "cumulative": round(cash_usd * (1 + best["apy"] / 100 / 12) ** mo - cash_usd, 2),
-        })
+    recommendation, projection = _recommend_safe_yield(tier1, tier2, cash_usd, tbill)
 
     return {
         "cash_usd":         round(cash_usd, 2),

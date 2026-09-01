@@ -35,16 +35,63 @@ PICKLE_NAME   = 'robinhood_session'
 MAC_PICKLE    = os.path.expanduser(f'~/.tokens/robinhood{PICKLE_NAME}.pickle')
 PROJECT_PICKLE = os.path.join(SESSION_DIR, f'robinhood{PICKLE_NAME}.pickle')
 
-os.makedirs(SESSION_DIR, exist_ok=True)
-
 
 def _log(msg: str) -> None:
     ts = datetime.now().strftime('%H:%M:%S')
     print(f'[{ts}] {msg}', flush=True)
 
 
+def _normalize_holding(symbol: str, data: dict) -> dict | None:
+    """Coerce one RH holding row. Returns None on unparseable fields (skip, don't abort)."""
+    try:
+        qty   = float(data.get('quantity') or 0)
+        price = float(data.get('price') or 0)
+        eq    = float(data.get('equity') or qty * price)
+        avg   = float(data.get('average_buy_price') or 0)
+        pct   = float(data.get('percent_change') or 0)
+        equity_change = float(data.get('equity_change') or 0)
+    except (TypeError, ValueError):
+        return None
+    return {
+        'symbol':            symbol,
+        'quantity':          qty,
+        'price':             price,
+        'equity':            eq,
+        'average_buy_price': avg,
+        'percent_change':    pct,
+        'equity_change':     equity_change,
+    }
+
+
+def _build_equity_summary(
+    portfolio_equity: float,
+    holdings: list,
+    raw_buying_power: float,
+    raw_withdrawable: float,
+) -> dict:
+    """Assemble equity_summary. Never treat Gold leveraged buying_power as cash."""
+    total_invested = sum(h['equity'] for h in holdings)
+    today_pnl      = sum(h['equity_change'] for h in holdings)
+    # Real cash = portfolio equity minus invested equity.
+    # On Gold accounts buying_power includes margin so we never use it as cash.
+    cash = round(max(0.0, (portfolio_equity or total_invested) - total_invested), 2)
+    return {
+        'portfolio_equity': round(portfolio_equity or total_invested + cash, 2),
+        'cash':             cash,
+        'buying_power':     round(raw_withdrawable or raw_buying_power or cash, 2),
+        'total_invested':   round(total_invested, 2),
+        'today_pnl':        round(today_pnl, 2),
+        'today_pnl_pct':    (
+            round(today_pnl / (total_invested - today_pnl) * 100, 2)
+            if (total_invested - today_pnl) > 0 else 0
+        ),
+    }
+
+
 def export() -> dict:
     import robin_stocks.robinhood as rh
+
+    os.makedirs(SESSION_DIR, exist_ok=True)
 
     _log('Logging in to Robinhood...')
     rh.login(
@@ -73,24 +120,9 @@ def export() -> dict:
     raw_holdings = rh.build_holdings()
     holdings = []
     for symbol, data in raw_holdings.items():
-        try:
-            qty   = float(data.get('quantity') or 0)
-            price = float(data.get('price') or 0)
-            eq    = float(data.get('equity') or qty * price)
-            avg   = float(data.get('average_buy_price') or 0)
-            pct   = float(data.get('percent_change') or 0)
-            equity_change = float(data.get('equity_change') or 0)
-            holdings.append({
-                'symbol':           symbol,
-                'quantity':         qty,
-                'price':            price,
-                'equity':           eq,
-                'average_buy_price': avg,
-                'percent_change':   pct,
-                'equity_change':    equity_change,
-            })
-        except (TypeError, ValueError):
-            continue
+        row = _normalize_holding(symbol, data)
+        if row is not None:
+            holdings.append(row)
 
     # Sort by equity descending
     holdings.sort(key=lambda h: h['equity'], reverse=True)
@@ -111,25 +143,17 @@ def export() -> dict:
         wl_quotes = {}
 
     # ── Assemble output ────────────────────────────────────────────────────────
-    total_invested = sum(h['equity'] for h in holdings)
-    today_pnl      = sum(h['equity_change'] for h in holdings)
-
-    # Real cash = portfolio equity minus invested equity.
-    # On Gold accounts buying_power includes margin so we never use it as cash.
-    cash = round(max(0.0, (portfolio_equity or total_invested) - total_invested), 2)
+    equity_summary = _build_equity_summary(
+        portfolio_equity, holdings, _raw_buying_power, _raw_withdrawable,
+    )
+    cash           = equity_summary['cash']
+    total_invested = equity_summary['total_invested']
 
     payload = {
         'exported_at':      datetime.now(timezone.utc).isoformat(),
         'source':           'robinhood_live',
         'holdings':         holdings,
-        'equity_summary': {
-            'portfolio_equity':    round(portfolio_equity or total_invested + cash, 2),
-            'cash':                cash,
-            'buying_power':        round(_raw_withdrawable or _raw_buying_power or cash, 2),
-            'total_invested':      round(total_invested, 2),
-            'today_pnl':           round(today_pnl, 2),
-            'today_pnl_pct':       round(today_pnl / (total_invested - today_pnl) * 100, 2) if (total_invested - today_pnl) > 0 else 0,
-        },
+        'equity_summary':   equity_summary,
         'watchlist_quotes': wl_quotes,
         'symbols':          [h['symbol'] for h in holdings],
     }
