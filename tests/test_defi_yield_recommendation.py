@@ -51,17 +51,19 @@ def test_best_of_tier1_and_tier2_wins():
     assert rec["annual_income_usd"] == 61.2
 
 
-def test_zero_or_negative_cash_monthly_income_is_zero():
-    for cash in (0.0, -50.0):
-        rec, proj = dy._recommend_safe_yield(
-            [_inst("T-Bill", 5.0)],
-            [],
-            cash,
-            5.0,
-        )
-        assert rec["monthly_income_usd"] == 0.0
-        assert rec["annual_income_usd"] == 0.0
-        assert all(p["income_usd"] == 0.0 and p["cumulative"] == 0.0 for p in proj)
+def test_zero_cash_monthly_income_and_projection_are_zero():
+    rec, proj = dy._recommend_safe_yield([_inst("T-Bill", 5.0)], [], 0.0, 5.0)
+    assert rec["monthly_income_usd"] == 0.0
+    assert rec["annual_income_usd"] == 0.0
+    assert all(p["income_usd"] == 0.0 and p["cumulative"] == 0.0 for p in proj)
+
+
+def test_negative_cash_monthly_income_is_zero_projection_uses_raw():
+    """The monthly-income guard is `cash_usd > 0`; projection is not clamped."""
+    rec, proj = dy._recommend_safe_yield([_inst("T-Bill", 5.0)], [], -50.0, 5.0)
+    assert rec["monthly_income_usd"] == 0.0
+    assert rec["annual_income_usd"] == 0.0
+    assert proj[0]["income_usd"] < 0.0
 
 
 def test_empty_safe_tiers_fall_back_to_tbill_name():
