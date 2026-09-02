@@ -652,6 +652,87 @@ def test_unknown_variant_activation_does_not_keep_existing_tier(monkeypatch):
     assert u["is_active"] == 1 and u["tier"] == "trader"
 
 
+def test_foreign_activation_does_not_rebind_active_subscription():
+    """An attacker who checks out with a victim's email must not steal billing_sub_id.
+
+    Found 2026-09-02: subscription_created for a DIFFERENT sub_id called
+    provision(), which overwrites billing_sub_id on the email-resolved row.
+    The attacker then cancels; revoke() matches the new id and deactivates
+    the victim, whose later renewals miss as unknown_variant.
+    """
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_legit",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    res = _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_attacker",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "foreign_subscription"
+    u = au.get_user("buyer@example.com")
+    assert u["billing_sub_id"] == "sub_legit"
+    assert u["is_active"] == 1
+    assert u["tier"] == "trader"
+
+    # Cancel of the attacker's sub must not revoke the victim.
+    res = _post(
+        "subscription_expired",
+        status="expired",
+        sub_id="sub_attacker",
+        updated_at="2026-03-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_legit"
+
+
+def test_churned_user_may_rebind_on_resubscribe():
+    """After a real expiry the next subscription_created has a NEW sub_id.
+
+    Refusing every differing sub_id would lock churned customers out forever.
+    The foreign-subscription fence is only for ACTIVE bindings.
+    """
+    _post(
+        "subscription_created",
+        sub_id="sub_old",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    _post(
+        "subscription_expired",
+        status="expired",
+        sub_id="sub_old",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert au.get_user("buyer@example.com")["is_active"] == 0
+
+    res = _post(
+        "subscription_created",
+        sub_id="sub_new",
+        updated_at="2026-03-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "provision"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1
+    assert u["billing_sub_id"] == "sub_new"
+
+
+def test_same_sub_resume_still_provisions():
+    """Resume/unpause of the bound subscription must still activate."""
+    _post("subscription_created", sub_id="sub_1")
+    res = _post(
+        "subscription_resumed",
+        sub_id="sub_1",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "provision"
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_1"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
 def test_foreign_renewal_does_not_replace_subscription():
     """Codex HIGH-1: two LEGIT LS subscriptions can share an email. A payment_success for a
     DIFFERENT sub_id (no variant) must NOT keep tier + overwrite billing_sub_id — otherwise the
