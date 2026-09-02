@@ -481,6 +481,7 @@ from urllib.parse import urlparse as _urlparse  # CSRF same-origin check
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import advisory_copy
 import auth_users  # multi-user login wall (OFF unless GESH_AUTH_ENABLED is set)
 import billing  # Lemon Squeezy payment webhook → provision/revoke auth_users
 import decision_quality  # unified degraded-decision block (Codex #6)
@@ -6164,6 +6165,7 @@ def mybook_summary(request: Request):
     saved = auth_users.get_latest_book_analysis(email)
     stale = _analysis_stale_for(email, saved)
     top_changes: list[dict] = []
+    signals: dict[str, dict] = {}
     try:
         import signal_history
 
@@ -6178,16 +6180,47 @@ def mybook_summary(request: Request):
             }
             for f in flips[:3]
         ]
+        for s in (p["symbol"] for p in positions):
+            hist = signal_history.get_history(s, days=1)
+            if hist:
+                signals[s] = {"verdict": hist[-1]["verdict"], "date": hist[-1]["date"]}
     except Exception:  # noqa: BLE001 — hero must render without signal history
         pass
+    kelly_by: dict[str, dict] = {}
+    if saved:
+        for k in (saved.get("kelly") or {}).get("holdings") or []:
+            if k.get("symbol") and k.get("action"):
+                kelly_by[str(k["symbol"]).upper()] = {
+                    "action": k["action"],
+                    "delta_pp": round(
+                        (k.get("optimal_pct") or 0) - (k.get("current_pct") or 0), 1
+                    ),
+                }
+    rows = []
+    for p in positions:
+        kd = kelly_by.get(str(p["symbol"]).upper()) or {}
+        sig = signals.get(p["symbol"]) or {}
+        rows.append(
+            {
+                "symbol": p["symbol"],
+                "consensus": sig.get("verdict"),
+                "kelly_action": kd.get("action"),
+                "delta_pp": kd.get("delta_pp"),
+            }
+        )
+    actions = (
+        advisory_copy.book_actions(rows, top_changes=top_changes, limit=3)
+        if saved and not stale
+        else []
+    )
     if not positions:
         action = {"label": "Add your holdings", "target": "book"}
     elif not saved:
-        action = {"label": "Analyze my portfolio", "target": "analyze"}
+        action = {"label": "See what's in this book", "target": "analyze"}
     elif stale:
-        action = {"label": "Re-run analysis — your book changed", "target": "analyze"}
+        action = {"label": "Book changed — run a fresh read", "target": "analyze"}
     else:
-        action = {"label": "View your report", "target": "report"}
+        action = {"label": "You're on your desk", "target": "desk"}
     return {
         "status": "ok",
         "data": {
@@ -6199,6 +6232,7 @@ def mybook_summary(request: Request):
             "analyzed_at": (saved or {}).get("_saved_at"),
             "top_changes": top_changes,
             "next_action": action,
+            "actions": actions,
         },
     }
 

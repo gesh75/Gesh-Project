@@ -261,7 +261,7 @@ _OWNER_WIDGET_TITLES = (
 # test_owner_surface_isolation already handles by checking the DELIVERED DOM.
 _NEW_BLOCK_MARKERS = (
     ("radar-cash-amount", "radar-cash-results"),
-    ("mybook-history-body", "Where Does New Cash Go?"),
+    ("mybook-history-body", "Where would new cash go?"),
     ("function drawBookMcChart", "function buildBookRiskPane"),
     ("function drawBookEquityChart", "function buildBookRiskPane"),
     ("function buildRadarCashCard", "// Diversification Radar"),

@@ -906,8 +906,35 @@ def test_mybook_summary_shapes_hero_payload(client, monkeypatch, au):
     d = c.get("/api/mybook/summary").json()["data"]
     assert d["total_equity"] == 1000.0 and d["positions_count"] == 1
     assert d["last_verdict"] == "HOLD" and d["analysis_stale"] is False
-    assert d["next_action"]["target"] == "report"
+    assert d["next_action"]["target"] == "desk"
     assert isinstance(d["top_changes"], list) and len(d["top_changes"]) <= 3
+    assert d["actions"] == []
+
+
+def test_mybook_summary_emits_advisory_actions_for_kelly_conflict(client, monkeypatch, au):
+    """Home tickets come from the saved analysis + latest signal, never a new LLM."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "LLY", 2)
+    import signal_history as sh
+    sh.record_snapshots(
+        [{"symbol": "LLY", "verdict": "BUY", "score": 0.3, "confidence": 70}],
+        date="2026-07-16",
+    )
+    au.save_book_analysis("cust@x.com", {
+        "_fp": server._book_fingerprint(au.get_positions("cust@x.com")),
+        "analysis": {"portfolio_verdict": "Quality compounder"},
+        "monte_carlo": {},
+        "kelly": {"holdings": [{"symbol": "LLY", "action": "TRIM",
+                                "current_pct": 15.9, "optimal_pct": 8.3}]},
+        "book": {"positions": [], "unpriced": []}})
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["actions"], "fresh analysis with a conflict must produce tickets"
+    assert d["actions"][0]["symbol"] == "LLY"
+    assert d["actions"][0]["kind"] == "conflict"
+    assert "Kelly" not in d["actions"][0]["headline"]
+    assert d["next_action"]["target"] == "desk"
 
 
 def test_mybook_summary_next_action_ladder(client, monkeypatch, au):
