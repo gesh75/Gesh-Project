@@ -96,6 +96,24 @@ def test_extract_json_raises_on_prose_only():
         llm_failover.extract_json_object("I cannot help with that.")
 
 
+def test_extract_json_skips_unrelated_object_when_required_keys_given():
+    """A status blob or CLI envelope must not beat the real analysis after it."""
+    text = '{"ok": true, "num_turns": 1}\n{"portfolio_score": 71, "portfolio_verdict": "HOLD"}'
+    got = llm_failover.extract_json_object(
+        text, required_any=["portfolio_score", "portfolio_verdict"]
+    )
+    assert got == {"portfolio_score": 71, "portfolio_verdict": "HOLD"}
+
+
+def test_extracted_payload_rejects_cli_envelope():
+    envelope = {"result": None, "text": None, "num_turns": 1, "session_id": "abc"}
+    assert not llm_failover.extracted_payload_matches_schema(envelope, _SCHEMA)
+
+
+def test_extracted_payload_accepts_partial_analysis():
+    assert llm_failover.extracted_payload_matches_schema({"portfolio_score": 64}, _SCHEMA)
+
+
 # ── Schema coercion ──────────────────────────────────────────────────────────
 
 
@@ -108,9 +126,7 @@ def test_coerce_fills_missing_required_keys_with_typed_blanks():
 
 
 def test_coerce_recurses_into_array_items():
-    out = llm_failover.coerce_to_schema(
-        {"holdings_analysis": [{"symbol": "NVDA"}]}, _SCHEMA
-    )
+    out = llm_failover.coerce_to_schema({"holdings_analysis": [{"symbol": "NVDA"}]}, _SCHEMA)
     assert out["holdings_analysis"][0] == {"symbol": "NVDA", "verdict": ""}
 
 
@@ -124,8 +140,10 @@ def test_coerce_casts_numeric_strings_to_int():
 
 def test_failover_message_satisfies_extract_tool_input():
     msg = llm_failover.FailoverMessage(
-        provider="grok", model="grok-build",
-        tool_name="return_portfolio_analysis", payload={"portfolio_score": 71},
+        provider="grok",
+        model="grok-build",
+        tool_name="return_portfolio_analysis",
+        payload={"portfolio_score": 71},
     )
     got = llm_contracts.extract_tool_input(
         msg, expected_tool="return_portfolio_analysis", operation="t"
@@ -145,19 +163,47 @@ def test_failover_message_reports_zero_anthropic_usage():
 # ── Gateway wiring ───────────────────────────────────────────────────────────
 
 
+def test_attempt_rejects_cli_envelope_and_tries_next_provider(monkeypatch):
+    """Empty-text Grok envelope must not coerce into a zeroed successful analysis."""
+    providers = {
+        "grok": (
+            lambda: True,
+            lambda _prompt: json.dumps({"result": None, "text": "", "num_turns": 1}),
+        ),
+        "gemini": (
+            lambda: True,
+            lambda _prompt: json.dumps({"portfolio_score": 61, "portfolio_verdict": "HOLD"}),
+        ),
+    }
+    monkeypatch.setattr(llm_failover, "_PROVIDERS", providers)
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "grok,gemini")
+
+    msg = llm_failover.attempt(operation="deep_analyze_portfolio", max_tokens=1000, **_kwargs())
+    assert msg.provider == "gemini"
+    assert msg.content[0].input["portfolio_score"] == 61
+    assert msg.content[0].input["portfolio_verdict"] == "HOLD"
+
+
+def test_attempt_rejects_unrelated_json_object(monkeypatch):
+    _install_provider(monkeypatch, json.dumps({"ok": True, "status": "done"}))
+    with pytest.raises(llm_failover.FailoverUnavailable, match="no JSON object found"):
+        llm_failover.attempt(operation="deep_analyze_portfolio", max_tokens=1000, **_kwargs())
+
+
 def test_gateway_fails_over_when_anthropic_unreachable(monkeypatch, tmp_path):
     _kill_anthropic(monkeypatch)
     _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))
 
     gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
-    msg = gw.stream(operation="deep_analyze_portfolio", model="claude-sonnet-4-6",
-                    max_tokens=1000, **_kwargs())
+    msg = gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **_kwargs()
+    )
 
     out = llm_contracts.extract_tool_input(
         msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
     )
     assert out["portfolio_score"] == 64
-    assert out["risk_score"] == 0          # coerced, not missing
+    assert out["risk_score"] == 0  # coerced, not missing
     assert llm_failover.FAILOVER_COUNT == 1
 
 
@@ -168,8 +214,12 @@ def test_gateway_failover_is_disabled_by_empty_env(monkeypatch, tmp_path):
 
     gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
     with pytest.raises(llm_gateway.LLMUnavailableError):
-        gw.stream(operation="deep_analyze_portfolio", model="claude-sonnet-4-6",
-                  max_tokens=1000, **_kwargs())
+        gw.stream(
+            operation="deep_analyze_portfolio",
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
+            **_kwargs(),
+        )
 
 
 def test_original_error_is_reraised_when_all_providers_fail(monkeypatch, tmp_path):
@@ -178,8 +228,12 @@ def test_original_error_is_reraised_when_all_providers_fail(monkeypatch, tmp_pat
 
     gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
     with pytest.raises(llm_gateway.LLMUnavailableError):
-        gw.stream(operation="deep_analyze_portfolio", model="claude-sonnet-4-6",
-                  max_tokens=1000, **_kwargs())
+        gw.stream(
+            operation="deep_analyze_portfolio",
+            model="claude-sonnet-4-6",
+            max_tokens=1000,
+            **_kwargs(),
+        )
 
 
 def test_refusal_is_not_laundered_through_a_fallback():
@@ -206,8 +260,8 @@ def test_build_prompt_embeds_schema_and_forbids_tools():
     tool_name, prompt, schema = llm_failover.build_prompt(_kwargs())
     assert tool_name == "return_portfolio_analysis"
     assert schema["properties"]["portfolio_score"]["type"] == "integer"
-    assert "You are an analyst." in prompt      # system prompt carried over
-    assert "Analyze this book." in prompt       # user content carried over
+    assert "You are an analyst." in prompt  # system prompt carried over
+    assert "Analyze this book." in prompt  # user content carried over
     assert "RAW JSON only" in prompt
     assert "Do not use any tools" in prompt
 
@@ -250,7 +304,7 @@ def test_grok_command_pins_a_single_turn_completion(monkeypatch):
     rules = cmd[cmd.index("--rules") + 1].lower()
     assert "do not call any tool" in rules
     assert "memory system" in rules
-    assert seen["check"] is False        # non-zero exit is translated, not raised
+    assert seen["check"] is False  # non-zero exit is translated, not raised
     assert llm_failover.extract_json_object(out) == {"ok": 1}
 
 
@@ -291,6 +345,35 @@ def test_grok_retries_on_the_cli_default_when_model_id_is_retired(monkeypatch):
     assert llm_failover.extract_json_object(llm_failover.call_grok("x")) == {"ok": True}
     assert len(calls) == 2
     assert "--model" in calls[0] and "--model" not in calls[1]
+
+
+def test_grok_rejects_envelope_with_no_text_answer(monkeypatch):
+    """result is documented-null; empty text must fail, not become the payload."""
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"result": null, "text": "", "num_turns": 1, "session_id": "s"}'
+        stderr = ""
+
+    monkeypatch.setattr(llm_failover.subprocess, "run", lambda cmd, **kw: _Proc())
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: "/usr/bin/grok")
+    with pytest.raises(llm_failover.FailoverUnavailable, match="envelope had no text"):
+        llm_failover.call_grok("x")
+
+
+def test_grok_returns_bare_analysis_json_when_not_an_envelope(monkeypatch):
+    class _Proc:
+        returncode = 0
+        stdout = '{"portfolio_score": 5, "portfolio_verdict": "HOLD"}'
+        stderr = ""
+
+    monkeypatch.setattr(llm_failover.subprocess, "run", lambda cmd, **kw: _Proc())
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: "/usr/bin/grok")
+    raw = llm_failover.call_grok("x")
+    assert llm_failover.extract_json_object(raw) == {
+        "portfolio_score": 5,
+        "portfolio_verdict": "HOLD",
+    }
 
 
 def test_grok_surfaces_other_cli_failures(monkeypatch):
