@@ -539,6 +539,13 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     # Cancelled accounts may rebind (cancel-then-rebuy while still in the paid-
     # through window). Fully expired (is_active=0) accounts may rebind too.
     # Same-sub lifecycle events (resume/unpause/renew) pass.
+    #
+    # Acknowledge (do not 503) this refusal: a RetryableError would let LS keep
+    # retrying the attacker's checkout, and a later genuine cancel of the
+    # victim's sub would then let that retry bind. The trade-off is that a
+    # cancel-then-rebuy whose *created* arrives before *cancelled* is also
+    # acked and will not retry; a later distinct activation after cancel still
+    # binds (see test_rebuy_created_before_cancel_needs_a_later_activation).
     stored_sub = (user or {}).get("billing_sub_id")
     already_cancelled = (user or {}).get("billing_status") == "cancelled"
     if (

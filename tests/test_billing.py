@@ -805,6 +805,95 @@ def test_cancelled_user_may_rebind_on_rebuy():
     assert au.get_user("buyer@example.com")["is_active"] == 1
 
 
+def test_rebuy_created_before_cancel_needs_a_later_activation():
+    """Cancel-then-rebuy is allowed only after billing_status=cancelled.
+
+    If Lemon Squeezy delivers subscription_created(new) BEFORE
+    subscription_cancelled(old) — buy-then-cancel-old, or a reordered pair —
+    the fence must still refuse (200, not 503). A 503 would let an attacker's
+    checkout keep retrying and bind after a later genuine cancel. The acked
+    created event will not retry; a later distinct activation after cancel
+    still binds.
+    """
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_old",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    first = _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_new",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert first["ok"] is True
+    assert first["action"] == "ignored" and first["reason"] == "foreign_subscription"
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_old"
+
+    _post(
+        "subscription_cancelled",
+        status="cancelled",
+        sub_id="sub_old",
+        updated_at="2026-03-01T00:00:00.000000Z",
+    )
+    assert au.get_user("buyer@example.com")["billing_status"] == "cancelled"
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_old"
+
+    later = _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_new",
+        updated_at="2026-04-01T00:00:00.000000Z",
+    )
+    assert later["action"] == "provision"
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_new"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
+def test_past_due_and_paused_are_not_rebound():
+    """Dunning / pause keep is_active=1 and must not open the hijack window."""
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_legit",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    _post(
+        "subscription_payment_failed",
+        status="past_due",
+        sub_id="sub_legit",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert au.get_user("buyer@example.com")["billing_status"] == "past_due"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+    res = _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_attacker",
+        updated_at="2026-03-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "foreign_subscription"
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_legit"
+
+    _post(
+        "subscription_paused",
+        status="paused",
+        sub_id="sub_legit",
+        updated_at="2026-04-01T00:00:00.000000Z",
+    )
+    res = _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_attacker",
+        updated_at="2026-05-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "foreign_subscription"
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_legit"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
 def test_foreign_renewal_does_not_replace_subscription():
     """Codex HIGH-1: two LEGIT LS subscriptions can share an email. A payment_success for a
     DIFFERENT sub_id (no variant) must NOT keep tier + overwrite billing_sub_id — otherwise the
