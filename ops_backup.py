@@ -14,6 +14,7 @@ Restore drill (documented, run manually):
     sqlite3 backups/nightly/<file>  "PRAGMA integrity_check;"
     cp backups/nightly/<file> <original-name>.restored  # then point the app at it
 """
+
 from __future__ import annotations
 
 import os
@@ -42,6 +43,11 @@ TARGETS = [
 RETENTION_DAYS = 14
 
 
+def _integrity_result(conn: sqlite3.Connection) -> str:
+    """Raw ``PRAGMA integrity_check`` token — ``ok`` or a corruption diagnostic."""
+    return str(conn.execute("PRAGMA integrity_check").fetchone()[0])
+
+
 def backup_one(src: Path, dest_dir: Path, stamp: str) -> bool:
     dest = dest_dir / f"{src.stem}_{stamp}.db"
     try:
@@ -51,7 +57,7 @@ def backup_one(src: Path, dest_dir: Path, stamp: str) -> bool:
         dest.chmod(0o600)
         d = sqlite3.connect(dest)
         s.backup(d)
-        ok = d.execute("PRAGMA integrity_check").fetchone()[0]
+        ok = _integrity_result(d)
         d.close()
         s.close()
         dest.chmod(0o600)
