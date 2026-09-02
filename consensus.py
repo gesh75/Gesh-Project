@@ -491,6 +491,51 @@ _ECG_DISABLED_DETAIL = (
 )
 
 
+def _looks_like_owner_ecg_detail(text: str) -> bool:
+    """True for the owner-curve reading node_ecg ships in details.ECG.
+
+    The customer dollar-masker only redacts strings containing '$' or 'share',
+    so 'ECG=SUSPENDED DD=-71.9% Streak=1' would otherwise ship raw.
+    """
+    return "ECG=" in text and ("DD=" in text or "Streak=" in text)
+
+
+def redact_owner_ecg(payload: object) -> object:
+    """Return a copy of a consensus payload with the owner ECG node removed.
+
+    Used when serving the daily-chain cache to a non-owner. Those rows were
+    computed with allow_ecg=True against equity_snapshots (no user column).
+    The node is forced to ABSTAIN (never a fabricated NEUTRAL) and the
+    drawdown string is replaced, matching run_consensus_for_customer.
+    Does not recompute verdicts — those stay the published owner research;
+    only the private curve reading is stripped.
+    """
+    if isinstance(payload, dict):
+        out: dict = {}
+        for k, v in payload.items():
+            if k == "votes" and isinstance(v, dict):
+                votes = {nk: redact_owner_ecg(nv) for nk, nv in v.items()}
+                if "ECG" in votes:
+                    votes["ECG"] = None
+                out[k] = votes
+            elif k == "details" and isinstance(v, dict):
+                details = {nk: redact_owner_ecg(nv) for nk, nv in v.items()}
+                if "ECG" in details:
+                    details["ECG"] = _ECG_DISABLED_DETAIL
+                out[k] = details
+            else:
+                out[k] = redact_owner_ecg(v)
+        if "votes" in out:
+            out["ecg_enabled"] = False
+            out.setdefault("ecg_note", _ECG_DISABLED_DETAIL)
+        return out
+    if isinstance(payload, list):
+        return [redact_owner_ecg(x) for x in payload]
+    if isinstance(payload, str) and _looks_like_owner_ecg_detail(payload):
+        return _ECG_DISABLED_DETAIL
+    return payload
+
+
 def run_consensus_holding(
     symbol: str,
     equity: float = 0,
