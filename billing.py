@@ -530,20 +530,24 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     ev = {**ev, "email": email, "tier": tier}    # carry the resolved tier (renewal fallback)
     eat = ev.get("event_at", "")
 
-    # An ACTIVE account is already bound to a subscription. A second allowlisted
+    # An ACTIVE, still-subscribed account is already bound. A second allowlisted
     # activation for the same email (attacker checkout using the victim's address)
     # must not overwrite billing_sub_id — otherwise cancel/expire of the foreign
     # sub revokes the victim, and the victim's later renewals miss as
-    # unknown_variant. Inactive (churned) accounts may rebind on a genuine
-    # re-subscribe. Same-sub lifecycle events (resume/unpause/renew) pass.
+    # unknown_variant. Also refuse when the incoming event has NO sub_id
+    # (live order_created): provision() would still overwrite tier / customer_id.
+    # Cancelled accounts may rebind (cancel-then-rebuy while still in the paid-
+    # through window). Fully expired (is_active=0) accounts may rebind too.
+    # Same-sub lifecycle events (resume/unpause/renew) pass.
     stored_sub = (user or {}).get("billing_sub_id")
+    already_cancelled = (user or {}).get("billing_status") == "cancelled"
     if (
         is_activation
         and user
         and user.get("is_active")
         and stored_sub
-        and ev["sub_id"]
         and ev["sub_id"] != stored_sub
+        and not already_cancelled
     ):
         logger.warning(
             "billing: refusing to rebind active %s from sub=%s to foreign sub=%s (event=%s)",

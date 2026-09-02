@@ -743,6 +743,68 @@ def test_same_sub_resume_still_provisions():
     assert au.get_user("buyer@example.com")["is_active"] == 1
 
 
+def test_order_created_without_sub_id_does_not_mutate_bound_account(monkeypatch):
+    """Live order_created often has no subscription_id. That must not provision
+    a bound active account (it used to overwrite tier and billing_customer_id)."""
+    monkeypatch.setenv("LS_VARIANT_TRADER", "555")
+    monkeypatch.setenv("LS_VARIANT_DESK", "777")
+    _post(
+        "subscription_created",
+        variant_id="555",
+        sub_id="sub_legit",
+        customer_id=10,
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    before = au.get_user("buyer@example.com")
+    res = _post_raw(_order_payload(variant_id="777", updated_at="2026-02-01T00:00:00.000000Z"))
+    assert res["action"] == "ignored" and res["reason"] == "foreign_subscription"
+    after = au.get_user("buyer@example.com")
+    assert after["billing_sub_id"] == "sub_legit"
+    assert after["tier"] == before["tier"] == "trader"
+    assert after["billing_customer_id"] == before["billing_customer_id"]
+
+
+def test_cancelled_user_may_rebind_on_rebuy():
+    """Cancel is mark-only (access runs to period end). A genuine re-checkout
+    must be allowed to bind the new sub, or the old expiry would revoke a
+    customer who already paid again."""
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_old",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    _post(
+        "subscription_cancelled",
+        status="cancelled",
+        sub_id="sub_old",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+    assert au.get_user("buyer@example.com")["billing_status"] == "cancelled"
+
+    res = _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_new",
+        updated_at="2026-03-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "provision"
+    u = au.get_user("buyer@example.com")
+    assert u["is_active"] == 1
+    assert u["billing_sub_id"] == "sub_new"
+
+    # Old period-end expiry must not disable the rebound account.
+    res = _post(
+        "subscription_expired",
+        status="expired",
+        sub_id="sub_old",
+        updated_at="2026-04-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
+    assert au.get_user("buyer@example.com")["is_active"] == 1
+
+
 def test_foreign_renewal_does_not_replace_subscription():
     """Codex HIGH-1: two LEGIT LS subscriptions can share an email. A payment_success for a
     DIFFERENT sub_id (no variant) must NOT keep tier + overwrite billing_sub_id — otherwise the
