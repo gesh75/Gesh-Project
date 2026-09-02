@@ -82,6 +82,40 @@ All tables auto-create via the idempotent DDL on every connection — no migrati
   **every dynamic string is `html.escape`d** — a test injects `<script>` via a fake
   LLM result and asserts it renders inert.
 
+## Owner Robinhood session fence (PR #258)
+
+Customer traffic must never restore or spend the owner's `robin_stocks` pickle.
+`price_source` defaults `_ALLOW_AUTHENTICATED_RH` to **True** so the daily chain
+can fall back to the authenticated historicals after a Yahoo 401 / Invalid Crumb.
+Until #258, only `/api/explainability/{symbol}` opted out. A customer hit on
+`/api/consensus/{symbol}`, `/api/mybook/*`, `/api/chart/{symbol}`, or any other
+engine path that goes through `yf_download` / `rh_fallback` could call
+`_ensure_rh_session()` and restore the owner pickle — rate-limiting or locking
+the same session the 10:30 chain and live dashboard depend on.
+
+| Surface | How the fence is applied |
+|---|---|
+| Authenticated customer HTTP (wall ON) | `_customer_view_middleware` wraps the request in `unauthenticated_rh_fallback()`, including mask-exempt `/api/mybook` and `/api/analyze-ticker` |
+| `POST /api/mybook/analyze` worker | The HTTP handler returns **202** and exits the middleware ContextVar. `_mybook_analyze_worker` re-enters the same wrap before payload + Kelly/MC/radar |
+| `run_consensus_portfolio` thread pool | `ThreadPoolExecutor` does not copy ContextVars. The caller snapshots `contextvars.copy_context()` and each holding runs `ctx.run(...)` so workers keep `_ALLOW_AUTHENTICATED_RH=False` |
+| Owner / wall-OFF / auth-disabled | Unchanged — authenticated fallback stays on. That is the chain's resilient path |
+
+When the flag is False, `rh_fallback` does **not** call `_ensure_rh_session()` and
+`_rh_history_one` skips `robin_stocks.get_stock_historicals`. Daily intervals
+still use the **public** (unauthenticated) RH historicals endpoint; other
+intervals return no RH bars. Yahoo remains primary.
+
+**Still on main — do not treat as closed.** `market_data.rh_analyst` /
+`rh_fundamentals` (`GET /api/analyst/{symbol}`, `GET /api/fundamentals/{symbol}`)
+call `robin_stocks` directly and do not read `_ALLOW_AUTHENTICATED_RH`. They
+cannot *restore* a pickle (that is `_ensure_rh_session`), but if an owner
+session is already live in this process they can still spend it. Coverage for
+that leftover is draft #261, not this contract.
+
+Pins: `tests/test_price_source_fallback.py` (customer GET sees False, owner GET
+sees True, mybook worker re-wraps, consensus pool inherits the flag, customer
+fallback never calls `_ensure_rh_session`).
+
 ## Smoke test
 
 After any deploy / env change, on the host:
@@ -104,3 +138,5 @@ Restores the watchlist/book to their prior state. Exit ≠ 0 ⇒ something is ac
 | 1D/5D chart says intraday unavailable | `ALPACA_API_KEY/SECRET` unset — daily ranges unaffected |
 | Analyst card 404 for an index/ETF | Correct — no analyst ratings exist; not a bug |
 | Report says "No analysis yet" | The user never ran a live analyze (or the persisted rows were pruned) — run Analyze My Portfolio once |
+| Customer consensus/chart after Yahoo 401 tries MFA / touches the owner pickle | Fence missed that path — HTTP should be inside `_customer_view_middleware`; the 202 mybook worker must wrap itself; consensus pool must `copy_context()` |
+| Fundamentals/analyst cards still hit RH while Yahoo is dark | Those two cards call `robin_stocks` directly (`market_data.rh_*`) and are **outside** the #258 ContextVar. An already-live owner session in this process can still be spent. Draft #261 closes the leftover. |

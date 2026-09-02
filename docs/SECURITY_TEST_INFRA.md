@@ -16,6 +16,7 @@ hold forever: (1) no real owner dollar/share value reaches a customer response,
 | Layer | File | What it enforces |
 |-------|------|------------------|
 | Masking middleware | `server.py` `_customer_view_middleware` / `_scale_money` | Every customer `/api/*` JSON dict is scaled to the model book and stamped `view:"model_book"`; fails **closed** (500) if scaling throws |
+| Owner RH session fence (PR #258) | `price_source.unauthenticated_rh_fallback` + `_customer_view_middleware` | Authenticated customer requests (and the 202 mybook worker) set `_ALLOW_AUTHENTICATED_RH=False` so Yahoo 401 cannot restore the owner pickle. Consensus pool copies ContextVars. Pins: `tests/test_price_source_fallback.py`. Does **not** cover `market_data.rh_analyst` / `rh_fundamentals` (direct `robin_stocks` on an already-live session) |
 | Owner-only authz | `server.py` `require_api_key` | Mutating/spend endpoints reject customer sessions (403) |
 | Leak sweep (test) | `tests/test_customer_leak_sweep.py` | No owner sentinel appears in any customer-reachable GET; every GET is categorized |
 | XSS guard (test) | `tests/test_dashboard_xss_wiring.py` | Deny-by-default: every `${…}` sink in `dashboard.html` must be escaped/proven-safe |
