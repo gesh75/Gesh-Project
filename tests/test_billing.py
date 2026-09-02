@@ -280,12 +280,22 @@ def test_payment_event_does_not_corrupt_sub_id():
 
 
 def test_stale_subscription_expiry_does_not_disable_newer_sub():
-    """An old subscription's expired event must not revoke a newer active subscription."""
-    _post("subscription_created", sub_id="sub_OLD")
-    _post("subscription_created", sub_id="sub_NEW")          # user now on sub_NEW
-    res = _post("subscription_expired", status="expired", sub_id="sub_OLD")
+    """An old subscription's expired event must not revoke a newer active subscription.
+
+    Setup is expire-then-resubscribe (the only legitimate way to rebind): an
+    ACTIVE account can no longer be overwritten by a second subscription_created.
+    """
+    _post("subscription_created", sub_id="sub_OLD",
+          updated_at="2026-01-01T00:00:00.000000Z")
+    _post("subscription_expired", status="expired", sub_id="sub_OLD",
+          updated_at="2026-02-01T00:00:00.000000Z")
+    _post("subscription_created", sub_id="sub_NEW",
+          updated_at="2026-03-01T00:00:00.000000Z")
+    res = _post("subscription_expired", status="expired", sub_id="sub_OLD",
+                updated_at="2026-04-01T00:00:00.000000Z")
     assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
     assert au.get_user("buyer@example.com")["is_active"] == 1
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_NEW"
 
 
 # ── H5: onboarding email is reliably retryable ────────────────────────────────
