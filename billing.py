@@ -530,6 +530,38 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
     ev = {**ev, "email": email, "tier": tier}    # carry the resolved tier (renewal fallback)
     eat = ev.get("event_at", "")
 
+    # An ACTIVE, still-subscribed account is already bound. A second allowlisted
+    # activation for the same email (attacker checkout using the victim's address)
+    # must not overwrite billing_sub_id — otherwise cancel/expire of the foreign
+    # sub revokes the victim, and the victim's later renewals miss as
+    # unknown_variant. Also refuse when the incoming event has NO sub_id
+    # (live order_created): provision() would still overwrite tier / customer_id.
+    # Cancelled accounts may rebind (cancel-then-rebuy while still in the paid-
+    # through window). Fully expired (is_active=0) accounts may rebind too.
+    # Same-sub lifecycle events (resume/unpause/renew) pass.
+    #
+    # Acknowledge (do not 503) this refusal: a RetryableError would let LS keep
+    # retrying the attacker's checkout, and a later genuine cancel of the
+    # victim's sub would then let that retry bind. The trade-off is that a
+    # cancel-then-rebuy whose *created* arrives before *cancelled* is also
+    # acked and will not retry; a later distinct activation after cancel still
+    # binds (see test_rebuy_created_before_cancel_needs_a_later_activation).
+    stored_sub = (user or {}).get("billing_sub_id")
+    already_cancelled = (user or {}).get("billing_status") == "cancelled"
+    if (
+        is_activation
+        and user
+        and user.get("is_active")
+        and stored_sub
+        and ev["sub_id"] != stored_sub
+        and not already_cancelled
+    ):
+        logger.warning(
+            "billing: refusing to rebind active %s from sub=%s to foreign sub=%s (event=%s)",
+            email, stored_sub, ev["sub_id"], name,
+        )
+        return {"action": "ignored", "email": email, "reason": "foreign_subscription"}
+
     if is_activation:
         return provision(email, ev["tier"], ev["customer_id"], ev["sub_id"], eat)
     if name in _REVOKE_EVENTS or (name == "subscription_updated" and ev["status"] == "expired"):
