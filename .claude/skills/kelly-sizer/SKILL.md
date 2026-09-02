@@ -1,6 +1,11 @@
 ---
 name: kelly-sizer
-description: Kelly criterion position sizing, trim/add, rebalance recommendations.
+description: >
+  Use when sizing positions with Kelly, explaining ADD/HOLD/TRIM, leftover
+  dollar gaps on every holding, whether to buy small lots of everything, or
+  reconciling delta_usd with add_list/trim_list. Also use for the 0.6×/1.3×
+  HOLD band vs equal-weight drift, cash_recommended_pct vs deployable cash,
+  and Rule 8 ($500 floor blocks all ADD).
 model: grok-4.6
 ---
 
@@ -9,7 +14,8 @@ model: grok-4.6
 ## Trigger phrases
 "position sizing", "how much should I buy", "kelly criterion", "optimal allocation",
 "trim or add", "overweight", "underweight", "rebalance", "kelly analysis",
-"position size for", "should I add more", "portfolio rebalance"
+"position size for", "should I add more", "portfolio rebalance",
+"why add a little of every stock", "leftover cash lots", "HOLD band", "delta_usd"
 
 ## What this skill does
 Calculates mathematically optimal position sizes using the Kelly Criterion for
@@ -60,9 +66,24 @@ final_pct  = clamp(half_kelly, 0, 25%)
 | ADD | current_pct < final_pct × 0.6 |
 | HOLD | otherwise |
 
+`delta_usd` is still computed on HOLD (gap to the target weight). It is **not**
+an order. Execute names in `add_list` / `trim_list` only. The daily report
+overrides Action to HOLD when Kelly is HOLD/AVOID even if the lot math is
+ADD/TRIM (`report_share_plan.py`). Those leftover lots are labeled **drift**.
+**REQUIRED BACKGROUND:** gesh-daily-report for the six-column operator table
+(Action | Symbol | Shares | Now | Kelly | Gate). This skill owns HOLD-band math only.
+
+Placing in-band fractional lots (often 4 decimals) is a 20–30 min chore that
+burns the cash buffer. Direction toward equal-weight is not a blow-up; emptying
+deployable cash and overshooting the one real ADD is the miss.
+
+Rule 8: `equity_summary.deployable` < $500 blocks **all** ADD. Size from
+deployable, never Gold `buying_power`. `cash_recommended_pct` is a Kelly
+reserve %, not the cash in the account.
+
 ## Output per holding
 - `symbol`, `current_pct`, `optimal_pct`, `recommended_usd`
-- `delta_usd`: dollar amount to add (+) or trim (-)
+- `delta_usd`: dollar gap to target weight — **not** a gate-approved order on HOLD
 - `delta_pct`: allocation change in %
 - `action`: ADD / HOLD / TRIM / AVOID
 - `win_rate`: % of days with positive return
@@ -99,3 +120,5 @@ final_pct  = clamp(half_kelly, 0, 25%)
 6. ADD + MOMENTUM-HIGH = caution, wait for pullback before adding
 7. Kelly is a sizing tool, not a buy/sell signal — always cross-check with fundamentals and sentiment
 8. Show the math: "Kelly says 18% optimal, Half-Kelly caps at 9%, your current 12% means TRIM"
+9. Never tell Georgi to add leftover-cash lots on HOLD names. Quote `add_list` / `trim_list`.
+10. Daily HTML Action plan is Action | Symbol | Shares | Now | Kelly | Gate — do not invent a seventh column.

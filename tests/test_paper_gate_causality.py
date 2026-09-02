@@ -293,3 +293,30 @@ def test_buy_below_entry_floor_is_rejected_trim_is_not(gate_mod):
     assert mu["approved"] is True
     assert ("record", "NVDA") not in r.events
     assert ("record", "MU") in r.events
+
+
+def test_buy_blocked_by_precision_overlay_even_above_floor(gate_mod):
+    """Rel.Strength bearish vetoes a BUY that clears min_entry_score."""
+    r = _run(
+        gate_mod,
+        raw_score_by_sym={"NVDA": 0.62, "MU": 0.62},
+        min_entry_score=0.50,
+        consensus_by_sym={
+            "NVDA": {
+                "verdict": "STRONG BUY",
+                "votes": {
+                    "Momentum": 1, "Trend": 1, "Rel.Strength": -1,
+                    "Volume": 1, "Macro": 1,
+                },
+                "bullish": 4,
+                "bearish": 1,
+            },
+        },
+    )
+    nvda = next(g for g in r.gate_results if g["symbol"] == "NVDA")
+    mu = next(g for g in r.gate_results if g["symbol"] == "MU")
+    assert nvda["approved"] is False
+    assert "precision overlay" in (nvda["reason"] or "").lower()
+    assert mu["approved"] is True
+    assert ("record", "NVDA") not in r.events
+    assert ("record", "MU") in r.events

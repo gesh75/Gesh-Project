@@ -18,3 +18,5 @@ Rules:
 - Run deterministic chains via `run_daily_analysis.sh` — do not improvise engine output in REPL
 - Match existing Python/FastAPI patterns; minimal focused diffs
 - For financial analysis requests, use the project skills in `.claude/skills/`
+- Stale HTML / ADD-every-name / leftover lots / missed APPROVED → **REQUIRED:** gesh-daily-report
+- Kelly leftover `delta_usd` is drift, not an order → **REQUIRED:** kelly-sizer

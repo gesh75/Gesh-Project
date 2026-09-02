@@ -81,16 +81,18 @@ Concise markdown briefing, tables over prose:
    plan without this reconciliation up top.
 1. **Headline** — total, day change, portfolio_score/risk_score,
    `portfolio_verdict`, MC VaR 95% in dollars.
-2. **Action plan** — from `action_plan` + `gate_results`: Priority | Symbol |
-   Action | Shares | $ | Rationale | Gate. Use the chain's share counts verbatim.
+2. **Action plan** — quote the HTML table (and `report_share_plan.share_plan_rows`),
+   not AI prose. Columns: **Action | Symbol | Shares | Now | Kelly | Gate**.
+   Open with the header counts: TRIM N names / X sh · ADD N names / Y sh · HOLD N names.
+   Action follows Kelly’s 0.6× / 1.3× band. HOLD + “drift” is leftover `delta_usd`,
+   not an order. **REQUIRED BACKGROUND:** gesh-daily-report.
    An executable row's **Gate** column MUST read APPROVED or REJECTED with the
    gate's own reason (e.g. "REJECTED — size 24% > 2% cap") only when it has a
-   matching result. Missing results MUST read "NOT EVALUATED — gate failed" (or
-   the `paper_session.error`). Non-executable HOLD rows MUST read "NOT EVALUATED
-   — pre-gate HOLD" and retain their pre-gate rationale; they are neither
-   approved nor rejected. If an `action_plan` row has a blank reason, fill
-   **Rationale** from its consensus verdict + Kelly signal — never render an
-   empty cell.
+   matching result **and** matching share count. Missing results MUST read
+   "NOT EVALUATED — gate failed" (or the `paper_session.error`). HOLD rows
+   MUST read "not gated — pre-gate HOLD" / "not gated — Kelly HOLD band"; they
+   are neither approved nor rejected. "Gated executable: 0" on a HOLD-all day
+   is band HOLD, not a crash. Never invent share counts; N/A if price/delta missing.
 3. **Signal conflicts** — reconcile consensus vs Kelly vs AI (Kelly wins sizing;
    momentum wins short-term; RSI≥70 blocks ADD; cash<$500 blocks all ADD).
 4. **Watch items** — regime flips, GARCH≫EWMA stress, alpha grade F, tax-harvest
@@ -115,4 +117,19 @@ INFORMATIONAL PURPOSES ONLY".
   `/tmp/gesh_mcp_fetch.log` first; the MCP is OAuth, so a recent password change means the
   token expired → re-auth via `/mcp` → robinhood-trading. Both paths failing → chain aborts
   at 1/5 by design; report, stop.
-- Kelly keys: `optimal_pct`, `delta_usd`.
+- Kelly keys: `optimal_pct`, `delta_usd`. **Action follows Kelly's 0.6×/1.3×
+  band**, not the sign of `delta_usd`. HOLD rows may still show leftover
+  dollars as **drift** — not orders. Quote `add_list` / `trim_list`.
+  **REQUIRED BACKGROUND:** kelly-sizer, gesh-daily-report.
+- **Stale screenshot ≠ failed chain.** Compare `gesh_report.html` mtime and
+  the ET masthead (`Weekday, DD Month YYYY · … ET`) to the tab. A leftover
+  `file://` Chrome tab caches yesterday; `/report` is `Cache-Control: no-store`.
+  Cmd-Shift-R before re-running the chain.
+- **Gate traffic-light:** APPROVED = bold green 13px/700; HOLD = amber; TRIM /
+  REJECTED = red. Caption-gray APPROVED is a defect (missed on 2026-08-27).
+- After leftover cash is spent, regenerate with `run_daily_analysis.sh` (fresh
+  MCP snapshot). Never hand-edit HTML. Paper TRIM/close ≠ a Robinhood fill.
+- The 10:30 launchd job is **weekdays only**. Do not fire a Saturday/Sunday
+  snapshot unless Georgi asks. A weekday HOLD-all after `CHAIN DONE fail=0`
+  is Kelly band HOLD, not a stuck chain — do not re-run.
+  **REQUIRED BACKGROUND:** gesh-daily-report.

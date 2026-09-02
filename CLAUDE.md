@@ -287,6 +287,10 @@ Before performing any trading analysis task, read the matching skill file:
 | SEC filings, EDGAR alerts | `.claude/skills/sec-watcher/SKILL.md` |
 | Market regime (ADX/RSI/Bollinger) | `.claude/skills/regime-detector/SKILL.md` |
 | Kelly Criterion position sizing | `.claude/skills/kelly-sizer/SKILL.md` |
+| Daily analysis chain (run → verify → narrate) | `.claude/skills/daily-portfolio-analysis/SKILL.md` |
+| Daily HTML report (stale tab, HOLD-band drift, Gate colors) | `.claude/skills/gesh-daily-report/SKILL.md` |
+| Friend / third-party book (isolated snapshot, never owner RH) | `.claude/skills/isolating-friend-books/SKILL.md` |
+| Facebook Page vs personal group comment | `.claude/skills/gesh-public-social/SKILL.md` |
 | Fundamental momentum scanning | `.claude/skills/fundamental-scanner/SKILL.md` |
 | Trade signals, consolidation zones | `.claude/skills/trade-signal-generator/SKILL.md` |
 | Paper trading, risk gate, execution | `.claude/skills/paper-trading/SKILL.md` |

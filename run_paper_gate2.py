@@ -38,6 +38,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gesh_core.trading.autopilot_core import entry_floor_blocks
+try:
+    from gesh_core.trading.autopilot_core import precision_overlay_blocks
+except ImportError:  # pinned SHA without the overlay — fail OPEN, keep the paper chain alive
+    def precision_overlay_blocks(action, row=None):  # noqa: ARG001
+        class _Unavailable:
+            blocked = False
+            reason = "overlay unavailable"
+        return _Unavailable()
 
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -141,7 +149,8 @@ def gate_and_execute(
     reviewer=None,
     review_blocks: bool = False,
     raw_score_by_sym: Mapping[str, float] | None = None,
-    min_entry_score: float = 0.35,
+    min_entry_score: float = 0.50,
+    consensus_by_sym: Mapping[str, dict] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Causal audit chain per order: intent → risk decision → record if APPROVED.
 
@@ -189,6 +198,30 @@ def gate_and_execute(
                         f"< {min_entry_score:.2f}"
                     ),
                     'gates':       {'ENTRY_FLOOR': False},
+                    'intent_uuid': intent.intent_uuid,
+                    'confidence':  intent.confidence,
+                    'target_position_pct': intent.target_position_pct,
+                })
+                continue
+        if side == 'BUY':
+            overlay_row: dict = {}
+            if consensus_by_sym and isinstance(consensus_by_sym.get(a['symbol']), dict):
+                overlay_row = consensus_by_sym[a['symbol']]
+            try:
+                overlay = precision_overlay_blocks(side, overlay_row)
+            except Exception as e:  # noqa: BLE001 — overlay must never abort the paper chain
+                logging.getLogger(__name__).warning(
+                    "precision overlay error for %s (%s) — not blocking", a['symbol'], e
+                )
+                overlay = None
+            if overlay is not None and overlay.blocked:
+                gate_results.append({
+                    'symbol':      a['symbol'],
+                    'action':      a['action'],
+                    'shares':      a['shares'],
+                    'approved':    False,
+                    'reason':      f"precision overlay: {overlay.reason}",
+                    'gates':       {'PRECISION_OVERLAY': False},
                     'intent_uuid': intent.intent_uuid,
                     'confidence':  intent.confidence,
                     'target_position_pct': intent.target_position_pct,
@@ -389,10 +422,10 @@ def main(results_path: str | Path | None = None) -> int:
                 raw_score_by_sym[_sym] = float(_c.get('raw_score', _c.get('score', 0)) or 0)
             except (TypeError, ValueError):
                 raw_score_by_sym[_sym] = 0.0
-        min_entry_score = 0.35
+        min_entry_score = 0.50
         try:
-            from trading.config import RiskConfig
-            min_entry_score = float(RiskConfig.from_env().min_entry_score)
+            from trading.config import load_risk_config
+            min_entry_score = float(load_risk_config().min_entry_score)
         except Exception:
             pass
         # Stage 2 broker preflight — read-only simulation of each approved order.
@@ -416,6 +449,7 @@ def main(results_path: str | Path | None = None) -> int:
             recorder=run_paper_session,
             raw_score_by_sym=raw_score_by_sym,
             min_entry_score=min_entry_score,
+            consensus_by_sym=consensus,
             reviewer=_reviewer,
             review_blocks=_review_blocks,
         )

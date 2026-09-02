@@ -1,6 +1,10 @@
 ---
 name: paper-trading
-description: Paper trading, risk gate, trade logging, and signal performance review.
+description: >
+  Use when running paper sessions, checking the risk gate, reviewing win rate,
+  or when a paper TRIM/close looks like a Robinhood fill. Also use for
+  "paper closed so I sold", paper_trades vs orders vs tracker books, dry-run,
+  and PAPER_MODE vs live.
 model: grok-4.6
 ---
 
@@ -13,7 +17,8 @@ This skill covers everything from "run this in paper mode" to "how are my signal
 
 Trigger phrases: "paper trade", "simulate this trade", "run paper session", "check paper performance",
 "what's my win rate", "how are my signals doing", "dry run", "gate check", "execution layer",
-"log this trade", "close my trade", "paper vs live", "scanner performance"
+"log this trade", "close my trade", "paper vs live", "scanner performance",
+"paper closed so I sold", "paper book vs robinhood"
 
 ---
 
@@ -192,3 +197,6 @@ Verdict: Performing similarly to live — continue paper testing
 - KILL_SWITCH file = `touch ~/.gesh/KILL` — creates instantly, remove to re-enable
 - `PAPER_MODE=false` + `auto_trade=True` = LIVE MONEY. Never suggest this without explicit user instruction and 30+ days clean paper history
 - Report outcomes by scanner_source — this is how Georgi learns which setups work
+- Paper TRIM/close is **not** a Robinhood fill. Do not sell on RH because the
+  paper book closed a name. Two books by design (daily-chain `paper_trades` vs
+  autopilot tracker). **REQUIRED BACKGROUND:** gesh-daily-report.

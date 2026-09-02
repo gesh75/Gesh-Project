@@ -7,7 +7,7 @@ Repository guide for coding agents working in `gesh75/Gesh-Project`.
 - **Port 9000 (`server.py`) is the customer product.**
 - `gesh-project-trading` / port 9003 is the internal proof and execution sidecar.
 - Read `CLAUDE.md` before substantive work.
-- For portfolio, screener, risk, regime, Kelly, news, SEC, or paper-trading analysis, read the matching skill under `.claude/skills/` first.
+- For portfolio, screener, risk, regime, Kelly, news, SEC, paper-trading, or daily-report analysis, read the matching skill under `.claude/skills/` first.
 
 ## 2. Model routing
 
