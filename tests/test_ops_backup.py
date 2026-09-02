@@ -39,34 +39,34 @@ def test_backup_one_copies_and_restricts_mode(tmp_path: Path):
     conn.close()
 
 
+def test_integrity_result_requires_literal_ok():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    assert ob._integrity_result(conn) == "ok"
+    conn.close()
+
+    class _Bad:
+        def execute(self, _sql):
+            class _Row:
+                def fetchone(self):
+                    return ("2nd reference to page 2",)
+
+            return _Row()
+
+    assert ob._integrity_result(_Bad()) == "2nd reference to page 2"  # type: ignore[arg-type]
+
+
 def test_backup_one_integrity_failure_returns_false(tmp_path: Path, monkeypatch, capsys):
     src = tmp_path / "src.db"
     _make_db(src)
     dest_dir = tmp_path / "nightly"
     dest_dir.mkdir()
 
-    orig_connect = sqlite3.connect
-
-    def connect_wrapper(*args, **kwargs):
-        conn = orig_connect(*args, **kwargs)
-        orig_execute = conn.execute
-
-        def execute(sql, *a, **k):
-            if isinstance(sql, str) and "integrity_check" in sql.lower():
-
-                class _Row:
-                    def fetchone(self):
-                        return ("2nd reference to page 2",)
-
-                return _Row()
-            return orig_execute(sql, *a, **k)
-
-        conn.execute = execute  # type: ignore[method-assign]
-        return conn
-
-    monkeypatch.setattr(ob.sqlite3, "connect", connect_wrapper)
+    monkeypatch.setattr(ob, "_integrity_result", lambda _conn: "2nd reference to page 2")
     assert ob.backup_one(src, dest_dir, "stamp") is False
-    assert "FAIL integrity" in capsys.readouterr().out
+    logged = capsys.readouterr().out
+    assert "FAIL integrity" in logged
+    assert "2nd reference to page 2" in logged
 
 
 def test_backup_one_missing_source_fail_soft(tmp_path: Path, capsys):
