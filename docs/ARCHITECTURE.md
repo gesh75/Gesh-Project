@@ -8,6 +8,8 @@ GESH Financial is a single-node Python platform that turns a **live Robinhood po
 
 On top of the owner engine sits a **per-user customer surface** (the *Analyze* tab): any-ticker research cards (company-name→ticker search, 12-node consensus, momentum RSI/MACD/Volume, support/resistance trade setup, EPS beat/miss earnings, regime, cycle, fundamentals, analyst, news), a price-grounded **AI research card** (one Claude call/symbol/15 min), a per-user **watchlist + portfolio book**, and a full engine run on the customer's own book — all money-masked so a customer never sees the owner's real account dollars. Customer HTTP also runs inside `unauthenticated_rh_fallback()` so a Yahoo 401 cannot restore the owner's `robin_stocks` pickle (PR #258). See [`CUSTOMER_SURFACE.md`](CUSTOMER_SURFACE.md).
 
+The daily chain's snapshot and the tax / paper-gate steps also speak the **Robinhood agent MCP** (OHLCV, tax lots, broker order review). That path is VPN-safe and read-only — see [`RH_MCP.md`](RH_MCP.md).
+
 ---
 
 ## Table of Contents
@@ -35,6 +37,7 @@ flowchart TB
 
     subgraph MKT["Market and Brokerage"]
         rh["Robinhood - robin_stocks"]:::ext
+        mcp["Robinhood agent MCP - OHLCV, lots, review"]:::ext
         yf["yfinance or Yahoo"]:::ext
         fred["FRED macro CSV"]:::ext
     end
@@ -53,6 +56,7 @@ flowchart TB
 
     operator -->|"dashboard, skills"| gesh
     gesh -->|"holdings, equity, quotes"| rh
+    gesh -->|"historicals, tax lots, review"| mcp
     gesh -->|"history, fundamentals"| yf
     gesh -->|"rates, yield curve, CPI"| fred
     gesh -->|"forced-tool JSON"| claude
@@ -85,7 +89,7 @@ flowchart TB
     end
 
     subgraph INGEST["Ingestion"]
-        fetch["auth and data_fetcher to cache.json"]:::svc
+        fetch["auth, data_fetcher, rh_mcp_data to cache.json"]:::svc
     end
 
     subgraph QUANT["Quant Engines"]
@@ -348,7 +352,7 @@ erDiagram
 | Layer | Technologies |
 |---|---|
 | **API / Server** | FastAPI · uvicorn · threading · hmac (X-API-Key) |
-| **Ingestion** | robin_stocks · pyotp · pandas · atomic JSON cache |
+| **Ingestion** | robin_stocks · Robinhood agent MCP (`rh_mcp_data`) · pyotp · pandas · atomic JSON cache |
 | **Quant Engines** | numpy · pandas · yfinance · FRED CSV API |
 | **AI Routing** | Anthropic Claude (Sonnet/Haiku) · forced tool-use · prompt caching |
 | **Alt Intelligence** | Google Gemini 2.5 · Ollama llama3.2 · Finnhub · Polymarket · SEC EDGAR · VADER |

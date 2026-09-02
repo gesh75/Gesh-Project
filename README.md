@@ -9,6 +9,8 @@
 ![GESH Financial — documentation](docs/assets/preview.png)
 
 > Open **`docs/index.html`** for the full animated single-page documentation (architecture diagrams, data flow, quickstart).
+>
+> Operator runbooks: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/CUSTOMER_SURFACE.md`](docs/CUSTOMER_SURFACE.md) · [`docs/LLM_OPERATIONS.md`](docs/LLM_OPERATIONS.md) · [`docs/RH_MCP.md`](docs/RH_MCP.md).
 
 
 > AI-powered financial analysis and trading intelligence for Robinhood portfolios.
@@ -33,6 +35,7 @@ flowchart TB
 
     subgraph MKT["Market and Brokerage"]
         rh["Robinhood"]:::ext
+        mcp["Robinhood agent MCP"]:::ext
         yf["yfinance or Yahoo"]:::ext
         fred["FRED macro"]:::ext
     end
@@ -51,6 +54,7 @@ flowchart TB
 
     operator -->|"dashboard, skills"| gesh
     gesh -->|"holdings, equity"| rh
+    gesh -->|"historicals, tax lots, review"| mcp
     gesh -->|"history, fundamentals"| yf
     gesh -->|"rates, curve, CPI"| fred
     gesh -->|"forced-tool JSON"| claude

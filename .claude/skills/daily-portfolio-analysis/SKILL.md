@@ -115,3 +115,9 @@ INFORMATIONAL PURPOSES ONLY".
   token expired → re-auth via `/mcp` → robinhood-trading. Both paths failing → chain aborts
   at 1/5 by design; report, stop.
 - Kelly keys: `optimal_pct`, `delta_usd`.
+- Tax harvest: empty `tax_report.candidates` means no loss cleared `$500`, not
+  "the book is profitable". Read `purchase_wash_warnings` and `lot_coverage`
+  (`unavailable` is unknown, not clear). Operator contract: `docs/RH_MCP.md`.
+- Broker preflight (step 4/5): `[gate] broker preflight: N/M conclusively
+  checked`. An all-`UNAUTHORIZED` day is expected on the current OAuth scope —
+  not an all-clear, and not a veto (`GESH_REVIEW_BLOCKING` defaults off).
