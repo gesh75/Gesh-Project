@@ -571,10 +571,16 @@ async def lifespan(app):
     # hard timeout; on failure the app still starts and serves cached-snapshot
     # data (CLAUDE.md #5). Mirrors the gesh-project-trading server fix.
     def _startup_auth() -> None:
-        login()
-        print("✓ Robinhood session established")
-        # Write live cache immediately on startup so the daily-analysis
-        # skill always has fresh data even before the first dashboard poll.
+        # Pickle/robin_stocks credential POST is retired (RH rejects .env
+        # password; empty pickle KeyError token_type). Restore a *working*
+        # pickle if one exists; otherwise serve the MCP snapshot
+        # (live_portfolio_snapshot.json via fetch_snapshot_direct.py).
+        try:
+            login(allow_credentials=False)
+            print("✓ Robinhood pickle session restored")
+        except RuntimeError as exc:
+            print(f"⚠  Pickle session unavailable — serving MCP snapshot ({exc})")
+            return
         try:
             from fetch_live_data import fetch_and_cache
 
