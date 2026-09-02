@@ -472,7 +472,59 @@ for rec in recs:
 
 # ─── Share plan + paper/gate audit (always visible, even on all-HOLD days) ──
 share_plan_section_html = report_share_plan.share_plan_html(eng)
-gate_audit_html = report_share_plan.gate_audit_html(eng)
+
+
+def _gate_audit_section(eng: dict) -> str:
+    gates = eng.get("gate_results") or []
+    plan = eng.get("action_plan") or []
+    paper = eng.get("paper_session") or {}
+    stats = eng.get("trade_stats") or {}
+    if not plan:
+        return ""
+    gate_by_sym = {(g.get("symbol"), g.get("action")): g for g in gates}
+    rows = ""
+    for a in plan:
+        g = gate_by_sym.get((a.get("symbol"), a.get("action")))
+        if g is not None:
+            verdict = (
+                "✅ APPROVED"
+                if g.get("approved")
+                else f"⛔ {_esc(str(g.get('reason') or 'rejected'))}"
+            )
+            v_col = "#00e87a" if g.get("approved") else "#ff3c5a"
+        elif a.get("action") == "HOLD":
+            verdict, v_col = "— override", "#888"
+        else:
+            verdict, v_col = "—", "#888"
+        rows += f"""<tr>
+      <td>{_esc(str(a.get("symbol", "?")))}</td>
+      <td>{_esc(str(a.get("action", "")))}</td>
+      <td style="text-align:right">{a.get("shares", 0)}</td>
+      <td style="color:#888;font-size:11px">{_esc(str(a.get("signal_reason", "")))}</td>
+      <td style="color:{v_col};font-size:11px">{verdict}</td>
+    </tr>"""
+    closed_n = len(paper.get("closed") or [])
+    created_n = len(paper.get("created") or [])
+    stat_bits = [f"{created_n} paper record(s) today", f"{closed_n} auto-closed"]
+    _pw = (stats.get("paper") or {}).get("win_rate_pct")
+    _rw = (stats.get("real") or {}).get("win_rate_pct")
+    if _pw is not None:
+        stat_bits.append(f"paper win-rate 7d: {_pw}%")
+    if _rw is not None:
+        stat_bits.append(f"real win-rate 7d: {_rw}%")
+    return f"""
+  <!-- Paper & Gate Audit -->
+  <div class="section-title">🛡️ Paper &amp; Risk-Gate Audit</div>
+  <div class="table-card" style="margin-bottom:16px">
+    <table class="action-table">
+      <thead><tr><th>Symbol</th><th>Action</th><th>Shares</th><th>Signal</th><th>8-Gate Verdict</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <div style="color:#888;font-size:11px;padding:8px 4px 2px">{" · ".join(stat_bits)}</div>
+  </div>"""
+
+
+gate_audit_html = _gate_audit_section(eng)
 
 
 def _signal_gate_banner(eng: dict) -> str:

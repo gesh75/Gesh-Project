@@ -374,8 +374,24 @@ def test_buy_below_entry_floor_is_rejected_trim_is_not(gate_mod):
     assert ("record", "MU") in r.events
 
 
-def test_buy_blocked_by_precision_overlay_even_above_floor(gate_mod):
+def test_buy_blocked_by_precision_overlay_even_above_floor(gate_mod, monkeypatch):
     """Rel.Strength bearish vetoes a BUY that clears min_entry_score."""
+
+    class _Block:
+        blocked = True
+        reason = "Rel.Strength bearish"
+
+    class _Open:
+        blocked = False
+        reason = "ok"
+
+    def _overlay(action, row=None):  # noqa: ARG001
+        votes = (row or {}).get("votes") or {}
+        if votes.get("Rel.Strength") == -1:
+            return _Block()
+        return _Open()
+
+    monkeypatch.setattr(gate_mod, "precision_overlay_blocks", _overlay)
     r = _run(
         gate_mod,
         raw_score_by_sym={"NVDA": 0.62, "MU": 0.62},

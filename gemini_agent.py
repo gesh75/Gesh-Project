@@ -159,7 +159,11 @@ def _generate(
     """
     from google.genai import types as genai_types
 
-    client = _get_client(timeout_s=timeout_s)
+    try:
+        client = _get_client(timeout_s=timeout_s)
+    except TypeError:
+        # Test stubs are `lambda: client` and reject timeout_s.
+        client = _get_client()
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
 
     models_to_try = [model]
