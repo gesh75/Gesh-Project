@@ -5339,6 +5339,26 @@ def _jsonable(o):
 _BOOK_RADAR_NEW_NAMES = 4
 
 
+def _customer_radar_consensus(symbol: str, **kw) -> dict:
+    """Consensus for customer-book radar picks. ECG must stay off.
+
+    Radar candidates are NEW names the customer does not hold. The default
+    invest_radar `_consensus_safe` path calls `run_consensus_holding` with
+    `allow_ecg` defaulting to True, and `node_ecg` reads the symbol-keyed
+    owner `equity_snapshots` table. If the owner holds (or previously held)
+    the same ticker, the owner's drawdown votes on the customer's advisory
+    pick and is persisted into `customer_analyses`. Owner `/invest` keeps
+    the default path — this wrapper is injected only from `_run_book_radar`.
+    """
+    try:
+        from consensus import run_consensus_holding
+
+        kw["allow_ecg"] = False
+        return run_consensus_holding(symbol, **kw) or {}
+    except Exception:
+        return {}
+
+
 def _run_book_radar(holdings: list[dict], total_equity: float | None) -> dict:
     """Diversification Radar scoped to a CUSTOMER's own book. Advisory only.
 
@@ -5365,7 +5385,10 @@ def _run_book_radar(holdings: list[dict], total_equity: float | None) -> dict:
         "max_open_positions": len(holdings) + _BOOK_RADAR_NEW_NAMES,
     }
     return invest_radar.scan_candidates(
-        holdings, {"cash": 0.0, "total": float(total_equity or 0.0)}, config=cfg
+        holdings,
+        {"cash": 0.0, "total": float(total_equity or 0.0)},
+        config=cfg,
+        consensus_fn=_customer_radar_consensus,
     )
 
 
@@ -7627,7 +7650,16 @@ async def api_explainability(symbol: str):
         # Customer-controlled tickers may use public market-data fallbacks, but
         # must never generate traffic authenticated as the broker-account owner.
         with unauthenticated_rh_fallback():
-            consensus = run_consensus_holding(symbol)
+            # MUST stay False. Same leak class as /api/consensus/{symbol}
+            # (fixed in 1ad42d7): node_ecg reads db.get_equity_history(symbol)
+            # from the symbol-keyed owner `equity_snapshots` table. This route
+            # is customer-reachable (heavy bucket, not owner-only) and
+            # explain_consensus embeds details["ECG"] verbatim in node_bullets
+            # / plain_english — owner drawdown strings like
+            # "ECG=SUSPENDED DD=-71.9%" shipped to subscribers, and the vote
+            # could flip the explained verdict. Money-masking does not scrub
+            # drawdown percentages.
+            consensus = run_consensus_holding(symbol, allow_ecg=False)
         regime_str = consensus.get("regime", "NEUTRAL")
         report = build_transparency_report(symbol, consensus, regime=regime_str)
         return _sanitize({"status": "ok", "symbol": symbol, **report})

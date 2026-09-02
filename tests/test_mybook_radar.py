@@ -43,6 +43,7 @@ def _capture(monkeypatch) -> dict:
         seen["holdings"] = holdings
         seen["equity_summary"] = equity_summary
         seen["config"] = kwargs.get("config")
+        seen["consensus_fn"] = kwargs.get("consensus_fn")
         return {"mode": "SCAN", "candidates": [], "excluded_holdings": []}
 
     monkeypatch.setattr(server.invest_radar, "scan_candidates", _fake)
@@ -50,6 +51,7 @@ def _capture(monkeypatch) -> dict:
 
 
 # ─── PII discipline ───────────────────────────────────────────────────────────
+
 
 def test_radar_receives_only_cash_and_total(monkeypatch):
     """invest_radar documents that only cash + total ever leave equity_summary.
@@ -76,6 +78,7 @@ def test_radar_sees_the_customers_own_holdings(monkeypatch):
 
 
 # ─── slot sizing ──────────────────────────────────────────────────────────────
+
 
 def test_large_book_still_gets_room_to_suggest_new_names(monkeypatch):
     """`max_open_positions` defaults to 5 — the owner's book shape. Left alone,
@@ -126,6 +129,38 @@ def test_sizing_is_cash_free_so_the_cached_fingerprint_stays_valid(monkeypatch):
     assert seen["equity_summary"]["cash"] == 0.0
 
 
+def test_customer_radar_injects_consensus_fn_that_disables_owner_ecg(monkeypatch):
+    """Radar picks are NEW names. The default `_consensus_safe` path leaves
+    `allow_ecg` at True, so `node_ecg` would vote the owner's equity curve for
+    any candidate the owner also holds (NVDA, MU, …) and persist that verdict
+    into `customer_analyses`. The customer path must inject a wrapper that
+    forces `allow_ecg=False`. Owner `/invest` keeps the default path.
+    """
+    import consensus
+    import server
+
+    seen = _capture(monkeypatch)
+    server._run_book_radar(_holdings("AAPL"), 2000.0)
+
+    cfn = seen.get("consensus_fn")
+    assert cfn is not None, "customer radar must inject a consensus_fn so ECG stays off"
+    assert cfn is server._customer_radar_consensus
+
+    captured: dict = {}
+
+    def _spy(symbol, *args, **kwargs):
+        captured["kwargs"] = kwargs
+        return {"verdict": "BUY", "raw_score": 0.4}
+
+    monkeypatch.setattr(consensus, "run_consensus_holding", _spy)
+    out = cfn("NVDA", equity=0, total_portfolio=2000.0, avg_cost=10.0, current_price=10.0)
+
+    assert out["verdict"] == "BUY"
+    assert captured["kwargs"].get("allow_ecg") is False, (
+        f"customer radar consensus_fn did not disable ECG; kwargs={captured['kwargs']!r}"
+    )
+
+
 def test_missing_total_equity_does_not_explode(monkeypatch):
     """A book whose valuation failed hands through None; the radar fails closed
     on total <= 0 on its own, but it must receive a float to do that."""
@@ -138,6 +173,7 @@ def test_missing_total_equity_does_not_explode(monkeypatch):
 
 
 # ─── best-effort wiring into the engine suite ─────────────────────────────────
+
 
 def _stub_book_engines(server, monkeypatch):
     monkeypatch.setattr(
