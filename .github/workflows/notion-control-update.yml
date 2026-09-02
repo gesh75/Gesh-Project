@@ -56,7 +56,10 @@ jobs:
           else
             SUMMARY="${INPUT_SUMMARY:-manual workflow_dispatch sync}"
           fi
-          SUMMARY="$(printf '%s' "$SUMMARY" | head -c 1800)"
+          # Parameter expansion, not `printf | head`. With pipefail, head
+          # closing after 1800 bytes SIGPIPEs printf on squash-merge
+          # messages (PR #246 / run 33666867623).
+          SUMMARY="${SUMMARY:0:1800}"
           NAME="CI — ${REPO} @ ${SHORT}"
           python3 scripts/notion/post_control_update.py \
             --name "$NAME" \
