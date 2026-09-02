@@ -7,7 +7,7 @@ over a raw BUY chip.
 
 from __future__ import annotations
 
-from advisory_copy import book_actions, plain_line
+from advisory_copy import EDUCATIONAL, book_actions, plain_line
 
 
 def test_plain_line_conflict_buy_and_trim():
@@ -88,3 +88,12 @@ def test_book_actions_includes_confirmed_flip_when_room():
     assert "flip" in kinds
     flip = next(a for a in acts if a["kind"] == "flip")
     assert "HOLD" in flip["headline"] and "BUY" in flip["headline"]
+
+
+def test_educational_copy_is_nfa_and_names_no_engines():
+    text = EDUCATIONAL.lower()
+    assert "not investment advice" in text
+    assert "educational" in text
+    assert "kelly" not in text
+    assert "monte carlo" not in text
+    assert "robinhood" not in text

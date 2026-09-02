@@ -121,3 +121,69 @@ def test_customer_init_skips_owner_portfolio_poll():
         html.index("loadPortfolioWithECG();") - 200 : html.index("loadPortfolioWithECG();") + 80
     ]
     assert "customer" in init.lower()
+
+
+def _home_pane() -> str:
+    html = TEMPLATE.read_text()
+    return html[html.index('id="tab-home"') : html.index('id="tab-analyze"')]
+
+
+def test_home_pane_has_no_whole_book_analyze_button():
+    """Whole-book POST /api/mybook/analyze must not be a Home CTA."""
+    home = _home_pane()
+    assert 'onclick="mybookAnalyze()"' not in home
+    assert "SEE WHAT'S IN THIS BOOK" not in home.upper()
+
+
+def test_home_action_never_starts_whole_book_job():
+    body = _fn(TEMPLATE.read_text(), "homeAction")
+    assert "mybookAnalyze" not in body
+    assert "switchTab('analyze')" in body
+
+
+def test_focus_my_book_section_never_auto_analyzes():
+    body = _fn(TEMPLATE.read_text(), "focusMyBookSection")
+    assert "mybookAnalyze" not in body
+
+
+def test_tickets_open_share_research():
+    body = _fn(TEMPLATE.read_text(), "buildAdvisoryTickets")
+    assert "openShareResearch" in body
+    assert "Run a read" not in body
+
+
+def test_open_share_research_is_ticker_not_book():
+    body = _fn(TEMPLATE.read_text(), "openShareResearch")
+    assert "analyzeTicker" in body
+    assert "mybookAnalyze" not in body
+    assert "/api/mybook/analyze" not in body
+
+
+def test_home_hero_is_educational_and_dated():
+    body = _fn(TEMPLATE.read_text(), "buildHomeHero")
+    assert "educational" in body.lower() or "not investment advice" in body.lower()
+    assert "mybookAnalyze" not in body
+    assert "buildHomeCatchup" in TEMPLATE.read_text()
+
+
+def test_home_hero_uses_equal_weight_flag_not_zero_total():
+    """A quote outage is not equal-weight and must not print $0 as the book."""
+    body = _fn(TEMPLATE.read_text(), "buildHomeHero")
+    assert "equal_weight" in body
+    assert "total_equity===0" not in body.replace(" ", "")
+    assert "not available" in body.lower()
+
+
+def test_customer_boot_loads_public_macro_not_owner_regime():
+    body = _fn(TEMPLATE.read_text(), "bootDesk")
+    customer = body.split("loadPortfolioWithECG")[0]
+    assert "loadHomeMarket" in customer
+    assert "loadRegime" not in customer
+
+
+def test_home_market_uses_cached_public_macro():
+    body = _fn(TEMPLATE.read_text(), "loadHomeMarket")
+    assert "/api/long-term-macro/cached" in body
+    assert "/api/long-term-macro" in body
+    assert "/api/regime" not in body
+    assert "Robinhood" not in body

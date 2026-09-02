@@ -943,15 +943,15 @@ def test_mybook_summary_next_action_ladder(client, monkeypatch, au):
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     # empty book → add holdings
     assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "book"
-    # book, no analysis → analyze
+    # book, no analysis → research a name (never the whole-book job)
     au.set_position("cust@x.com", "NVDA", 10)
-    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "analyze"
-    # stale analysis → re-run
+    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "research"
+    # stale analysis → still research, not a 3-minute book job
     au.save_book_analysis("cust@x.com", {"_fp": "other-book", "analysis": {},
                                          "kelly": {}, "monte_carlo": {},
                                          "book": {"positions": [], "unpriced": []}})
     d = c.get("/api/mybook/summary").json()["data"]
-    assert d["analysis_stale"] is True and d["next_action"]["target"] == "analyze"
+    assert d["analysis_stale"] is True and d["next_action"]["target"] == "research"
 
 
 def test_mybook_summary_flags_stale_for_legacy_analysis_with_changed_symbols(client, monkeypatch, au):
@@ -971,7 +971,7 @@ def test_mybook_summary_flags_stale_for_legacy_analysis_with_changed_symbols(cli
                  "unpriced": []}})   # legacy row: no _fp, recorded only NVDA
     d = c.get("/api/mybook/summary").json()["data"]
     assert d["analysis_stale"] is True
-    assert d["next_action"]["target"] == "analyze"
+    assert d["next_action"]["target"] == "research"
 
 
 def test_mybook_summary_flags_any_legacy_analysis_without_fingerprint(client, monkeypatch, au):
@@ -990,7 +990,56 @@ def test_mybook_summary_flags_any_legacy_analysis_without_fingerprint(client, mo
                  "unpriced": []}})
     d = c.get("/api/mybook/summary").json()["data"]
     assert d["analysis_stale"] is True
-    assert d["next_action"]["target"] == "analyze"
+    assert d["next_action"]["target"] == "research"
+
+
+def test_mybook_summary_catch_up_is_mechanical_never_analyze(client, monkeypatch, au):
+    """Home catch-up is quotes + educational copy. No LLM, no whole-book job."""
+    from advisory_copy import EDUCATIONAL
+
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["next_action"]["target"] == "research"
+    assert d["educational"] == EDUCATIONAL
+    assert "not investment advice" in d["educational"].lower()
+    assert isinstance(d["day_change_available"], bool)
+    assert d["top_symbol"] == "NVDA"
+    assert d["top_weight_pct"] == 100.0
+    assert d["unpriced"] == []
+    assert "analyze" not in d["next_action"]["target"]
+
+
+def test_mybook_summary_all_unpriced_does_not_invent_zero_day(client, monkeypatch, au):
+    """A quote outage is not a $0 book or a flat day."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "ZZZZ9", 3)
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["positions_count"] == 1
+    assert d["unpriced"] == ["ZZZZ9"]
+    assert d["total_equity"] is None
+    assert d["day_change_available"] is False
+    assert d["day_change_amount"] is None
+    assert d["day_change_percent"] is None
+    assert d["top_weight_pct"] is None
+    assert d["equal_weight"] is False
+
+
+def test_mybook_summary_mixed_unpriced_omits_concentration(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.set_position("cust@x.com", "ZZZZ9", 3)
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["unpriced"] == ["ZZZZ9"]
+    assert d["total_equity"] == 1000.0
+    assert d["top_weight_pct"] is None
+    assert d["day_change_available"] is False
 
 
 def test_mybook_summary_survives_missing_signal_history(client, monkeypatch, au):
