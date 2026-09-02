@@ -3192,6 +3192,26 @@ def monte_carlo():
 @app.get("/api/ecg")
 def equity_curve_gate(request: Request = None):  # noqa: B008
     try:
+        # equity_snapshots is keyed by SYMBOL with no user column.
+        # get_equity_history() therefore returns the owner's personal curve
+        # (drawdown, loss streak, SUSPENDED) to whoever asks. The published
+        # model book deliberately excludes ECG/drawdown (model_portfolio.py),
+        # and customer book ECG lives at /api/mybook/ecg (per-user store).
+        # Same leak class as /api/consensus/{symbol} (1ad42d7) — do not compute
+        # a HEALTHY gate from empty history; that would look like a measurement.
+        if not _is_owner_request(request):
+            return {
+                "status": "ok",
+                "data": {
+                    "portfolio_gate": "UNKNOWN",
+                    "portfolio_message": (
+                        "Owner equity-curve history is not available on customer "
+                        "sessions. Use /api/mybook/ecg for your own book."
+                    ),
+                    "states": [],
+                    "ecg_enabled": False,
+                },
+            }
         try:
             payload = _context_payload(request)
         except RobinhoodOfflineError:
