@@ -6,6 +6,7 @@ mode: a false all-clear. A harvester that says "no wash warnings" because it
 could not look, or because the base report silently dropped the row, is worse
 than one that says nothing.
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -17,9 +18,13 @@ import tax_lots_enrich as T
 
 def _lot(lot_id, qty, cps, price, open_date, term="st", selectable=True):
     return {
-        "lot_id": lot_id, "quantity": qty, "cost_per_share": cps,
-        "cost_basis": round(qty * cps, 2), "open_date": open_date,
-        "term": term, "selectable": selectable,
+        "lot_id": lot_id,
+        "quantity": qty,
+        "cost_per_share": cps,
+        "cost_basis": round(qty * cps, 2),
+        "open_date": open_date,
+        "term": term,
+        "selectable": selectable,
         "current_price": price,
         "unrealized_usd": round((price - cps) * qty, 2),
         "unrealized_pct": round((price / cps - 1) * 100, 2),
@@ -39,8 +44,10 @@ def test_recent_purchases_flags_inside_window():
 
 
 def test_recent_purchases_boundary_is_inclusive_at_30_days():
-    lots = [_lot("a", 1, 100.0, 95.0, "2026-07-22"),   # exactly 30d
-            _lot("b", 1, 100.0, 95.0, "2026-07-21")]   # 31d — outside
+    lots = [
+        _lot("a", 1, 100.0, 95.0, "2026-07-22"),  # exactly 30d
+        _lot("b", 1, 100.0, 95.0, "2026-07-21"),
+    ]  # 31d — outside
     got = [x["lot_id"] for x in T.recent_purchases(lots, today=TODAY)]
     assert got == ["a"]
 
@@ -51,8 +58,7 @@ def test_recent_purchases_ignores_unparseable_dates():
 
 # ── harvest_plan ─────────────────────────────────────────────────────────────
 def test_harvest_plan_selects_only_losing_lots():
-    lots = [_lot("win", 4, 90.0, 100.0, "2026-01-01"),
-            _lot("lose", 2, 120.0, 100.0, "2026-01-01")]
+    lots = [_lot("win", 4, 90.0, 100.0, "2026-01-01"), _lot("lose", 2, 120.0, 100.0, "2026-01-01")]
     plan = T.harvest_plan(lots)
     assert plan["lot_ids"] == ["lose"]
     assert plan["loss_usd"] == pytest.approx(-40.0)
@@ -64,8 +70,10 @@ def test_harvest_plan_excludes_non_selectable_lots():
 
 
 def test_harvest_plan_splits_short_and_long_term():
-    lots = [_lot("s", 1, 120.0, 100.0, "2026-06-01", term="st"),
-            _lot("l", 1, 130.0, 100.0, "2024-01-01", term="lt")]
+    lots = [
+        _lot("s", 1, 120.0, 100.0, "2026-06-01", term="st"),
+        _lot("l", 1, 130.0, 100.0, "2024-01-01", term="lt"),
+    ]
     plan = T.harvest_plan(lots)
     assert plan["short_term_loss_usd"] == pytest.approx(-20.0)
     assert plan["long_term_loss_usd"] == pytest.approx(-30.0)
@@ -96,7 +104,7 @@ def test_loader_exception_degrades_to_unavailable():
 
 
 def test_available_view_reports_days_until_safe():
-    lots = [_lot("a", 4, 110.0, 100.0, "2026-08-14")]      # 7d ago
+    lots = [_lot("a", 4, 110.0, 100.0, "2026-08-14")]  # 7d ago
     v = T.symbol_lot_view("ZS", 100.0, loader=lambda s, p: lots, today=TODAY)
     assert v["lot_data"] == T.OK
     assert v["wash_risk_from_purchases"] is True
@@ -113,15 +121,19 @@ def test_old_lots_carry_no_purchase_wash_risk():
 # ── enrich ───────────────────────────────────────────────────────────────────
 def _holdings():
     return [
-        {"symbol": "ZS", "price": 100.0, "average_buy_price": 110.0},    # losing
-        {"symbol": "MA", "price": 100.0, "average_buy_price": 90.0},     # winning
+        {"symbol": "ZS", "price": 100.0, "average_buy_price": 110.0},  # losing
+        {"symbol": "MA", "price": 100.0, "average_buy_price": 90.0},  # winning
     ]
 
 
 def test_below_threshold_positions_are_still_checked():
     """get_harvest_summary drops BELOW_THRESHOLD rows; enrich must not miss them."""
-    report = {"eligible": [], "in_wash_window": [], "no_cost_basis": [],
-              "total_harvestable_loss_usd": 0.0}
+    report = {
+        "eligible": [],
+        "in_wash_window": [],
+        "no_cost_basis": [],
+        "total_harvestable_loss_usd": 0.0,
+    }
     lots = [_lot("a", 4, 110.0, 100.0, "2026-08-20")]
     out = T.enrich(report, _holdings(), loader=lambda s, p: lots, today=TODAY)
     assert "ZS" in out["lots_by_symbol"], "a sub-$500 loss still has wash exposure"
@@ -130,14 +142,22 @@ def test_below_threshold_positions_are_still_checked():
 
 def test_enrich_skips_profitable_holdings():
     report = {"eligible": [], "in_wash_window": []}
-    out = T.enrich(report, _holdings(), loader=lambda s, p: [_lot("a", 1, 110.0, 100.0, "2026-08-20")],
-                   today=TODAY)
+    out = T.enrich(
+        report,
+        _holdings(),
+        loader=lambda s, p: [_lot("a", 1, 110.0, 100.0, "2026-08-20")],
+        today=TODAY,
+    )
     assert "MA" not in out["lots_by_symbol"]
 
 
 def test_enrich_is_additive_and_never_mutates_base_report():
-    report = {"eligible": [], "in_wash_window": [], "total_harvestable_loss_usd": 0.0,
-              "summary": "Tax harvest: $0 eligible across 0 position(s)."}
+    report = {
+        "eligible": [],
+        "in_wash_window": [],
+        "total_harvestable_loss_usd": 0.0,
+        "summary": "Tax harvest: $0 eligible across 0 position(s).",
+    }
     snapshot = dict(report)
     out = T.enrich(report, _holdings(), loader=lambda s, p: [], today=TODAY)
     assert report == snapshot, "input report must not be mutated"
@@ -152,7 +172,7 @@ def test_lot_coverage_reports_a_ratio_not_a_bare_count():
     out = T.enrich(report, _holdings(), loader=lambda s, p: [], today=TODAY)
     cov = out["lot_coverage"]
     assert cov == {"checked": 1, "available": 0, "unavailable": 1}
-    assert out["purchase_wash_warnings"] == []      # empty because unknown, and coverage says so
+    assert out["purchase_wash_warnings"] == []  # empty because unknown, and coverage says so
 
 
 def test_enrich_tolerates_garbage_cost_basis():
@@ -163,3 +183,28 @@ def test_enrich_tolerates_garbage_cost_basis():
 
 def test_enrich_passes_through_non_dict_report():
     assert T.enrich(None, _holdings()) is None
+
+
+def test_enrich_checks_eligible_report_rows_even_if_currently_profitable():
+    """The union is load-bearing: a name the base scan called ELIGIBLE must
+    still be wash-checked even if today's mark is above blended cost. Deriving
+    the symbol set from losing holdings alone would miss it."""
+    report = {"eligible": [{"ticker": "MA"}], "in_wash_window": []}
+    holdings = [{"symbol": "MA", "price": 100.0, "average_buy_price": 90.0}]
+    lots = [_lot("a", 1, 90.0, 100.0, "2026-08-20")]
+    out = T.enrich(report, holdings, loader=lambda s, p: lots, today=TODAY)
+    assert "MA" in out["lots_by_symbol"]
+    assert [w["ticker"] for w in out["purchase_wash_warnings"]] == ["MA"]
+
+
+def test_enrich_reads_current_price_and_avg_cost_aliases():
+    holdings = [{"symbol": "ZS", "current_price": 100.0, "avg_cost": 110.0}]
+    lots = [_lot("a", 1, 110.0, 100.0, "2026-08-20")]
+    out = T.enrich({"eligible": []}, holdings, loader=lambda s, p: lots, today=TODAY)
+    assert "ZS" in out["lots_by_symbol"]
+    assert out["purchase_wash_warnings"][0]["ticker"] == "ZS"
+
+
+def test_recent_purchases_excludes_future_open_dates():
+    lots = [_lot("a", 1, 100.0, 95.0, "2026-08-22")]  # tomorrow vs TODAY
+    assert T.recent_purchases(lots, today=TODAY) == []
