@@ -229,3 +229,82 @@ def test_build_confidence_map_uses_real_signals(gate_mod):
     assert conf["MU"] == pytest.approx(0.545)    # kelly win_rate fallback
     assert conf["OVER"] == 1.0                   # clamped to [0, 1]
     assert conf.get("MISSING", 0.0) == 0.0       # absent → fail-closed
+
+
+# ── recorder fail-soft: approved intent, no fill, remaining orders still gated ─
+def test_recorder_exception_sets_record_error_without_fill(gate_mod):
+    events: list = []
+    intents: list = []
+
+    def boom(plan, holdings, total_eq, scanner_source="daily-analysis"):
+        events.append(("record", plan[0]["symbol"]))
+        raise RuntimeError("db locked")
+
+    gate_results, created = gate_mod.gate_and_execute(
+        [ORDERS[0]],
+        HOLDINGS,
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS},
+        confidence_by_sym=CONFIDENCE,
+        intent_builder=_make_intent_builder(events, intents),
+        gate_evaluate=_make_gate(events, {}),
+        recorder=boom,
+    )
+    assert created == []
+    nvda = gate_results[0]
+    assert nvda["approved"] is True
+    assert nvda["record_error"] == "db locked"
+    assert ("intent", "NVDA") in events
+    assert ("gate", "NVDA") in events
+    assert ("record", "NVDA") in events
+
+
+def test_recorder_failure_does_not_stop_remaining_orders(gate_mod):
+    events: list = []
+    intents: list = []
+    rec_calls: list = []
+
+    def flaky(plan, holdings, total_eq, scanner_source="daily-analysis"):
+        sym = plan[0]["symbol"]
+        events.append(("record", sym))
+        if sym == "NVDA":
+            raise RuntimeError("nvda write failed")
+        rec_calls.append(plan)
+        return [{"id": 1, "symbol": sym}]
+
+    gate_results, created = gate_mod.gate_and_execute(
+        ORDERS,
+        HOLDINGS,
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS},
+        confidence_by_sym=CONFIDENCE,
+        intent_builder=_make_intent_builder(events, intents),
+        gate_evaluate=_make_gate(events, {}),
+        recorder=flaky,
+    )
+    by_sym = {g["symbol"]: g for g in gate_results}
+    assert by_sym["NVDA"]["approved"] is True
+    assert by_sym["NVDA"]["record_error"] == "nvda write failed"
+    assert "record_error" not in by_sym["MU"]
+    assert by_sym["MU"]["approved"] is True
+    assert [c["symbol"] for c in created] == ["MU"]
+    # both orders still ran intent → gate; only MU produced a fill
+    assert ("intent", "MU") in events and ("gate", "MU") in events
+
+
+def test_order_target_pct_zero_equity_is_zero(gate_mod):
+    pct = gate_mod._order_target_pct(
+        {"symbol": "NVDA", "action": "BUY", "shares": 5, "current_price": 100.0},
+        HOLDINGS,
+        0.0,
+    )
+    assert pct == 0.0
+
+
+def test_order_target_pct_negative_equity_is_zero(gate_mod):
+    pct = gate_mod._order_target_pct(
+        {"symbol": "NVDA", "action": "BUY", "shares": 5, "current_price": 100.0},
+        HOLDINGS,
+        -1.0,
+    )
+    assert pct == 0.0
