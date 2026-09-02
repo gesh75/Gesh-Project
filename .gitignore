@@ -104,3 +104,6 @@ docs/ATTORNEY_*
 run_manifest.json
 gesh_report.degraded.*.html
 .claude/settings.local.json
+
+# Machine-local Android/Gradle SDK paths — never commit
+**/local.properties

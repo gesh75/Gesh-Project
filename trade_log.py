@@ -11,8 +11,11 @@ Tables (in gesh_financial.db):
   trade_log    — real executed trades
   paper_trades — paper/simulated trades (same schema)
 
+Long-only P&L (GFD-008): close_trade always uses (exit − entry) × shares.
+TRIM/SELL close longs; they are not short entries.
+
 Usage:
-    from trade_log import log_trade, close_trade, get_win_rate, get_trade_history
+    from trade_log import log_trade, close_trade, close_long_qty, get_win_rate, get_trade_history
 """
 
 from __future__ import annotations
@@ -93,12 +96,6 @@ _DDL_STATEMENTS = [
 ]
 
 
-# Schema is created once per distinct DB path, not on every connection. Keying by
-# path (rather than a single process-global flag) keeps per-test DB isolation
-# working while eliminating the redundant DDL that ran on EVERY log/read call —
-# real lock contention + latency on the VirtioFS/FUSE fallback under /api/trades
-# polling. CREATE IF NOT EXISTS remains idempotent, so a first connection to any
-# new path still initialises it.
 _schema_lock = threading.Lock()
 _initialized_paths: set[str] = set()
 
@@ -197,6 +194,9 @@ def close_trade(
     """
     Close an open trade. Calculates P&L and outcome automatically.
 
+    GFD-008: the book is long-only. P&L is always (exit − entry) × shares,
+    including leftover TRIM/SELL-labeled rows.
+
     Returns the updated trade record.
     """
     now = datetime.now(timezone.utc).isoformat()
@@ -212,17 +212,9 @@ def close_trade(
         row = dict(row)
         entry_price = row["entry_price"]
         shares = row["shares"]
-        action = row["action"]
 
-        # P&L direction: BUY/ADD = long, TRIM/SELL = short exit.
-        # Guard pnl_pct against a corrupt entry_price=0 row (ZeroDivisionError);
-        # the dollar pnl is still meaningful, so only the percentage degrades.
-        if action in ("BUY", "ADD"):
-            pnl = (exit_price - entry_price) * shares
-            pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price else 0.0
-        else:
-            pnl = (entry_price - exit_price) * shares
-            pnl_pct = ((entry_price - exit_price) / entry_price * 100) if entry_price else 0.0
+        pnl = (exit_price - entry_price) * shares
+        pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price else 0.0
 
         if pnl > 0.01:
             outcome = "WIN"
@@ -241,6 +233,110 @@ def close_trade(
         )
 
     return get_trade_by_id(trade_id, is_paper=is_paper)
+
+
+def close_long_qty(
+    symbol: str,
+    qty: float,
+    exit_price: float,
+    notes: str | None = None,
+    is_paper: bool = True,
+) -> list[dict]:
+    """FIFO-close `qty` shares of open BUY/ADD lots for `symbol`.
+
+    Partial lots shrink in place and a closed child row is written for the
+    taken quantity. P&L is always (exit − entry) × shares (GFD-008).
+    """
+    if qty <= 0:
+        return []
+
+    open_rows = get_trade_history(symbol=symbol, open_only=True, is_paper=is_paper, limit=500)
+    longs = [r for r in open_rows if str(r.get("action", "")).upper() in ("BUY", "ADD")]
+    longs.sort(key=lambda r: r.get("entry_time") or "")
+    remaining = float(qty)
+    closed: list[dict] = []
+
+    for lot in longs:
+        if remaining <= 1e-9:
+            break
+        lot_shares = float(lot["shares"])
+        take = min(lot_shares, remaining)
+        if take + 1e-9 >= lot_shares:
+            rec = close_trade(int(lot["id"]), exit_price=exit_price, notes=notes, is_paper=is_paper)
+            closed.append(rec)
+            remaining -= lot_shares
+            continue
+        rec = _close_partial_lot(lot, take, exit_price, notes, is_paper)
+        closed.append(rec)
+        remaining -= take
+    return closed
+
+
+def _close_partial_lot(
+    lot: dict,
+    take: float,
+    exit_price: float,
+    notes: str | None,
+    is_paper: bool,
+) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    table = "paper_trades" if is_paper else "trade_log"
+    entry_price = float(lot["entry_price"])
+    left = float(lot["shares"]) - take
+    pnl = (exit_price - entry_price) * take
+    pnl_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price else 0.0
+    if pnl > 0.01:
+        outcome = "WIN"
+    elif pnl < -0.01:
+        outcome = "LOSS"
+    else:
+        outcome = "BREAKEVEN"
+
+    with _conn() as con:
+        con.execute(f"UPDATE {table} SET shares=? WHERE id=?", (round(left, 6), lot["id"]))
+        if is_paper:
+            sql = """
+                INSERT INTO paper_trades
+                  (symbol, action, shares, entry_price, entry_time,
+                   exit_price, exit_time, stop_loss, target_price,
+                   scanner_source, signal_reason, notes,
+                   realized_pnl, pnl_pct, outcome)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """
+            params = (
+                lot["symbol"], lot["action"], take, entry_price, lot["entry_time"],
+                exit_price, now, lot.get("stop_loss"), lot.get("target_price"),
+                lot.get("scanner_source"), lot.get("signal_reason"), notes,
+                round(pnl, 2), round(pnl_pct, 2), outcome,
+            )
+        else:
+            sql = """
+                INSERT INTO trade_log
+                  (symbol, action, shares, entry_price, entry_time,
+                   exit_price, exit_time, stop_loss, target_price,
+                   scanner_source, signal_reason, notes,
+                   realized_pnl, pnl_pct, outcome, is_paper)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+            """
+            params = (
+                lot["symbol"], lot["action"], take, entry_price, lot["entry_time"],
+                exit_price, now, lot.get("stop_loss"), lot.get("target_price"),
+                lot.get("scanner_source"), lot.get("signal_reason"), notes,
+                round(pnl, 2), round(pnl_pct, 2), outcome,
+            )
+        cur = con.execute(sql, params)
+        new_id = cur.lastrowid
+    rec = get_trade_by_id(new_id, is_paper=is_paper)
+    return rec or {
+        "id": new_id,
+        "symbol": lot["symbol"],
+        "shares": take,
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "realized_pnl": round(pnl, 2),
+        "pnl_pct": round(pnl_pct, 2),
+        "outcome": outcome,
+    }
 
 
 # ─── Queries ──────────────────────────────────────────────────────────────────
@@ -296,17 +392,8 @@ def get_win_rate(
 ) -> dict:
     """
     Calculate win rate, average P&L, and trade stats for the last N days.
-
-    Returns:
-        {
-            total_trades, wins, losses, breakevens, open_trades,
-            win_rate_pct, avg_win_pct, avg_loss_pct, avg_pnl_pct,
-            total_realized_pnl, best_trade, worst_trade
-        }
     """
     table = "paper_trades" if is_paper else "trade_log"
-    since = datetime.now(timezone.utc).isoformat()[:10]  # today
-    # calculate cutoff by subtracting days (simple string comparison works for ISO dates)
     from datetime import timedelta
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
@@ -369,10 +456,7 @@ def get_win_rate(
 
 
 def get_scanner_performance(is_paper: bool = False) -> list[dict]:
-    """
-    Show win rate broken down by scanner_source.
-    Useful for knowing which scanner generates the best signals.
-    """
+    """Show win rate broken down by scanner_source."""
     table = "paper_trades" if is_paper else "trade_log"
     with _conn() as con:
         rows = con.execute(
@@ -400,13 +484,8 @@ def get_scanner_performance(is_paper: bool = False) -> list[dict]:
     return results
 
 
-# ─── Quick summary for report injection ──────────────────────────────────────
-
 def trade_summary_for_report(days: int = 7) -> dict:
-    """
-    Returns a compact dict ready to inject into the HTML report header.
-    Covers both real and paper trades.
-    """
+    """Returns a compact dict ready to inject into the HTML report header."""
     real  = get_win_rate(days=days, is_paper=False)
     paper = get_win_rate(days=days, is_paper=True)
     scanner_perf = get_scanner_performance(is_paper=False)
@@ -420,7 +499,6 @@ def trade_summary_for_report(days: int = 7) -> dict:
 
 
 if __name__ == "__main__":
-    # Quick smoke test
     print("Initialising trade_log schema...")
     with _conn():
         pass

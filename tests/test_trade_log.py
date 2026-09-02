@@ -65,21 +65,21 @@ def test_long_add_uses_same_direction_as_buy(trade_db):
     assert row["pnl_pct"] == pytest.approx(-20.0)
 
 
-def test_short_sell_close_below_entry_is_win(trade_db):
-    """TRIM/SELL are treated as short exits on current main (GFD-008 / #238)."""
+def test_leftover_sell_row_closes_as_long(trade_db):
+    """GFD-008: close_trade is long-only even if the open row was labeled SELL."""
     tid = _open(action="SELL", shares=10.0, entry=100.0)
     row = tl.close_trade(tid, exit_price=90.0)
-    assert row["outcome"] == "WIN"
-    assert row["realized_pnl"] == pytest.approx(100.0)  # (100-90)*10
-    assert row["pnl_pct"] == pytest.approx(10.0)
+    assert row["outcome"] == "LOSS"
+    assert row["realized_pnl"] == pytest.approx(-100.0)  # (90-100)*10
+    assert row["pnl_pct"] == pytest.approx(-10.0)
 
 
-def test_trim_close_above_entry_is_loss(trade_db):
+def test_leftover_trim_row_closes_as_long(trade_db):
     tid = _open(action="TRIM", shares=5.0, entry=20.0)
     row = tl.close_trade(tid, exit_price=22.0)
-    assert row["outcome"] == "LOSS"
-    assert row["realized_pnl"] == pytest.approx(-10.0)
-    assert row["pnl_pct"] == pytest.approx(-10.0)
+    assert row["outcome"] == "WIN"
+    assert row["realized_pnl"] == pytest.approx(10.0)  # (22-20)*5
+    assert row["pnl_pct"] == pytest.approx(10.0)
 
 
 # ─── BREAKEVEN band and $0-entry guard ────────────────────────────────────────
@@ -123,13 +123,13 @@ def test_zero_entry_price_does_not_raise_and_pct_degrades_to_zero(trade_db):
     assert row["outcome"] == "WIN"
 
 
-def test_zero_entry_price_on_short_also_degrades_pct(trade_db):
+def test_zero_entry_price_on_sell_labeled_row_also_degrades_pct(trade_db):
     tid = _open(action="SELL", shares=2.0, entry=0.0)
     row = tl.close_trade(tid, exit_price=5.0)
-    # short: (0-5)*2 = -10 → LOSS; pct guarded
-    assert row["realized_pnl"] == pytest.approx(-10.0)
+    # long-only: (5-0)*2 = +10 → WIN; pct guarded
+    assert row["realized_pnl"] == pytest.approx(10.0)
     assert row["pnl_pct"] == pytest.approx(0.0)
-    assert row["outcome"] == "LOSS"
+    assert row["outcome"] == "WIN"
 
 
 # ─── Paper / live fence ───────────────────────────────────────────────────────

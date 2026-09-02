@@ -125,11 +125,13 @@ def test_buy_stop_and_target_use_default_percents(trade_db, allow_all):
     assert stored["target_price"] == pytest.approx(112.0)
 
 
-def test_sell_stop_and_target_are_inverted(trade_db, allow_all):
+def test_sell_without_open_long_is_blocked(trade_db, allow_all):
+    """GFD-008: SELL does not open an inverted short."""
     out = pt.run_paper_session([_plan(action="SELL", price=100.0)], holdings=[], total_portfolio=1)
     row = out[0]
-    assert row["stop_loss"] == pytest.approx(105.0)  # 5% above (short)
-    assert row["target_price"] == pytest.approx(88.0)  # 12% below
+    assert row["blocked"] is True
+    assert "No open paper long" in row["reason"]
+    assert "stop_loss" not in row
 
 
 def test_symbol_is_uppercased_on_the_paper_row(trade_db, allow_all):
@@ -179,22 +181,14 @@ def test_long_hits_target_and_records_win(trade_db, allow_all, monkeypatch):
     assert "Target hit" in (closed[0]["notes"] or "")
 
 
-def test_short_hits_stop_when_price_rises(trade_db, allow_all, monkeypatch):
-    pt.run_paper_session([_plan(action="SELL", price=100.0)], holdings=[], total_portfolio=1)
+def test_lone_sell_does_not_create_a_short_to_auto_close(trade_db, allow_all, monkeypatch):
+    """A SELL with no open long is blocked; auto-close must not invent a short."""
+    out = pt.run_paper_session([_plan(action="SELL", price=100.0)], holdings=[], total_portfolio=1)
+    assert out[0]["blocked"] is True
     monkeypatch.setattr(pt, "_fetch_current_prices", lambda _syms: {"NVDA": 105.0})
-    closed = pt.check_and_close_paper_positions()
-    assert len(closed) == 1
-    assert closed[0]["outcome"] == "LOSS"
-    assert "Stop hit" in (closed[0]["notes"] or "")
-
-
-def test_short_hits_target_when_price_falls(trade_db, allow_all, monkeypatch):
-    pt.run_paper_session([_plan(action="SELL", price=100.0)], holdings=[], total_portfolio=1)
+    assert pt.check_and_close_paper_positions() == []
     monkeypatch.setattr(pt, "_fetch_current_prices", lambda _syms: {"NVDA": 88.0})
-    closed = pt.check_and_close_paper_positions()
-    assert len(closed) == 1
-    assert closed[0]["outcome"] == "WIN"
-    assert "Target hit" in (closed[0]["notes"] or "")
+    assert pt.check_and_close_paper_positions() == []
 
 
 def test_missing_price_leaves_position_open(trade_db, allow_all, monkeypatch):

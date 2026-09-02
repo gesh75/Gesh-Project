@@ -7,6 +7,12 @@ Mirrors the full GESH action plan in simulation mode:
   - Tracks simulated P&L vs real portfolio performance
   - Auto-closes positions when price hits stop or target
 
+Long-only book (GFD-008):
+  BUY/ADD open longs with stop below entry and target above.
+  TRIM/SELL FIFO-close matching open BUY/ADD lots.
+  They never open inverted shorts. Realized P&L is always
+  (exit − entry) × shares.
+
 Designed to:
   1. Test new signal configs risk-free before going live
   2. Validate scanner modes (1HR, 5MIN, premarket) before auto_trade=True
@@ -29,7 +35,13 @@ from typing import Any
 import price_source  # locked yf.download adapter (thread-safety)
 logger = logging.getLogger(__name__)
 
-from trade_log import log_trade, close_trade, get_trade_history, get_win_rate
+from trade_log import (
+    log_trade,
+    close_trade,
+    close_long_qty,
+    get_trade_history,
+    get_win_rate,
+)
 from allocation_config import load_config, validate_action
 
 
@@ -49,6 +61,9 @@ def run_paper_session(
 ) -> list[dict]:
     """
     Convert an action plan into paper trade entries.
+
+    BUY/ADD open longs. TRIM/SELL close matching open longs (FIFO).
+    TRIM/SELL never open a short-like row.
 
     Args:
         action_plan: List of action dicts from daily analysis.
@@ -94,44 +109,71 @@ def run_paper_session(
             })
             continue
 
-        # Calculate stop/target from config or defaults
+        signal_reason = item.get("signal_reason") or item.get("reason", "")
+        notes = f"Paper trade | Portfolio: ${total_portfolio:,.0f}"
+
         if action in ("BUY", "ADD"):
             stop   = round(price * (1 - DEFAULT_STOP_PCT),   2)
             target = round(price * (1 + DEFAULT_TARGET_PCT), 2)
-        else:  # TRIM/SELL
-            stop   = round(price * (1 + DEFAULT_STOP_PCT),   2)
-            target = round(price * (1 - DEFAULT_TARGET_PCT), 2)
+            trade_id = log_trade(
+                symbol=symbol,
+                action=action,
+                shares=shares,
+                entry_price=price,
+                stop_loss=stop,
+                target_price=target,
+                scanner_source=scanner_source,
+                signal_reason=signal_reason,
+                notes=notes,
+                is_paper=True,
+            )
+            open_positions += 1
+            created.append({
+                "trade_id":     trade_id,
+                "symbol":       symbol,
+                "action":       action,
+                "shares":       shares,
+                "entry_price":  price,
+                "stop_loss":    stop,
+                "target_price": target,
+                "trade_usd":    round(trade_usd, 2),
+                "signal_reason": signal_reason,
+                "blocked":      False,
+            })
+            continue
 
-        signal_reason = item.get("signal_reason") or item.get("reason", "")
-
-        trade_id = log_trade(
-            symbol=symbol,
-            action=action,
-            shares=shares,
-            entry_price=price,
-            stop_loss=stop,
-            target_price=target,
-            scanner_source=scanner_source,
-            signal_reason=signal_reason,
-            notes=f"Paper trade | Portfolio: ${total_portfolio:,.0f}",
+        # TRIM/SELL: close matching open longs. Never invert stops/P&L (GFD-008).
+        closed_rows = close_long_qty(
+            symbol,
+            shares,
+            price,
+            notes=f"Paper {action} | {scanner_source} | {signal_reason}",
             is_paper=True,
         )
-
-        if action in ("BUY", "ADD"):
-            open_positions += 1
-
-        created.append({
-            "trade_id":     trade_id,
-            "symbol":       symbol,
-            "action":       action,
-            "shares":       shares,
-            "entry_price":  price,
-            "stop_loss":    stop,
-            "target_price": target,
-            "trade_usd":    round(trade_usd, 2),
-            "signal_reason": signal_reason,
-            "blocked":      False,
-        })
+        if not closed_rows:
+            created.append({
+                "symbol": symbol,
+                "action": action,
+                "blocked": True,
+                "reason": "No open paper long to trim/sell",
+            })
+            continue
+        for rec in closed_rows:
+            created.append({
+                "trade_id":      rec.get("id"),
+                "symbol":        symbol,
+                "action":        action,
+                "shares":        rec.get("shares"),
+                "entry_price":   rec.get("entry_price"),
+                "exit_price":    rec.get("exit_price"),
+                "realized_pnl":  rec.get("realized_pnl"),
+                "pnl_pct":       rec.get("pnl_pct"),
+                "outcome":       rec.get("outcome"),
+                "trade_usd":     round(float(rec.get("shares") or 0) * price, 2),
+                "signal_reason": signal_reason,
+                "blocked":       False,
+                "closed":        True,
+            })
 
     return created
 
@@ -141,9 +183,10 @@ def run_paper_session(
 def check_and_close_paper_positions() -> list[dict]:
     """
     Fetch current prices for all open paper trades.
-    Auto-close positions that have hit stop loss or target price.
+    Auto-close longs that have hit stop loss or target price.
 
-    Returns list of closed trade records.
+    Open rows are BUY/ADD longs only after GFD-008. Any leftover TRIM/SELL
+    row is also closed with long-exit P&L (see trade_log.close_trade).
     """
     open_trades = get_trade_history(open_only=True, is_paper=True)
     if not open_trades:
@@ -159,20 +202,13 @@ def check_and_close_paper_positions() -> list[dict]:
         if price is None:
             continue
 
-        action     = trade["action"]
         stop       = trade.get("stop_loss")
         target     = trade.get("target_price")
         trade_id   = trade["id"]
 
-        hit_stop   = False
-        hit_target = False
-
-        if action in ("BUY", "ADD"):
-            if stop   and price <= stop:   hit_stop   = True
-            if target and price >= target: hit_target = True
-        else:  # TRIM/SELL
-            if stop   and price >= stop:   hit_stop   = True
-            if target and price <= target: hit_target = True
+        # Long-only stop/target: stop below entry, target above.
+        hit_stop   = bool(stop and price <= stop)
+        hit_target = bool(target and price >= target)
 
         if hit_stop or hit_target:
             note = "Target hit" if hit_target else "Stop hit"
@@ -215,7 +251,7 @@ def _fetch_current_prices(symbols: list[str]) -> dict[str, float]:
 # ─── Manual close ─────────────────────────────────────────────────────────────
 
 def close_paper_position(trade_id: int, exit_price: float, notes: str = "") -> dict:
-    """Manually close a specific paper trade."""
+    """Manually close a specific paper trade (long P&L)."""
     return close_trade(trade_id, exit_price=exit_price, notes=notes, is_paper=True)
 
 
