@@ -58,6 +58,9 @@ class TestMarkdownToHtml:
 
 
 class TestRenderTermsHtml:
+    def setup_method(self):
+        legal_pages._cache.clear()
+
     def test_is_self_contained_page(self):
         html = legal_pages.render_terms_html()
         assert html.lstrip().lower().startswith("<!doctype html")
@@ -76,8 +79,30 @@ class TestRenderTermsHtml:
         assert "Delphia" not in html
         assert "Series 65" not in html
 
+    def test_does_not_serve_author_draft_or_template_banner(self):
+        """Public /terms must not look like an unreviewed template."""
+        html = legal_pages.render_terms_html().lower()
+        assert "not yet legally reviewed" not in html
+        assert "template language" not in html
+        assert "before charging any user" not in html
+
+    def test_does_not_claim_outputs_are_untailored_while_mybook_exists(self):
+        """My Book runs models on user holdings — ToS must not deny that."""
+        html = legal_pages.render_terms_html().lower()
+        assert "does not tailor any output to you personally" not in html
+        assert "financial plan" in html
+        assert "research metrics" in html or "model tags" in html
+
+    def test_disclaimer_is_short_nfa_page_not_a_terms_clone(self):
+        disc = legal_pages.render_disclaimer_html()
+        terms = legal_pages.render_terms_html()
+        assert "not financial" in disc.lower()
+        assert "never places live orders" in disc.lower()
+        assert "/terms" in disc
+        assert len(disc) < len(terms)
+
     def test_handles_missing_file_gracefully(self, monkeypatch, tmp_path):
         monkeypatch.setattr(legal_pages, "TERMS_PATH", tmp_path / "missing.md")
-        html = legal_pages.render_terms_html()
-        assert "<!doctype html" in html.lower()          # still a valid page
+        html = legal_pages.render_terms_html(use_cache=False)
+        assert "<!doctype html" in html.lower()  # still a valid page
         assert "terms" in html.lower()

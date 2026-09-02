@@ -91,15 +91,31 @@ HOLDINGS = [
 ]
 TOTAL_EQ = 10_000.0
 ORDERS = [
-    {"symbol": "NVDA", "action": "BUY", "shares": 5, "current_price": 100.0,
-     "signal_reason": "Kelly ADD: now 20.0% vs optimal 25.0%"},
-    {"symbol": "MU", "action": "TRIM", "shares": 10, "current_price": 50.0,
-     "signal_reason": "Kelly TRIM: now 15.0% vs optimal 10.0%"},
+    {
+        "symbol": "NVDA",
+        "action": "BUY",
+        "shares": 5,
+        "current_price": 100.0,
+        "signal_reason": "Kelly ADD: now 20.0% vs optimal 25.0%",
+    },
+    {
+        "symbol": "MU",
+        "action": "TRIM",
+        "shares": 10,
+        "current_price": 50.0,
+        "signal_reason": "Kelly TRIM: now 15.0% vs optimal 10.0%",
+    },
 ]
 CONFIDENCE = {"NVDA": 0.89, "MU": 0.78}
 
 
-def _run(gate_mod, verdicts: dict | None = None, orders=ORDERS, conf=CONFIDENCE):
+def _run(
+    gate_mod,
+    verdicts: dict | None = None,
+    orders=ORDERS,
+    conf=CONFIDENCE,
+    **gate_kw,
+):
     events: list = []
     intents: list = []
     rec_calls: list = []
@@ -112,9 +128,15 @@ def _run(gate_mod, verdicts: dict | None = None, orders=ORDERS, conf=CONFIDENCE)
         intent_builder=_make_intent_builder(events, intents),
         gate_evaluate=_make_gate(events, verdicts or {}),
         recorder=_make_recorder(events, rec_calls),
+        **gate_kw,
     )
-    return SimpleNamespace(events=events, intents=intents, rec_calls=rec_calls,
-                           gate_results=gate_results, created=created)
+    return SimpleNamespace(
+        events=events,
+        intents=intents,
+        rec_calls=rec_calls,
+        gate_results=gate_results,
+        created=created,
+    )
 
 
 # ── (a) causal order: intent → decision → record ──────────────────────────────
@@ -222,13 +244,12 @@ def test_each_symbol_uses_its_own_provider_quote_timestamp(gate_mod):
 # ── real confidence derivation: consensus first, kelly win_rate fallback ──────
 def test_build_confidence_map_uses_real_signals(gate_mod):
     consensus = {"NVDA": {"confidence": 89.0}}
-    kelly = {"NVDA": {"win_rate": 53.5}, "MU": {"win_rate": 54.5},
-             "OVER": {"win_rate": 250.0}}
+    kelly = {"NVDA": {"win_rate": 53.5}, "MU": {"win_rate": 54.5}, "OVER": {"win_rate": 250.0}}
     conf = gate_mod.build_confidence_map(consensus, kelly)
-    assert conf["NVDA"] == pytest.approx(0.89)   # consensus beats kelly
-    assert conf["MU"] == pytest.approx(0.545)    # kelly win_rate fallback
-    assert conf["OVER"] == 1.0                   # clamped to [0, 1]
-    assert conf.get("MISSING", 0.0) == 0.0       # absent → fail-closed
+    assert conf["NVDA"] == pytest.approx(0.89)  # consensus beats kelly
+    assert conf["MU"] == pytest.approx(0.545)  # kelly win_rate fallback
+    assert conf["OVER"] == 1.0  # clamped to [0, 1]
+    assert conf.get("MISSING", 0.0) == 0.0  # absent → fail-closed
 
 
 # ── recorder fail-soft: approved intent, no fill, remaining orders still gated ─
@@ -308,3 +329,89 @@ def test_order_target_pct_negative_equity_is_zero(gate_mod):
         -1.0,
     )
     assert pct == 0.0
+
+
+def test_build_confidence_map_uses_coverage_not_conviction(gate_mod):
+    """CONFIDENCE_FLOOR is a data-coverage gate, not call strength.
+
+    Putting conviction on intent.confidence would also reject TRIMs of
+    weak-vote names. Coverage 89 with conviction 43 must still clear 0.75.
+    """
+    consensus = {"NVDA": {"confidence": 89.0, "conviction": 43.0}}
+    conf = gate_mod.build_confidence_map(consensus, {"NVDA": {"win_rate": 53.5}})
+    assert conf["NVDA"] == pytest.approx(0.89)
+    assert conf["NVDA"] >= 0.75
+
+
+def test_build_confidence_map_conviction_zero_does_not_replace_coverage(gate_mod):
+    consensus = {"NVDA": {"confidence": 89.0, "conviction": 0.0}}
+    conf = gate_mod.build_confidence_map(consensus, {})
+    assert conf["NVDA"] == pytest.approx(0.89)
+
+
+def test_buy_below_entry_floor_is_rejected_trim_is_not(gate_mod):
+    """Conviction belongs on the BUY-only entry floor, not CONFIDENCE_FLOOR.
+
+    NVDA raw_score 0.237 → conviction ~43, below min_entry_score 0.35.
+    Coverage stays 0.89 on the intent so a TRIM of the same book still clears
+    the 0.75 floor.
+    """
+    r = _run(
+        gate_mod,
+        raw_score_by_sym={"NVDA": 0.237, "MU": 0.237},
+        min_entry_score=0.35,
+    )
+    nvda_intent = next(i for i in r.intents if i.symbol == "NVDA")
+    mu_intent = next(i for i in r.intents if i.symbol == "MU")
+    assert nvda_intent.confidence == pytest.approx(0.89)
+    assert mu_intent.confidence == pytest.approx(0.78)
+    nvda = next(g for g in r.gate_results if g["symbol"] == "NVDA")
+    mu = next(g for g in r.gate_results if g["symbol"] == "MU")
+    assert nvda["approved"] is False
+    assert "entry floor" in (nvda["reason"] or "").lower()
+    assert mu["approved"] is True
+    assert ("record", "NVDA") not in r.events
+    assert ("record", "MU") in r.events
+
+
+def test_buy_blocked_by_precision_overlay_even_above_floor(gate_mod, monkeypatch):
+    """Rel.Strength bearish vetoes a BUY that clears min_entry_score."""
+
+    class _Block:
+        blocked = True
+        reason = "Rel.Strength bearish"
+
+    class _Open:
+        blocked = False
+        reason = "ok"
+
+    def _overlay(action, row=None):  # noqa: ARG001
+        votes = (row or {}).get("votes") or {}
+        if votes.get("Rel.Strength") == -1:
+            return _Block()
+        return _Open()
+
+    monkeypatch.setattr(gate_mod, "precision_overlay_blocks", _overlay)
+    r = _run(
+        gate_mod,
+        raw_score_by_sym={"NVDA": 0.62, "MU": 0.62},
+        min_entry_score=0.50,
+        consensus_by_sym={
+            "NVDA": {
+                "verdict": "STRONG BUY",
+                "votes": {
+                    "Momentum": 1, "Trend": 1, "Rel.Strength": -1,
+                    "Volume": 1, "Macro": 1,
+                },
+                "bullish": 4,
+                "bearish": 1,
+            },
+        },
+    )
+    nvda = next(g for g in r.gate_results if g["symbol"] == "NVDA")
+    mu = next(g for g in r.gate_results if g["symbol"] == "MU")
+    assert nvda["approved"] is False
+    assert "precision overlay" in (nvda["reason"] or "").lower()
+    assert mu["approved"] is True
+    assert ("record", "NVDA") not in r.events
+    assert ("record", "MU") in r.events

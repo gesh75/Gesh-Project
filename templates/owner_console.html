@@ -700,8 +700,8 @@ async function daRunAnalysis(){
   }catch(e){
     $('da-placeholder').style.display='flex';
     if(e&&e.authRequired){
-      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">🔒</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Daily Analysis again.</div>`;
-      if(typeof toast==='function') toast('Sign in to run a live Claude analysis','error',6000);
+      $('da-placeholder').innerHTML=`<div class="deep-ph-icon">🔒</div><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live AI analysis only runs for a signed-in session. Sign in, then click ▶ Run Daily Analysis again.</div>`;
+      if(typeof toast==='function') toast('Sign in to run a live AI analysis','error',6000);
     }else if(e&&e.name==='AbortError'){
       $('da-placeholder').innerHTML=`<div class="deep-ph-icon">✋</div><div class="deep-ph-text" style="color:var(--muted)">Run cancelled. Nothing was saved — click ▶ Run Daily Analysis to start again.</div>`;
     }else if(e&&e.name==='TimeoutError'){
@@ -1005,7 +1005,7 @@ async function runAllAgents(){
     secR=await agentPost('/api/agents/sec','SEC agent');
 
     intelSetProgress('Step 2/3 — News sentiment scanner',
-      '✓ SEC done ('+daEsc(String(secR.new_filings||0))+' new, '+daEsc(String(secR.skipped_cached||0))+' cached skipped)<br>Scanning holdings + watchlist news…');
+      '✓ SEC done ('+daEsc(String(secR.new_filings||0))+' new, '+daEsc(String(secR.skipped_cached||0))+' cached skipped)<br>Cache first — live AI scoring is capped (~20s) and skipped if the provider is down…');
     newsR=await agentPost('/api/agents/news','News agent');
 
     intelSetProgress('Step 3/3 — Fundamental momentum detector',
@@ -1394,7 +1394,7 @@ async function runDeepAnalysis(){
   _cachedAnalysisLoaded=false; // allow re-cache after fresh run
   const btn=$('btn-deep'),cont=$('deep-container');
   btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analyzing...';
-  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running AI deep analysis…<br><span style="font-size:13px">Generating snowflake scores, fair values, predictions</span><br><button class="da-btn-load" style="margin-top:12px" onclick="cancelDeepAnalysis()">Cancel</button></div></div>`;
+  cont.innerHTML=`<div class="deep-placeholder"><div class="spin" style="width:22px;height:22px;border-width:3px;margin:0 auto 14px"></div><div class="deep-ph-text">Running AI deep analysis on Grok…<br><span style="font-size:13px">Snowflake scores, fair values, predictions — typically 7–15 minutes. Leave this tab open.</span><br><button class="da-btn-load" style="margin-top:12px" onclick="cancelDeepAnalysis()">Cancel</button></div></div>`;
   // GESH-5: bound the wait. Without a deadline a hung Claude call spins forever.
   _deepCtl=new AbortController();
   const killer=setTimeout(()=>_deepCtl&&_deepCtl.abort(new DOMException('deadline','TimeoutError')),DA_DEADLINE_MS);
@@ -1417,8 +1417,8 @@ async function runDeepAnalysis(){
     refreshSectionBadges();
   }catch(e){
     if(e&&e.authRequired){
-      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live Claude analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
-      toast('Sign in to run a live Claude analysis','error',6000);
+      cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--yellow)"><strong>Sign in required.</strong><br>A live AI analysis only runs for a signed-in session. Sign in, then click ▶ Run Deep Analysis again.</div></div>`;
+      toast('Sign in to run a live AI analysis','error',6000);
     }else if(e&&e.name==='AbortError'){
       cont.innerHTML=`<div class="deep-placeholder"><div class="deep-ph-text" style="color:var(--muted)">Run cancelled — nothing was saved.</div></div>`;
     }else if(e&&e.name==='TimeoutError'){

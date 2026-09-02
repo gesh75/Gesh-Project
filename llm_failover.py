@@ -12,12 +12,13 @@ The critical design constraint: the object returned here must quack like an
 Satisfying that shape means NOTHING downstream changes when a fallback runs.
 
 Providers are tried in the order named by ``GESH_LLM_FAILOVER`` (default
-``grok,gemini``):
+``xai,grok,gemini``):
 
-  grok    — the Grok CLI in headless mode (``grok -p --output-format json``).
-            Uses the interactive OAuth session in ~/.grok/auth.json, so it needs
-            no XAI_API_KEY. This is the same "CLI as a courier" pattern the
-            snapshot fetcher already uses for the Robinhood MCP.
+  xai     — SpaceXAI HTTP Chat Completions (``https://api.x.ai/v1/chat/completions``)
+            with ``XAI_API_KEY``. Model ``grok-4.6``. This is the production path
+            for pay.geshfinance.com — no CLI, no launchd PATH hole.
+  grok    — the Grok CLI in headless mode. Uses ~/.grok/auth.json (grok.com
+            login, no extra API bill) when XAI_API_KEY is unset.
   gemini  — google-genai via GEMINI_API_KEY (see gemini_agent.py).
 
 Failover is deliberately LOUD: ``FAILOVER_COUNT`` / ``LAST_FAILOVER`` are module
@@ -28,6 +29,7 @@ degrade in llm_gateway.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -38,6 +40,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Final
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 # Observability: mirrors llm_gateway.STRICT_DEGRADE_COUNT so a caller (run_ai2)
@@ -45,10 +49,22 @@ logger = logging.getLogger(__name__)
 FAILOVER_COUNT: int = 0
 LAST_FAILOVER: dict[str, Any] | None = None
 
-_DEFAULT_ORDER: Final[str] = "grok,gemini"
+_DEFAULT_ORDER: Final[str] = "xai,grok,gemini"
 _GROK_MODEL: Final[str] = os.getenv("GESH_GROK_MODEL", "grok-4.6")
-_GROK_TIMEOUT_S: Final[float] = float(os.getenv("GESH_GROK_TIMEOUT_S", "900"))
+_GROK_TIMEOUT_S: Final[float] = 900.0  # default; grok_timeout_s() reads env at call time
 _GROK_MAX_TURNS: Final[str] = os.getenv("GESH_GROK_MAX_TURNS", "4")
+_XAI_URL: Final[str] = "https://api.x.ai/v1/chat/completions"
+_XAI_MODEL: Final[str] = os.getenv("GESH_XAI_MODEL", "grok-4.6")
+_XAI_TIMEOUT_S: Final[float] = 900.0  # default; xai_timeout_s() reads env at call time
+# Interactive intel (news/SEC/fundamentals) must not inherit the 15-minute deep
+# analysis budget. One hung grok-4.6 call per ticker froze Company Intelligence.
+_XAI_FAST_TIMEOUT_S: Final[float] = 20.0
+_FAST_OPS: Final[frozenset[str]] = frozenset({"news_sentiment", "sec_filing", "fundamental_scan"})
+# gemini-2.5-pro 404s for new API users ("no longer available"). Flash is the
+# live default; the id is env-overridable and a 404 degrades to the lite model
+# the same way a retired Grok pin degrades to the CLI default.
+_GEMINI_FAILOVER_DEFAULT: Final[str] = "gemini-2.5-flash"
+_GEMINI_FAILOVER_FALLBACK_DEFAULT: Final[str] = "gemini-2.0-flash-lite"
 
 # The Grok CLI loads the user's global agent rules, which on this host instruct it
 # to open a memory MCP session before answering ("I'll load OMEGA context first…").
@@ -314,17 +330,22 @@ def coerce_to_schema(payload: Any, schema: dict[str, Any]) -> Any:
             return []
         return [coerce_to_schema(item, items) for item in payload]
     if payload is None:
+        # Omitted scores must not become 0 — a missing portfolio_score rendered
+        # as "0 / 100" is a fabricated measurement (gap F-11). Strings/arrays
+        # stay typed blanks so required-key readers do not KeyError.
+        if node_type in ("integer", "number"):
+            return None
         return _ZERO_BY_TYPE.get(str(node_type), None)
     if node_type == "integer":
         try:
             return round(float(payload))
         except (TypeError, ValueError):
-            return 0
+            return None
     if node_type == "number":
         try:
             return float(payload)
         except (TypeError, ValueError):
-            return 0.0
+            return None
     if node_type == "string" and not isinstance(payload, str):
         return str(payload)
     return payload
@@ -332,30 +353,68 @@ def coerce_to_schema(payload: Any, schema: dict[str, Any]) -> Any:
 
 # ── Providers ────────────────────────────────────────────────────────────────
 
+# launchd's default PATH is /usr/bin:/bin:/usr/sbin:/sbin. The Grok CLI lives in
+# ~/.local/bin. shutil.which("grok") is therefore False in every :9000 process
+# started by com.gesh.main — the same hole that hid Grok from the scheduled
+# chain (scripts/daily_analysis_et.sh). Search well-known locations too.
+_GROK_FALLBACK_BINS: Final[tuple[str, ...]] = (
+    os.path.expanduser("~/.local/bin/grok"),
+    "/opt/homebrew/bin/grok",
+    "/usr/local/bin/grok",
+)
+
+
+def _grok_executable() -> str | None:
+    found = shutil.which("grok")
+    if found:
+        return found
+    for raw in _GROK_FALLBACK_BINS:
+        if os.path.isfile(raw) and os.access(raw, os.X_OK):
+            return raw
+    return None
+
 
 def grok_available() -> bool:
-    if shutil.which("grok") is None:
+    if _grok_executable() is None:
         return False
     # The CLI falls back to XAI_API_KEY when no OAuth session is cached.
     return Path.home().joinpath(".grok", "auth.json").exists() or bool(os.getenv("XAI_API_KEY"))
 
 
-def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
+def grok_timeout_s() -> float:
+    """GESH_GROK_TIMEOUT_S at call time so the 10:30 wrapper can cap the CLI."""
+    return _env_float("GESH_GROK_TIMEOUT_S", _GROK_TIMEOUT_S)
+
+
+def gemini_timeout_s() -> float:
+    """GESH_GEMINI_TIMEOUT_S at call time — SDK default is wait-forever."""
+    return _env_float("GESH_GEMINI_TIMEOUT_S", 180.0)
+
+
+def call_grok(
+    prompt: str,
+    *,
+    timeout_s: float | None = None,
+    operation: str = "",  # noqa: ARG001 — shared provider signature
+    max_tokens: int | None = None,  # noqa: ARG001
+) -> str:
     """Run the Grok CLI headless and return its final text answer.
 
     The prompt goes through --prompt-file: a deep-analysis prompt is tens of KB
     and would risk ARG_MAX as an argv string. --max-turns 1 keeps it a single
     completion rather than an agentic loop that might try to read the repo.
     """
-    if shutil.which("grok") is None:
+    grok_bin = _grok_executable()
+    if grok_bin is None:
         raise FailoverUnavailable("grok CLI not on PATH")
 
-    timeout_s = timeout_s or _GROK_TIMEOUT_S
+    if timeout_s is None:
+        timeout_s = grok_timeout_s()
     with tempfile.TemporaryDirectory(prefix="gesh-failover.") as workdir:
         prompt_path = Path(workdir) / "prompt.txt"
         prompt_path.write_text(prompt, encoding="utf-8")
         base = [
-            "grok",
+            grok_bin,
             "--prompt-file",
             str(prompt_path),
             "--verbatim",
@@ -419,24 +478,187 @@ def call_grok(prompt: str, *, timeout_s: float | None = None) -> str:
     return raw
 
 
+def xai_available() -> bool:
+    return bool(os.getenv("XAI_API_KEY"))
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def xai_timeout_s(operation: str = "") -> float:
+    if operation in _FAST_OPS:
+        return _env_float("GESH_XAI_FAST_TIMEOUT_S", _XAI_FAST_TIMEOUT_S)
+    return _env_float("GESH_XAI_TIMEOUT_S", _XAI_TIMEOUT_S)
+
+
+def _xai_timeout_s(operation: str = "") -> float:
+    return xai_timeout_s(operation)
+
+
+def _xai_http_error_summary(response: Any) -> str:
+    """Status + optional error type/code. Never the raw body (may echo prompts)."""
+    kind = ""
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            kind = str(err.get("type") or err.get("code") or "")[:80]
+    suffix = f" ({kind})" if kind else ""
+    return f"xAI HTTP {response.status_code}{suffix}"
+
+
+def call_xai(
+    prompt: str,
+    *,
+    operation: str = "",
+    max_tokens: int | None = None,
+) -> str:
+    """SpaceXAI Chat Completions. Key from env only — never logged.
+
+    ``response_format=json_object`` is the xAI structured-output path
+    (docs.x.ai structured outputs). Deep analysis used to get unconstrained
+    prose, then ``coerce_to_schema`` filled omitted scores with blanks.
+    """
+    key = os.getenv("XAI_API_KEY") or ""
+    if not key:
+        raise FailoverUnavailable("XAI_API_KEY unset")
+    model = os.getenv("GESH_XAI_MODEL") or _XAI_MODEL
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    if max_tokens is not None and int(max_tokens) > 0:
+        body["max_tokens"] = int(max_tokens)
+    try:
+        response = httpx.post(
+            _XAI_URL,
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=_xai_timeout_s(operation),
+        )
+    except Exception as exc:
+        raise FailoverUnavailable(f"xAI request failed: {type(exc).__name__}") from exc
+    if response.status_code >= 400:
+        raise FailoverUnavailable(_xai_http_error_summary(response))
+    try:
+        data = response.json()
+    except Exception as exc:
+        raise FailoverUnavailable("xAI returned non-JSON") from exc
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, str) and content.strip():
+            return content
+    raise FailoverUnavailable("xAI returned empty content")
+
+
 def gemini_available() -> bool:
     return bool(os.getenv("GEMINI_API_KEY"))
 
 
-def call_gemini(prompt: str) -> str:
+def _gemini_failover_model() -> str:
+    return os.getenv("GESH_GEMINI_FAILOVER_MODEL") or _GEMINI_FAILOVER_DEFAULT
+
+
+def _gemini_failover_fallback() -> str:
+    return os.getenv("GESH_GEMINI_FAILOVER_FALLBACK") or _GEMINI_FAILOVER_FALLBACK_DEFAULT
+
+
+def _is_missing_gemini_model(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "404" in text or "not_found" in text or "no longer available" in text
+
+
+def _gemini_generate(agent: Any, prompt: str, model: str, max_tokens: int) -> str:
+    """Call gemini_agent._generate with the deep-analysis budget when supported.
+
+    Test stubs only take ``prompt, model=``. The real agent accepts
+    ``max_tokens`` and ``response_mime_type``; inspect the signature so a
+    TypeError from the SDK is not mistaken for a stub mismatch (and then
+    silently drop the 24k token budget).
+    """
+    fn = agent._generate
+    kwargs: dict[str, Any] = {"model": model}
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        params = {}
+    has_var = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if "max_tokens" in params or has_var:
+        kwargs["max_tokens"] = max_tokens
+    if "response_mime_type" in params or has_var:
+        kwargs["response_mime_type"] = "application/json"
+    if "timeout_s" in params or has_var:
+        kwargs["timeout_s"] = gemini_timeout_s()
+    return fn(prompt, **kwargs)
+
+
+def call_gemini(
+    prompt: str,
+    *,
+    operation: str = "",  # noqa: ARG001 — shared provider signature
+    max_tokens: int | None = None,
+) -> str:
     if not gemini_available():
         raise FailoverUnavailable("GEMINI_API_KEY unset")
     try:
         import gemini_agent
     except Exception as exc:  # pragma: no cover - import guard
         raise FailoverUnavailable(f"gemini_agent unavailable: {exc}") from exc
-    text = gemini_agent._generate(prompt, model="gemini-2.5-pro")
-    if not isinstance(text, str) or not text.strip():
-        raise FailoverUnavailable("gemini returned empty text")
-    return text
+
+    models = [_gemini_failover_model()]
+    fallback = _gemini_failover_fallback()
+    if fallback not in models:
+        models.append(fallback)
+
+    # gemini_agent._generate defaults to 1024 output tokens — enough for news
+    # scoring, nowhere near deep_analyze_portfolio (max_tokens=24000). A Gemini
+    # failover with the default truncates the JSON and the report fills blanks.
+    out_tokens = int(max_tokens) if max_tokens and int(max_tokens) > 0 else 8192
+
+    last_exc: BaseException | None = None
+    for model in models:
+        try:
+            text = _gemini_generate(gemini_agent, prompt, model, out_tokens)
+        except Exception as exc:
+            last_exc = exc
+            if (
+                _is_missing_gemini_model(exc)
+                or "429" in str(exc)
+                or "RESOURCE_EXHAUSTED" in str(exc)
+            ):
+                logger.warning(
+                    "LLM_FAILOVER: gemini model %r failed (%s) — retrying fallback. "
+                    "Set GESH_GEMINI_FAILOVER_MODEL to a current id.",
+                    model,
+                    exc,
+                )
+                continue
+            raise FailoverUnavailable(f"gemini failed: {exc}") from exc
+        if isinstance(text, str) and text.strip():
+            return text
+        last_exc = FailoverUnavailable("gemini returned empty text")
+    raise FailoverUnavailable(f"gemini failed: {last_exc}")
 
 
 _PROVIDERS: Final[dict[str, tuple[Any, Any]]] = {
+    "xai": (xai_available, call_xai),
     "grok": (grok_available, call_grok),
     "gemini": (gemini_available, call_gemini),
 }
@@ -482,6 +704,25 @@ def analysis_model_label(default_model: str) -> str:
 # ── Entry point used by llm_gateway ──────────────────────────────────────────
 
 
+def _invoke_provider(call: Any, prompt: str, *, operation: str, max_tokens: int) -> str:
+    """Call a failover provider, adding kwargs the callable actually accepts.
+
+    Test stubs are ``lambda prompt: text``. A bare TypeError retry would swallow
+    SDK bugs and drop the 24k deep-analysis budget this path exists to forward.
+    """
+    kwargs: dict[str, Any] = {}
+    try:
+        params = inspect.signature(call).parameters
+    except (TypeError, ValueError):
+        params = {}
+    has_var = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if "operation" in params or has_var:
+        kwargs["operation"] = operation
+    if "max_tokens" in params or has_var:
+        kwargs["max_tokens"] = max_tokens
+    return call(prompt, **kwargs)
+
+
 def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessage:
     """Try each configured provider; return the first Anthropic-shaped success."""
     global FAILOVER_COUNT, LAST_FAILOVER
@@ -503,13 +744,16 @@ def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessag
             if not is_available():
                 errors.append(f"{name}: not configured")
                 continue
+            if operation in _FAST_OPS and name == "grok":
+                errors.append("grok: skipped (slow CLI) for fast operation")
+                continue
             logger.warning(
                 "LLM_FAILOVER: Anthropic unavailable for operation=%s — falling back to %s. "
                 "Output is NOT grammar-constrained; schema coercion applies.",
                 operation,
                 name,
             )
-            text = call(prompt)
+            text = _invoke_provider(call, prompt, operation=operation, max_tokens=max_tokens)
             required_any = schema_required_keys(schema)
             payload = extract_json_object(text, required_any=required_any or None)
             if not extracted_payload_matches_schema(payload, schema):
@@ -521,9 +765,10 @@ def attempt(*, operation: str, max_tokens: int, **kwargs: Any) -> FailoverMessag
             FAILOVER_COUNT += 1
             LAST_FAILOVER = {"operation": operation, "provider": name}
             logger.warning("LLM_FAILOVER: operation=%s satisfied by %s", operation, name)
+            model = _XAI_MODEL if name == "xai" else (_GROK_MODEL if name == "grok" else name)
             return FailoverMessage(
                 provider=name,
-                model=_GROK_MODEL if name == "grok" else name,
+                model=model,
                 tool_name=tool_name,
                 payload=payload,
             )

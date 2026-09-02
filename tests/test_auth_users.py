@@ -28,6 +28,7 @@ def isolated_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
     monkeypatch.setenv("GESH_AUTH_SECRET", "test-secret-deterministic")
     monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
     import auth_users as au
+
     monkeypatch.setattr(au, "AUTH_DB_PATH", tmp_path / "auth.db")
     au.init_auth_db()
     yield
@@ -52,7 +53,9 @@ def _signed_v2_token(subject: str, *, typ: str = "session") -> str:
     signature = au._b64u(hmac.new(au._secret(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{signature}"
 
+
 # ── password hashing ──────────────────────────────────────────────────────────
+
 
 class TestPasswordHashing:
     def test_round_trip(self):
@@ -76,6 +79,7 @@ class TestPasswordHashing:
 
 # ── session token ─────────────────────────────────────────────────────────────
 
+
 class TestSessionToken:
     def test_issue_verify_round_trip(self):
         au.create_user("a@b.com", "pw")
@@ -96,7 +100,7 @@ class TestSessionToken:
 
     def test_expired_token_rejected(self):
         au.create_user("a@b.com", "pw")
-        tok = au.issue_token("a@b.com", ttl=-1)   # already expired
+        tok = au.issue_token("a@b.com", ttl=-1)  # already expired
         assert au.verify_token(tok) is None
 
     def test_unknown_email_cannot_mint_an_identity_token(self):
@@ -109,6 +113,7 @@ class TestSessionToken:
 
 
 # ── user store ────────────────────────────────────────────────────────────────
+
 
 class TestUserStore:
     def test_create_and_get(self):
@@ -137,7 +142,7 @@ class TestUserStore:
     def test_inactive_user_cannot_authenticate(self):
         au.create_user("off@x.com", "pw")
         au.set_active("off@x.com", False)
-        assert au.verify_credentials("off@x.com", "pw") is False   # revoked on non-payment
+        assert au.verify_credentials("off@x.com", "pw") is False  # revoked on non-payment
 
     def test_reactivate(self):
         au.create_user("re@x.com", "pw")
@@ -158,6 +163,7 @@ class TestUserStore:
 
 # ── tier CLI (comp a tester to higher LLM quotas) ─────────────────────────────
 
+
 class TestTierCli:
     def test_tier_sets_billing_tier(self):
         au.create_user("t@x.com", "pw")
@@ -169,7 +175,7 @@ class TestTierCli:
         au.create_user("t@x.com", "pw")
         rc = au._cli(["tier", "t@x.com", "platinum"])
         assert rc == 1
-        assert au.get_tier("t@x.com") is None      # unchanged
+        assert au.get_tier("t@x.com") is None  # unchanged
 
     def test_unknown_user_rejected(self):
         rc = au._cli(["tier", "ghost@x.com", "desk"])
@@ -179,10 +185,11 @@ class TestTierCli:
         au.create_user("t@x.com", "pw")
         au._cli(["tier", "t@x.com", "trader"])
         row = next(u for u in au.list_users() if u["email"] == "t@x.com")
-        assert row["tier"] == "trader"             # list_users SELECT includes tier
+        assert row["tier"] == "trader"  # list_users SELECT includes tier
 
 
 # ── gate decision (OFF by default) ────────────────────────────────────────────
+
 
 class TestGate:
     def test_auth_disabled_by_default(self):
@@ -193,13 +200,13 @@ class TestGate:
         assert au.auth_enabled() is True
 
     def test_public_paths_allowed(self):
-        for p in ("/login", "/auth/login", "/terms", "/disclaimer", "/healthz"):
+        for p in ("/login", "/auth/login", "/terms", "/disclaimer", "/healthz", "/track-record"):
             assert au.is_public_path(p) is True
 
     def test_protected_paths_not_public(self):
         assert au.is_public_path("/") is False
         assert au.is_public_path("/api/portfolio") is False
-        assert au.is_public_path("/track-record") is False
+        assert au.is_public_path("/track-record") is True
 
     def test_public_prefix_respects_path_boundary(self):
         # '/api/congress' must expose itself and sub-paths…
@@ -234,12 +241,14 @@ class TestGate:
     def test_gate_rejects_disabled_user_immediately(self):
         au.create_user("churned@x.com", "pw")
         tok = au.issue_token("churned@x.com")
-        assert au.gate_decision("/api/portfolio", tok) == "allow"        # active
-        au.set_active("churned@x.com", False)                           # revoke
-        assert au.gate_decision("/api/portfolio", tok) == "unauthorized"  # same valid token now rejected
+        assert au.gate_decision("/api/portfolio", tok) == "allow"  # active
+        au.set_active("churned@x.com", False)  # revoke
+        assert (
+            au.gate_decision("/api/portfolio", tok) == "unauthorized"
+        )  # same valid token now rejected
 
     def test_gate_rejects_unknown_subject(self):
-        tok = _signed_v2_token(str(uuid.uuid4()))   # crypto-valid token, no such user
+        tok = _signed_v2_token(str(uuid.uuid4()))  # crypto-valid token, no such user
         assert au.gate_decision("/", tok) == "redirect"
 
     def test_authenticate_session_active_user(self):

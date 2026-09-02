@@ -72,7 +72,7 @@ def test_auth_gate_blocks_when_enabled(monkeypatch):
     monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
     assert client.get("/watch", follow_redirects=False).status_code == 302
     assert client.get("/watch/data", follow_redirects=False).status_code == 302
-    assert client.get("/track-record", follow_redirects=False).status_code == 302
+    assert client.get("/track-record", follow_redirects=False).status_code == 200
 
 
 def test_existing_views_unbroken():

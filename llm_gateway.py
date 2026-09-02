@@ -650,6 +650,34 @@ _FAILOVER_TRIGGERS: Final[tuple[type[BaseException], ...]] = (
     anthropic.APITimeoutError,
 )
 
+# Billing/auth failures will not recover later in the same process. Cache them
+# so run_ai2 does not pay another round-trip on every subsequent gateway call
+# (2026-08-26: credit-too-low 400, then Grok CLI held the chain lock 15–20 min).
+_ANTHROPIC_PERMANENT_FAIL: BaseException | None = None
+_CREDIT_MARKERS: Final[tuple[str, ...]] = (
+    "credit balance is too low",
+    "credit balance too low",
+    "purchase credits",
+)
+
+
+def _is_permanent_anthropic_fail(exc: BaseException) -> bool:
+    # Daily spend cap resets at UTC midnight; do not cache LLMBudgetExceededError
+    # for the life of :9000. Credit/auth will not recover in this process.
+    if isinstance(exc, anthropic.AuthenticationError):
+        return True
+    if isinstance(exc, anthropic.BadRequestError):
+        text = str(exc).lower()
+        return any(marker in text for marker in _CREDIT_MARKERS)
+    return False
+
+
+def _skip_anthropic() -> bool:
+    if _ANTHROPIC_PERMANENT_FAIL is not None:
+        return True
+    raw = (os.getenv("GESH_LLM_SKIP_ANTHROPIC") or "").strip().lower()
+    return raw in {"1", "true", "yes"}
+
 
 class Gateway:
     """Single entry point for Anthropic create/stream with spend accounting."""
@@ -744,17 +772,36 @@ class Gateway:
         a second model, and a truncation is a schema-too-large bug that a silent
         fallback would hide (see the max_tokens note in CLAUDE.md).
         """
+        global _ANTHROPIC_PERMANENT_FAIL
+        if llm_failover.enabled() and _skip_anthropic():
+            reason = (
+                type(_ANTHROPIC_PERMANENT_FAIL).__name__
+                if _ANTHROPIC_PERMANENT_FAIL is not None
+                else "GESH_LLM_SKIP_ANTHROPIC"
+            )
+            logger.warning(
+                "LLM_FAILOVER: skipping Anthropic for operation=%s (%s)",
+                operation,
+                reason,
+            )
+            try:
+                return llm_failover.attempt(operation=operation, max_tokens=max_tokens, **kwargs)
+            except llm_failover.FailoverUnavailable as fexc:
+                if _ANTHROPIC_PERMANENT_FAIL is not None:
+                    raise _ANTHROPIC_PERMANENT_FAIL from fexc
+                raise
+
         try:
             return self._call_anthropic(
                 mode=mode, operation=operation, model=model, max_tokens=max_tokens, **kwargs
             )
         except _FAILOVER_TRIGGERS as exc:
+            if _is_permanent_anthropic_fail(exc):
+                _ANTHROPIC_PERMANENT_FAIL = exc
             if not llm_failover.enabled():
                 raise
             try:
-                return llm_failover.attempt(
-                    operation=operation, max_tokens=max_tokens, **kwargs
-                )
+                return llm_failover.attempt(operation=operation, max_tokens=max_tokens, **kwargs)
             except llm_failover.FailoverUnavailable as fexc:
                 logger.error(
                     "LLM_FAILOVER: all fallback providers failed for operation=%s (%s)",
@@ -835,8 +882,9 @@ def get_gateway() -> Gateway:
 
 def reset_gateway() -> None:
     """Drop the cached default gateway (test seam)."""
-    global _default_gateway
+    global _default_gateway, _ANTHROPIC_PERMANENT_FAIL
     _default_gateway = None
+    _ANTHROPIC_PERMANENT_FAIL = None
 
 
 def daily_usage_summary(days: int = 1) -> dict[str, Any]:

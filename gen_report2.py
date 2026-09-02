@@ -6,7 +6,11 @@ import os
 from datetime import datetime, timezone
 from html import escape as _esc  # the report body f-string is bound to `html`, so alias
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+_ET = ZoneInfo("America/New_York")
+
+import report_share_plan
 from alpha_reporting import (
     alpha_value_color,
     cvar_95_pct,
@@ -22,6 +26,89 @@ from run_manifest import report_output_path
 def _html(value):
     """Escape untrusted engine/LLM values before inserting them into HTML."""
     return _esc(str(value), quote=True)
+
+
+def _optional_pct(value) -> str:
+    """Format a percent-unit metric. Missing/None renders N/A, never a fake 0.0%."""
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):.1f}%"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def _finite_float(value):
+    """None if the value is missing or not a real number. 0.0 is kept (measured)."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v:  # NaN
+        return None
+    return v
+
+
+def _optional_usd(value) -> str:
+    n = _finite_float(value)
+    return "N/A" if n is None else f"${n:,.0f}"
+
+
+def _score_display(value) -> str:
+    """AI score card. Missing/unparseable renders N/A, never a fake 0/100."""
+    n = _finite_float(value)
+    return "N/A" if n is None else f"{n:g}/100"
+
+
+def _cvar_95_display(monte: dict, fallback_equity: float) -> str:
+    """CVaR as a percent of equity. Derive it; never default a missing key to 0.0%."""
+    raw = monte.get("cvar_95_pct") if isinstance(monte, dict) else None
+    if isinstance(raw, (int, float)):
+        return f"{float(raw):.1f}%"
+    if not isinstance(monte, dict):
+        return "N/A"
+    cvar = monte.get("cvar_95")
+    equity = monte.get("current_equity") or fallback_equity
+    try:
+        cvar_f = float(cvar)
+        eq_f = float(equity)
+    except (TypeError, ValueError):
+        return "N/A"
+    if eq_f <= 0:
+        return "N/A"
+    return f"{(cvar_f / eq_f) * 100:.1f}%"
+
+
+def _parse_iso(value: object):
+    """Parse an ISO timestamp to aware UTC-or-offset datetime. None if unreadable."""
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _fmt_et(dt: datetime | None) -> str:
+    """America/New_York wall clock. Never a UTC string that reads as the wrong day."""
+    if dt is None:
+        return "unknown"
+    local = dt.astimezone(_ET)
+    hour = local.strftime("%I").lstrip("0") or "0"
+    return (
+        f"{local.strftime('%A')}, {local.day} {local.strftime('%b %Y')} · "
+        f"{hour}{local.strftime(':%M %p')} ET"
+    )
 
 
 def _json_script(value):
@@ -107,10 +194,12 @@ day_gain_col = "#00e87a" if day_gain_usd >= 0 else "#ff3c5a"
 
 # Score colour helpers
 def score_col(s):
-    s = float(s or 0)
-    if s >= 75:
+    n = _finite_float(s)
+    if n is None:
+        return "#888"
+    if n >= 75:
         return "#00e87a"
-    if s >= 50:
+    if n >= 50:
         return "#f0b429"
     return "#ff3c5a"
 
@@ -154,12 +243,38 @@ def snowflake_bar(val, label, max_val=100):
     <span class="sf-val">{int(val or 0)}</span></div>"""
 
 
-now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-fetch_at = snap.get("fetched_at", "")[:19].replace("T", " ")
+now_dt = datetime.now(timezone.utc)
+snap_dt = _parse_iso(snap.get("fetched_at"))
+asof_dt = snap_dt or now_dt
+asof_et = asof_dt.astimezone(_ET)
+now_str = _fmt_et(now_dt)
+fetch_at = _fmt_et(snap_dt)
+now_iso = now_dt.isoformat()
+snap_iso = snap_dt.isoformat() if snap_dt else ""
+masthead_dow = asof_et.strftime("%A")
+masthead_date = f"{asof_et.day} {asof_et.strftime('%B %Y')}"
+masthead_clock = f"{(asof_et.strftime('%I').lstrip('0') or '0')}{asof_et.strftime(':%M %p')} ET"
+title_day = asof_et.strftime("%Y-%m-%d")
+stale_write_html = ""
+if snap_dt is not None and snap_dt.astimezone(_ET).date() != now_dt.astimezone(_ET).date():
+    stale_write_html = (
+        '<div class="asof-live is-stale" id="asof-write">'
+        "This briefing’s book is "
+        f"<b>{_html(fetch_at)}</b> — the file was written {_html(now_str)}. "
+        "Not a new session.</div>"
+    )
 
 # Degraded-run provenance banner — surfaced when the chain ran on a stale
 # snapshot (run_engines2/run_ai2 stamp degraded/age/source): research-only,
 # no paper records were created for this run.
+notes_banner_html = ""
+_snap_notes = snap.get("notes") if isinstance(snap, dict) else None
+if _snap_notes:
+    notes_banner_html = (
+        '<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
+        f"{_html(str(_snap_notes))}</div>"
+    )
+
 degraded_banner_html = ""
 if eng.get("degraded"):
     _age_s = eng.get("snapshot_age_seconds")
@@ -300,6 +415,7 @@ def holding_card(h):
         <span>Now {curr_pct:.1f}%</span>
         <span style="color:#00d4ff">→ Optimal {opt_pct:.1f}%</span>
       </div>
+      <div style="font-size:11px;color:#ccc;margin:2px 0 4px">{_html(report_share_plan.holding_share_caption(h, kly, total))}</div>
       {pct_bar(curr_pct, 30)}
       <div class="hc-section-title" style="margin-top:10px">Volatility</div>
       <div style="font-size:11px;color:#aaa">GARCH {garch_label} &nbsp;|&nbsp; EWMA {ewma_label} annualised</div>
@@ -354,7 +470,10 @@ for rec in recs:
     </tr>"""
 
 
-# ─── Paper & risk-gate audit section (from run_paper_gate2, step 4/5) ─────────
+# ─── Share plan + paper/gate audit (always visible, even on all-HOLD days) ──
+share_plan_section_html = report_share_plan.share_plan_html(eng)
+
+
 def _gate_audit_section(eng: dict) -> str:
     gates = eng.get("gate_results") or []
     plan = eng.get("action_plan") or []
@@ -405,13 +524,13 @@ def _gate_audit_section(eng: dict) -> str:
   </div>"""
 
 
-gate_audit_html = _gate_audit_section(eng)
+# AST tests pin _gate_audit_section; empty-plan days still need the share-plan
+# Paper-close row from report_share_plan.gate_audit_html.
+gate_audit_html = report_share_plan.gate_audit_html(eng) or _gate_audit_section(eng)
 
 
-# ─── Signal-vs-gate reconciliation banner (added 2026-07-17) ─────────────────
-# Surfaces, in one line at the top, when ADD/BUY signals are blocked by the risk
-# gate — so "the plan says buy but nothing is actionable" can't hide in the table.
 def _signal_gate_banner(eng: dict) -> str:
+    """Reconcile ADD/BUY action_plan rows against gate_results in one banner."""
     plan = eng.get("action_plan") or []
     gates = eng.get("gate_results") or []
     if not plan:
@@ -468,14 +587,43 @@ def _provider_banner(eng: dict) -> str:
         return ""
     return (
         '<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
-        + f"⚠️ MODEL FAILOVER — Anthropic was unavailable; this analysis was produced by "
-        + f"<b>{_esc(provider)}</b>. Output was not grammar-constrained and any field the "
-        + "model omitted is blank rather than estimated. Engine numbers (regime, Kelly, "
-        + "Monte Carlo, gates) are unaffected — they are computed, not generated.</div>"
+        "⚠️ MODEL FAILOVER — Anthropic was unavailable; this analysis was produced by "
+        f"<b>{_esc(provider)}</b>. Output was not grammar-constrained and any field the "
+        "model omitted is blank rather than estimated. Engine numbers (regime, Kelly, "
+        "Monte Carlo, gates) are unaffected — they are computed, not generated.</div>"
     )
 
 
-provider_banner_html = _provider_banner(eng)
+def _ai_freshness_banner(eng: dict) -> str:
+    """When engines refreshed but the narrative is from an earlier run, say so.
+
+    2026-08-26: step 3/5 FATAL aborted before gen_report2, so the HTML still
+    showed 25 Aug P&L while Kelly/MC in engine_results.json were already today's.
+    Continuing the chain on AI failure only helps if the page discloses it.
+    """
+    snap = (eng.get("snapshot") or {}).get("fetched_at")
+    ai_at = eng.get("ai_result_ran_at")
+    snap_dt = _parse_iso(snap)
+    ai_dt = _parse_iso(ai_at)
+    if snap_dt is None:
+        return ""
+    if ai_dt is None:
+        return (
+            '<div class="override-banner">⚠️ AI NARRATIVE MISSING — engines (Kelly, '
+            "Monte Carlo, regime, vol) are from this snapshot; the prose cards are blank. "
+            "Not yesterday's frozen HTML.</div>"
+        )
+    if (snap_dt - ai_dt).total_seconds() > 3600:
+        return (
+            '<div class="override-banner">⚠️ AI NARRATIVE STALE — engines refreshed '
+            f"{_esc(str(snap)[:19])} UTC; last deep analysis "
+            f"{_esc(str(ai_at)[:19])} UTC. Dollar P&amp;L, Kelly, and vol are today's; "
+            "the AI verdict/cards may not be.</div>"
+        )
+    return ""
+
+
+provider_banner_html = _provider_banner(eng) + _ai_freshness_banner(eng)
 
 
 # ─── Diversification radar section (advisory-only, new non-held names) ────────
@@ -556,11 +704,13 @@ buckets = monte.get("buckets", [])
 mc_labels = [b.get("label", "") for b in buckets]
 mc_data = [b.get("pct", 0) for b in buckets]
 mc_colors = []
-var95 = optional_float(monte.get("var_95_pct")) or 0
+var95 = _finite_float(monte.get("var_95_pct") if isinstance(monte, dict) else None)
 curr_eq = optional_float(monte.get("current_equity")) or total
 for b in buckets:
     center = b.get("center", 0)
-    if center < curr_eq * (1 - var95 / 100):
+    if var95 is None:
+        mc_colors.append("'#00d4ff'")
+    elif center < curr_eq * (1 - var95 / 100):
         mc_colors.append("'#ff3c5a'")
     elif center < curr_eq:
         mc_colors.append("'#f0b429'")
@@ -658,30 +808,37 @@ else:
     # layer knows it.
     _lot_views = tax_report.get("lots_by_symbol") or {}
     _losing = len(_lot_views)
-    _detail = (f" {_losing} position(s) are at a loss but below the threshold."
-               if _losing else "")
-    tax_html = ('<div style="color:#666;font-style:italic">No position\'s unrealized '
-                f'loss reaches the $500 harvest threshold.{_html(_detail)}</div>')
+    _detail = f" {_losing} position(s) are at a loss but below the threshold." if _losing else ""
+    tax_html = (
+        '<div style="color:#666;font-style:italic">No position\'s unrealized '
+        f"loss reaches the $500 harvest threshold.{_html(_detail)}</div>"
+    )
 
 # Purchase-side wash-sale warnings (lot layer). The base scan only tracks prior
 # harvest SALES, so these are invisible to it — surface them explicitly.
 _wash_warn = tax_report.get("purchase_wash_warnings") or []
 if _wash_warn:
-    tax_html += ('<div style="margin-top:10px;padding:8px;border-left:3px solid #f0b429;'
-                 'background:#1a1508"><div style="color:#f0b429;font-weight:600;'
-                 'margin-bottom:4px">⚠ Wash-sale exposure from recent purchases</div>')
+    tax_html += (
+        '<div style="margin-top:10px;padding:8px;border-left:3px solid #f0b429;'
+        'background:#1a1508"><div style="color:#f0b429;font-weight:600;'
+        'margin-bottom:4px">⚠ Wash-sale exposure from recent purchases</div>'
+    )
     for _w in _wash_warn:
-        tax_html += (f'<div class="tax-item"><span>{_html(_w["ticker"])}</span>'
-                     f'<span style="color:#f0b429">bought {int(_w["bought_days_ago"])}d ago '
-                     f'· safe in {int(_w["days_until_safe"])}d</span></div>')
-    tax_html += '</div>'
+        tax_html += (
+            f'<div class="tax-item"><span>{_html(_w["ticker"])}</span>'
+            f'<span style="color:#f0b429">bought {int(_w["bought_days_ago"])}d ago '
+            f"· safe in {int(_w['days_until_safe'])}d</span></div>"
+        )
+    tax_html += "</div>"
 
 _lot_cov = tax_report.get("lot_coverage") or {}
 if _lot_cov.get("unavailable"):
-    tax_html += (f'<div style="margin-top:6px;color:#888;font-size:11px">Lot data '
-                 f'unavailable for {int(_lot_cov["unavailable"])} of '
-                 f'{int(_lot_cov.get("checked", 0))} symbol(s) — wash-sale status '
-                 f'unknown, not clear.</div>')
+    tax_html += (
+        f'<div style="margin-top:6px;color:#888;font-size:11px">Lot data '
+        f"unavailable for {int(_lot_cov['unavailable'])} of "
+        f"{int(_lot_cov.get('checked', 0))} symbol(s) — wash-sale status "
+        f"unknown, not clear.</div>"
+    )
 
 # ─── Yield tiers ──────────────────────────────────────────────────────────────
 tiers = yield_data.get("tiers", {}) if isinstance(yield_data, dict) else {}
@@ -709,9 +866,9 @@ else:
     yield_html = '<div style="color:#666;font-style:italic">Yield data unavailable.</div>'
 
 # ─── Scores box ──────────────────────────────────────────────────────────────
-port_score = ai.get("portfolio_score", 0)
-risk_score = ai.get("risk_score", 0)
-div_score = ai.get("diversification_score", 0)
+port_score = _finite_float(ai.get("portfolio_score") if isinstance(ai, dict) else None)
+risk_score = _finite_float(ai.get("risk_score") if isinstance(ai, dict) else None)
+div_score = _finite_float(ai.get("diversification_score") if isinstance(ai, dict) else None)
 port_type = ai.get("portfolio_type", "")
 port_verdict = ai.get("portfolio_verdict", "")
 mkt_ctx = ai.get("market_context", "")
@@ -726,40 +883,52 @@ cash_col = "#ff3c5a" if cash < 500 else "#00e87a"
 
 # ─── Full HTML ────────────────────────────────────────────────────────────────
 html = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-generated-iso="{_html(now_iso)}" data-snapshot-iso="{_html(snap_iso)}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GESH Financial — Daily Report {now_str[:10]}</title>
+<meta http-equiv="Cache-Control" content="no-store">
+<title>GESH · {title_day} ET</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
-  body{{background:#080d14;color:#e0e0e0;font-family:'JetBrains Mono','Courier New',monospace;font-size:13px;min-height:100vh}}
-  a{{color:#00d4ff;text-decoration:none}}
-
-  /* Layout */
-  .container{{max-width:1400px;margin:0 auto;padding:16px}}
-  .header{{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #1a2840;margin-bottom:16px}}
-  .header h1{{font-size:20px;color:#00d4ff;letter-spacing:2px}}
-  .header .ts{{color:#555;font-size:11px}}
+  :root{{
+    --ink:#e8e4d4;--mute:#8a8474;--paper:#12160f;--panel:#1a1f16;
+    --line:#3a3628;--cyan:#5ad0c8;--gain:#7dce7a;--loss:#e07070;--copper:#c4a574;
+  }}
+  body{{background:var(--paper);color:var(--ink);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:15px;line-height:1.45;min-height:100vh}}
+  a{{color:var(--cyan);text-decoration:none}}
+  .container{{max-width:1120px;margin:0 auto;padding:28px 22px 64px}}
+  .masthead{{border-bottom:2px solid var(--copper);padding-bottom:22px;margin-bottom:18px}}
+  .masthead-kicker{{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--copper)}}
+  .masthead-kicker b{{color:var(--cyan);letter-spacing:.28em;font-weight:700;white-space:nowrap}}
+  .masthead-dow{{font-family:Palatino,"Iowan Old Style","Palatino Linotype",Georgia,serif;font-size:13px;letter-spacing:.28em;text-transform:uppercase;color:var(--mute);margin-top:18px}}
+  .masthead-date{{font-family:Palatino,"Iowan Old Style","Palatino Linotype",Georgia,serif;font-size:clamp(34px,6vw,56px);font-weight:700;line-height:1;letter-spacing:-.02em;margin:4px 0 8px}}
+  .masthead-clock{{font-size:14px;color:var(--mute)}}
+  .masthead-pnl{{margin-top:16px;display:flex;flex-wrap:wrap;gap:18px 32px;align-items:end}}
+  .masthead-pnl .fig{{font-family:Palatino,Georgia,serif;font-size:28px;font-weight:700}}
+  .masthead-pnl .lbl{{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);display:block;margin-bottom:2px}}
+  .asof-live{{display:none;background:#5a2018;color:#f3d0c8;border:1px solid #e07070;padding:12px 14px;margin:0 0 16px;font-size:14px}}
+  .asof-live.is-stale,.asof-live[data-show]{{display:block}}
+  body.is-stale .masthead-date{{color:var(--loss)}}
 
   /* Ticker tape */
-  .tape{{background:#0a1628;border:1px solid #1a2840;border-radius:6px;padding:10px 16px;margin-bottom:16px;overflow:hidden;white-space:nowrap;font-size:12px}}
+  .tape{{background:var(--panel);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin-bottom:16px;overflow:hidden;white-space:nowrap;font-size:12px;font-variant-numeric:tabular-nums}}
   .tape-item{{margin-right:4px}}
 
   /* Stats grid */
-  .stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}}
-  .stat-card{{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:14px;text-align:center}}
-  .stat-card .sv{{font-size:26px;font-weight:700;margin:4px 0}}
-  .stat-card .sl{{font-size:10px;color:#555;text-transform:uppercase;letter-spacing:1px}}
+  .stats-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:var(--line);margin-bottom:16px;border:1px solid var(--line)}}
+  .stat-card{{background:var(--panel);padding:14px;text-align:left}}
+  .stat-card .sv{{font-family:Palatino,Georgia,serif;font-size:26px;font-weight:700;margin:4px 0;font-variant-numeric:tabular-nums}}
+  .stat-card .sl{{font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:1px}}
 
   /* Verdict / AI card */
-  .ai-card{{background:#0d1520;border:1px solid #1a2840;border-radius:8px;padding:16px;margin-bottom:16px}}
-  .ai-card h3{{color:#00d4ff;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}}
-  .ai-text{{color:#bbb;font-size:12px;line-height:1.7}}
+  .ai-card{{background:var(--panel);border:1px solid var(--line);padding:16px;margin-bottom:16px}}
+  .ai-card h3{{color:var(--copper);font-size:12px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.14em;font-weight:600}}
+  .ai-text{{color:var(--ink);font-size:14px;line-height:1.65}}
 
   /* Override banner */
-  .override-banner{{background:#ff3c5a15;border:1px solid #ff3c5a44;border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#ff7c9a}}
+  .override-banner{{background:#3a2018;border:1px solid #e0707066;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#f3d0c8}}
 
   /* Holdings cards */
   .section-title{{font-size:12px;color:#555;text-transform:uppercase;letter-spacing:2px;margin:20px 0 10px}}
@@ -836,26 +1005,41 @@ html = f"""<!DOCTYPE html>
   .yi-risk{{color:#555;font-size:10px}}
 
   /* Footer */
-  .footer{{text-align:center;color:#333;font-size:10px;padding:24px 0;border-top:1px solid #1a2840;margin-top:24px}}
+  .footer{{text-align:center;color:var(--mute);font-size:11px;padding:28px 0;border-top:1px solid var(--line);margin-top:28px}}
+  @media(max-width:640px){{.masthead-date{{font-size:32px}}}}
 </style>
 </head>
 <body>
 <div class="container">
 
-  <!-- Header -->
-  <div class="header">
-    <div>
-      <h1>⚡ GESH FINANCIAL</h1>
-      <div style="font-size:11px;color:#00d4ff;margin-top:2px">AI-Powered Portfolio Observability &nbsp;|&nbsp; {_html(port_type)}</div>
+  <header class="masthead">
+    <div class="masthead-kicker">
+      <b>GESH FINANCIAL</b>
+      <span>Daily book · America/New_York</span>
     </div>
-    <div class="ts" style="text-align:right">
-      <div style="font-size:12px;color:{day_gain_col}">${day_gain_usd:+,.2f} ({day_gain_pct:+.2f}%) today</div>
-      <div>Generated {now_str}</div>
-      <div>Data: {fetch_at} UTC</div>
+    <div class="masthead-dow">{_html(masthead_dow)}</div>
+    <div class="masthead-date">{_html(masthead_date)}</div>
+    <div class="masthead-clock">Book snapshot {_html(masthead_clock)} · written {_html(now_str)}</div>
+    <div class="masthead-pnl">
+      <div>
+        <span class="lbl">vs prior close</span>
+        <span class="fig" style="color:{day_gain_col}">${day_gain_usd:+,.2f} ({day_gain_pct:+.2f}%)</span>
+      </div>
+      <div>
+        <span class="lbl">Book</span>
+        <span class="fig">${total:,.0f}</span>
+      </div>
+      <div>
+        <span class="lbl">clock</span>
+        <span class="fig" style="font-size:20px;color:var(--mute)">{_html(masthead_clock)}</span>
+      </div>
     </div>
-  </div>
+  </header>
+  <div class="asof-live" id="asof-live" role="status"></div>
+  {stale_write_html}
 
   {degraded_banner_html}
+  {notes_banner_html}
 
   <!-- Ticker tape -->
   <div class="tape">{tape_html}</div>
@@ -868,12 +1052,12 @@ html = f"""<!DOCTYPE html>
     </div>
     <div class="stat-card">
       <div class="sl">AI Score</div>
-      <div class="sv" style="color:{score_col(port_score)}">{port_score}/100</div>
+      <div class="sv" style="color:{score_col(port_score)}">{_score_display(port_score)}</div>
       <div style="font-size:9px;color:#7a8a99">model-generated, not a calculation</div>
     </div>
     <div class="stat-card">
       <div class="sl">AI Risk Opinion</div>
-      <div class="sv" style="color:{score_col(100 - risk_score)}">{risk_score}/100</div>
+      <div class="sv" style="color:{score_col(None if risk_score is None else 100 - risk_score)}">{_score_display(risk_score)}</div>
       <div style="font-size:9px;color:#7a8a99">model-generated, not a calculation</div>
     </div>
     <div class="stat-card">
@@ -894,13 +1078,13 @@ html = f"""<!DOCTYPE html>
       <div class="sv" style="color:#00d4ff">{mc_median_display}</div>
     </div>
     <div class="stat-card">
-      <div class="sl">Cash / Buying Power</div>
-      <div class="sv" style="color:{cash_col}">${cash:,.0f}</div>
+      <div class="sl">Deployable cash</div>
+      <div class="sv" style="color:{cash_col}">${float(_eqs_hdr.get("deployable") if _eqs_hdr.get("deployable") is not None else cash):,.0f}</div>
       <div style="font-size:9px;color:{cash_col}">{"⚠️ BELOW $500 BUFFER" if cash < 500 else "✓ OK"}</div>
     </div>
     <div class="stat-card">
       <div class="sl">Diversification</div>
-      <div class="sv" style="color:{score_col(div_score)}">{div_score}/100</div>
+      <div class="sv" style="color:{score_col(div_score)}">{_score_display(div_score)}</div>
     </div>
   </div>
 
@@ -910,6 +1094,8 @@ html = f"""<!DOCTYPE html>
 
   {provider_banner_html}
   {signal_gate_banner_html}
+
+  {share_plan_section_html}
 
   <!-- AI Verdict -->
   <div class="ai-card">
@@ -943,11 +1129,12 @@ html = f"""<!DOCTYPE html>
   <div class="section-title">🌡️ Market Regime</div>
   <div class="regime-grid">{regime_cards_html}</div>
 
-  <!-- Action Table -->
-  <div class="section-title">⚡ Prioritised Action Plan</div>
+  <!-- AI notes — prose, not share counts -->
+  <div class="section-title">📝 AI notes</div>
+  <div style="color:#888;font-size:11px;margin:-6px 0 8px">Narrative only — share counts are in the Action plan at the top. Not orders.</div>
   <div class="table-card" style="margin-bottom:16px">
     <table class="action-table">
-      <thead><tr><th>Priority</th><th>Action</th><th>Rationale</th></tr></thead>
+      <thead><tr><th>Priority</th><th>Note</th><th>Rationale</th></tr></thead>
       <tbody>{action_rows}</tbody>
     </table>
   </div>
@@ -969,6 +1156,7 @@ html = f"""<!DOCTYPE html>
         <thead><tr><th>Symbol</th><th>GARCH</th><th>EWMA</th><th>Diff</th></tr></thead>
         <tbody>{vol_rows}</tbody>
       </table>
+      <div style="color:#888;font-size:11px;padding:8px 4px 2px">GARCH N/A means the (1,1) fit did not run (short sample, or <code>arch</code> missing). EWMA is not relabelled as GARCH.</div>
     </div>
     <div class="table-card">
       <div class="chart-title">Alpha vs Benchmarks (1M)</div>
@@ -994,7 +1182,7 @@ html = f"""<!DOCTYPE html>
   <!-- Footer -->
   <div class="footer">
     NOT FINANCIAL ADVICE — FOR INFORMATIONAL PURPOSES ONLY<br>
-    GESH Financial Observability v2.1 &nbsp;|&nbsp; Generated {now_str} &nbsp;|&nbsp; Data via Robinhood API + yfinance + Claude AI<br>
+    GESH daily book &nbsp;|&nbsp; Snapshot {_html(fetch_at)} &nbsp;|&nbsp; Written {_html(now_str)}<br>
     PAPER_MODE=true by default &nbsp;|&nbsp; All trading decisions remain the user's responsibility
   </div>
 
@@ -1045,6 +1233,21 @@ new Chart(document.getElementById('kellyChart').getContext('2d'), {{
     }}
   }}
 }});
+
+(function(){{
+  var bar = document.getElementById('asof-live');
+  if (!bar) return;
+  var iso = document.documentElement.getAttribute('data-snapshot-iso')
+          || document.documentElement.getAttribute('data-generated-iso');
+  var t = Date.parse(iso || '');
+  if (!t) return;
+  var hours = Math.floor((Date.now() - t) / 36e5);
+  if (hours < 20) return;
+  bar.className = 'asof-live is-stale';
+  bar.setAttribute('data-show', '1');
+  bar.textContent = 'This file is ' + hours + ' hours old. Hard-reload (Cmd-Shift-R). If the masthead date does not move, the 10:30 ET chain has not published.';
+  document.body.classList.add('is-stale');
+}})();
 </script>
 </body>
 </html>"""

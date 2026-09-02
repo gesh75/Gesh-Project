@@ -2,7 +2,7 @@
 
 confidence from from_consensus is participation (data coverage), so
 pre_market_scan must ALSO gate new BUYs on the consensus raw_score
-(cfg.min_entry_score, default 0.35). Mirrors the engine repo's
+(cfg.min_entry_score, default 0.50). Mirrors the engine repo's
 test_entry_conviction_floor.py so the two autopilot copies can't drift apart.
 Fully offline: login, fetcher, consensus, alerts, and the DB are all stubbed.
 """
@@ -49,11 +49,11 @@ def _drive(monkeypatch, rows_by_symbol: dict[str, dict]) -> dict:
 
 def test_weak_buy_below_floor_is_dropped(sandbox_db, monkeypatch):
     cands = _drive(monkeypatch, {"WEAK": _row("WEAK", "BUY", 0.26)})
-    assert "WEAK" not in cands  # 0.26 < 0.35 floor — near-coin-flip, no entry
+    assert "WEAK" not in cands  # 0.26 < 0.50 floor — near-coin-flip, no entry
 
 
 def test_solid_buy_at_floor_is_kept(sandbox_db, monkeypatch):
-    cands = _drive(monkeypatch, {"SOLID": _row("SOLID", "BUY", 0.40)})
+    cands = _drive(monkeypatch, {"SOLID": _row("SOLID", "BUY", 0.50)})
     assert "SOLID" in cands
 
 

@@ -22,8 +22,22 @@ import pytest
 from starlette.testclient import TestClient
 
 OWNER_SYMBOLS = {
-    "AMD", "BAC", "BKNG", "BLK", "COF", "DELL", "HOOD", "JD",
-    "JMKE", "MPC", "MU", "NVDA", "PANW", "REGN", "RTX", "SCHW",
+    "AMD",
+    "BAC",
+    "BKNG",
+    "BLK",
+    "COF",
+    "DELL",
+    "HOOD",
+    "JD",
+    "JMKE",
+    "MPC",
+    "MU",
+    "NVDA",
+    "PANW",
+    "REGN",
+    "RTX",
+    "SCHW",
 }
 OWNER_EMAIL = "georgy75@gmail.com"
 CUSTOMER_EMAIL = "cust@x.com"
@@ -64,9 +78,7 @@ def client(au, monkeypatch):
 def _as(server, monkeypatch, email):
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: email)
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
-    monkeypatch.setattr(
-        server.auth_users, "is_owner", lambda e: e == OWNER_EMAIL, raising=False
-    )
+    monkeypatch.setattr(server.auth_users, "is_owner", lambda e: e == OWNER_EMAIL, raising=False)
 
 
 def _seed(au, email=CUSTOMER_EMAIL, book=BOOK, watch=WATCH):
@@ -78,28 +90,45 @@ def _seed(au, email=CUSTOMER_EMAIL, book=BOOK, watch=WATCH):
 
 def _filing(sym: str) -> dict:
     return {
-        "symbol": sym, "form_type": "8-K", "filing_date": "2026-08-01",
-        "filing_url": f"https://sec.gov/{sym}", "action_signal": "NEUTRAL",
-        "urgency": "LOW", "analysis": {"summary": f"{sym} filed an 8-K"},
+        "symbol": sym,
+        "form_type": "8-K",
+        "filing_date": "2026-08-01",
+        "filing_url": f"https://sec.gov/{sym}",
+        "action_signal": "NEUTRAL",
+        "urgency": "LOW",
+        "analysis": {"summary": f"{sym} filed an 8-K"},
     }
 
 
 def _sentiment(sym: str, score: int = 40, articles: int = 3) -> dict:
     return {
-        "symbol": sym, "overall_sentiment": "POSITIVE", "sentiment_score": score,
+        "symbol": sym,
+        "overall_sentiment": "POSITIVE",
+        "sentiment_score": score,
         "impact_level": "MEDIUM",
-        "analysis": {"article_count": articles,
-                     "reasoning": "INTERNAL model prose that must not ship"},
+        "analysis": {
+            "article_count": articles,
+            "reasoning": "INTERNAL model prose that must not ship",
+        },
         "analyzed_at": "2026-08-08T12:00:00",
     }
 
 
 def _fund(sym: str) -> dict:
     return {
-        "symbol": sym, "company_name": f"{sym} Inc", "sector": "Technology",
-        "price": 10.0, "ret_1m": 4.0, "ret_3m": 9.0, "revenue_growth": 22.0,
-        "earnings_growth": 15.0, "forward_pe": 18.0, "analyst_upside": 12.0,
-        "insider_signal": "BUYING", "num_analysts": 9, "recommendation": "buy",
+        "symbol": sym,
+        "company_name": f"{sym} Inc",
+        "sector": "Technology",
+        "price": 10.0,
+        "ret_1m": 4.0,
+        "ret_3m": 9.0,
+        "revenue_growth": 22.0,
+        "earnings_growth": 15.0,
+        "forward_pe": 18.0,
+        "analyst_upside": 12.0,
+        "insider_signal": "BUYING",
+        "num_analysts": 9,
+        "recommendation": "buy",
     }
 
 
@@ -120,12 +149,20 @@ def _stub_legs(server, monkeypatch, seen: dict, sec=None, news=None, fund=None):
 
     monkeypatch.setattr(server, "get_filing_history", _sec, raising=True)
     monkeypatch.setattr(server, "get_news_history", _news, raising=True)
-    monkeypatch.setattr(fundamental_agent, "_fetch_fundamentals_batch", _fund_batch,
-                        raising=True)
+    monkeypatch.setattr(fundamental_agent, "_fetch_fundamentals_batch", _fund_batch, raising=True)
+    # Mechanical headline fetchers must not hit the network in this suite.
+    import news_agent
+    import sec_agent
+
+    monkeypatch.setattr(news_agent, "_fetch_alpaca_news", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(news_agent, "_fetch_all_news", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(news_agent, "get_cached_articles", lambda *a, **k: [], raising=False)
+    monkeypatch.setattr(sec_agent, "discover_filing_cards", lambda *a, **k: [], raising=False)
     return seen
 
 
 # ─── auth + scoping ──────────────────────────────────────────────────────────
+
 
 def test_intelligence_requires_a_session(client, monkeypatch):
     server, c = client
@@ -177,7 +214,9 @@ def test_engine_rows_for_unentitled_symbols_are_dropped(client, au, monkeypatch)
     _as(server, monkeypatch, CUSTOMER_EMAIL)
     _seed(au)
     _stub_legs(
-        server, monkeypatch, {},
+        server,
+        monkeypatch,
+        {},
         sec=[_filing("ZZZA"), _filing("NVDA")],
         news=[_sentiment("ZZZB"), _sentiment("AMD")],
         fund=[_fund("ZZZC"), _fund("RTX")],
@@ -205,6 +244,7 @@ def test_one_customer_cannot_see_anothers_symbols(client, au, monkeypatch):
 
 
 # ─── boundedness ─────────────────────────────────────────────────────────────
+
 
 def test_intelligence_caps_symbols_and_discloses_the_truncation(client, au, monkeypatch):
     server, c = client
@@ -254,6 +294,7 @@ def test_intelligence_empty_book_is_ok_not_an_error(client, monkeypatch):
 
 # ─── news: allow-listed, never fabricated ────────────────────────────────────
 
+
 def test_news_is_allow_listed_and_never_ships_the_model_prose(client, au, monkeypatch):
     """Matches the /api/news/{symbol} contract: score / mood / article_count /
     as_of only. The raw analysis is owner-side research, not a customer field."""
@@ -275,20 +316,40 @@ def test_sentiment_over_zero_articles_is_never_reported(client, au, monkeypatch)
     server, c = client
     _as(server, monkeypatch, CUSTOMER_EMAIL)
     _seed(au, book=["ZZZA", "ZZZB"], watch=[])
-    _stub_legs(server, monkeypatch, {},
-               news=[_sentiment("ZZZA", articles=0), _sentiment("ZZZB", articles=2)])
+    _stub_legs(
+        server,
+        monkeypatch,
+        {},
+        news=[_sentiment("ZZZA", articles=0), _sentiment("ZZZB", articles=2)],
+    )
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
 
     d = c.post("/api/mybook/intelligence", json={}).json()["data"]
     assert [r["symbol"] for r in d["news"]["results"]] == ["ZZZB"]
 
 
+def test_explicit_zero_article_count_is_not_rescued_by_leftover_headlines(client, au, monkeypatch):
+    """article_count=0 is authoritative. A leftover articles list must not
+    launder a NEUTRAL/0 score into the customer pane."""
+    server, c = client
+    _as(server, monkeypatch, CUSTOMER_EMAIL)
+    _seed(au, book=["ZZZA"], watch=[])
+    zero = _sentiment("ZZZA", score=0, articles=0)
+    zero["analysis"]["articles"] = [{"title": "leftover"}]
+    _stub_legs(server, monkeypatch, {}, news=[zero])
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    d = c.post("/api/mybook/intelligence", json={}).json()["data"]
+    assert d["news"]["results"] == []
+
+
 def test_news_mood_is_derived_only_from_reported_scores(client, au, monkeypatch):
     server, c = client
     _as(server, monkeypatch, CUSTOMER_EMAIL)
     _seed(au, book=["ZZZA", "ZZZB"], watch=[])
-    _stub_legs(server, monkeypatch, {},
-               news=[_sentiment("ZZZA", score=60), _sentiment("ZZZB", score=40)])
+    _stub_legs(
+        server, monkeypatch, {}, news=[_sentiment("ZZZA", score=60), _sentiment("ZZZB", score=40)]
+    )
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
 
     d = c.post("/api/mybook/intelligence", json={}).json()["data"]
@@ -296,7 +357,8 @@ def test_news_mood_is_derived_only_from_reported_scores(client, au, monkeypatch)
     assert d["news"]["market_mood"] == "RISK_ON"
 
 
-def test_empty_news_cache_is_neutral_not_bullish(client, au, monkeypatch):
+def test_empty_news_cache_does_not_fabricate_a_mood(client, au, monkeypatch):
+    """No scored rows → no avg 0.0 / NEUTRAL. That reads as a measured result."""
     server, c = client
     _as(server, monkeypatch, CUSTOMER_EMAIL)
     _seed(au, book=["ZZZA"], watch=[])
@@ -305,10 +367,100 @@ def test_empty_news_cache_is_neutral_not_bullish(client, au, monkeypatch):
 
     d = c.post("/api/mybook/intelligence", json={}).json()["data"]
     assert d["news"]["results"] == []
-    assert d["news"]["market_mood"] == "NEUTRAL"
+    assert d["news"].get("avg_score") is None
+    assert d["news"].get("market_mood") in (None, "UNAVAILABLE")
+
+
+def test_mechanical_headlines_fill_when_sentiment_cache_is_empty(client, au, monkeypatch):
+    """Customer intelligence is $0 LLM. Headlines still come from RSS/cache."""
+    import news_agent
+
+    server, c = client
+    _as(server, monkeypatch, CUSTOMER_EMAIL)
+    _seed(au, book=["ZZZA"], watch=[])
+    _stub_legs(server, monkeypatch, {}, news=[])
+    monkeypatch.setattr(
+        news_agent,
+        "_fetch_alpaca_news",
+        lambda sym, *a, **k: [
+            {
+                "title": f"{sym} beats estimates",
+                "source": "TestWire",
+                "published": "2026-08-21",
+                "url": "https://example.com/x",
+            }
+        ],
+        raising=False,
+    )
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    d = c.post("/api/mybook/intelligence", json={}).json()["data"]
+    assert d["news"]["results"] == []
+    assert d["news"].get("avg_score") is None
+    heads = d["news"]["headlines"]
+    assert heads and heads[0]["symbol"] == "ZZZA"
+    assert heads[0]["title"] == "ZZZA beats estimates"
+    assert "url" not in heads[0]
+    assert d["news"].get("market_mood") in (None, "UNAVAILABLE")
+
+
+def test_parse_error_sec_rows_are_not_shipped_as_signals(client, au, monkeypatch):
+    """A Claude/xAI parse failure is not a market signal. Fall back to EDGAR metadata."""
+    import sec_agent
+
+    server, c = client
+    _as(server, monkeypatch, CUSTOMER_EMAIL)
+    _seed(au, book=["COF"], watch=[])
+    broken = {
+        "symbol": "COF",
+        "form_type": "8-K",
+        "filing_date": "2026-08-20",
+        "filing_url": "https://www.sec.gov/cgi-bin/browse-edgar?COF",
+        "action_signal": "PARSE_ERROR",
+        "urgency": "UNKNOWN",
+        "analysis": {
+            "availability": "UNAVAILABLE",
+            "summary": "",
+            "action_signal": "PARSE_ERROR",
+            "urgency": "UNKNOWN",
+        },
+    }
+    _stub_legs(server, monkeypatch, {}, sec=[broken])
+    monkeypatch.setattr(
+        sec_agent,
+        "discover_filing_cards",
+        lambda symbols, days_back=30: [
+            {
+                "symbol": "COF",
+                "form_type": "8-K",
+                "filing_date": "2026-08-20",
+                "filing_url": "https://www.sec.gov/cgi-bin/browse-edgar?COF",
+                "action_signal": "NEUTRAL",
+                "urgency": "LOW",
+                "analysis": {
+                    "summary": "Recent 8-K on EDGAR — run agents for Claude analysis.",
+                    "action_signal": "NEUTRAL",
+                },
+            }
+        ],
+        raising=False,
+    )
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    r = c.post("/api/mybook/intelligence", json={})
+    body = r.text
+    assert "PARSE_ERROR" not in body
+    assert "run agents for Claude" not in body
+    row = r.json()["data"]["sec"]["results"][0]
+    assert row["symbol"] == "COF"
+    assert row["form_type"] == "8-K"
+    assert "action_signal" not in row
+    assert "urgency" not in row
+    assert "Claude" not in (row.get("analysis") or {}).get("summary", "")
 
 
 # ─── fundamentals ────────────────────────────────────────────────────────────
+
 
 def test_fundamentals_carry_the_momentum_score(client, au, monkeypatch):
     server, c = client
@@ -317,9 +469,7 @@ def test_fundamentals_carry_the_momentum_score(client, au, monkeypatch):
     _stub_legs(server, monkeypatch, {}, fund=[_fund("ZZZA")])
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
 
-    row = c.post("/api/mybook/intelligence", json={}).json()["data"]["fundamentals"][
-        "results"
-    ][0]
+    row = c.post("/api/mybook/intelligence", json={}).json()["data"]["fundamentals"]["results"][0]
     assert isinstance(row["momentum_score"], (int, float))
     assert row["revenue_growth"] == 22.0
 
@@ -328,15 +478,18 @@ def test_fundamentals_are_ranked_best_first(client, au, monkeypatch):
     server, c = client
     _as(server, monkeypatch, CUSTOMER_EMAIL)
     _seed(au, book=["ZZZA", "ZZZB"], watch=[])
-    weak = dict(_fund("ZZZA"), revenue_growth=1.0, earnings_growth=0.0,
-                analyst_upside=0.0, insider_signal="NEUTRAL")
+    weak = dict(
+        _fund("ZZZA"),
+        revenue_growth=1.0,
+        earnings_growth=0.0,
+        analyst_upside=0.0,
+        insider_signal="NEUTRAL",
+    )
     strong = _fund("ZZZB")
     _stub_legs(server, monkeypatch, {}, fund=[weak, strong])
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
 
-    rows = c.post("/api/mybook/intelligence", json={}).json()["data"]["fundamentals"][
-        "results"
-    ]
+    rows = c.post("/api/mybook/intelligence", json={}).json()["data"]["fundamentals"]["results"]
     assert [r["symbol"] for r in rows] == ["ZZZB", "ZZZA"]
 
 
@@ -345,9 +498,13 @@ def test_one_unknown_ticker_does_not_blank_the_panel(client, au, monkeypatch):
     _as(server, monkeypatch, CUSTOMER_EMAIL)
     _seed(au, book=["ZZZA", "ZZZB"], watch=[])
     _stub_legs(
-        server, monkeypatch, {},
-        fund=[_fund("ZZZA"),
-              {"symbol": "ZZZB", "error": "HTTPError at https://query2.finance.yahoo.com/x"}],
+        server,
+        monkeypatch,
+        {},
+        fund=[
+            _fund("ZZZA"),
+            {"symbol": "ZZZB", "error": "HTTPError at https://query2.finance.yahoo.com/x"},
+        ],
     )
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
 
@@ -360,6 +517,7 @@ def test_one_unknown_ticker_does_not_blank_the_panel(client, au, monkeypatch):
 
 
 # ─── leg isolation ───────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("leg", ["sec", "news", "fundamentals"])
 def test_a_dead_leg_does_not_kill_the_others(client, au, monkeypatch, leg):
@@ -386,11 +544,12 @@ def test_a_dead_leg_does_not_kill_the_others(client, au, monkeypatch, leg):
     d = r.json()["data"]
     assert d[leg].get("error"), f"{leg} should report its own failure"
     assert "upstream down" not in r.text
-    for other in ({"sec", "news", "fundamentals"} - {leg}):
+    for other in {"sec", "news", "fundamentals"} - {leg}:
         assert not d[other].get("error"), f"{leg} failing took {other} with it"
 
 
 # ─── caching + spend ─────────────────────────────────────────────────────────
+
 
 def test_repeat_calls_are_served_from_cache(client, au, monkeypatch):
     server, c = client
@@ -434,10 +593,12 @@ def test_intelligence_spends_no_llm(client, au, monkeypatch):
         raise AssertionError("intelligence spent an LLM call")
 
     for mod, name in (
-        (sec_agent, "watch_filings"), (news_agent, "scan_news"),
+        (sec_agent, "watch_filings"),
+        (news_agent, "scan_news"),
         (news_agent, "analyze_news_sentiment"),
         (fundamental_agent, "run_fundamental_scan"),
-        (server, "watch_filings"), (server, "scan_news"),
+        (server, "watch_filings"),
+        (server, "scan_news"),
         (server, "run_fundamental_scan"),
     ):
         monkeypatch.setattr(mod, name, _boom, raising=True)
@@ -459,8 +620,7 @@ def test_intelligence_never_serves_the_owners_universe_scan(client, au, monkeypa
     def _boom(*a, **k):
         raise AssertionError("served the owner's universe-wide fundamental scan")
 
-    monkeypatch.setattr(fundamental_agent, "get_latest_fundamental_scan", _boom,
-                        raising=True)
+    monkeypatch.setattr(fundamental_agent, "get_latest_fundamental_scan", _boom, raising=True)
     monkeypatch.setattr(server, "get_latest_fundamental_scan", _boom, raising=True)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
 

@@ -572,6 +572,7 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
     """
     results = []
     skipped_cached = 0
+    skip_live_llm = False
     sym_list = list(dict.fromkeys(s.upper() for s in symbols))[:MAX_NEWS_SYMBOLS]
 
     for symbol in sym_list:
@@ -603,7 +604,20 @@ def scan_news(symbols: list[str], days_back: int = 7) -> dict[str, Any]:
             )
             continue
 
-        analysis = analyze_news_sentiment(symbol, articles)
+        if skip_live_llm:
+            analysis = llm_contracts.unavailable_news_result(
+                symbol=symbol,
+                reason="provider_or_contract_failure",
+                articles=_public_articles(articles),
+                source_count=len(articles),
+            )
+        else:
+            analysis = analyze_news_sentiment(symbol, articles)
+            if analysis.get("availability") == "UNAVAILABLE" and analysis.get(
+                "unavailable_reason"
+            ) in ("provider_or_contract_failure", "provider_not_configured"):
+                # One dead provider must not serialize 12 × 15-minute failover calls.
+                skip_live_llm = True
         _save_sentiment(symbol, analysis)
 
         rolling = (

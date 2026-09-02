@@ -130,10 +130,21 @@ def test_radar_cash_card_reads_only_producer_keys():
     """Keys are server._radar_allocation's + the envelope the endpoint returns."""
     js = _js()
     body = js.split("function buildRadarCashCard", 1)[1].split("\n// Diversification Radar", 1)[0]
-    for key in ("a.symbol", "a.sector", "a.price", "a.dollars", "a.shares",
-                "a.max_corr_to_holdings", "a.rationale",
-                "d.stale", "d.mode", "d.cash", "d.deployable_cash",
-                "d.new_names_to_add", "d.leftover"):
+    for key in (
+        "a.symbol",
+        "a.sector",
+        "a.price",
+        "a.dollars",
+        "a.shares",
+        "a.max_corr_to_holdings",
+        "a.rationale",
+        "d.stale",
+        "d.mode",
+        "d.cash",
+        "d.deployable_cash",
+        "d.new_names_to_add",
+        "d.leftover",
+    ):
         assert key in body, f"radar cash card stopped reading {key}"
     # An unsized SWAP_ONLY preview arrives with dollars/shares null; it must read as
     # "—", never as $0, and the mode must be stated.
@@ -157,8 +168,17 @@ def test_history_list_reads_only_producer_keys():
     """Keys are server._history_entry's own dict literal."""
     js = _js()
     body = js.split("function buildMybookHistoryList", 1)[1].split("\n// Replay one stored", 1)[0]
-    for key in ("h.saved_at", "h.is_current_book", "h.parse_error", "h.portfolio_verdict",
-                "h.portfolio_score", "h.positions_count", "h.symbols", "h.id", "d.max_kept"):
+    for key in (
+        "h.saved_at",
+        "h.is_current_book",
+        "h.parse_error",
+        "h.portfolio_verdict",
+        "h.portfolio_score",
+        "h.positions_count",
+        "h.symbols",
+        "h.id",
+        "d.max_kept",
+    ):
         assert key in body, f"history list stopped reading {key}"
 
 
@@ -212,12 +232,28 @@ def test_intelligence_pane_discloses_its_coverage_gaps():
     assert "fund.errors" in body
 
 
+def test_intelligence_pane_does_not_treat_parse_error_as_a_signal():
+    """Failed LLM parses must not render as PARSE_ERROR · urgency UNKNOWN."""
+    js = _js()
+    body = js.split("function buildBookIntelligencePane", 1)[1].split("\n// Book-health gate", 1)[0]
+    assert "PARSE_ERROR" in body
+    assert "sigU === 'PARSE_ERROR'" in body or 'sigU === "PARSE_ERROR"' in body
+    assert "typeof news.avg_score === 'number'" in body
+    assert "news.headlines" in body
+    assert "fundPct" in body
+
+
 # ─── the new UI must not smuggle in operator vocabulary ──────────────────────
 
 
 _OWNER_WIDGET_TITLES = (
-    "Paper Trade Log", "Risk-Gate", "Bull", "Scanner Config",
-    "Portfolio Value", "Buying Power", "Equity Curve",
+    "Paper Trade Log",
+    "Risk-Gate",
+    "Bull",
+    "Scanner Config",
+    "Portfolio Value",
+    "Buying Power",
+    "Equity Curve",
 )
 
 # The blocks this change added. Scoped to them on purpose: a whole-file assertion

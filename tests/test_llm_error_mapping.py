@@ -47,3 +47,26 @@ def test_contract_error_maps_to_422() -> None:
     assert response.status_code == 422
     assert response.detail == "AI research could not be completed for this request"
     assert "provider detail" not in str(response.detail)
+
+
+def test_anthropic_credit_exhaustion_maps_to_503_not_500() -> None:
+    """Anthropic 400 'credit balance too low' was leaking as Internal server error.
+
+    The live :9000 UI rendered the raw JSON body. A billing outage is a provider
+    unavailability, not an application bug.
+    """
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(400, request=request)
+    exc = anthropic.BadRequestError(
+        "Your credit balance is too low to access the Anthropic API",
+        response=response,
+        body=None,
+    )
+    out = server._server_error(exc)
+    assert out.status_code == 503
+    assert out.detail == "AI provider temporarily unavailable"
+    assert "credit" not in str(out.detail).lower()
+    assert "req_" not in str(out.detail)

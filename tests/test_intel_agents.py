@@ -91,3 +91,34 @@ def test_news_reuses_fresh_db_sentiment(agent_db, monkeypatch):
     assert out["skipped_cached"] == 1
     assert out["results"][0]["symbol"] == "AAPL"
     assert out["results"][0]["sentiment_score"] == 42
+
+
+def test_scan_news_does_not_llm_the_rest_after_provider_failure(agent_db, monkeypatch):
+    """Interactive Re-run Agents was hanging: 12 sequential grok-4.6/xAI calls
+    with a 900s timeout each after Claude died. One provider miss must stop the
+    live scoring loop; remaining names stay UNAVAILABLE with headlines."""
+    monkeypatch.setattr(na, "_fresh_sentiment", lambda s, max_age_hours=12: None)
+    monkeypatch.setattr(na, "_fetch_all_news", lambda s, days_back=7: [{"title": f"{s} headline"}])
+    calls: list[str] = []
+
+    def _analyze(symbol, articles):
+        calls.append(symbol)
+        return na.llm_contracts.unavailable_news_result(
+            symbol=symbol,
+            reason="provider_or_contract_failure",
+            articles=articles,
+            source_count=len(articles),
+        )
+
+    monkeypatch.setattr(na, "analyze_news_sentiment", _analyze)
+    import regime
+
+    monkeypatch.setattr(regime, "get_macro_context", lambda: {"macro_signal": "NEUTRAL"})
+
+    out = na.scan_news(["AAA", "BBB", "CCC"])
+    assert calls == ["AAA"]
+    assert [r["symbol"] for r in out["results"]] == ["AAA", "BBB", "CCC"]
+    assert all(r["availability"] == "UNAVAILABLE" for r in out["results"])
+    assert all(
+        r.get("unavailable_reason") == "provider_or_contract_failure" for r in out["results"]
+    )

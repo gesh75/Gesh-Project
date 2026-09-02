@@ -227,6 +227,13 @@ def _upstream_unavailable_error(exc: Exception) -> HTTPException | None:
                 status_code=503,
                 detail="Claude API rate limit — wait a minute and retry",
             )
+        # 400 credit-too-low, 401 dead key, 5xx provider outage — not app bugs.
+        # Failover should have already run; if we're here, every vendor failed.
+        if isinstance(exc, anthropic.APIStatusError):
+            return HTTPException(
+                status_code=503,
+                detail="AI provider temporarily unavailable",
+            )
     except ImportError:
         pass
     if isinstance(exc, EnvironmentError) and "ANTHROPIC" in str(exc).upper():
@@ -644,7 +651,7 @@ async def _auth_gate_middleware(request: Request, call_next):
 
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
 # Raw proof and cockpit pages expose paper sizing and P&L — owner only.
-_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage", "/track-record")
+_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage")
 # Customer research endpoints whose bodies carry NO owner dollars — single-ticker AI
 # research cards (public per-share fair value / price forecasts, not the owner's book).
 # Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
@@ -1459,7 +1466,8 @@ padding:11px;font-weight:700;font-size:14px;cursor:pointer}
 <script>document.getElementById('f').addEventListener('submit',async function(ev){ev.preventDefault();
 var r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({email:ev.target.email.value,password:ev.target.password.value})});
-if(r.ok){location.href='/';}else{document.getElementById('e').textContent='Invalid email or password.';}});
+if(r.ok){location.href='/';}else if(r.status===429){document.getElementById('e').textContent='Too many attempts — try again shortly.';}else{document.getElementById('e').textContent='Invalid email or password.';}});
+(function(){var q=new URLSearchParams(location.search).get('e');if(q==='expired'){document.getElementById('e').textContent='This sign-in link expired — request a new one.';}})();
 document.getElementById('ml').addEventListener('click',async function(ev){ev.preventDefault();
 var em=document.querySelector('input[name=email]').value;
 if(!em){document.getElementById('e').textContent='Enter your email first.';return;}
@@ -1926,7 +1934,8 @@ async def billing_webhook(request: Request):
 # ─── Signal-accuracy proof + public legal pages ──────────────────────────────
 @app.get("/track-record", response_class=HTMLResponse)
 def track_record_page():
-    """Owner-only proof page rendering raw closed-trade stats from the tracker."""
+    """Public proof page: closed paper-trade stats from the tracker. No live RH
+    holdings. In PUBLIC_PREFIXES; never paywalled."""
     try:
         import proof_page
 
@@ -1979,12 +1988,19 @@ def api_congress_symbol(symbol: str):
 
 
 @app.get("/terms", response_class=HTMLResponse)
-@app.get("/disclaimer", response_class=HTMLResponse)
 def terms_page():
-    """Public Terms of Service & Disclaimer (internal compliance notes stripped)."""
+    """Public Terms of Service (internal compliance notes stripped)."""
     import legal_pages
 
     return legal_pages.render_terms_html()
+
+
+@app.get("/disclaimer", response_class=HTMLResponse)
+def disclaimer_page():
+    """Short public disclaimer — research/education only, not advice."""
+    import legal_pages
+
+    return legal_pages.render_disclaimer_html()
 
 
 @app.get("/api/account/export")
@@ -2061,10 +2077,8 @@ async def account_delete(request: Request):
 def privacy_page():
     """Public Privacy Policy (hub item L1).
 
-    Published as an honest DRAFT pending counsel review: the product already
-    collects emails, customer-entered positions, and usage metering, and until
-    now had NO published policy at all. Public (in PUBLIC_PREFIXES) because a
-    policy nobody can read before signing up is not a published policy."""
+    Public (in PUBLIC_PREFIXES) because a policy nobody can read before signing
+    up is not a published policy."""
     import legal_pages
 
     return legal_pages.render_privacy_html()
@@ -2231,7 +2245,11 @@ def daily_report_page(request: Request):
             status_code=404, detail="No daily report yet — the 10:30 chain has not produced one."
         )
     try:
-        return HTMLResponse(report_path.read_text())
+        resp = HTMLResponse(report_path.read_text())
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
     except Exception as exc:
         raise _server_error(exc)
 
@@ -3883,7 +3901,9 @@ def long_term_macro_cached():
             hit = _ltm_cache.get("v")
         cached = bool(hit and (time.monotonic() - hit[0]) < _LTM_TTL_SEC)
         if not cached:
-            raise HTTPException(status_code=503, detail="Long-term macro cache is not available")
+            # Honest empty, not a 503: the dashboard polls this on every refresh
+            # and a 503 reads as "the page is broken" rather than "not computed yet".
+            return {"status": "unavailable", "cached": False, "data": None}
         data = hit[1]
         out = {"status": "ok", "data": data, "cached": True}
         if isinstance(data, dict) and data.get("fetched_at"):
@@ -5176,6 +5196,21 @@ def mybook_consensus(request: Request):
 _MYBOOK_TTL = 900  # 15 min
 _mybook_cache: dict[str, tuple[float, str, dict]] = {}
 _mybook_lock = threading.Lock()
+# The dashboard polls POST /api/mybook/analyze every 3s. After a failed job we
+# enqueue at most one automatic retry per (user, book) per cooldown so an
+# outage cannot stampede LLM providers or quota.
+_MYBOOK_FAIL_RETRY_COOLDOWN_S = 300.0
+_MYBOOK_FAIL_RETRY_AT: dict[tuple[str, str], float] = {}
+
+
+def _allow_mybook_fail_retry(user_id: str, fingerprint: str, *, now: float | None = None) -> bool:
+    now = time.monotonic() if now is None else now
+    key = (str(user_id), str(fingerprint))
+    last = _MYBOOK_FAIL_RETRY_AT.get(key)
+    if last is not None and (now - last) < _MYBOOK_FAIL_RETRY_COOLDOWN_S:
+        return False
+    _MYBOOK_FAIL_RETRY_AT[key] = now
+    return True
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -5392,15 +5427,32 @@ def _run_book_radar(holdings: list[dict], total_equity: float | None) -> dict:
     )
 
 
+def _blank_book_analysis(*, reason: str) -> dict:
+    """Typed empty LLM result. Scores stay None — never a fabricated 0."""
+    return {
+        "portfolio_verdict": "",
+        "portfolio_type": "",
+        "portfolio_score": None,
+        "risk_score": None,
+        "diversification_score": None,
+        "holdings_analysis": [],
+        "portfolio_risks": [],
+        "market_context": "",
+        "ai_unavailable": True,
+        "ai_unavailable_reason": reason,
+    }
+
+
 def _run_book_engines(payload: dict) -> dict:
     """Blocking engine suite on a customer payload — runs in a worker thread.
-    Regime/Kelly/Monte-Carlo are best-effort (partial results beat a 500); the
-    Claude deep analysis is the core deliverable and failures propagate.
 
-    Order matters: the deep analysis runs BEFORE Kelly so its per-holding verdicts
-    (verdict + fair-value gap) feed run_kelly_analysis exactly like the owner
-    pipeline does (/api/kelly builds the same map from the latest analysis run) —
-    without them Kelly sizes verdict-blind."""
+    Kelly / Monte Carlo / radar are local math (API spend $0) and are the
+    deliverable when Anthropic/Grok/Gemini cannot narrate. The LLM narrative
+    is best-effort: a provider outage must not 500 the Analyze button.
+
+    Order: try deep analysis BEFORE Kelly so per-holding verdicts can feed
+    sizing when a model is available; if it fails, Kelly sizes verdict-blind.
+    """
     # Cap expensive detailed AI, regime, and analyst enrichment. Kelly still
     # sizes the full book; holdings outside the enrichment cap receive neutral
     # analyst-upside input instead of triggering unbounded per-symbol network IO.
@@ -5450,7 +5502,14 @@ def _run_book_engines(payload: dict) -> dict:
         regime_context = detect_regimes(analyzed_symbols).get("regime_summary")
     except Exception:
         pass
-    analysis = _deep_analyze_for_book(analysis_payload, regime_context, truncated)
+    try:
+        analysis = _deep_analyze_for_book(analysis_payload, regime_context, truncated)
+    except Exception as exc:
+        logger.warning(
+            "mybook deep analysis unavailable (%s) — returning engines only",
+            type(exc).__name__,
+        )
+        analysis = _blank_book_analysis(reason=type(exc).__name__)
     if truncated:
         analysis["holdings_truncated"] = truncated
     ai_verdicts = {}
@@ -5615,8 +5674,16 @@ async def mybook_analyze(request: Request):
                 raise HTTPException(
                     status_code=404, detail="No market data for any symbol on your book"
                 )
-            raise HTTPException(status_code=500, detail="Book analysis failed — please retry.")
-        if latest.get("status") == "done" and latest.get("result") is not None:
+            # A failed generation is over. Do not 500 the poll — enqueue ONE
+            # automatic retry so a single Analyze click survives a transient
+            # outage. Further polls in the 3s loop must 503 rather than
+            # reserve another live LLM slot.
+            if not _allow_mybook_fail_retry(user_id, fp):
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI provider temporarily unavailable",
+                )
+        elif latest.get("status") == "done" and latest.get("result") is not None:
             auth_users.mark_mybook_job_delivered(user_id, latest["job_id"])
             return {"status": "ok", "cached": False, "data": latest["result"]}
 
@@ -6378,6 +6445,52 @@ async def mybook_scanner(request: Request):
     return _ticker_get_store(_MYBOOK_SCANNER_BUCKET, key, {"status": "ok", "data": data})
 
 
+def _sec_row_usable(row: dict) -> bool:
+    """True when the stored filing analysis is a real verdict, not a failed LLM parse.
+
+    `action_signal=PARSE_ERROR` / `availability=UNAVAILABLE` are written when Claude
+    (or a failover) cannot read the filing. Serving that string as a customer
+    signal makes the Intelligence pane look broken and invents a market view.
+    """
+    if not isinstance(row, dict):
+        return False
+    analysis = row.get("analysis") if isinstance(row.get("analysis"), dict) else {}
+    if str(analysis.get("availability") or "").upper() == "UNAVAILABLE":
+        return False
+    sig = str(row.get("action_signal") or analysis.get("action_signal") or "").upper()
+    return sig not in {"PARSE_ERROR", "UNAVAILABLE"}
+
+
+def _customer_sec_card(raw: dict) -> dict:
+    """Allow-listed filing card for the customer pane. Never ships PARSE_ERROR
+    or owner-only 'run agents for Claude' copy."""
+    form = str((raw or {}).get("form_type") or "")
+    date = str((raw or {}).get("filing_date") or "")[:10]
+    analysis = raw.get("analysis") if isinstance((raw or {}).get("analysis"), dict) else {}
+    summary = str(analysis.get("summary") or "").strip()
+    placeholder = (not summary) or "claude" in summary.lower() or "run agents" in summary.lower()
+    if placeholder:
+        summary = f"Recent {form} on EDGAR ({date})." if form else "Recent filing on EDGAR."
+    out: dict = {
+        "symbol": str((raw or {}).get("symbol") or "").upper(),
+        "form_type": form,
+        "filing_date": (raw or {}).get("filing_date"),
+        "filing_url": (raw or {}).get("filing_url"),
+        "analysis": {"summary": summary},
+    }
+    # Mechanical EDGAR cards stamp NEUTRAL/LOW with no analysis. That is a fake
+    # verdict — omit signal/urgency whenever we rewrote the owner placeholder.
+    if placeholder:
+        return out
+    sig = (raw or {}).get("action_signal") or analysis.get("action_signal")
+    urg = (raw or {}).get("urgency")
+    if str(sig or "").upper() not in {"", "PARSE_ERROR", "UNAVAILABLE"}:
+        out["action_signal"] = sig
+    if str(urg or "").upper() not in {"", "UNKNOWN"}:
+        out["urgency"] = urg
+    return out
+
+
 def _customer_sec_block(symbols: list[str], days: int) -> dict:
     """Recent SEC filings for the customer's symbols.
 
@@ -6385,19 +6498,82 @@ def _customer_sec_block(symbols: list[str], days: int) -> dict:
     LLM-free EDGAR metadata discovery when the DB has nothing — no Claude call on
     either path. Rows are re-filtered against the entitled set because the stored
     table is symbol-keyed and shared with the owner's runs.
+
+    PARSE_ERROR / UNAVAILABLE stored rows do not count as coverage: they are the
+    failed-LLM leftover that made the customer Intelligence pane look broken.
+    Those symbols fall through to `discover_filing_cards` (mechanical EDGAR).
     """
+    import sec_agent
+
     scoped = symbols[:MYBOOK_INTEL_SEC_MAX_SYMBOLS]
     allowed = set(scoped)
-    rows = get_filing_history(scoped, days=max(days, MYBOOK_INTEL_SEC_MIN_DAYS)) if scoped else []
+    lookback = max(days, MYBOOK_INTEL_SEC_MIN_DAYS)
+    rows = get_filing_history(scoped, days=lookback) if scoped else []
+    usable = [
+        _customer_sec_card(r)
+        for r in (rows or [])
+        if str((r or {}).get("symbol") or "").upper() in allowed and _sec_row_usable(r)
+    ]
+    have = {str(r.get("symbol") or "").upper() for r in usable}
+    missing = [s for s in scoped if s not in have]
+    if missing:
+        try:
+            discovered = sec_agent.discover_filing_cards(missing, days_back=lookback)
+        except Exception as e:  # noqa: BLE001 — mechanical fallback must not 500
+            logger.warning("customer intelligence EDGAR discovery failed: %s", e)
+            discovered = []
+        for card in discovered or []:
+            sym = str((card or {}).get("symbol") or "").upper()
+            if sym in allowed and sym not in have:
+                usable.append(_customer_sec_card(card))
+                have.add(sym)
     return {
-        "results": [
-            r for r in (rows or []) if str((r or {}).get("symbol") or "").upper() in allowed
-        ],
+        "results": usable,
         "symbols": scoped,
         "symbol_cap": MYBOOK_INTEL_SEC_MAX_SYMBOLS,
         "truncated": len(symbols) > len(scoped),
-        "days": max(days, MYBOOK_INTEL_SEC_MIN_DAYS),
+        "days": lookback,
     }
+
+
+def _customer_news_headlines(symbols: list[str]) -> list[dict]:
+    """Mechanical headlines (Alpaca → RSS → stored articles). No LLM, no scores."""
+    import news_agent
+
+    out: list[dict] = []
+    cap, per = 12, 3
+    for sym in symbols:
+        items: list = []
+        for fetch in (
+            news_agent._fetch_alpaca_news,
+            news_agent._fetch_all_news,
+            news_agent.get_cached_articles,
+        ):
+            if items:
+                break
+            try:
+                items = list(fetch(sym) or [])
+            except Exception:  # noqa: BLE001 — one feed down must not blank the pane
+                items = []
+        n = 0
+        for it in items:
+            title = str((it or {}).get("title") or "").strip()
+            if not title:
+                continue
+            out.append(
+                {
+                    "symbol": sym,
+                    "title": title[:200],
+                    "source": str((it or {}).get("source") or "")[:80],
+                    "published": str((it or {}).get("published") or "")[:40],
+                }
+            )
+            n += 1
+            if n >= per or len(out) >= cap:
+                break
+        if len(out) >= cap:
+            break
+    return out
 
 
 def _customer_news_block(symbols: list[str], days: int) -> dict:
@@ -6408,6 +6584,9 @@ def _customer_news_block(symbols: list[str], days: int) -> dict:
     impact, article_count + as_of): the raw model analysis is owner-side research,
     not a customer field. A row whose run analyzed ZERO articles is dropped rather
     than reported — sentiment over no articles is fabricated by definition.
+
+    An empty score cache is NOT NEUTRAL / 0.0 — that is a fabricated measurement.
+    Mechanical headlines still fill the pane so "no Claude" is not "no news".
     """
     allowed = set(symbols)
     rows = get_news_history(symbols, days=days) if symbols else []
@@ -6417,8 +6596,19 @@ def _customer_news_block(symbols: list[str], days: int) -> dict:
         if sym not in allowed:
             continue
         analysis = r.get("analysis") if isinstance(r.get("analysis"), dict) else {}
-        count = analysis.get("article_count") or 0
-        if not count:
+        raw_count = analysis.get("article_count")
+        if raw_count is None:
+            arts = analysis.get("articles")
+            count = len(arts) if isinstance(arts, list) else 0
+        else:
+            try:
+                count = int(raw_count)
+            except (TypeError, ValueError):
+                count = 0
+        if count <= 0:
+            continue
+        score = r.get("sentiment_score")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
             continue
         out.append(
             {
@@ -6431,11 +6621,26 @@ def _customer_news_block(symbols: list[str], days: int) -> dict:
             }
         )
     scores = [x["score"] for x in out if isinstance(x["score"], (int, float))]
-    avg = round(sum(scores) / len(scores), 1) if scores else 0.0
-    # An empty cache is NEUTRAL, never bullish — same thresholds as the owner's
-    # /api/agents/news/history so the two surfaces cannot disagree.
-    mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
-    return {"results": out, "avg_score": avg, "market_mood": mood, "cached": True}
+    avg = round(sum(scores) / len(scores), 1) if scores else None
+    mood = None
+    if scores:
+        mood = "RISK_ON" if avg > 20 else "RISK_OFF" if avg < -20 else "NEUTRAL"
+    headlines: list[dict] = []
+    if not out:
+        try:
+            headlines = _customer_news_headlines(list(symbols))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("customer intelligence headlines failed: %s", e)
+            headlines = []
+    payload: dict = {
+        "results": out,
+        "avg_score": avg,
+        "cached": True,
+        "headlines": headlines,
+    }
+    if mood is not None:
+        payload["market_mood"] = mood
+    return payload
 
 
 def _customer_fundamentals_block(symbols: list[str]) -> dict:
@@ -6487,7 +6692,7 @@ def _run_book_intelligence(symbols: list[str], days: int) -> dict:
             "truncated": False,
             "days": days,
         },
-        "news": {"results": [], "avg_score": 0.0, "market_mood": "NEUTRAL", "cached": True},
+        "news": {"results": [], "avg_score": None, "market_mood": "NEUTRAL", "cached": True, "headlines": []},
         "fundamentals": {"results": [], "errors": []},
     }
     builders = {
@@ -6526,7 +6731,7 @@ async def mybook_intelligence(request: Request):
     days = int(_clamped_float(body.get("days", 7), default=7.0, low=1.0, high=90.0))
     symbols, requested = _customer_scan_symbols(email, MYBOOK_INTEL_MAX_SYMBOLS, include_watchlist)
 
-    key = _book_scan_cache_key(email, ",".join(symbols), requested, days)
+    key = _book_scan_cache_key(email, "intel-v2", ",".join(symbols), requested, days)
     cached = _ticker_get_cached(_MYBOOK_INTEL_BUCKET, key)
     if cached:
         return cached
@@ -6771,7 +6976,40 @@ def _render_book_report(email: str) -> str:
             f"<td style='padding:6px 12px;color:#555'>{e(s.get('assessment', ''))}</td></tr>"
             for s in (d.get("sector_breakdown") or [])
         )
-        sector_block = (f"<h2>Sector breakdown</h2><table>{sectors}</table>") if sectors else ""
+        sector_block = (f"<h2>Sector mix</h2><table>{sectors}</table>") if sectors else ""
+        # The actual customer benefit is seeing the book — e.g. 44% in one sector —
+        # before any model tag. Build that line from analysis sectors or radar weights.
+        top_sector_html = ""
+        _sec_w: list[tuple[str, float]] = []
+        for s in d.get("sector_breakdown") or []:
+            if not isinstance(s, dict):
+                continue
+            try:
+                _sec_w.append((str(s.get("sector") or ""), float(s.get("allocation_pct") or 0)))
+            except (TypeError, ValueError):
+                continue
+        if not _sec_w:
+            _raw_w = (saved.get("radar") or {}).get("existing_sector_weights")
+            if isinstance(_raw_w, dict):
+                for sec, w in _raw_w.items():
+                    try:
+                        wf = float(w)
+                    except (TypeError, ValueError):
+                        continue
+                    _sec_w.append((str(sec), wf * 100.0 if wf <= 1.5 else wf))
+        if _sec_w:
+            _sec_w.sort(key=lambda kv: kv[1], reverse=True)
+            _ts, _tw = _sec_w[0]
+            _flag = (
+                " — more than 40% in one sector."
+                if _tw >= 40
+                else "."
+            )
+            top_sector_html = (
+                "<p style='color:#111;line-height:1.6;font-size:16px'><b>What this book is:</b> "
+                f"{e(f'{_tw:.1f}% {_ts}')}{_flag} "
+                "That is a measurement of the positions you entered, not a trade instruction.</p>"
+            )
         # Conclusions first, mechanics folded (plan T2): each engine section LEADS
         # with one plain-language line; the raw tables stay complete but move
         # behind <details>. Nothing is deleted — fold, don't remove.
@@ -6785,11 +7023,21 @@ def _render_book_report(email: str) -> str:
             default=None,
         )
         n_adj = len(adjustments)
-        kelly_conclusion = f"{n_adj} sizing adjustment{'s' if n_adj != 1 else ''} suggested" + (
-            f" — largest: {e(str(top_adj.get('symbol', '')))} {e(str(top_adj.get('action', '')))}."
-            if top_adj
-            else "."
-        )
+        _n_txt = "1 name differs" if n_adj == 1 else f"{n_adj} names differ"
+        if top_adj:
+            _gap_sym = e(str(top_adj.get("symbol", "")))
+            _now = float(top_adj.get("current_pct") or 0)
+            _opt = float(top_adj.get("optimal_pct") or 0)
+            kelly_conclusion = (
+                f"Kelly formula vs current weights: {_n_txt} from the formula"
+                f" — largest gap: {_gap_sym} now {_now:.1f}% vs formula {_opt:.1f}%."
+                " Educational math, not an order."
+            )
+        else:
+            kelly_conclusion = (
+                f"Kelly formula vs current weights: {_n_txt} from the formula."
+                " Educational math, not an order."
+            )
         mc_var = mc.get("var_95", 0) or 0
         # The headline pairs the SAVED analysis's VaR dollars with TODAY'S live
         # book total — when the analysis is stale that mix understates risk, so
@@ -6815,12 +7063,15 @@ def _render_book_report(email: str) -> str:
             else ""
         )
         body = f"""
-  <h2>AI Verdict: {e(str(d.get("portfolio_verdict", "—")))}</h2>
+  <h2>What this book is</h2>
+  {top_sector_html or "<p style='color:#666'>Sector mix unavailable for this run.</p>"}
+  {sector_block}
+  <h2>Model commentary</h2>
+  <p style='color:#111;line-height:1.6'><b>{e(str(d.get("portfolio_verdict", "—")))}</b></p>
   <table>{row("Portfolio score", d.get("portfolio_score", "—"))}{row("Risk score", d.get("risk_score", "—"))}
   {row("Diversification", d.get("diversification_score", "—"))}{row("Portfolio type", d.get("portfolio_type", "—"))}</table>
   {ctx_html}
   {("<h2>Key risks</h2><ul>" + risks + "</ul>") if risks else ""}
-  {sector_block}
   <h2>Risk check</h2><p style='color:#111;line-height:1.6'><b>{mc_conclusion}</b></p>
   <details><summary>How this was computed — Monte Carlo ({e(str(mc.get("horizon_days") or 21))} trading days)</summary>
   <table>{row("Median outcome", "$" + format(mc.get("median", 0) or 0, ",.0f"))}
@@ -6843,7 +7094,7 @@ details{{margin:8px 0;page-break-inside:avoid}}details summary{{cursor:pointer;c
 @media print{{a{{display:none}}details{{display:block}}details>*{{display:block}}}}</style></head><body>
 <div style='border-bottom:3px solid #111;padding-bottom:10px;display:flex;justify-content:space-between;align-items:baseline'>
 <h1>GESH <span style='font-weight:300'>Portfolio Report</span></h1>
-<span style='color:#666;font-size:13px'>AI portfolio intelligence · 11-node consensus · verified signals</span></div>
+<span style='color:#666;font-size:13px'>See what's in the book · educational model output · not advice</span></div>
 <p style='color:#666'>Prepared for {e(email)} · {_dt.now(_tz.utc).strftime("%Y-%m-%d %H:%M")} UTC</p>
 <h2>Positions</h2>
 <table><tr style='border-bottom:1px solid #ccc'><th style='padding:6px 12px;text-align:left'>Symbol</th>
