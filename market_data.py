@@ -538,16 +538,39 @@ def screen_market(top_n: int = 40) -> list[dict]:
     return top
 
 
-# ── Robinhood-backed company data (VPN-safe) ───────────────────────────────────
-# yfinance's .info is category-blocked under the owner's VPN (curl 35 reset), so
-# the analyst/fundamentals cards on the customer Analyze view came back empty.
-# Robinhood's authed reads (ratings + fundamentals) survive the block, so these are
-# the primary source for those cards; the yfinance path stays as a fallback. Both
-# return None on any failure — never raise.
+# ── Robinhood-backed company data (VPN-safe for the owner / daily chain) ──────
+# yfinance's .info is category-blocked under the owner's VPN (curl 35 reset).
+# Authenticated robin_stocks reads survive that block and are the primary source
+# for owner / chain cards. Customer HTTP / mybook paths must not spend the owner
+# session (same fence as price_source._ALLOW_AUTHENTICATED_RH); those callers
+# fall back to yfinance and may 404 when Yahoo is blocked. Both helpers return
+# None on any failure — never raise.
+
+def _customer_rh_session_blocked() -> bool:
+    """True when this call must not spend the owner's authenticated robin_stocks session.
+
+    price_source._ALLOW_AUTHENTICATED_RH is False on customer HTTP / mybook paths
+    (server middleware + the 202 worker wrap). rh_analyst / rh_fundamentals used
+    to ignore that flag and call get_ratings / get_fundamentals whenever a
+    session was already live — the remaining leak after the Yahoo-401 pickle
+    restore was closed.
+
+    Fail-closed: if the flag cannot be read, treat the call as customer-blocked
+    rather than spending the owner session.
+    """
+    try:
+        from price_source import _ALLOW_AUTHENTICATED_RH
+
+        return not bool(_ALLOW_AUTHENTICATED_RH.get())
+    except Exception:
+        return True
+
 
 def rh_analyst(symbol: str) -> dict[str, Any] | None:
     """Analyst ratings for `symbol` from Robinhood: buy/hold/sell counts + a derived
     consensus. Returns None if unavailable."""
+    if _customer_rh_session_blocked():
+        return None
     try:
         import robin_stocks.robinhood as rh  # noqa: PLC0415 — optional, lazy
         s = (rh.stocks.get_ratings(symbol) or {}).get("summary") or {}
@@ -567,6 +590,8 @@ def rh_analyst(symbol: str) -> dict[str, Any] | None:
 def rh_fundamentals(symbol: str) -> dict[str, Any] | None:
     """Company fundamentals for `symbol` from Robinhood (PE, P/B, market cap, 52-week
     range, dividend yield, sector). Returns None if unavailable."""
+    if _customer_rh_session_blocked():
+        return None
     try:
         import robin_stocks.robinhood as rh  # noqa: PLC0415 — optional, lazy
         rows = rh.stocks.get_fundamentals(symbol) or []
