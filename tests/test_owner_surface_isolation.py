@@ -190,8 +190,8 @@ def test_customer_document_keeps_the_customer_surface(client, monkeypatch):
     """The strip must not take the customer's own product with it."""
     server, c = client
     html = _customer_html(server, monkeypatch, c)
-    for keep in ('id="tab-home"', 'id="tab-analyze"', 'id="mybook-nav"',
-                 "Model Research", "Signals", "Model Risk"):
+    for keep in ('id="tab-home"', 'id="tab-analyze"', 'id="mybook-list"',
+                 "Research", "Proof"):
         assert keep in html, f"customer surface lost: {keep}"
 
 
