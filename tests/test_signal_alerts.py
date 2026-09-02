@@ -178,3 +178,38 @@ def test_alert_email_carries_one_click_headers(au, monkeypatch):
     hdrs = captured.get("headers") or {}
     assert "/alerts/unsubscribe?token=" in hdrs.get("List-Unsubscribe", "")
     assert hdrs.get("List-Unsubscribe-Post") == "List-Unsubscribe=One-Click"
+
+
+def test_consensus_for_disables_the_owner_ecg_node(monkeypatch):
+    """The alert job writes the SHARED signal_history table that customers read.
+
+    Assert on the ARGUMENT, not on downstream behaviour. Offline tests have no
+    price data, so run_consensus_holding can return before node_ecg runs; a
+    spy on node_ecg would pass against the unfixed caller. allow_ecg=False is
+    the contract — same class as GET /api/consensus/{symbol} (1ad42d7).
+
+    Inject a fake consensus module so this assertion does not depend on the
+    real engine (or on gesh-core) being importable.
+    """
+    import sys
+    import types
+
+    import run_signal_alerts as job
+
+    seen: list[dict] = []
+
+    def _spy(*, symbol, equity=0, total_portfolio=1, avg_cost=0, current_price=0, **kwargs):
+        seen.append({"symbol": symbol, **kwargs})
+        return {"verdict": "HOLD", "raw_score": 0.0, "confidence": 50}
+
+    fake = types.ModuleType("consensus")
+    fake.run_consensus_holding = _spy
+    monkeypatch.setitem(sys.modules, "consensus", fake)
+    out = job._consensus_for(["NVDA"])
+
+    assert out == [{"symbol": "NVDA", "verdict": "HOLD", "score": 0.0, "confidence": 50}]
+    assert seen, "the job never reached run_consensus_holding"
+    assert seen[0].get("allow_ecg") is False, (
+        "the alert job did not disable the ECG node; it would vote the owner's "
+        f"equity_snapshots into customer signal history. kwargs={seen[0]!r}"
+    )
