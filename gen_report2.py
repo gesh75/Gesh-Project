@@ -7,7 +7,15 @@ from datetime import datetime, timezone
 from html import escape as _esc  # the report body f-string is bound to `html`, so alias
 from pathlib import Path
 
-from alpha_reporting import alpha_value_color, format_alpha_percent
+from alpha_reporting import (
+    alpha_value_color,
+    cvar_95_pct,
+    format_alpha_percent,
+    format_optional_percent,
+    format_optional_usd,
+    optional_float,
+    var_95_status,
+)
 from run_manifest import report_output_path
 
 
@@ -252,10 +260,10 @@ def holding_card(h):
     verdict_ai = ai_h.get("verdict", "—")
 
     vol_sym = vol_models.get(sym, {})
-    # compare_vol_models emits *_annual_pct (already in percent units) — convert
-    # to fractions so the existing :.1% format renders correctly.
-    garch_v = (vol_sym.get("garch_annual_pct", 0) or 0) / 100
-    ewma_v = (vol_sym.get("ewma_annual_pct", 0) or 0) / 100
+    # compare_vol_models emits None for garch_* when the fit did not run.
+    # Defaulting that to 0 printed "GARCH 0.0%" — a fabricated measurement.
+    garch_label = format_optional_percent(vol_sym.get("garch_annual_pct"))
+    ewma_label = format_optional_percent(vol_sym.get("ewma_annual_pct"))
 
     exp_sym = explanations.get(sym, {})
     headline = exp_sym.get("headline", "") if isinstance(exp_sym, dict) else ""
@@ -294,7 +302,7 @@ def holding_card(h):
       </div>
       {pct_bar(curr_pct, 30)}
       <div class="hc-section-title" style="margin-top:10px">Volatility</div>
-      <div style="font-size:11px;color:#aaa">GARCH {garch_v:.1%} &nbsp;|&nbsp; EWMA {ewma_v:.1%} annualised</div>
+      <div style="font-size:11px;color:#aaa">GARCH {garch_label} &nbsp;|&nbsp; EWMA {ewma_label} annualised</div>
     </div>
     <div class="hc-col">
       <div class="hc-section-title">Snowflake Scores</div>
@@ -548,8 +556,8 @@ buckets = monte.get("buckets", [])
 mc_labels = [b.get("label", "") for b in buckets]
 mc_data = [b.get("pct", 0) for b in buckets]
 mc_colors = []
-var95 = monte.get("var_95_pct", 0)
-curr_eq = monte.get("current_equity", total)
+var95 = optional_float(monte.get("var_95_pct")) or 0
+curr_eq = optional_float(monte.get("current_equity")) or total
 for b in buckets:
     center = b.get("center", 0)
     if center < curr_eq * (1 - var95 / 100):
@@ -605,17 +613,16 @@ for rd in regimes_list:
 vol_rows = ""
 for sym in kelly_syms:
     vd = vol_models.get(sym, {})
-    # *_annual_pct keys are percent units; convert to fractions for :.1% format
-    gv = (vd.get("garch_annual_pct", 0) or 0) / 100
-    ev = (vd.get("ewma_annual_pct", 0) or 0) / 100
+    gv = optional_float(vd.get("garch_annual_pct"))
+    ev = optional_float(vd.get("ewma_annual_pct"))
     diff_str = ""
-    if gv and ev:
-        diff = (gv - ev) / ev * 100 if ev else 0
+    if gv is not None and ev:
+        diff = (gv - ev) / ev * 100
         diff_str = f"{'↑' if diff > 0 else '↓'} {abs(diff):.0f}%"
     vol_rows += f"""<tr>
       <td>{_html(sym)}</td>
-      <td style="color:#00d4ff">{gv:.1%}</td>
-      <td style="color:#f0b429">{ev:.1%}</td>
+      <td style="color:#00d4ff">{format_optional_percent(gv)}</td>
+      <td style="color:#f0b429">{format_optional_percent(ev)}</td>
       <td style="color:#888;font-size:11px">{diff_str}</td>
     </tr>"""
 
@@ -709,12 +716,12 @@ port_type = ai.get("portfolio_type", "")
 port_verdict = ai.get("portfolio_verdict", "")
 mkt_ctx = ai.get("market_context", "")
 
-var95_pct = monte.get("var_95_pct", 0)
-cvar95_pct = monte.get("cvar_95_pct", 0)
-prob_profit = monte.get("prob_profit_pct", 0)
-mc_median = monte.get("median", 0)
-
-var_col = "#ff3c5a" if var95_pct > 15 else "#f0b429" if var95_pct > 10 else "#00e87a"
+var95_pct = optional_float(monte.get("var_95_pct"))
+cvar95_display = format_optional_percent(cvar_95_pct(monte))
+prob_display = format_optional_percent(monte.get("prob_profit_pct"), digits=0)
+mc_median_display = format_optional_usd(monte.get("median"))
+var95_display = format_optional_percent(var95_pct)
+var_col, var_badge = var_95_status(var95_pct)
 cash_col = "#ff3c5a" if cash < 500 else "#00e87a"
 
 # ─── Full HTML ────────────────────────────────────────────────────────────────
@@ -871,20 +878,20 @@ html = f"""<!DOCTYPE html>
     </div>
     <div class="stat-card">
       <div class="sl">VaR 95% (21d)</div>
-      <div class="sv" style="color:{var_col}">{var95_pct:.1f}%</div>
-      <div style="font-size:9px;color:{var_col}">{"⚠️ RED >15%" if var95_pct > 15 else "✓ OK"}</div>
+      <div class="sv" style="color:{var_col}">{var95_display}</div>
+      <div style="font-size:9px;color:{var_col}">{var_badge}</div>
     </div>
     <div class="stat-card">
       <div class="sl">CVaR 95%</div>
-      <div class="sv" style="color:#f0b429">{cvar95_pct:.1f}%</div>
+      <div class="sv" style="color:#f0b429">{cvar95_display}</div>
     </div>
     <div class="stat-card">
       <div class="sl">Prob Profit</div>
-      <div class="sv" style="color:#00d4ff">{prob_profit:.0f}%</div>
+      <div class="sv" style="color:#00d4ff">{prob_display}</div>
     </div>
     <div class="stat-card">
       <div class="sl">MC Median (21d)</div>
-      <div class="sv" style="color:#00d4ff">${mc_median:,.0f}</div>
+      <div class="sv" style="color:#00d4ff">{mc_median_display}</div>
     </div>
     <div class="stat-card">
       <div class="sl">Cash / Buying Power</div>

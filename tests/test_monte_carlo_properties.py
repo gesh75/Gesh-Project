@@ -105,6 +105,9 @@ def test_cvar_at_least_var_and_probs_monotone(monkeypatch):
     assert r["prob_loss_20pct"] <= r["prob_loss_10pct"]    # a 20% loss implies a 10% loss
     assert r["median"] > 0 and r["mean"] > 0               # GBM values are strictly positive
     assert r["var_95_pct"] == pytest.approx(r["var_95"] / r["current_equity"] * 100, abs=0.01)
+    assert "cvar_95_pct" in r
+    assert r["cvar_95_pct"] == pytest.approx(r["cvar_95"] / r["current_equity"] * 100, abs=0.01)
+    assert r["cvar_95_pct"] >= r["var_95_pct"]
 
 
 def test_higher_vol_widens_the_distribution(monkeypatch):
