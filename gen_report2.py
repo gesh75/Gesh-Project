@@ -524,7 +524,9 @@ def _gate_audit_section(eng: dict) -> str:
   </div>"""
 
 
-gate_audit_html = _gate_audit_section(eng)
+# AST tests pin _gate_audit_section; empty-plan days still need the share-plan
+# Paper-close row from report_share_plan.gate_audit_html.
+gate_audit_html = report_share_plan.gate_audit_html(eng) or _gate_audit_section(eng)
 
 
 def _signal_gate_banner(eng: dict) -> str:
