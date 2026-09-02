@@ -5,12 +5,13 @@
 #
 #   1/5 fetch_live_snapshot.py  — live Robinhood holdings -> live_portfolio_snapshot.json
 #   2/5 run_engines2.py         — all engines -> engine_results.json
-#   3/5 run_ai2.py              — radar + Claude deep analysis + DB save
+#   3/5 run_ai2.py              — radar + deep analysis + DB save (non-fatal:
+#                                 engines+report still refresh if Claude/Grok fail)
 #   4/5 run_paper_gate2.py      — paper session + 8-gate audit chain (non-fatal)
 #   5/5 gen_report2.py          — template-fill HTML report (<1s)
 #
-# Logs to a private .logs/gesh_fullchain.log in the repo. Exit 0 = clean run,
-# 1 = a fatal step failed.
+# Logs to a private .logs/gesh_fullchain.log in the repo. Exit 0 = usable report,
+# 1 = a fatal step failed (snapshot/engines/report too small).
 # Safe to re-run any time (lock prevents overlap; later steps just regenerate).
 #
 # Sleep/wake note: launchd coalesces a 10:30 StartCalendarInterval missed during
@@ -234,11 +235,20 @@ fi
 step "2/5 run_engines2"
 "$PY" run_engines2.py || { echo "FATAL: engines failed"; tg_alert "FATAL step 2/5: run_engines2 failed — see $LOG"; exit 1; }
 
-# ── 3/5 AI analysis + DB save (fatal — the report needs ai_result; stopping
-# here keeps yesterday's good gesh_report.html in place instead of overwriting
-# it with empty AI sections)
+# ── 3/5 AI analysis + DB save
+# Non-fatal. Anthropic credit-exhausted / grammar-too-large 400s used to abort
+# here (2026-08-07, 2026-08-21, 2026-08-26 10:16) and freeze YESTERDAY's HTML
+# even though engines had already refreshed. Claude's Cowork path never hit
+# this because the deep call succeeded; Grok failover can take 15–20 min and
+# still fail. Always continue to paper-gate + gen_report2 so Kelly/MC/vol/day
+# P&L are today's. The report banners stale/missing AI instead of lying.
 step "3/5 run_ai2"
-"$PY" run_ai2.py || { echo "FATAL: run_ai2 failed — keeping previous report"; tg_alert "FATAL step 3/5: run_ai2 failed — previous report kept, see $LOG"; exit 1; }
+AI_FAILED=0
+if ! "$PY" run_ai2.py; then
+    AI_FAILED=1
+    echo "WARN: run_ai2 failed — continuing with engines + paper + report (AI narrative may be stale)"
+    tg_alert "WARN step 3/5: run_ai2 failed — generating today's engine report anyway, see $LOG"
+fi
 
 # ── 4/5 paper session + risk-gate audit chain (non-fatal by design; a degraded
 # run is research-only — skipped here, and run_paper_gate2's own entry guard
@@ -271,7 +281,10 @@ if [ "$SIZE" -lt 60000 ]; then
 else
     echo "assert ok: $REPORT_FILE ${SIZE}B"
 fi
-"$PY" - <<'PYEOF' || { echo "ASSERT FAIL: no analysis_runs row for today"; FAIL=1; }
+if [ "$AI_FAILED" -eq 1 ]; then
+    echo "assert skipped: no analysis_runs row expected after AI failure"
+else
+    "$PY" - <<'PYEOF' || { echo "ASSERT FAIL: no analysis_runs row for today"; FAIL=1; }
 import sqlite3, sys
 from datetime import datetime, timezone
 con = sqlite3.connect('gesh_financial.db')
@@ -280,6 +293,15 @@ n = con.execute("SELECT COUNT(*) FROM analysis_runs WHERE run_at LIKE ?", (today
 print(f"assert ok: {n} analysis_runs row(s) for {today}" if n else "no row today")
 sys.exit(0 if n > 0 else 1)
 PYEOF
+fi
+
+# Scheduled 10:30: stamp only after a usable report so a failed AI step can
+# retry on the next 10-minute tick (lock-skip exits 0 WITHOUT this stamp).
+if [ "$FAIL" -eq 0 ] && [ -n "${GESH_ET_GATE_STAMP:-}" ]; then
+    mkdir -p "$(dirname "$GESH_ET_GATE_STAMP")" 2>/dev/null || true
+    : > "$GESH_ET_GATE_STAMP"
+    echo "et_gate stamp written: $GESH_ET_GATE_STAMP"
+fi
 
 # ── Publish report copy for the trading repo (skill contract) — only on clean
 # runs, so a failed/degraded run never overwrites the last good published copy.

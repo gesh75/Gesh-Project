@@ -39,6 +39,10 @@ nltk==3.10.0
 # Macro data
 fredapi==0.5.2
 
+# GARCH(1,1) in volatility_models.compare_vol_models. Without this package the
+# report correctly prints GARCH N/A (EWMA is not relabelled as GARCH).
+arch==8.0.0
+
 # Scheduler (autopilot)
 APScheduler==3.11.2
 

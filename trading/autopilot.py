@@ -148,6 +148,14 @@ from gesh_core.trading.autopilot_core import (  # noqa: E402
     restore_candidate_symbols,
     stop_sweep_intent,
 )
+try:
+    from gesh_core.trading.autopilot_core import precision_overlay_blocks  # noqa: E402
+except ImportError:  # pinned SHA without the overlay — fail OPEN, keep SELL jobs alive
+    def precision_overlay_blocks(action, row=None):  # noqa: ARG001
+        class _Unavailable:
+            blocked = False
+            reason = "overlay unavailable"
+        return _Unavailable()
 
 _CANDIDATES: dict[str, tuple[TradeIntent | None, dict]] = {}
 
@@ -249,6 +257,13 @@ def pre_market_scan() -> None:
                         sym, raw_score, cfg.min_entry_score,
                     )
                     continue
+                overlay = precision_overlay_blocks(intent.action, row)
+                if overlay.blocked:
+                    logger.info(
+                        "  ⊘ %s → BUY skipped (precision overlay): %s",
+                        sym, overlay.reason,
+                    )
+                    continue
                 new_candidates[sym] = (intent, row)
                 logger.info(
                     "  ✓ %s → %s conf=%.2f raw=%.2f verdict=%s",
@@ -334,6 +349,14 @@ def open_window() -> None:
                 logger.info(
                     "  ⊘ %s BUY skipped at open: raw_score=%.2f < min_entry_score=%.2f",
                     sym, fresh_raw, cfg.min_entry_score,
+                )
+                rejected += 1
+                continue
+            overlay = precision_overlay_blocks(intent.action, fresh_row)
+            if overlay.blocked:
+                logger.info(
+                    "  ⊘ %s BUY skipped at open (precision overlay): %s",
+                    sym, overlay.reason,
                 )
                 rejected += 1
                 continue

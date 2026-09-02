@@ -46,7 +46,7 @@ def _is_content_bracket(md: str, match: re.Match[str]) -> bool:
     be "redact", because an unanticipated shape defaulting to "render" is what
     published internal legal strategy on 2026-07-23.
     """
-    if md[match.end():match.end() + 1] == "(":
+    if md[match.end() : match.end() + 1] == "(":
         return True
     return match.group(0)[1:-1].strip().isdigit()
 
@@ -58,10 +58,7 @@ def _strip_author_note(md: str) -> str:
     review... Placeholders in [BRACKETS] need your real values"), not to the
     reader — same class as the internal compliance notes, so it must not be
     served. The rendered page carries its own reader-facing DRAFT banner."""
-    return "\n".join(
-        ln for ln in md.splitlines()
-        if not ln.lstrip().startswith("> **DRAFT")
-    )
+    return "\n".join(ln for ln in md.splitlines() if not ln.lstrip().startswith("> **DRAFT"))
 
 
 def unfilled_placeholders(md: str) -> list[str]:
@@ -86,10 +83,12 @@ def redact_placeholders(md: str) -> str:
     preserved. A redacted span leaves a neutral marker so the reader can see the
     document is incomplete rather than silently reading around a hole.
     """
+
     def _sub(m: re.Match[str]) -> str:
         return m.group(0) if _is_content_bracket(md, m) else "[…]"
 
     return _PLACEHOLDER_RE.sub(_sub, md)
+
 
 _BG, _SURFACE, _BORDER = "#080d14", "#0d1520", "#1a2840"
 _CYAN, _DIM, _TEXT = "#00d4ff", "#5b7290", "#dfe8f2"
@@ -98,7 +97,7 @@ _CYAN, _DIM, _TEXT = "#00d4ff", "#5b7290", "#dfe8f2"
 def _strip_internal(md: str) -> str:
     indexes = (md.find(marker) for marker in _INTERNAL_MARKERS)
     present = [idx for idx in indexes if idx != -1]
-    return md if not present else md[:min(present)].rstrip() + "\n"
+    return md if not present else md[: min(present)].rstrip() + "\n"
 
 
 def _inline(text: str) -> str:
@@ -132,28 +131,47 @@ def _md_to_html(md: str) -> str:
         line = raw.rstrip()
         stripped = line.strip()
         if not stripped:
-            flush_para(); close_list(); continue
+            flush_para()
+            close_list()
+            continue
         if stripped.startswith("### "):
-            flush_para(); close_list(); out.append(f"<h3>{_inline(stripped[4:])}</h3>"); continue
+            flush_para()
+            close_list()
+            out.append(f"<h3>{_inline(stripped[4:])}</h3>")
+            continue
         if stripped.startswith("## "):
-            flush_para(); close_list(); out.append(f"<h2>{_inline(stripped[3:])}</h2>"); continue
+            flush_para()
+            close_list()
+            out.append(f"<h2>{_inline(stripped[3:])}</h2>")
+            continue
         if stripped.startswith("# "):
-            flush_para(); close_list(); out.append(f"<h1>{_inline(stripped[2:])}</h1>"); continue
+            flush_para()
+            close_list()
+            out.append(f"<h1>{_inline(stripped[2:])}</h1>")
+            continue
         if stripped in ("---", "***", "___"):
-            flush_para(); close_list(); out.append('<hr style="border:0;border-top:1px solid ' + _BORDER + '">'); continue
+            flush_para()
+            close_list()
+            out.append('<hr style="border:0;border-top:1px solid ' + _BORDER + '">')
+            continue
         if stripped.startswith("> "):
-            flush_para(); close_list()
-            out.append(f'<blockquote style="border-left:3px solid {_CYAN};margin:12px 0;padding:6px 14px;color:{_DIM}">{_inline(stripped[2:])}</blockquote>')
+            flush_para()
+            close_list()
+            out.append(
+                f'<blockquote style="border-left:3px solid {_CYAN};margin:12px 0;padding:6px 14px;color:{_DIM}">{_inline(stripped[2:])}</blockquote>'
+            )
             continue
         if stripped.startswith("- "):
             flush_para()
             if not in_list:
-                out.append("<ul>"); in_list = True
+                out.append("<ul>")
+                in_list = True
             out.append(f"<li>{_inline(stripped[2:])}</li>")
             continue
         para.append(stripped)
 
-    flush_para(); close_list()
+    flush_para()
+    close_list()
     return "\n".join(out)
 
 
@@ -161,16 +179,17 @@ def policy_footer_html(muted: str = _DIM, accent: str = _CYAN) -> str:
     """The one legal footer every served page uses. Policies that exist but are
     unreachable from the product are not published in any meaningful sense —
     dashboard.html carried ZERO policy links before this (verified 2026-07-19)."""
-    link = f'color:{accent};text-decoration:none'
+    link = f"color:{accent};text-decoration:none"
     return (
         f'<div class="gesh-policy-footer" style="margin-top:28px;padding-top:14px;'
         f'border-top:1px solid {_BORDER};color:{muted};font-size:12px;line-height:1.7">'
         f'<a href="/privacy" style="{link}">Privacy Policy</a> · '
         f'<a href="/terms" style="{link}">Terms of Service</a> · '
         f'<a href="/disclaimer" style="{link}">Disclaimer</a><br>'
-        'GESH Financial is a research and education tool. Informational purposes only — '
-        '<b>not investment advice</b>. Past and simulated performance do not guarantee '
-        'future results.</div>')
+        "GESH Financial is a research and education tool. Informational purposes only — "
+        "<b>not investment advice</b>. Past and simulated performance do not guarantee "
+        "future results.</div>"
+    )
 
 
 def _page(title: str, body_html: str) -> str:
@@ -199,26 +218,56 @@ def render_terms_html(use_cache: bool = True) -> str:
     if use_cache and "terms" in _cache:
         return _cache["terms"]
     try:
-        md = TERMS_PATH.read_text(encoding="utf-8")
+        md = _strip_author_note(TERMS_PATH.read_text(encoding="utf-8"))
         body = _md_to_html(_strip_internal(md))
     except FileNotFoundError:
-        body = ("<h1>Terms of Service &amp; Disclaimer</h1><p>This research tool is provided for "
-                "informational and educational purposes only and is NOT FINANCIAL ADVICE. "
-                "Results are HYPOTHETICAL/SIMULATED; PAST PERFORMANCE does not guarantee future results.</p>")
-    page = _page("Terms & Disclaimer", body)
+        body = (
+            "<h1>Terms of Service &amp; Disclaimer</h1><p>This research tool is provided for "
+            "informational and educational purposes only and is NOT FINANCIAL ADVICE. "
+            "Results are HYPOTHETICAL/SIMULATED; PAST PERFORMANCE does not guarantee future results.</p>"
+        )
+    page = _page("Terms of Service", body)
     if use_cache:
         _cache["terms"] = page
+    return page
+
+
+def render_disclaimer_html(use_cache: bool = True) -> str:
+    """Short public disclaimer — informational/educational only, not advice."""
+    if use_cache and "disclaimer" in _cache:
+        return _cache["disclaimer"]
+    body = f"""<h1>Disclaimer</h1>
+<p><strong>Last updated:</strong> 2026-08-23</p>
+<p><strong>GESH Financial is a research and education tool. It is not financial,
+investment, tax, or legal advice.</strong> Nothing on this site is a recommendation,
+solicitation, or offer to buy or sell any security, and nothing is an endorsement
+that any transaction is suitable for you.</p>
+<p>GESH is not a registered investment adviser. It does not manage money, does not
+have access to your brokerage account, and <strong>never places live orders</strong>.
+You are solely responsible for every trade you make.</p>
+<p>If you enter your own holdings, the software runs the same general-purpose models
+on the numbers you typed. Model tags such as BUY, SELL, ADD, TRIM, or HOLD are
+research labels, not instructions.</p>
+<p>Performance figures, win rates, and track-record pages are
+<strong>hypothetical / simulated</strong> unless clearly labeled otherwise.
+Past and simulated performance do not guarantee future results. You can lose money.</p>
+<p>AI-generated commentary can be incomplete or wrong. Market data can be delayed
+or inaccurate. The service is provided as-is.</p>
+<p>The full contract is the <a href="/terms">Terms of Service</a>.
+Privacy practices are in the <a href="/privacy">Privacy Policy</a>.</p>"""
+    page = _page("Disclaimer", body)
+    if use_cache:
+        _cache["disclaimer"] = page
     return page
 
 
 def render_privacy_html(use_cache: bool = True) -> str:
     """Render the public Privacy Policy page.
 
-    Ships behind a visible DRAFT banner and, when the source still contains
-    [PLACEHOLDER] tokens only the owner can resolve (legal entity, contact
-    address), names them in the banner. An honest published draft beats no
-    policy at all while emails, customer-entered positions, and usage analytics
-    are already being collected — but it must never read as counsel-approved.
+    Author-facing DRAFT instructions are stripped. If the source still contains
+    unresolved [placeholder] tokens, a pending-details banner is shown so the
+    page cannot read as complete. Filled policies render without a DRAFT stamp
+    and still must not claim attorney review.
     """
     if use_cache and "privacy" in _cache:
         return _cache["privacy"]
@@ -230,28 +279,31 @@ def render_privacy_html(use_cache: bool = True) -> str:
         body = _md_to_html(redact_placeholders(_strip_internal(md)))
     except FileNotFoundError:
         pending = []
-        body = ("<h1>Privacy Policy</h1><p>Our privacy policy is being finalized. "
-                "We collect your email, the positions you enter, and usage metering "
-                "data; analysis inputs are processed by third-party AI providers "
-                "(Anthropic, Google). Contact us for details or to request deletion.</p>")
+        body = (
+            "<h1>Privacy Policy</h1><p>Our privacy policy is being finalized. "
+            "We collect your email, the positions you enter, and usage metering "
+            "data; analysis inputs are processed by third-party AI providers "
+            "(Anthropic, Google). Contact us for details or to request deletion.</p>"
+        )
 
-    note = ""
+    banner = ""
     if pending:
         # COUNT ONLY — never the annotation text. Printing the raw tokens is how
         # the geo-blocking decision note reached the public page even after the
         # body was redacted (2026-07-23): the banner re-leaked what the body hid.
         n = len(pending)
-        note = (f'<p style="color:{_DIM};font-size:13px">'
-                f'{n} detail{"" if n == 1 else "s"} in this document '
-                f'{"is" if n == 1 else "are"} still pending final confirmation '
-                f'(shown as […]) and will be completed when counsel finalises it. '
-                f'Ask us if any of them matter to you.</p>')
-    banner = (
-        f'<div style="background:{_SURFACE};border:1px solid {_BORDER};border-left:3px solid '
-        f'{_CYAN};border-radius:6px;padding:12px 16px;margin:0 0 20px">'
-        '<b>DRAFT — pending legal review.</b> This policy is published in good faith so you '
-        'can see how your data is handled today. It has not yet been reviewed by counsel and '
-        f'may change.{note}</div>')
+        note = (
+            f'<p style="color:{_DIM};font-size:13px">'
+            f"{n} detail{'' if n == 1 else 's'} in this document "
+            f"{'is' if n == 1 else 'are'} still pending final confirmation "
+            f"(shown as […]). Ask us if any of them matter to you.</p>"
+        )
+        banner = (
+            f'<div style="background:{_SURFACE};border:1px solid {_BORDER};border-left:3px solid '
+            f'{_CYAN};border-radius:6px;padding:12px 16px;margin:0 0 20px">'
+            "<b>Some details are still being confirmed.</b> This policy describes how "
+            f"your data is handled today and may be updated.{note}</div>"
+        )
     page = _page("Privacy Policy", banner + body)
     if use_cache:
         _cache["privacy"] = page

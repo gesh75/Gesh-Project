@@ -1,16 +1,17 @@
 """L1 + L5 — publish the Privacy Policy, reach the policies from the product, and
-frame the product as beta/educational while the ToS is still a DRAFT.
+frame the product as beta/educational. The public legal pages must not look like
+an unreviewed template, and must not claim attorney review.
 
 Verified gaps this closes (2026-07-19, checked against the code, not assumed):
   * no `/privacy` route existed anywhere in server.py / legal_pages.py, while the
     app collects emails, customer-entered positions, and usage analytics;
   * dashboard.html contained ZERO links to /terms or /disclaimer — the policies
     existed but were unreachable from the product;
-  * TERMS_OF_SERVICE.md:3 self-labels "DRAFT — not yet legally reviewed" and is
-    served live at /terms while the product charges $49/mo.
+  * TERMS_OF_SERVICE.md used to self-label "DRAFT — not yet legally reviewed" and
+    was served live at /terms while the product charges $49/mo.
 
-The privacy policy ships behind a visible DRAFT banner on purpose: publishing an
-honest draft beats publishing nothing, but it must not read as counsel-approved.
+The public legal pages must not claim attorney review. Unresolved placeholders
+still surface a pending-details banner rather than leaking author notes.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ def _dashboard() -> str:
 
 # ─── L1: the /privacy route ───────────────────────────────────────────────────
 
+
 def test_privacy_route_serves_the_policy(client):
     r = client.get("/privacy")
     assert r.status_code == 200
@@ -75,9 +77,26 @@ def test_privacy_covers_the_required_subject_areas(client):
         assert topic in body, f"privacy policy is missing: {topic}"
 
 
-def test_privacy_is_labeled_draft_until_counsel_signs_off(client):
-    """Honesty gate: it must not read as attorney-reviewed when it isn't."""
-    assert "DRAFT" in client.get("/privacy").text
+def test_privacy_does_not_claim_attorney_review(client):
+    """Honesty gate: filled or not, the page must not read as counsel-approved."""
+    body = client.get("/privacy").text.lower()
+    assert "attorney-reviewed" not in body
+    assert "counsel-approved" not in body
+    assert "legally reviewed" not in body
+
+
+def test_privacy_has_no_raw_draft_banner_when_placeholders_are_filled(client):
+    import legal_pages
+
+    remaining = legal_pages.unfilled_placeholders(
+        legal_pages._strip_author_note(legal_pages.PRIVACY_PATH.read_text())
+    )
+    body = client.get("/privacy").text
+    if remaining:
+        assert "pending" in body.lower()
+    else:
+        assert "DRAFT — pending legal review" not in body
+        assert "DRAFT" not in body
 
 
 def test_privacy_page_escapes_markup_it_renders():
@@ -112,6 +131,7 @@ def test_privacy_route_never_leaks_engineering_todos(client):
 
 # ─── L1: unfilled-placeholder detection ───────────────────────────────────────
 
+
 def test_placeholder_detector_finds_unfilled_brackets():
     """The draft ships with [BRACKET] placeholders only the owner can fill.
     Detect them so the page can flag itself instead of publishing '[DOMAIN]'."""
@@ -144,6 +164,7 @@ def test_privacy_page_flags_remaining_placeholders_visibly(client):
 
 # ─── L1: footer links reachable from the product ──────────────────────────────
 
+
 def test_dashboard_links_to_all_three_policies():
     """The verified gap: dashboard.html had zero policy links."""
     html = _dashboard()
@@ -157,9 +178,15 @@ def test_book_report_links_to_the_policies(client, au, monkeypatch):
     import server
 
     au.create_user("cust@x.com", "pw")
-    monkeypatch.setattr(server, "_customer_book_payload", lambda *_a, **_k: {
-        "holdings": [], "equity_summary": {"portfolio_equity": 0.0}, "unpriced": [],
-    })
+    monkeypatch.setattr(
+        server,
+        "_customer_book_payload",
+        lambda *_a, **_k: {
+            "holdings": [],
+            "equity_summary": {"portfolio_equity": 0.0},
+            "unpriced": [],
+        },
+    )
     monkeypatch.setattr(au, "get_latest_book_analysis", lambda *_a, **_k: None)
 
     html = server._render_book_report("cust@x.com")
@@ -177,6 +204,7 @@ def test_legal_pages_carry_cross_links(client):
 
 # ─── L5: beta / educational framing ───────────────────────────────────────────
 
+
 def test_dashboard_shows_the_beta_educational_banner():
     """While the ToS is a DRAFT and no counsel has classified 'My Book', the
     product must present itself as beta/educational, not as advice."""
@@ -190,7 +218,7 @@ def test_dashboard_shows_the_beta_educational_banner():
 def test_beta_banner_says_not_investment_advice():
     html = _dashboard().lower()
     idx = html.index("gesh-beta-banner")
-    near = html[idx:idx + 900]
+    near = html[idx : idx + 900]
 
     assert "not investment advice" in near or "not financial advice" in near
 
@@ -211,6 +239,7 @@ def test_pricing_page_links_privacy(client):
 
 # ─── L1: AI-disclosure at the point of use ────────────────────────────────────
 
+
 def test_analyze_button_carries_an_ai_data_flow_disclosure():
     """The hub's key GESH-specific disclosure, shown where the customer acts —
     a policy page alone does not put it in front of them at the moment of use."""
@@ -218,7 +247,7 @@ def test_analyze_button_carries_an_ai_data_flow_disclosure():
 
     assert "gesh-ai-disclosure" in html, "no AI-disclosure element near analyze"
     idx = html.index("gesh-ai-disclosure")
-    near = html[idx:idx + 700]
+    near = html[idx : idx + 700]
     assert "Anthropic" in near or "Claude" in near
 
 
@@ -228,9 +257,11 @@ def test_author_instruction_note_is_never_served():
     drafting instructions onto a public policy page."""
     import legal_pages
 
-    md = ("# Privacy\n"
-          "> **DRAFT — NOT YET LEGALLY REVIEWED.** Placeholders in **[BRACKETS]** need values.\n\n"
-          "Real policy text.\n")
+    md = (
+        "# Privacy\n"
+        "> **DRAFT — NOT YET LEGALLY REVIEWED.** Placeholders in **[BRACKETS]** need values.\n\n"
+        "Real policy text.\n"
+    )
     out = legal_pages._strip_author_note(md)
 
     assert "[BRACKETS]" not in out

@@ -51,7 +51,7 @@ _GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # ─── SDK lazy import ──────────────────────────────────────────────────────────
 
-def _get_client():
+def _get_client(*, timeout_s: float | None = None):
     """
     Lazy-load google-genai SDK (new official SDK, replaces deprecated google-generativeai).
     Returns a configured genai.Client or raises on failure.
@@ -64,8 +64,16 @@ def _get_client():
         )
     try:
         from google import genai
-        client = genai.Client(api_key=_GEMINI_KEY)
-        return client
+        from google.genai import types as genai_types
+
+        kwargs: dict[str, Any] = {"api_key": _GEMINI_KEY}
+        if timeout_s is not None and timeout_s > 0:
+            ms = int(timeout_s * 1000)
+            try:
+                kwargs["http_options"] = genai_types.HttpOptions(timeout=ms)
+            except AttributeError:
+                kwargs["http_options"] = {"timeout": ms}
+        return genai.Client(**kwargs)
     except ImportError:
         raise ImportError(
             "google-genai not installed. Run:\n"
@@ -141,6 +149,8 @@ def _generate(
     temperature: float = 0.3,
     max_tokens: int = 1024,
     retry_on_quota: bool = True,
+    response_mime_type: str | None = None,
+    timeout_s: float | None = None,
 ) -> str:
     """
     Send a prompt to Gemini using google-genai SDK and return the response text.
@@ -149,7 +159,7 @@ def _generate(
     """
     from google.genai import types as genai_types
 
-    client = _get_client()
+    client = _get_client(timeout_s=timeout_s)
     full_prompt = f"{system}\n\n{prompt}" if system else prompt
 
     models_to_try = [model]
@@ -159,13 +169,16 @@ def _generate(
     last_exc: Exception | None = None
     for attempt_model in models_to_try:
         try:
+            cfg_kwargs: dict[str, Any] = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+            }
+            if response_mime_type:
+                cfg_kwargs["response_mime_type"] = response_mime_type
             response = client.models.generate_content(
                 model=attempt_model,
                 contents=full_prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=max_tokens,
-                ),
+                config=genai_types.GenerateContentConfig(**cfg_kwargs),
             )
             text = response.text
             if text:
@@ -174,11 +187,19 @@ def _generate(
         except Exception as exc:
             last_exc = exc
             err_str = str(exc)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                # Try fallback model after brief pause
-                time.sleep(2)
+            is_quota = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+            is_missing_model = (
+                "404" in err_str
+                or "NOT_FOUND" in err_str
+                or "no longer available" in err_str.lower()
+            )
+            if is_quota or is_missing_model:
+                # Quota: brief pause. Retired model id: skip straight to fallback
+                # (gemini-2.5-pro 404s for new API users — sleeping does not help).
+                if is_quota:
+                    time.sleep(2)
                 continue
-            raise  # non-quota errors propagate immediately
+            raise  # other errors propagate immediately
 
     raise last_exc or RuntimeError("All Gemini models failed")
 

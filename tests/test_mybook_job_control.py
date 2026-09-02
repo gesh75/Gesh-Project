@@ -160,6 +160,48 @@ def test_deep_analyze_for_book_typed_truncation_retries_smaller(
     assert truncated["analyzed"] == 6
 
 
+def test_run_book_engines_survives_llm_outage_with_local_engines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Customer Analyze My Portfolio must not 500 when Anthropic is out of credits.
+
+    Kelly / Monte Carlo / radar are local math (API spend $0). The LLM narrative
+    is optional. Production 2026-08-22 returned 202 then 500 because the worker
+    treated Claude as the core deliverable.
+    """
+    import llm_gateway
+    import server
+
+    payload = {
+        "holdings": [{"symbol": "TALK", "equity": 100.0, "portfolio_percentage": 50.0}],
+        "equity_summary": {"portfolio_equity": 200.0},
+        "unpriced": [],
+    }
+
+    def boom(*args, **kwargs):
+        raise llm_gateway.LLMUnavailableError("credit balance too low")
+
+    monkeypatch.setattr(server, "_deep_analyze_for_book", boom)
+    monkeypatch.setattr(server, "detect_regimes", lambda symbols: {})
+    monkeypatch.setattr(
+        server, "run_monte_carlo", lambda *a, **k: {"var_95": 10.0, "current_equity": 200.0}
+    )
+    monkeypatch.setattr(server, "get_analyst_targets", lambda symbols: {})
+    monkeypatch.setattr(
+        server, "run_kelly_analysis", lambda *a, **k: {"holdings": [], "action": "HOLD"}
+    )
+    monkeypatch.setattr(server, "_run_book_radar", lambda *a, **k: {"mode": "NO_ACTION"})
+
+    result = server._run_book_engines(payload)
+
+    assert result["analysis"]["ai_unavailable"] is True
+    assert result["analysis"]["holdings_analysis"] == []
+    assert result["analysis"].get("portfolio_score") is None
+    assert result["kelly"]["action"] == "HOLD"
+    assert result["monte_carlo"]["var_95"] == 10.0
+    assert "error" not in result["kelly"]
+
+
 # ── [CLAUDE V5 2026-07-19] reservation transitions are tenant-scoped ────────────
 def test_release_usage_scoped_by_user_id(au):
     au.create_user("t1@x.com", "pw")
@@ -173,3 +215,15 @@ def test_release_usage_scoped_by_user_id(au):
     # the rightful tenant can release it
     assert au.release_usage("job-uid1", uid1) is True
     assert au.get_usage_reservation("job-uid1")["state"] == "released"
+
+
+def test_allow_mybook_fail_retry_cools_down_per_user_and_book():
+    import server
+
+    server._MYBOOK_FAIL_RETRY_AT.clear()
+    assert server._allow_mybook_fail_retry("u1", "fp-a", now=100.0) is True
+    assert server._allow_mybook_fail_retry("u1", "fp-a", now=101.0) is False
+    assert server._allow_mybook_fail_retry("u2", "fp-a", now=101.0) is True
+    assert server._allow_mybook_fail_retry("u1", "fp-b", now=101.0) is True
+    cooled = 100.0 + server._MYBOOK_FAIL_RETRY_COOLDOWN_S
+    assert server._allow_mybook_fail_retry("u1", "fp-a", now=cooled) is True

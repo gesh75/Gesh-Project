@@ -23,9 +23,11 @@ import llm_gateway
 
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch, tmp_path):
+    llm_gateway.reset_gateway()
     monkeypatch.setattr(llm_failover, "FAILOVER_COUNT", 0, raising=False)
     monkeypatch.setattr(llm_failover, "LAST_FAILOVER", None, raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("GESH_LLM_SKIP_ANTHROPIC", raising=False)
     yield
     llm_gateway.reset_gateway()
 
@@ -124,8 +126,16 @@ def test_coerce_fills_missing_required_keys_with_typed_blanks():
     out = llm_failover.coerce_to_schema({"portfolio_score": 70}, _SCHEMA)
     assert out["portfolio_score"] == 70
     assert out["portfolio_verdict"] == ""
-    assert out["risk_score"] == 0
+    assert out["risk_score"] is None
     assert out["holdings_analysis"] == []
+
+
+def test_coerce_omitted_numeric_is_none_not_zero():
+    """A missing score must not render as 0 / 100 (gap F-11)."""
+    out = llm_failover.coerce_to_schema({}, _SCHEMA)
+    assert out["portfolio_score"] is None
+    assert out["risk_score"] is None
+    assert out["portfolio_verdict"] == ""
 
 
 def test_coerce_recurses_into_array_items():
@@ -136,6 +146,13 @@ def test_coerce_recurses_into_array_items():
 def test_coerce_casts_numeric_strings_to_int():
     out = llm_failover.coerce_to_schema({"portfolio_score": "87.6"}, _SCHEMA)
     assert out["portfolio_score"] == 88
+
+
+def test_coerce_invalid_numeric_is_none_not_zero():
+    """Garbage is not a measured 0 — same F-11 class as an omitted key."""
+    out = llm_failover.coerce_to_schema({"portfolio_score": "n/a", "risk_score": "nope"}, _SCHEMA)
+    assert out["portfolio_score"] is None
+    assert out["risk_score"] is None
 
 
 # ── Duck-typed message ───────────────────────────────────────────────────────
@@ -193,6 +210,144 @@ def test_attempt_rejects_unrelated_json_object(monkeypatch):
         llm_failover.attempt(operation="deep_analyze_portfolio", max_tokens=1000, **_kwargs())
 
 
+def _credit_exhausted() -> anthropic.BadRequestError:
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(400, request=request)
+    return anthropic.BadRequestError(
+        "Your credit balance is too low to access the Anthropic API",
+        response=response,
+        body=None,
+    )
+
+
+def test_gateway_fails_over_when_anthropic_credits_are_exhausted(monkeypatch, tmp_path):
+    """Subscription lapsed / credit 400 is the actual 2026-08-22 dashboard 500.
+
+    BadRequestError is non-retryable, so it used to bubble out of _call_anthropic
+    as a raw SDK error. It is an APIStatusError and MUST fail over, not 500.
+    """
+
+    class _Stream:
+        def __enter__(self):
+            raise _credit_exhausted()
+
+        def __exit__(self, *a):
+            return False
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**k):
+                raise _credit_exhausted()
+
+            @staticmethod
+            def stream(**k):
+                return _Stream()
+
+    monkeypatch.setattr(llm_gateway, "create_client", lambda: _Client())
+    _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))
+    gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
+    msg = gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **_kwargs()
+    )
+    out = llm_contracts.extract_tool_input(
+        msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
+    )
+    assert out["portfolio_score"] == 64
+    assert llm_failover.FAILOVER_COUNT == 1
+
+
+def test_second_call_skips_anthropic_after_credit_400(monkeypatch, tmp_path):
+    """A billed-out key will not recover later in the same process."""
+    hits = {"n": 0}
+
+    class _Stream:
+        def __enter__(self):
+            hits["n"] += 1
+            raise _credit_exhausted()
+
+        def __exit__(self, *a):
+            return False
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**k):
+                hits["n"] += 1
+                raise _credit_exhausted()
+
+            @staticmethod
+            def stream(**k):
+                return _Stream()
+
+    monkeypatch.setattr(llm_gateway, "create_client", lambda: _Client())
+    _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))
+    gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
+    kwargs = _kwargs()
+    gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **kwargs
+    )
+    assert hits["n"] == 1
+    gw.stream(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **kwargs
+    )
+    assert hits["n"] == 1
+    assert llm_failover.FAILOVER_COUNT == 2
+
+
+def test_skip_anthropic_env_goes_straight_to_failover(monkeypatch, tmp_path):
+    monkeypatch.setenv("GESH_LLM_SKIP_ANTHROPIC", "1")
+
+    def _boom():
+        raise AssertionError("Anthropic must not be contacted")
+
+    monkeypatch.setattr(llm_gateway, "create_client", _boom)
+    _install_provider(monkeypatch, json.dumps({"portfolio_score": 70, "portfolio_verdict": "HOLD"}))
+    gw = llm_gateway.Gateway(db_path=tmp_path / "usage.db")
+    msg = gw.create(
+        operation="deep_analyze_portfolio", model="claude-sonnet-4-6", max_tokens=1000, **_kwargs()
+    )
+    out = llm_contracts.extract_tool_input(
+        msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
+    )
+    assert out["portfolio_score"] == 70
+    assert llm_failover.FAILOVER_COUNT == 1
+
+
+def test_call_gemini_forwards_deep_analysis_token_budget(monkeypatch):
+    seen: dict = {}
+
+    def fake_generate(
+        prompt, model="", max_tokens=1024, response_mime_type=None, timeout_s=None, **k
+    ):
+        seen["max_tokens"] = max_tokens
+        seen["mime"] = response_mime_type
+        seen["model"] = model
+        seen["timeout_s"] = timeout_s
+        return json.dumps({"portfolio_score": 71, "portfolio_verdict": "HOLD"})
+
+    stub = type("Agent", (), {"_generate": staticmethod(fake_generate)})()
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-not-a-real-key")
+    monkeypatch.setenv("GESH_GEMINI_TIMEOUT_S", "180")
+    monkeypatch.setitem(sys.modules, "gemini_agent", stub)
+    out = llm_failover.call_gemini("analyze", max_tokens=24000)
+    assert json.loads(out)["portfolio_score"] == 71
+    assert seen["max_tokens"] == 24000
+    assert seen["mime"] == "application/json"
+    assert seen["timeout_s"] == 180.0
+
+
+def test_grok_executable_finds_home_local_bin_when_not_on_path(monkeypatch, tmp_path):
+    grok = tmp_path / "grok"
+    grok.write_text("#!/bin/sh\n")
+    grok.chmod(0o755)
+    monkeypatch.setattr(llm_failover.shutil, "which", lambda _: None)
+    monkeypatch.setattr(llm_failover, "_GROK_FALLBACK_BINS", (str(grok),))
+    assert llm_failover._grok_executable() == str(grok)
+
+
 def test_gateway_fails_over_when_anthropic_unreachable(monkeypatch, tmp_path):
     _kill_anthropic(monkeypatch)
     _install_provider(monkeypatch, json.dumps({"portfolio_score": 64, "portfolio_verdict": "HOLD"}))
@@ -206,7 +361,7 @@ def test_gateway_fails_over_when_anthropic_unreachable(monkeypatch, tmp_path):
         msg, expected_tool="return_portfolio_analysis", operation="deep_analyze_portfolio"
     )
     assert out["portfolio_score"] == 64
-    assert out["risk_score"] == 0  # coerced, not missing
+    assert out["risk_score"] is None  # omitted numeric is blank, not a fake 0
     assert llm_failover.FAILOVER_COUNT == 1
 
 
@@ -345,9 +500,190 @@ def test_budget_exhaustion_reraises_original_when_all_fallbacks_fail(
         )
 
 
-def test_provider_order_defaults_to_grok_then_gemini(monkeypatch):
+def test_provider_order_defaults_to_xai_then_grok_then_gemini(monkeypatch):
     monkeypatch.delenv("GESH_LLM_FAILOVER", raising=False)
-    assert llm_failover.provider_order() == ["grok", "gemini"]
+    assert llm_failover.provider_order() == ["xai", "grok", "gemini"]
+
+
+def test_xai_available_requires_key(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    assert llm_failover.xai_available() is False
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    assert llm_failover.xai_available() is True
+
+
+def test_call_xai_reads_chat_completions_content(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    monkeypatch.delenv("GESH_XAI_MODEL", raising=False)
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    def fake_post(url, **kwargs):
+        seen["url"] = url
+        seen["headers"] = kwargs.get("headers")
+        seen["json"] = kwargs.get("json")
+        seen["timeout"] = kwargs.get("timeout")
+        return _Resp()
+
+    monkeypatch.setattr(llm_failover.httpx, "post", fake_post)
+    out = llm_failover.call_xai("return json")
+    assert out == '{"ok": true}'
+    assert seen["url"] == "https://api.x.ai/v1/chat/completions"
+    assert seen["headers"]["Authorization"] == "Bearer xai-test-not-a-real-key"
+    assert seen["json"]["model"] == "grok-4.6"
+    assert seen["json"]["response_format"] == {"type": "json_object"}
+    assert "max_tokens" not in seen["json"]
+    assert seen["timeout"] == llm_failover._XAI_TIMEOUT_S
+
+
+def test_call_xai_forwards_max_tokens(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    def fake_post(url, **kwargs):
+        seen["json"] = kwargs.get("json")
+        return _Resp()
+
+    monkeypatch.setattr(llm_failover.httpx, "post", fake_post)
+    llm_failover.call_xai("return json", max_tokens=24000)
+    assert seen["json"]["max_tokens"] == 24000
+
+
+def test_xai_timeout_honours_env_at_call_time(monkeypatch):
+    monkeypatch.setenv("GESH_XAI_TIMEOUT_S", "480")
+    assert llm_failover.xai_timeout_s() == 480.0
+    monkeypatch.delenv("GESH_XAI_TIMEOUT_S", raising=False)
+    assert llm_failover.xai_timeout_s() == llm_failover._XAI_TIMEOUT_S
+
+
+def test_grok_timeout_honours_env_at_call_time(monkeypatch):
+    monkeypatch.setenv("GESH_GROK_TIMEOUT_S", "180")
+    assert llm_failover.grok_timeout_s() == 180.0
+    monkeypatch.delenv("GESH_GROK_TIMEOUT_S", raising=False)
+    assert llm_failover.grok_timeout_s() == llm_failover._GROK_TIMEOUT_S
+
+
+def test_attempt_forwards_max_tokens_to_the_provider(monkeypatch):
+    seen: dict = {}
+
+    def stub(prompt, operation="", max_tokens=None):
+        seen["max_tokens"] = max_tokens
+        seen["operation"] = operation
+        return json.dumps(
+            {
+                "portfolio_score": 64,
+                "portfolio_verdict": "HOLD",
+                "risk_score": 40,
+                "holdings_analysis": [],
+            }
+        )
+
+    providers = dict(llm_failover._PROVIDERS)
+    providers["stub"] = (lambda: True, stub)
+    monkeypatch.setattr(llm_failover, "_PROVIDERS", providers)
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "stub")
+    llm_failover.attempt(operation="deep_analyze_portfolio", max_tokens=24000, **_kwargs())
+    assert seen["max_tokens"] == 24000
+    assert seen["operation"] == "deep_analyze_portfolio"
+
+
+def test_call_xai_news_sentiment_uses_fast_timeout(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+    seen: dict = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    def fake_post(url, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        return _Resp()
+
+    monkeypatch.setattr(llm_failover.httpx, "post", fake_post)
+    llm_failover.call_xai("score this", operation="news_sentiment")
+    assert seen["timeout"] == llm_failover._XAI_FAST_TIMEOUT_S
+    assert seen["timeout"] <= 30
+
+
+def test_fast_ops_skip_the_grok_cli(monkeypatch):
+    """News/SEC/fundamentals must not fall through to a 900s grok CLI loop."""
+    called: list[str] = []
+
+    def grok_call(prompt):
+        called.append("grok")
+        raise AssertionError("grok CLI must not run for news_sentiment")
+
+    def xai_call(prompt):
+        called.append("xai")
+        return json.dumps(
+            {
+                "portfolio_score": 1,
+                "portfolio_verdict": "HOLD",
+                "risk_score": 1,
+                "holdings_analysis": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        llm_failover,
+        "_PROVIDERS",
+        {"grok": (lambda: True, grok_call), "xai": (lambda: True, xai_call)},
+    )
+    monkeypatch.setenv("GESH_LLM_FAILOVER", "grok,xai")
+    llm_failover.attempt(operation="news_sentiment", max_tokens=200, **_kwargs())
+    assert called == ["xai"]
+
+
+def test_call_xai_raises_on_http_error_without_leaking_the_key(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-secret-key-must-not-leak")
+
+    class _Resp:
+        status_code = 401
+        text = "unauthorized"
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(llm_failover.httpx, "post", lambda *a, **k: _Resp())
+    with pytest.raises(llm_failover.FailoverUnavailable, match="xAI HTTP 401") as ei:
+        llm_failover.call_xai("hi")
+    assert "xai-secret-key-must-not-leak" not in str(ei.value)
+    assert "unauthorized" not in str(ei.value)
+
+
+def test_call_xai_http_error_does_not_log_raw_body(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-not-a-real-key")
+
+    class _Resp:
+        status_code = 400
+        text = "PROMPT ECHO: Analyze this private book NVDA 12 shares"
+
+        def json(self):
+            return {"error": {"type": "invalid_request_error", "message": self.text}}
+
+    monkeypatch.setattr(llm_failover.httpx, "post", lambda *a, **k: _Resp())
+    with pytest.raises(llm_failover.FailoverUnavailable) as ei:
+        llm_failover.call_xai("Analyze this private book")
+    msg = str(ei.value)
+    assert msg == "xAI HTTP 400 (invalid_request_error)"
+    assert "PROMPT ECHO" not in msg
+    assert "NVDA 12 shares" not in msg
 
 
 def test_build_prompt_embeds_schema_and_forbids_tools():
@@ -556,9 +892,7 @@ def test_unconfigured_is_a_failover_trigger_but_its_parent_is_not():
     assert llm_gateway.LLMProviderUnconfiguredError in llm_gateway._FAILOVER_TRIGGERS
     assert llm_gateway.LLMConfigurationError not in llm_gateway._FAILOVER_TRIGGERS
     # ...and the subclass relationship keeps every existing handler working.
-    assert issubclass(
-        llm_gateway.LLMProviderUnconfiguredError, llm_gateway.LLMConfigurationError
-    )
+    assert issubclass(llm_gateway.LLMProviderUnconfiguredError, llm_gateway.LLMConfigurationError)
 
 
 def test_malformed_setting_still_fails_loudly(monkeypatch):
@@ -575,6 +909,7 @@ def test_malformed_setting_still_fails_loudly(monkeypatch):
 
 def test_call_grok_requires_cli_on_path(monkeypatch):
     monkeypatch.setattr(llm_failover.shutil, "which", lambda _: None)
+    monkeypatch.setattr(llm_failover, "_GROK_FALLBACK_BINS", ())
     with pytest.raises(llm_failover.FailoverUnavailable, match="not on PATH"):
         llm_failover.call_grok("x")
 
@@ -592,6 +927,7 @@ def test_enabled_is_false_for_empty_or_whitespace_env(monkeypatch):
 
 def test_grok_available_requires_cli_plus_auth(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_failover.shutil, "which", lambda _: None)
+    monkeypatch.setattr(llm_failover, "_GROK_FALLBACK_BINS", ())
     monkeypatch.setattr(llm_failover.Path, "home", lambda *a: tmp_path)
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     assert llm_failover.grok_available() is False
@@ -720,8 +1056,8 @@ def test_coerce_fills_boolean_and_number_blanks_and_invalid_ints():
         },
     }
     out = llm_failover.coerce_to_schema({}, schema)
-    assert out == {"ok": False, "beta": 0, "n": 0}
-    assert llm_failover.coerce_to_schema({"n": "not-a-number"}, schema)["n"] == 0
+    assert out == {"ok": False, "beta": None, "n": None}
+    assert llm_failover.coerce_to_schema({"n": "not-a-number"}, schema)["n"] is None
     assert llm_failover.coerce_to_schema({"beta": "1.5"}, schema)["beta"] == 1.5
 
 
@@ -744,3 +1080,62 @@ def test_build_prompt_flattens_string_system_and_mixed_user_blocks():
     assert "part-a" in prompt
     assert "part-b" in prompt
     assert "ignore me" not in prompt
+
+
+# ── Gemini adapter (P0-5, 2026-08-21 audit) ───────────────────────────────────
+#
+# llm_failover.call_gemini pinned gemini-2.5-pro, which 404s for new API users.
+# Combined with the scheduled-PATH bug that hid Grok, the chain lost step 3/5
+# on 2026-08-20. Default to a live Flash id and retry on 404 like call_grok
+# already retries a retired model pin.
+
+
+def test_call_gemini_defaults_to_flash_not_retired_pro(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk-test")
+    monkeypatch.delenv("GESH_GEMINI_FAILOVER_MODEL", raising=False)
+    seen: list[str] = []
+
+    class _Agent:
+        @staticmethod
+        def _generate(prompt, model=""):
+            seen.append(model)
+            return '{"ok": true}'
+
+    monkeypatch.setitem(sys.modules, "gemini_agent", _Agent)
+    assert llm_failover.call_gemini("hi") == '{"ok": true}'
+    assert seen == ["gemini-2.5-flash"]
+
+
+def test_call_gemini_model_is_env_overridable(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk-test")
+    monkeypatch.setenv("GESH_GEMINI_FAILOVER_MODEL", "gemini-2.0-flash-lite")
+    seen: list[str] = []
+
+    class _Agent:
+        @staticmethod
+        def _generate(prompt, model=""):
+            seen.append(model)
+            return "ok"
+
+    monkeypatch.setitem(sys.modules, "gemini_agent", _Agent)
+    llm_failover.call_gemini("hi")
+    assert seen == ["gemini-2.0-flash-lite"]
+
+
+def test_call_gemini_retries_fallback_when_pinned_model_404s(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gk-test")
+    monkeypatch.setenv("GESH_GEMINI_FAILOVER_MODEL", "gemini-2.5-pro")
+    monkeypatch.delenv("GESH_GEMINI_FAILOVER_FALLBACK", raising=False)
+    seen: list[str] = []
+
+    class _Agent:
+        @staticmethod
+        def _generate(prompt, model=""):
+            seen.append(model)
+            if model == "gemini-2.5-pro":
+                raise RuntimeError("404 NOT_FOUND no longer available to new users")
+            return '{"ok": true}'
+
+    monkeypatch.setitem(sys.modules, "gemini_agent", _Agent)
+    assert llm_failover.call_gemini("hi") == '{"ok": true}'
+    assert seen == ["gemini-2.5-pro", "gemini-2.0-flash-lite"]

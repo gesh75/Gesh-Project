@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Persistent cadence, NO wall-clock claim (rule #56).
+
+  Replaces the Cowork "Gesh daily portfolio analysis" 10:45 ET pickup of
+  gesh_report.html. The 10:30 chain (com.gesh.daily-analysis) writes the file;
+  this job publishes it or reruns the chain if Friday's report is still sitting
+  there. Window is decided in scripts/daily_report_et.sh (10:45 ET weekdays).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.gesh.daily-report</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/georgigaydarov/Projects/gesh-project/scripts/daily_report_et.sh</string>
+    </array>
+    <key>WorkingDirectory</key><string>/Users/georgigaydarov/Projects/gesh-project</string>
+    <key>StartInterval</key><integer>600</integer>
+    <key>RunAtLoad</key><false/>
+    <key>KeepAlive</key><false/>
+    <key>ProcessType</key><string>Background</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/georgigaydarov/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StandardOutPath</key><string>/tmp/gesh_daily_report.log</string>
+    <key>StandardErrorPath</key><string>/tmp/gesh_daily_report.log</string>
+</dict>
+</plist>

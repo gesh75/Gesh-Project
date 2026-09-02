@@ -133,3 +133,48 @@ def test_garch_vol_still_returns_a_plain_float_for_existing_callers():
 def test_garch_vol_agrees_with_the_detail_form():
     r = _returns()
     assert vm.garch_vol(r) == pytest.approx(vm.garch_vol_detail(r)[0])
+
+
+def test_garch_portfolio_vol_is_none_when_no_name_actually_fit():
+    # Short series never reaches arch; must not average EWMA and call it GARCH.
+    rets = pd.DataFrame({"AAA": _returns(n=30), "BBB": _returns(n=30, seed=1)})
+    holdings = [
+        {"symbol": "AAA", "equity": 50.0},
+        {"symbol": "BBB", "equity": 50.0},
+    ]
+    assert vm.garch_portfolio_vol(holdings, rets, 100.0) is None
+
+
+def test_garch_portfolio_vol_is_none_if_any_name_is_ewma_fallback(monkeypatch):
+    # Incomplete coverage must not be reweighted and labeled GARCH(1,1).
+    rets = pd.DataFrame({"AAA": _returns(n=300, seed=0), "BBB": _returns(n=300, seed=1)})
+    holdings = [
+        {"symbol": "AAA", "equity": 80.0},
+        {"symbol": "BBB", "equity": 20.0},
+    ]
+    n = {"i": 0}
+
+    def _detail(series, scale=100.0):
+        n["i"] += 1
+        if n["i"] == 2:
+            return 0.05, "ewma:fit_failed"
+        return 0.02, vm.GARCH_ESTIMATOR
+
+    monkeypatch.setattr(vm, "garch_vol_detail", _detail)
+    assert vm.garch_portfolio_vol(holdings, rets, 100.0) is None
+
+
+def test_garch_portfolio_vol_uses_weighted_garch_when_every_name_fits(monkeypatch):
+    rets = pd.DataFrame({"AAA": _returns(n=300, seed=0), "BBB": _returns(n=300, seed=1)})
+    holdings = [
+        {"symbol": "AAA", "equity": 80.0},
+        {"symbol": "BBB", "equity": 20.0},
+    ]
+    n = {"i": 0}
+
+    def _detail(series, scale=100.0):
+        n["i"] += 1
+        return (0.02 if n["i"] == 1 else 0.05), vm.GARCH_ESTIMATOR
+
+    monkeypatch.setattr(vm, "garch_vol_detail", _detail)
+    assert vm.garch_portfolio_vol(holdings, rets, 100.0) == pytest.approx(0.8 * 0.02 + 0.2 * 0.05)

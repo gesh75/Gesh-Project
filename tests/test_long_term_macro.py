@@ -87,7 +87,11 @@ def test_endpoint_cached_cold_never_computes(client, monkeypatch):
         lambda: pytest.fail("cache-only route performed live work"),
     )
     r = client.get("/api/long-term-macro/cached")
-    assert r.status_code == 503
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "unavailable"
+    assert body["cached"] is False
+    assert body.get("data") is None
 
 
 def test_endpoint_cached_serves_from_cache_after_live(client, monkeypatch):
