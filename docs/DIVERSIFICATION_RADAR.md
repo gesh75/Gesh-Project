@@ -95,6 +95,7 @@ Consequences to remember:
 | AI awareness | `ai_analyzer.py` | `portfolio_recommendations` items gain optional `category`/`symbol` (backward-compatible) so Claude may surface advisory `DIVERSIFICATION` ideas. |
 | Daily report | `gen_report2.py` | New "💎 Diversification Radar" section (every cell `html.escape`d). |
 | Dashboard panel | `invest_view.py`, `server.py` | `GET /invest` + `GET /invest/data` (internal, login-wall gated like `/watch`), 12s poll, read-only. |
+| Customer book slider | `POST /api/mybook/radar-cash` | Sizes the **persisted** radar `resize_state` against a what-if cash amount. The analyze-time radar is computed **cash-free** so moving the slider does not bust the (user, book-fingerprint) cache. Hard-cap `WHAT_IF_MAX` ($1,000,000) is returned as `deployable_cash`. Advisory; 404 until the customer has run Analyze My Portfolio. Distinct from `/api/mybook/deploy-cash`, which sizes Kelly ADD gaps on **already-held** names. |
 | Nav | `dashboard.html`, `watch_view.py`, `progress_view.py` | 💎 Invest cross-links. |
 
 ## Safety invariants (enforced + tested)

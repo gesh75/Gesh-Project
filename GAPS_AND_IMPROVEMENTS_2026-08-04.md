@@ -79,7 +79,7 @@ Risk gate + paper defaults · customer isolation / leak sweep · billing HMAC + 
 | `docs/GESH_FINANCE_LAUNCH_CHECKLIST.md` | Launch readiness — **reconciled 2026-08-04** |
 | `docs/GESH_FINANCE_NEXT_ACTIONS.md` | Action queue — **reconciled 2026-08-04** |
 | `docs/GESH_FINANCE_DEFECT_REGISTER.md` | Defect IDs — **status column added 2026-08-04** |
-| `docs/LLM_OPERATIONS.md` | LLM gateway ops (newer) |
+| `docs/LLM_OPERATIONS.md` | LLM gateway ops + Grok/Gemini failover (PR #236) |
 | `AGENTS.md` / `CLAUDE.md` | Agent operating manual |
 
 *Update this file after every major milestone.*

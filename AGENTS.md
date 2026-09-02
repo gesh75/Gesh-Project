@@ -47,6 +47,7 @@ Also do **not** run AI calls, brokerage actions, billing actions, or production 
 - `data_fetcher.py` — live portfolio, holdings, quotes, snapshot loading
 - `rh_mcp_data.py` / `rh_order_review.py` / `tax_lots_enrich.py` — read-only Robinhood MCP (OHLCV, broker preflight, purchase-side wash). See `docs/RH_MCP.md`
 - `ai_analyzer.py` — Claude prompt orchestration and structured outputs
+- `llm_gateway.py` / `llm_failover.py` — Anthropic admission + loud Grok/Gemini failover (`docs/LLM_OPERATIONS.md`)
 - `regime.py`, `kelly.py`, `monte_carlo.py`, `consensus.py`, `ecg.py` — core portfolio engines
 - `news_agent.py`, `sec_agent.py`, `fundamental_agent.py`, `gemini_agent.py`, `ollama_agent.py` — supporting intelligence agents
 - `trade_log.py`, `paper_trading.py`, `trading/` — paper/live execution pipeline and gates
