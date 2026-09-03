@@ -6149,6 +6149,58 @@ def mybook_history_detail(analysis_id: int, request: Request):
         raise _server_error(e)
 
 
+def _summary_book_value(positions: list[dict], equal_weight: bool) -> dict:
+    """Hero valuation. Same honesty contract as run_weekly_digest._book_line:
+
+    - equal-weight (privacy) books never expose a dollar total
+    - a missing/zero quote must not become $0
+    - a partial book must not publish a silent-understated total — Home used
+      to infer ``equal-weight`` from ``total_equity === 0 && positions > 0``
+    """
+    symbols = [p["symbol"] for p in positions]
+    if equal_weight:
+        return {
+            "total_equity": None,
+            "priced_count": 0,
+            "unpriced": symbols,
+            "equal_weight": True,
+        }
+    if not positions:
+        return {
+            "total_equity": 0.0,
+            "priced_count": 0,
+            "unpriced": [],
+            "equal_weight": False,
+        }
+    priced: list[tuple[dict, float]] = []
+    unpriced: list[str] = []
+    for p in positions:
+        px = _cached_close(p["symbol"])
+        if (
+            isinstance(px, (int, float))
+            and not isinstance(px, bool)
+            and math.isfinite(px)
+            and px > 0
+        ):
+            priced.append((p, float(px)))
+        else:
+            unpriced.append(p["symbol"])
+    if unpriced:
+        return {
+            "total_equity": None,
+            "priced_count": len(priced),
+            "unpriced": unpriced,
+            "equal_weight": False,
+        }
+    total = sum(float(p["shares"]) * px for p, px in priced)
+    return {
+        "total_equity": round(total, 2),
+        "priced_count": len(priced),
+        "unpriced": [],
+        "equal_weight": False,
+    }
+
+
 @app.get("/api/mybook/summary")
 def mybook_summary(request: Request):
     """Hero payload for the customer Home pane: value, what changed, one next
@@ -6159,9 +6211,8 @@ def mybook_summary(request: Request):
     positions = auth_users.get_positions(email)
     watch = auth_users.get_watch(email)
     ew = auth_users.get_equal_weight(email)
-    # Equal-weight books never expose real dollars (sizes are private by design) —
-    # the hero shows position count prominently instead (see buildHomeHero).
-    total = 0.0 if ew else sum(p["shares"] * (_cached_close(p["symbol"]) or 0) for p in positions)
+    value = _summary_book_value(positions, ew)
+    total = value["total_equity"]
     saved = auth_users.get_latest_book_analysis(email)
     stale = _analysis_stale_for(email, saved)
     top_changes: list[dict] = []
@@ -6224,9 +6275,12 @@ def mybook_summary(request: Request):
     return {
         "status": "ok",
         "data": {
-            "total_equity": round(total, 2),
+            "total_equity": None if total is None else round(float(total), 2),
             "positions_count": len(positions),
             "watch_count": len(watch),
+            "priced_count": value["priced_count"],
+            "unpriced": value["unpriced"],
+            "equal_weight": value["equal_weight"],
             "last_verdict": ((saved or {}).get("analysis") or {}).get("portfolio_verdict"),
             "analysis_stale": stale,
             "analyzed_at": (saved or {}).get("_saved_at"),

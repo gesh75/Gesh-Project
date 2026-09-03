@@ -111,6 +111,15 @@ def test_customer_refresh_does_not_mention_robinhood():
     assert "Robinhood" not in btn
 
 
+def test_home_hero_does_not_infer_equal_weight_from_zero_total():
+    """A missing quote used to render total_equity=0, and the hero treated
+    that as equal-weight. The flag must be explicit; unpriced books say so."""
+    body = _fn(TEMPLATE.read_text(), "buildHomeHero")
+    assert "equal_weight" in body
+    assert "Value unavailable" in body
+    assert "===0 && Number(d.positions_count" not in body
+
+
 def test_customer_init_skips_owner_portfolio_poll():
     html = TEMPLATE.read_text()
     # The 30s /api/portfolio poll is owner RH. Customers refresh their book.

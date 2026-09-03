@@ -905,6 +905,7 @@ def test_mybook_summary_shapes_hero_payload(client, monkeypatch, au):
         "book": {"positions": [], "unpriced": []}})
     d = c.get("/api/mybook/summary").json()["data"]
     assert d["total_equity"] == 1000.0 and d["positions_count"] == 1
+    assert d["equal_weight"] is False and d["priced_count"] == 1 and d["unpriced"] == []
     assert d["last_verdict"] == "HOLD" and d["analysis_stale"] is False
     assert d["next_action"]["target"] == "desk"
     assert isinstance(d["top_changes"], list) and len(d["top_changes"]) <= 3
@@ -1007,6 +1008,34 @@ def test_mybook_summary_survives_missing_signal_history(client, monkeypatch, au)
     monkeypatch.setattr(builtins, "__import__", _no_sighist)
     r = c.get("/api/mybook/summary")
     assert r.status_code == 200 and r.json()["data"]["top_changes"] == []
+
+
+def test_mybook_summary_missing_quote_is_not_zero_or_equal_weight(client, monkeypatch, au):
+    """Home used to `or 0` a missing close, then the hero inferred equal-weight
+    from total_equity===0 && positions>0 — a sized book looked like privacy mode."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.set_position("cust@x.com", "TSLA", 5)  # not in fixture price map
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["equal_weight"] is False
+    assert d["total_equity"] is None
+    assert d["priced_count"] == 1
+    assert d["unpriced"] == ["TSLA"]
+    assert d["positions_count"] == 2
+
+
+def test_mybook_summary_equal_weight_hides_dollars(client, monkeypatch, au):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    au.set_position("cust@x.com", "NVDA", 10)
+    au.set_equal_weight("cust@x.com", True)
+    d = c.get("/api/mybook/summary").json()["data"]
+    assert d["equal_weight"] is True
+    assert d["total_equity"] is None
+    assert d["positions_count"] == 1
 
 
 # ─── book table signal columns (CONSENSUS / KELLY Δ / RISK) ─────────────────

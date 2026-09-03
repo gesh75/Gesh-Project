@@ -2102,15 +2102,28 @@ async function loadHomeHero(){
   }catch(e){ el.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">Could not load your desk — retry shortly.</div></div>'; }
 }
 function buildHomeHero(d){
-  const eqWeight=Number(d.total_equity||0)===0 && Number(d.positions_count||0)>0;
   const nPos=Number(d.positions_count||0);
   const nWatch=Number(d.watch_count||0);
+  const ew=!!d.equal_weight;
+  const rawEq=d.total_equity;
+  const hasValue=rawEq!=null && rawEq!=='' && Number.isFinite(Number(rawEq));
   const act=d.next_action||{};
   const showCta=act.target&&act.target!=='desk';
+  let heroVal;
+  if(ew && nPos>0){
+    heroVal=nPos+' <span style="font-size:18px;color:var(--muted);font-family:var(--font-sans);font-weight:500">names · equal-weight</span>';
+  }else if(!hasValue && nPos>0){
+    heroVal='<span style="font-size:clamp(22px,3vw,32px);color:var(--muted);font-family:var(--font-sans);font-weight:550">Value unavailable</span>';
+  }else{
+    heroVal='$' + Number(hasValue?rawEq:0).toLocaleString();
+  }
+  const coverNote=(!ew && !hasValue && nPos>0)
+    ? (' · priced '+Number(d.priced_count||0)+' of '+nPos)
+    : '';
   return `<div class="card" style="margin-bottom:16px;padding:22px 22px 20px">
     <div style="font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)">Your book</div>
-    <div class="desk-hero-val">${eqWeight?(nPos+' <span style="font-size:18px;color:var(--muted);font-family:var(--font-sans);font-weight:500">names · equal-weight</span>'):('$'+Number(d.total_equity||0).toLocaleString())}</div>
-    <div class="desk-hero-sub">${nPos} positions · ${nWatch} watched${d.analyzed_at?(' · last read '+daEsc(String(d.analyzed_at).slice(0,10))):''}</div>
+    <div class="desk-hero-val">${heroVal}</div>
+    <div class="desk-hero-sub">${nPos} positions · ${nWatch} watched${coverNote}${d.analyzed_at?(' · last read '+daEsc(String(d.analyzed_at).slice(0,10))):''}</div>
     <div class="desk-verdict">${daEsc(String(d.last_verdict||'Add holdings, then run a read. This desk stays empty until you do.'))}</div>
     ${d.analysis_stale?'<div style="color:var(--yellow);font-size:13px;margin-top:10px">Last deep read is older than this book. Run a fresh one when you want a new opinion.</div>':''}
     ${showCta?('<button class="btn-analyze" style="margin-top:14px" onclick="homeAction(\''+daEsc(String(act.target||'analyze'))+'\')">'+daEsc(String(act.label||"See what's in this book"))+'</button>'):''}
