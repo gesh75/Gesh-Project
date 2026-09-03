@@ -16,6 +16,7 @@ from pathlib import Path
 
 from report_share_plan import (
     gate_audit_html,
+    holding_share_caption,
     share_count,
     share_plan_html,
     share_plan_rows,
@@ -383,3 +384,140 @@ def test_optimal_pct_zero_renders_zero_not_na():
     assert "N/A" not in nvda or "0.0%" in nvda
     assert "0.0%" in nvda
     assert "9.9%" not in nvda
+
+
+def test_holding_share_caption_add_names_floor_lot_and_dollars():
+    # GTLB 2026-08-24: +$557.97 / $41.78 = 13 ADD
+    cap = holding_share_caption(
+        {"symbol": "GTLB", "price": 41.78, "quantity": 23.727, "equity": 991.32},
+        {"action": "ADD", "delta_usd": 557.97, "current_pct": 2.8, "optimal_pct": 4.3},
+        total=36029.89,
+    )
+    assert cap.startswith("ADD 13 sh")
+    assert "+$558" in cap or "+$557" in cap
+
+
+def test_holding_share_caption_kelly_hold_is_not_an_add_order():
+    """In-band dollar gap is drift. Caption must not paint a buy chore."""
+    cap = holding_share_caption(
+        {"symbol": "GTLB", "price": 41.78, "quantity": 23.727, "equity": 991.32},
+        {"action": "HOLD", "delta_usd": 557.97, "current_pct": 2.8, "optimal_pct": 4.3},
+        total=36029.89,
+    )
+    assert cap.startswith("HOLD ")
+    assert not cap.startswith("ADD ")
+    assert "13" in cap
+
+
+def test_holding_share_caption_missing_price_is_na_not_zero():
+    cap = holding_share_caption(
+        {"symbol": "X", "price": None, "quantity": 10, "equity": 0},
+        {"action": "ADD", "delta_usd": 500.0},
+        total=1000.0,
+    )
+    assert cap == "Shares N/A"
+    assert "0 sh" not in cap
+
+
+def test_holding_share_caption_blank_symbol_is_empty():
+    assert holding_share_caption({"symbol": ""}, {"action": "ADD", "delta_usd": 100}, 1000) == ""
+    assert holding_share_caption({}, {"action": "ADD", "delta_usd": 100}, 1000) == ""
+
+
+def test_share_count_rejects_non_positive_and_non_finite_price():
+    for price in (0, -41.78, float("nan"), "nan", None, "", "nope"):
+        shares, action = share_count(delta_usd=500.0, price=price, quantity=10)
+        assert shares is None, price
+        assert action == "HOLD"
+
+
+def test_share_plan_rows_skip_blank_and_non_dict_holdings():
+    eng = {
+        "holdings": [
+            "not-a-row",
+            {"symbol": "", "price": 10, "quantity": 1, "equity": 10},
+            {"symbol": None, "price": 10, "quantity": 1, "equity": 10},
+            {"symbol": "OK", "price": 10, "quantity": 5, "equity": 50},
+        ],
+        "equity_summary": {"total": 100.0},
+        "kelly": {"OK": {"action": "ADD", "delta_usd": 25.0, "current_pct": 50, "optimal_pct": 75}},
+    }
+    rows = share_plan_rows(eng)
+    assert [r["symbol"] for r in rows] == ["OK"]
+    assert rows[0]["size_action"] == "ADD"
+    assert rows[0]["shares"] == 2
+
+
+def test_share_plan_rows_keeps_measured_zero_current_pct():
+    """Kelly AVOID is 0%. `or` would treat that as missing and invent equity/total."""
+    eng = {
+        "holdings": [{"symbol": "NVDA", "price": 100.0, "quantity": 10, "equity": 1000.0}],
+        "equity_summary": {"total": 4000.0},
+        "kelly": {
+            "NVDA": {
+                "action": "AVOID",
+                "current_pct": 0.0,
+                "optimal_pct": 0.0,
+                "delta_usd": -1000.0,
+            }
+        },
+    }
+    row = share_plan_rows(eng)[0]
+    assert row["now_pct"] == 0.0
+    assert row["kelly_pct"] == 0.0
+    assert row["size_action"] == "HOLD"
+    assert row["lot_action"] == "TRIM"
+
+
+def test_share_plan_rows_derives_now_pct_only_when_current_missing():
+    eng = {
+        "holdings": [{"symbol": "CAT", "price": 200.0, "quantity": 2, "equity": 400.0}],
+        "equity_summary": {"total": 2000.0},
+        "kelly": {"CAT": {"action": "HOLD", "optimal_pct": 10.0, "delta_usd": 0.0}},
+    }
+    row = share_plan_rows(eng)[0]
+    assert row["now_pct"] == 20.0
+    assert row["kelly_pct"] == 10.0
+
+
+def test_share_plan_rejected_reason_is_html_escaped():
+    eng = _engine()
+    eng["kelly"]["GTLB"]["action"] = "ADD"
+    eng["action_plan"] = [
+        {"symbol": "GTLB", "action": "BUY", "shares": 13, "signal_reason": "Kelly ADD"}
+    ]
+    eng["gate_results"] = [
+        {
+            "symbol": "GTLB",
+            "action": "BUY",
+            "approved": False,
+            "reason": "<script>steal()</script>",
+        }
+    ]
+    html = share_plan_html(eng)
+    assert "<script>steal()</script>" not in html
+    assert "REJECTED" in html
+    assert "&lt;script&gt;" in html
+
+
+def test_gate_audit_escapes_paper_close_notes():
+    eng = _engine()
+    eng["paper_session"]["closed"][0]["notes"] = "<img src=x onerror=alert(1)>"
+    eng["paper_session"]["closed"][0]["symbol"] = "SCHW"
+    html = gate_audit_html(eng)
+    assert "<img src=x onerror=alert(1)>" not in html
+    assert "&lt;img" in html
+
+
+def test_signal_banner_ignores_hold_and_zero_share_plan_rows():
+    """HOLD / 0-share plan lines are not executable and must not flip the banner."""
+    eng = _engine()
+    eng["action_plan"] = [
+        {"symbol": "NVDA", "action": "HOLD", "shares": 4, "signal_reason": "in band"},
+        {"symbol": "JMKE", "action": "ADD", "shares": 0, "signal_reason": "subshare"},
+        "not-a-row",
+    ]
+    html = signal_gate_banner_html(eng)
+    assert "NOT EVALUATED" not in html
+    assert "Gated executable: 0" in html
+    assert "HOLD 4" in html
