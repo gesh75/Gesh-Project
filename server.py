@@ -6157,12 +6157,11 @@ def _summary_book_value(positions: list[dict], equal_weight: bool) -> dict:
     - a partial book must not publish a silent-understated total — Home used
       to infer ``equal-weight`` from ``total_equity === 0 && positions > 0``
     """
-    symbols = [p["symbol"] for p in positions]
     if equal_weight:
         return {
             "total_equity": None,
             "priced_count": 0,
-            "unpriced": symbols,
+            "unpriced": [],
             "equal_weight": True,
         }
     if not positions:
