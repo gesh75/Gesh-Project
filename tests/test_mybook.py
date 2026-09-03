@@ -1035,6 +1035,7 @@ def test_mybook_summary_equal_weight_hides_dollars(client, monkeypatch, au):
     d = c.get("/api/mybook/summary").json()["data"]
     assert d["equal_weight"] is True
     assert d["total_equity"] is None
+    assert d["unpriced"] == []
     assert d["positions_count"] == 1
 
 
