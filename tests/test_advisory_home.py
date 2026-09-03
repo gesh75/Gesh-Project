@@ -118,6 +118,16 @@ def test_home_hero_does_not_infer_equal_weight_from_zero_total():
     assert "equal_weight" in body
     assert "Value unavailable" in body
     assert "===0 && Number(d.positions_count" not in body
+    # XSS guard is file-wide on identifier names. Binding `ew` here poisoned
+    # buildFV's numeric bar-width interpolation, and a prebuilt heroVal
+    # string is a raw innerHTML sink. Flag stays eqWeight; hero HTML is inline.
+    assert "const ew=" not in body
+    assert "let ew=" not in body
+    assert "var ew=" not in body
+    assert "${heroVal}" not in body
+    # Strip comments so this assertion cannot match its own documentation.
+    code = re.sub(r"//[^\n]*", "", body)
+    assert "${ew}" not in code
 
 
 def test_customer_init_skips_owner_portfolio_poll():
