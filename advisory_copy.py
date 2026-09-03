@@ -9,6 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
+EDUCATIONAL = (
+    "Research desk. Educational information only — not investment advice. "
+    "GESH does not manage money and never places trades. Decisions stay yours."
+)
+
 _BUYISH = frozenset({"BUY", "STRONG BUY"})
 _SELLISH = frozenset({"SELL", "STRONG SELL"})
 

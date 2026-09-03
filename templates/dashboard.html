@@ -77,7 +77,14 @@ body.customer .desk-hero-val{font-family:var(--font-display);font-optical-sizing
 body.customer .desk-hero-sub{color:var(--muted2);font-size:14px;margin-top:8px}
 body.customer .desk-verdict{margin-top:14px;max-width:42rem;font-size:15.5px;line-height:1.55;color:var(--text-dim)}
 body.customer .blotter{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 18px}
-body.customer .ticket{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--brass);border-radius:10px;padding:14px 16px;min-height:92px}
+body.customer .ticket{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--brass);border-radius:10px;padding:14px 16px;min-height:92px;cursor:pointer}
+body.customer .ticket:hover{border-color:rgba(94,224,200,.4);box-shadow:var(--accent-glow)}
+body.customer .desk-edu{margin-top:12px;font-size:13.5px;line-height:1.55;color:var(--muted2);max-width:46rem}
+body.customer .desk-catchup{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+body.customer .desk-chip{background:var(--hover);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12.5px;color:var(--text-dim)}
+body.customer .desk-chip b{color:var(--text);font-weight:700}
+body.customer .home-market{margin:0 0 16px;padding:12px 16px;background:var(--card);border:1px solid var(--border);border-radius:10px;font-size:13.5px;line-height:1.5;color:var(--text-dim)}
+body.customer .home-market .kicker{font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
 body.customer .ticket.kind-conflict{border-left-color:var(--brass)}
 body.customer .ticket.kind-trim{border-left-color:var(--red)}
 body.customer .ticket.kind-add{border-left-color:var(--green)}
@@ -627,6 +634,7 @@ body:not(.customer) .customer-only { display: none !important; }
   <!-- ═══ TAB: HOME (the product — value, three tickets, the book) ═══ -->
   <div class="tab-pane" id="tab-home">
     <div id="home-hero"><div class="deep-placeholder"><div class="deep-ph-text">Loading your desk…</div></div></div>
+    <div id="home-market"></div>
     <div id="home-tickets"></div>
     <div class="card desk-book" style="margin-bottom:18px">
       <div class="ch" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
@@ -645,13 +653,13 @@ body:not(.customer) .customer-only { display: none !important; }
         <button class="btn-analyze" onclick="mybookImportWatchlist()" title="Add every saved watchlist ticker (1 share each — edit after)">⬇ Import watchlist</button>
         <button class="btn-analyze" onclick="mybookClear()" title="Remove EVERY position from your book.">🗑 Clear</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
-        <button class="btn-analyze" style="margin-left:auto" onclick="mybookAnalyze()" title="Measure what's in this book. Educational output — not personalized advice">See what's in this book</button>
       </div>
       <div id="mybook-form-error" role="alert" style="display:none;margin:0 0 10px;color:var(--red);font-size:13px"></div>
       <div id="gesh-ai-disclosure" style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.6">
-        ℹ️ A deep read sends your symbols to third-party AI providers
+        ℹ️ Click a ticker for a live research card. The AI portion of that card
+        sends <b>that one symbol</b> to third-party AI
         (<b>Anthropic Claude</b>, <b>Google Gemini</b>, <b>xAI Grok</b>).
-        Output is an AI opinion, not a calculation, and is <b>not investment advice</b>.
+        Output is an opinion, not a calculation, and is <b>not investment advice</b>.
         See the <a href="/privacy" style="color:var(--accent)">Privacy Policy</a>.
       </div>
       <div id="mybook-bulk-panel" style="display:none;margin:0 0 12px">
@@ -2101,29 +2109,83 @@ async function loadHomeHero(){
     if(tickets) tickets.innerHTML=buildAdvisoryTickets(d);
   }catch(e){ el.innerHTML='<div class="deep-placeholder"><div class="deep-ph-text">Could not load your desk — retry shortly.</div></div>'; }
 }
+function buildHomeCatchup(d){
+  const chips=[];
+  const nPos=Number(d.positions_count||0);
+  if(nPos) chips.push(`<span class="desk-chip">${nPos} name${nPos===1?'':'s'}</span>`);
+  if(d.day_change_available && d.day_change_amount!=null){
+    const amt=Number(d.day_change_amount);
+    const pct=d.day_change_percent;
+    const sign=amt>=0?'+':'−';
+    const pctBit=(pct==null)?'':(' ('+(Number(pct)>=0?'+':'−')+Math.abs(Number(pct)).toFixed(2)+'%)');
+    chips.push(`<span class="desk-chip">Today <b>${sign}$${Math.abs(amt).toLocaleString()}</b>${daEsc(pctBit)}</span>`);
+  }else if(nPos && !d.equal_weight){
+    chips.push(`<span class="desk-chip">Today's move not available</span>`);
+  }
+  if(d.top_symbol && d.top_weight_pct!=null){
+    chips.push(`<span class="desk-chip">Largest <b>${daEsc(String(d.top_symbol))}</b> ${Number(d.top_weight_pct).toFixed(0)}%</span>`);
+  }
+  return chips.length?`<div class="desk-catchup">${chips.join('')}</div>`:'';
+}
 function buildHomeHero(d){
-  const eqWeight=Number(d.total_equity||0)===0 && Number(d.positions_count||0)>0;
+  const eqWeight=!!d.equal_weight;
   const nPos=Number(d.positions_count||0);
   const nWatch=Number(d.watch_count||0);
   const act=d.next_action||{};
   const showCta=act.target&&act.target!=='desk';
   return `<div class="card" style="margin-bottom:16px;padding:22px 22px 20px">
-    <div style="font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)">Your book</div>
-    <div class="desk-hero-val">${eqWeight?(nPos+' <span style="font-size:18px;color:var(--muted);font-family:var(--font-sans);font-weight:500">names · equal-weight</span>'):('$'+Number(d.total_equity||0).toLocaleString())}</div>
-    <div class="desk-hero-sub">${nPos} positions · ${nWatch} watched${d.analyzed_at?(' · last read '+daEsc(String(d.analyzed_at).slice(0,10))):''}</div>
-    <div class="desk-verdict">${daEsc(String(d.last_verdict||'Add holdings, then run a read. This desk stays empty until you do.'))}</div>
-    ${d.analysis_stale?'<div style="color:var(--yellow);font-size:13px;margin-top:10px">Last deep read is older than this book. Run a fresh one when you want a new opinion.</div>':''}
-    ${showCta?('<button class="btn-analyze" style="margin-top:14px" onclick="homeAction(\''+daEsc(String(act.target||'analyze'))+'\')">'+daEsc(String(act.label||"See what's in this book"))+'</button>'):''}
+    <div style="font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)">Educational · your book</div>
+    <div class="desk-hero-val">${eqWeight?(nPos+' <span style="font-size:18px;color:var(--muted);font-family:var(--font-sans);font-weight:500">names · equal-weight</span>'):(d.total_equity==null?'Value not available':('$'+Number(d.total_equity).toLocaleString()))}</div>
+    <div class="desk-hero-sub">${nPos} positions · ${nWatch} watched</div>
+    <div class="desk-edu">${daEsc(String(d.educational||'Research desk. Educational information only — not investment advice.'))}</div>
+    ${buildHomeCatchup(d)}
+    <div class="desk-hero-sub" style="margin-top:12px">${d.analyzed_at?('Last AI read of this book: '+daEsc(String(d.analyzed_at).slice(0,10))):(nPos?'No AI read of this book yet — click a name for a live card.':'Add holdings to start.')}</div>
+    ${d.last_verdict?`<div class="desk-verdict">${daEsc(String(d.last_verdict))}</div>`:''}
+    ${d.analysis_stale?'<div style="color:var(--yellow);font-size:13px;margin-top:8px">That opinion is older than the book you hold now. It is not today\'s catch-up.</div>':''}
+    ${showCta?('<button class="btn-analyze" style="margin-top:14px" onclick="homeAction(\''+daEsc(String(act.target||'research'))+'\')">'+daEsc(String(act.label||'Pick a name to research'))+'</button>'):''}
   </div>`;
 }
 function buildAdvisoryTickets(d){
   const acts=d.actions||[];
   if(!acts.length){
     if(!d.positions_count) return '';
-    return `<div class="blotter"><div class="ticket kind-hold"><div class="ticket-kicker">Next</div><p>No tickets yet. Run a read so this blotter has something to say.</p></div></div>`;
+    return `<div class="blotter"><div class="ticket kind-hold"><div class="ticket-kicker">Next</div><p>Click a name in the table for a live research card. That is the only deep read — one share at a time.</p></div></div>`;
   }
   const kick={conflict:'Conflict',trim:'Trim',add:'Add',hold:'Hold',flip:'Changed'};
-  return `<div class="blotter">${acts.map(a=>`<div class="ticket kind-${daEsc(a.kind||'hold')}"><div class="ticket-kicker">${daEsc(kick[a.kind]||a.kind||'Note')}</div><p><span class="ticket-sym">${daEsc(a.symbol)}</span>${daEsc(String(a.headline||'').replace(/^[^—]+—\s*/,''))}</p></div>`).join('')}</div>`;
+  return `<div class="blotter">${acts.map(a=>{
+    const sym=String(a.symbol||'');
+    const prefix=sym+' — ';
+    const raw=String(a.headline||'');
+    const rest=raw.startsWith(prefix)?raw.slice(prefix.length):raw;
+    return `<div class="ticket kind-${daEsc(a.kind||'hold')}" onclick="openShareResearch('${daEsc(sym)}')" title="Research ${daEsc(sym)}"><div class="ticket-kicker">${daEsc(kick[a.kind]||a.kind||'Note')}</div><p><span class="ticket-sym">${daEsc(sym)}</span>${daEsc(rest)}</p></div>`;
+  }).join('')}</div>`;
+}
+function openShareResearch(sym){
+  const s=String(sym||'').trim().toUpperCase().replace(/[^A-Z0-9.\-^=]/g,'');
+  if(!s) return;
+  switchTab('analyze');
+  if(typeof analyzeTicker==='function') analyzeTicker(s);
+}
+function buildHomeMarket(d){
+  const v=(d&&d.vix)||{}, fg=(d&&d.fear_greed)||{};
+  const bias=String((d&&d.bias)||'');
+  const vix=v.level==null?'—':Number(v.level).toFixed(Number(v.level)>10?1:2);
+  const greed=fg.level==null?'—':Number(fg.level).toFixed(0);
+  return `<div class="kicker">Today · public market</div>
+    <div>VIX ${daEsc(vix)} · Fear &amp; Greed ${daEsc(greed)}${bias?(' · '+daEsc(bias)):''}. Public backdrop, not a forecast and not advice.</div>`;
+}
+async function loadHomeMarket(){
+  const el=document.getElementById('home-market'); if(!el) return;
+  try{
+    let r=await fetch('/api/long-term-macro/cached');
+    let j=r.ok?await r.json():null;
+    if(!j||j.status!=='ok'||!j.data){
+      r=await fetch('/api/long-term-macro');
+      j=r.ok?await r.json():null;
+    }
+    if(!j||j.status!=='ok'||!j.data){ el.innerHTML=''; return; }
+    el.innerHTML=buildHomeMarket(j.data);
+  }catch(e){ el.innerHTML=''; }
 }
 function buildPlainActionCell(sig, kd){
   const line=plainActionLine(sig&&sig.verdict, kd&&kd.action);
@@ -2154,13 +2216,19 @@ function homeAction(target){
   if(target==='report'){ window.location='/mybook/report'; return; }
   if(target==='desk'){ switchTab('home'); return; }
   if(target==='book'){ switchTab('home'); const f=document.getElementById('mybook-sym'); if(f) f.focus(); return; }
-  if(target==='analyze'&&typeof mybookAnalyze==='function'){ switchTab('home'); mybookAnalyze(); return; }
+  if(target==='research'||target==='analyze'){
+    switchTab('analyze');
+    const f=document.getElementById('analyze-input');
+    if(f) f.focus();
+    return;
+  }
   switchTab('home');
 }
 function refreshDesk(){
   if(document.body.classList.contains('customer')){
     if(typeof loadHomeHero==='function') loadHomeHero();
     if(typeof loadMyBook==='function') loadMyBook();
+    if(typeof loadHomeMarket==='function') loadHomeMarket();
     if(typeof setConn==='function') setConn(true);
     return;
   }
@@ -2796,14 +2864,17 @@ async function mybookClear(){
 
 // Customer My Book tab helpers - surface analyses like the full 9000 experience
 function focusMyBookSection(section) {
+  if (section === 'analysis') {
+    switchTab('analyze');
+    const f = document.getElementById('analyze-input');
+    if (f) f.focus();
+    return;
+  }
   switchTab('home');
   setTimeout(() => {
     const list = document.getElementById('mybook-list');
     if (list) {
       list.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    if (section === 'analysis' && typeof mybookAnalyze==='function') {
-      mybookAnalyze();
     }
   }, 80);
 }
@@ -2832,7 +2903,7 @@ function _bookPane(paneId, bodyId, render){
   const box = document.getElementById(bodyId);
   if (!box) return;
   const paint=d=>{
-    box.innerHTML=d?render(d):'<div class="deep-ph-text" style="padding:18px 0;text-align:center">No saved read yet. Use <b>See what\'s in this book</b> on Home — it takes a few minutes and is saved.</div>';
+    box.innerHTML=d?render(d):'<div class="deep-ph-text" style="padding:18px 0;text-align:center">No saved book read. Home is the desk; click a ticker for a live card.</div>';
   };
   if(_mybookLastResult){ paint(_mybookLastResult); return; }
   box.innerHTML='<div class="deep-ph-text" style="padding:18px 0;text-align:center">Loading your last saved read…</div>';
@@ -3726,6 +3797,7 @@ function bootDesk(){
   if(document.body.classList.contains('customer')){
     if(typeof loadHomeHero==='function') loadHomeHero();
     if(typeof loadMyBook==='function') loadMyBook();
+    if(typeof loadHomeMarket==='function') loadHomeMarket();
     if(typeof setConn==='function') setConn(true);
     applyRoleNav();
     return;

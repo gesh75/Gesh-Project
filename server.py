@@ -6159,9 +6159,27 @@ def mybook_summary(request: Request):
     positions = auth_users.get_positions(email)
     watch = auth_users.get_watch(email)
     ew = auth_users.get_equal_weight(email)
-    # Equal-weight books never expose real dollars (sizes are private by design) —
-    # the hero shows position count prominently instead (see buildHomeHero).
-    total = 0.0 if ew else sum(p["shares"] * (_cached_close(p["symbol"]) or 0) for p in positions)
+    # Canonical valuation (same formula as GET /api/mybook). Equal-weight books
+    # never expose real dollars — the hero shows name-count instead.
+    payload = _customer_book_payload(positions, equal_weight=ew)
+    eq = payload["equity_summary"]
+    holdings = payload["holdings"]
+    unpriced = list(payload.get("unpriced") or [])
+    fully_priced = bool(positions) and not unpriced
+    if ew:
+        total = None
+    elif not positions:
+        total = 0.0
+    elif not holdings:
+        total = None
+    else:
+        total = float(eq.get("portfolio_equity") or 0)
+    day_available = bool(eq.get("day_change_available")) and not ew and fully_priced
+    top = (
+        max(holdings, key=lambda h: h.get("portfolio_percentage") or 0)
+        if holdings and fully_priced
+        else None
+    )
     saved = auth_users.get_latest_book_analysis(email)
     stale = _analysis_stale_for(email, saved)
     top_changes: list[dict] = []
@@ -6192,9 +6210,7 @@ def mybook_summary(request: Request):
             if k.get("symbol") and k.get("action"):
                 kelly_by[str(k["symbol"]).upper()] = {
                     "action": k["action"],
-                    "delta_pp": round(
-                        (k.get("optimal_pct") or 0) - (k.get("current_pct") or 0), 1
-                    ),
+                    "delta_pp": round((k.get("optimal_pct") or 0) - (k.get("current_pct") or 0), 1),
                 }
     rows = []
     for p in positions:
@@ -6215,18 +6231,24 @@ def mybook_summary(request: Request):
     )
     if not positions:
         action = {"label": "Add your holdings", "target": "book"}
-    elif not saved:
-        action = {"label": "See what's in this book", "target": "analyze"}
-    elif stale:
-        action = {"label": "Book changed — run a fresh read", "target": "analyze"}
+    elif not saved or stale:
+        action = {"label": "Pick a name to research", "target": "research"}
     else:
         action = {"label": "You're on your desk", "target": "desk"}
     return {
         "status": "ok",
         "data": {
-            "total_equity": round(total, 2),
+            "total_equity": None if total is None else round(total, 2),
             "positions_count": len(positions),
             "watch_count": len(watch),
+            "equal_weight": bool(ew),
+            "unpriced": unpriced,
+            "day_change_amount": eq.get("day_change") if day_available else None,
+            "day_change_percent": eq.get("day_change_pct") if day_available else None,
+            "day_change_available": day_available,
+            "top_symbol": (top or {}).get("symbol"),
+            "top_weight_pct": (top or {}).get("portfolio_percentage"),
+            "educational": advisory_copy.EDUCATIONAL,
             "last_verdict": ((saved or {}).get("analysis") or {}).get("portfolio_verdict"),
             "analysis_stale": stale,
             "analyzed_at": (saved or {}).get("_saved_at"),
@@ -6732,7 +6754,13 @@ def _run_book_intelligence(symbols: list[str], days: int) -> dict:
             "truncated": False,
             "days": days,
         },
-        "news": {"results": [], "avg_score": None, "market_mood": "NEUTRAL", "cached": True, "headlines": []},
+        "news": {
+            "results": [],
+            "avg_score": None,
+            "market_mood": "NEUTRAL",
+            "cached": True,
+            "headlines": [],
+        },
         "fundamentals": {"results": [], "errors": []},
     }
     builders = {
@@ -7040,11 +7068,7 @@ def _render_book_report(email: str) -> str:
         if _sec_w:
             _sec_w.sort(key=lambda kv: kv[1], reverse=True)
             _ts, _tw = _sec_w[0]
-            _flag = (
-                " — more than 40% in one sector."
-                if _tw >= 40
-                else "."
-            )
+            _flag = " — more than 40% in one sector." if _tw >= 40 else "."
             top_sector_html = (
                 "<p style='color:#111;line-height:1.6;font-size:16px'><b>What this book is:</b> "
                 f"{e(f'{_tw:.1f}% {_ts}')}{_flag} "
