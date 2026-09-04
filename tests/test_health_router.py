@@ -80,6 +80,8 @@ def test_favicon_is_inline_svg():
 
 
 def test_security_health_uses_server_sanitize(monkeypatch: pytest.MonkeyPatch):
+    # /api/security/health is not a public prefix; CI enables the login wall.
+    monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: False)
     monkeypatch.setattr(
         "security.api_verifier.all_api_health",
         lambda: {"probe": float("nan")},
