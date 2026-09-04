@@ -700,6 +700,83 @@ def test_foreign_activation_does_not_rebind_active_subscription():
     assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_legit"
 
 
+def test_foreign_cancel_does_not_open_rebind_gate():
+    """PR #266 fenced foreign *activation* and *expiry*, but cancel is mark-only
+    and used to write billing_status via email fallback with no same-sub check.
+
+    Trigger: attacker checks out with the victim's email (refused), then
+    cancels. That mark opened the already_cancelled rebind hole; a second
+    attacker created rebound billing_sub_id; attacker expiry revoked a
+    still-paying customer. The real sub's later expiry was then stale.
+    """
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_legit",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    assert _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_attacker",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )["reason"] == "foreign_subscription"
+
+    cancel = _post(
+        "subscription_cancelled",
+        status="cancelled",
+        sub_id="sub_attacker",
+        updated_at="2026-03-01T00:00:00.000000Z",
+    )
+    assert cancel["action"] == "ignored" and cancel["reason"] == "stale_subscription"
+    victim = au.get_user("buyer@example.com")
+    assert victim["billing_status"] == "active"
+    assert victim["billing_sub_id"] == "sub_legit"
+    assert victim["is_active"] == 1
+
+    rebind = _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_attacker",
+        updated_at="2026-04-01T00:00:00.000000Z",
+    )
+    assert rebind["action"] == "ignored" and rebind["reason"] == "foreign_subscription"
+    assert au.get_user("buyer@example.com")["billing_sub_id"] == "sub_legit"
+
+    expire = _post(
+        "subscription_expired",
+        status="expired",
+        sub_id="sub_attacker",
+        updated_at="2026-05-01T00:00:00.000000Z",
+    )
+    assert expire["action"] == "ignored" and expire["reason"] == "stale_subscription"
+    still = au.get_user("buyer@example.com")
+    assert still["is_active"] == 1
+    assert still["billing_sub_id"] == "sub_legit"
+    assert still["billing_status"] == "active"
+
+
+def test_foreign_updated_cancelled_does_not_open_rebind_gate():
+    """subscription_updated(status=cancelled) is the same hole under another name."""
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_legit",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    res = _post(
+        "subscription_updated",
+        status="cancelled",
+        sub_id="sub_attacker",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
+    u = au.get_user("buyer@example.com")
+    assert u["billing_status"] == "active"
+    assert u["billing_sub_id"] == "sub_legit"
+    assert u["is_active"] == 1
+
+
 def test_churned_user_may_rebind_on_resubscribe():
     """After a real expiry the next subscription_created has a NEW sub_id.
 
