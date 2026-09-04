@@ -11,6 +11,7 @@ minimal stub that exports only the symbols present before PR #8.
 from __future__ import annotations
 
 import importlib
+import re
 import sys
 import types
 from pathlib import Path
@@ -92,7 +93,12 @@ def test_collection_guard_skips_on_pre_pr8_gesh_core(
         spec.loader.exec_module(mod)  # type: ignore[attr-defined]
 
     assert "ConfigError" in str(exc_info.value)
-    assert "49312393" in str(exc_info.value)
+    # Lockstep with PINNED_SHA in test_strict_config_integration.py — do not
+    # hard-code a SHA prefix here or the next pin bump fails the same way.
+    pin_src = Path(__file__).resolve().parent / "test_strict_config_integration.py"
+    m = re.search(r'PINNED_SHA = "([0-9a-f]{40})"', pin_src.read_text())
+    assert m, "PINNED_SHA literal missing from test_strict_config_integration.py"
+    assert m.group(1)[:8] in str(exc_info.value)
 
 
 def test_collection_guard_absent_on_correct_gesh_core() -> None:
