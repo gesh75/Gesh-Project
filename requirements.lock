@@ -6,12 +6,9 @@
 # Reproducible install:  pip install -r requirements.lock
 # Regenerate after changing requirements.txt; test-only tooling excluded.
 #
-# gesh-core is the private repo at commit 4931239 — v0.8.1, gesh_core.dcf with
-# the practitioner-reviewed DCF methodology (operating NWC, Blume beta +
-# fragility flag, average-ratio base, refusal guards). 33af748 declares
-# __version__ "0.6.1", so the 40-char commit SHA is the only unambiguous
-# identifier for this tree. The commit is pinned so the dependency is explicit
-# and reproducible. CI needs GESH_CORE_PAT to clone it.
+# gesh-core is the private repo at commit 56f14d4 — v0.8.2 plus PR #35 DCF
+# characterization tests and PR #46 CI fd-limit. The 40-char commit SHA is the
+# only unambiguous identifier. CI needs GESH_CORE_PAT to clone it.
 # This SHA must equal the one in requirements.txt;
 # tests/test_dependency_sanity.py enforces that and also verifies the SHA that
 # was actually INSTALLED.
@@ -35,7 +32,7 @@ docstring_parser==0.18.0
 fastapi==0.135.3
 fredapi==0.5.2
 frozendict==2.4.7
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@493123938a173d890c63655ea20410501bd8b9f0
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@56f14d4e3a8fd527a9637cc7fb1ce2042c11aee0
 google-auth==2.56.2
 google-genai==1.73.1
 h11==0.16.0
