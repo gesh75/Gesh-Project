@@ -21,9 +21,13 @@ import yfinance as yf
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _safe(val, default=None):
-    """Return val unless it is None/NaN/inf."""
+    """Return a finite float, else `default`.
+
+    Bool is rejected (``True`` must not become ``1.0`` and invent a price).
+    NaN / inf are missing, never a fabricated 0.0.
+    """
     try:
-        if val is None:
+        if val is None or isinstance(val, bool):
             return default
         f = float(val)
         if not (f == f) or f in (float("inf"), float("-inf")):  # NaN / inf
