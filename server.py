@@ -647,6 +647,11 @@ async def _auth_gate_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+from routers.health import router as health_router
+
+app.include_router(health_router)
+
+
 # ─── Customer view: model-book masking (launch gap #1) ─────────────────────────
 # Customers pay for the RESEARCH (signals, regime, Kelly %, risk, analysis) —
 # not a window into the owner's bank life. Non-owner sessions get every /api/*
@@ -1484,38 +1489,6 @@ document.getElementById('m').textContent='If that email has access, a sign-in li
 </script></body></html>"""
 
 
-# Process start time for public health probes (no PII / no filesystem paths).
-_PROCESS_STARTED_AT = time.time()
-
-
-@app.get("/healthz")
-def healthz():
-    """Liveness probe — public, secret-free. Expand carefully; never add DB paths,
-    account identifiers, or portfolio figures here."""
-    build = (os.getenv("GESH_BUILD_SHA") or "").strip() or None
-    payload = {
-        "status": "ok",
-        "auth": auth_users.auth_enabled(),
-        "uptime_seconds": int(max(0, time.time() - _PROCESS_STARTED_AT)),
-    }
-    if build:
-        payload["build"] = build[:40]
-    return payload
-
-
-@app.get("/api/me")
-def whoami(request: Request):
-    """Session role for the frontend nav (owner vs customer). No PII, no secrets —
-    lets the customer UI render Analyze/Track-Record and hide the owner's book on
-    load without racing the portfolio fetch."""
-    if not auth_users.auth_enabled():
-        return {"role": "owner"}
-    email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
-    if not email:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return {"role": "owner" if auth_users.is_owner(email) else "customer"}
-
-
 def _session_email(request: Request) -> str | None:
     """The requesting user's identity for per-user data (watchlist). In dev/solo
     mode (auth off) everything is the owner bucket; in production it's the session."""
@@ -2303,23 +2276,6 @@ def invest_data(request: Request, what_if_cash: float | None = None):
         return JSONResponse(invest_view.load_invest_data(what_if_cash=what_if_cash))
     except Exception as exc:
         raise _server_error(exc)
-
-
-_FAVICON_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-    '<rect width="32" height="32" rx="7" fill="#080d14"/>'
-    '<path d="M6 22 L13 14 L18 18 L26 8" fill="none" stroke="#00d4ff" '
-    'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-)
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-def favicon():
-    """Inline SVG favicon (cyan up-trend on the dark house background) — silences the
-    /favicon.ico 404. Already in auth_users.PUBLIC_PREFIXES, so it stays public."""
-    from fastapi.responses import Response
-
-    return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
 
 
 # ─── Engine-result cache (powers "never empty" run-tabs in the dashboard) ─────
@@ -8006,17 +7962,6 @@ async def api_yield_landscape(request: Request = None):  # noqa: B008
         cash_usd = float(payload.get("equity_summary", {}).get("cash", 0) or 0)
         result = get_yield_landscape(cash_usd)
         return _sanitize({"status": "ok", **result})
-    except Exception as e:
-        raise _server_error(e)
-
-
-@app.get("/api/security/health")
-async def api_security_health():
-    """API health report — latency, rate-limit hits, last errors."""
-    try:
-        from security.api_verifier import all_api_health
-
-        return _sanitize({"status": "ok", "sources": all_api_health()})
     except Exception as e:
         raise _server_error(e)
 
