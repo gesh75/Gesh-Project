@@ -20,15 +20,10 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: d4e9f46, "fix(config): strictly validate safety
-# booleans" (gesh-core PR #8). It sits 2 commits PAST the annotated tag v0.6.1
-# (peeled commit f11c460, tag-object 7af8fad) and still declares __version__
-# "0.6.1", so the 40-char commit SHA is the only unambiguous identifier for this
-# tree — a version-string comparison could not distinguish the two. Pinning the
-# commit makes the dependency explicit and reproducible. Declared as a LITERAL on
-# purpose — bumping the dependency then requires editing this line, so the change
-# is reviewable in the application repo.
-GESH_CORE_SHA = "493123938a173d890c63655ea20410501bd8b9f0"
+# The pinned gesh-core commit: 56f14d4 (v0.8.2 + PR #35 DCF tests + PR #46
+# CI fd-limit). Declared as a LITERAL on purpose — bumping the dependency then
+# requires editing this line, so the change is reviewable in the application repo.
+GESH_CORE_SHA = "56f14d4e3a8fd527a9637cc7fb1ce2042c11aee0"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 
