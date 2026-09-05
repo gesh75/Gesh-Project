@@ -189,12 +189,17 @@ written), lock-protected against double runs, and logs per-step timing to
 ### Setup
 
 ```bash
-git clone https://github.com/gesh75/gesh-project.git
-cd gesh-project
+git clone https://github.com/gesh75/Gesh-Project.git
+cd Gesh-Project
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.lock  # canonical runtime install (same tree CI and production use)
 ```
+
+`requirements.lock` pins private `gesh75/gesh-core`. A plain clone cannot
+install that line unless `GESH_CORE_PAT` (read access to that repo) is
+rewritten the way CI does in `.github/workflows/tests.yml` (credential-scoped
+two-step install). Without it, `import server` raises `ModuleNotFoundError`.
 
 ### Environment variables
 
@@ -244,8 +249,25 @@ python -m trading.autopilot --job pre_market_scan
 
 Open **http://localhost:9000** for the dashboard.
 
-> **Product improvements:** See `GAPS_AND_IMPROVEMENTS_2026-08-04.md` for the
-> current prioritized gaps roadmap (historical: `GAPS_AND_IMPROVEMENTS_2026-07-09.md`).
+Production starts with `./venv/bin/python server.py` (see `start_gesh_main.sh`);
+`GET /healthz` and `GET /` boot with no API keys.
+
+### Testing
+
+Commands that match `.github/workflows/tests.yml`:
+
+```bash
+ruff check tests/
+ruff check --isolated --select E9,F63,F7,F82 .   # --isolated is required
+./venv/bin/python -m pytest tests/ -q --cov=. --cov-fail-under=55
+```
+
+`--isolated` is load-bearing: `pyproject.toml` scopes ruff to `tests/`, so
+without it the whole-repo syntax gate silently scans nothing.
+
+> **Product improvements:** See `GAP_ANALYSIS.md` for the current ranked
+> gaps. Historical: `GAPS_AND_IMPROVEMENTS_2026-08-21.md`,
+> `GAPS_AND_IMPROVEMENTS_2026-08-04.md`.
 
 > **Production operations:** See `OPS_LAYER.md` for public-safe reliability and
 > deployment guidance. Environment-specific runbooks and runtime state are kept
