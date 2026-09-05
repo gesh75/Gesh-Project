@@ -323,7 +323,7 @@ def test_masthead_uses_snapshot_et_not_utc_clock(tmp_path):
 
 
 def test_degraded_monte_carlo_calibration_renders_banner_not_silent_ok(tmp_path):
-    """A fallback-vol VaR table must announce itself (F-09)."""
+    """A fallback-vol VaR table must announce itself and must not wear ✓ OK (F-09)."""
     report = _render(
         tmp_path,
         {
@@ -349,6 +349,9 @@ def test_degraded_monte_carlo_calibration_renders_banner_not_silent_ok(tmp_path)
     assert "MONTE CARLO CALIBRATION DEGRADED" in report
     assert "NVDA" in report and "MSTR" in report
     assert "fallback" in report.lower()
+    var_card = report.split("VaR 95% (21d)", 1)[1][:400]
+    assert "degraded" in var_card
+    assert "✓ OK" not in var_card
 
 
 def test_ok_monte_carlo_calibration_does_not_render_degraded_banner(tmp_path):

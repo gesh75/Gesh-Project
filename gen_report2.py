@@ -908,6 +908,9 @@ prob_display = format_optional_percent(monte.get("prob_profit_pct"), digits=0)
 mc_median_display = format_optional_usd(monte.get("median"))
 var95_display = format_optional_percent(var95_pct)
 var_col, var_badge = var_95_status(var95_pct)
+# A fallback-vol number must not wear the measured ✓ OK badge (F-09).
+if isinstance(monte, dict) and monte.get("calibration") not in (None, "", "ok"):
+    var_col, var_badge = "#f0b429", "degraded"
 cash_col = "#ff3c5a" if cash < 500 else "#00e87a"
 
 # ─── Full HTML ────────────────────────────────────────────────────────────────
