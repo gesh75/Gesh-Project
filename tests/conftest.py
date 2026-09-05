@@ -111,10 +111,23 @@ def _isolate_host_dotenv_leaks(monkeypatch: pytest.MonkeyPatch) -> None:
     Origin http://testserver (CLAUDE.md 2026-07-30: ~64 failures on a machine
     with a real .env; CI has no .env so the suite is green there).
     GESH_AUTH_ENABLED=1 turns the login wall on and 302s unauthenticated
-    TestClient calls. Tests that need either var set it via monkeypatch.setenv.
+    TestClient calls. GESH_ALLOWED_ORIGINS likewise fills _trusted_origins
+    and skips the testserver fallback. Tests that need these vars set them
+    via monkeypatch.setenv.
+
+    dotenv.load_dotenv is stubbed for the test: a late import
+    (fundamental_agent, etc.) would otherwise refill unset keys from a
+    host .env after this fixture ran.
     """
     monkeypatch.delenv("APP_BASE_URL", raising=False)
     monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
+    monkeypatch.delenv("GESH_ALLOWED_ORIGINS", raising=False)
+    try:
+        import dotenv
+    except ImportError:
+        pass
+    else:
+        monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
 
 
 @pytest.fixture(autouse=True)

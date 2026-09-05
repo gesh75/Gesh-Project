@@ -22,8 +22,8 @@ rewriting `server.py`.
 
 | ID | Area | Finding | Evidence | Status |
 |---|---|---|---|---|
-| **P0-1** | Security | `daEsc` did not escape `'`, but customer `onclick` handlers interpolate it into **single-quoted** JS. A ticker or AI string containing `'` breaks out of the handler. `_SYMBOL_RE` (`server.py:293`) is the only other fence, and several sinks are not symbols (action labels, AI text). | `templates/dashboard.html:860` (old helper omitted `'`). Live sinks: `:2145` `homeAction('…')`, `:2160` `openShareResearch('…')`, `:2279` `analyzeTicker('…')`, `:2496` `addToWatch('…')`. `tests/test_dashboard_xss_wiring.py` asserted the helper existed but never required apostrophe escaping. | **Fixed this PR** — `daEsc` now emits `&#39;`; `test_daEsc_escapes_apostrophe_for_single_quoted_onclick` locks it. |
-| **P0-2** | CI / DX | Host `.env` leaks into the suite. `ai_analyzer.py:13` `load_dotenv()` at import. `APP_BASE_URL=https://…` then fails CSRF against TestClient `Origin: http://testserver`. `GESH_AUTH_ENABLED=1` 302s unauthenticated TestClient calls. CI has no `.env`, so this is **red-on-dev, green-on-CI**. | `tests/conftest.py` isolated auth/signal/equity DBs but had **zero** `APP_BASE_URL` / `GESH_AUTH_ENABLED` handling (`rg APP_BASE_URL tests/conftest.py` → no matches). CLAUDE.md (2026-07-30) recorded ~64 failures from this leak; `tests/test_watch_endpoint.py:25-34` and `tests/test_account_data_rights.py:31-35` each re-implement a local `delenv`. | **Fixed this PR** — autouse `delenv` in `conftest.py`; `test_conftest_isolates_host_dotenv_leaks` is a source-level lock. |
+| **P0-1** | Security | `daEsc` omitted `'`. This PR adds `&#39;`, which is correct for **HTML text** (the browser displays `'`). It does **not** close `onclick="fn('${daEsc(x)}')"` breakout: the HTML parser decodes `&#39;` back to `'` before the handler is compiled. Ticker sinks are still fenced by `_SYMBOL_RE` (`server.py:293`). A real handler fix is a separate `daJs` (`\\u0027`) or `data-*` attributes — not done (would touch every onclick concat). | `templates/dashboard.html:860`. Sinks: `:2145` `homeAction('…')` (enum `act.target`), `:2160` / `:2279` / `:2496` (tickers). Prove the residual: `onclick="fn('&#39;);alert(1)//')"` compiles as `fn('');alert(1)//`. | **Partial.** HTML text hardened + source lock. Onclick JS escape left open. |
+| **P0-2** | CI / DX | Host `.env` leaks into the suite. `ai_analyzer.py:13` `load_dotenv()` at import. `APP_BASE_URL=https://…` then fails CSRF against TestClient `Origin: http://testserver`. `GESH_AUTH_ENABLED=1` 302s unauthenticated TestClient calls. CI has no `.env`, so this is **red-on-dev, green-on-CI**. | Pre-PR: `rg APP_BASE_URL tests/conftest.py` → no matches. CLAUDE.md (2026-07-30) recorded ~64 failures; `tests/test_watch_endpoint.py:25-34` re-implements a local `delenv`. | **Fixed this PR** — autouse `delenv` of `APP_BASE_URL` / `GESH_AUTH_ENABLED` / `GESH_ALLOWED_ORIGINS` plus a no-op `dotenv.load_dotenv` so a late import cannot re-inject `.env`. |
 | **P0-3** | Isolation | `GET /api/trades` and `GET /api/trades/stats` serve the **owner paper/live ledger** with no `Request`, no `_require_owner_view`, no API key. Login wall (when on) only requires *a* session — any customer qualifies. The only caller is `templates/owner_console.html:1072-1074`. Money-masking scales `realized_pnl` (`server.py:735-736`) but still returns owner symbols, outcomes, and scanner sources — private operational data (AGENTS.md §3). | `server.py:7510-7532` — handlers take only query params. Contrast `_require_owner_view` at `server.py:2170-2184` used by `/progress` etc. `tests/test_customer_leak_sweep.py:131-133` documents them as "customer-reachable". | **Open.** Recommended next job: add `_require_owner_view(request)` to `/api/trades`, `/api/trades/stats`, and `/api/paper/summary`, then update the leak-sweep expectations from masked-200 to 403. Not done here — that test rewrite needs a working `gesh-core` install. |
 
 ---
@@ -52,7 +52,7 @@ rewriting `server.py`.
 | **P2-3** | CI | `pyproject.toml` `[tool.ruff] include = ["tests/**/*.py"]`. `ruff check server.py` is a silent no-op unless `--isolated`. The CI syntax gate already uses `--isolated` — agents following AGENTS.md “ruff check --fix on touched files” do not. |
 | **P2-4** | DX | `ruff format` is told to agents but is not a CI gate; `ruff format --check tests/` wants to rewrite ~129 files. Running it dirties the tree. |
 | **P2-5** | DX | No pre-commit/pre-push hook is installed (`.git/hooks` empty). `scripts/install-git-hooks.sh` + `scripts/hooks/pre-push` exist but are unused. |
-| **P2-6** | Docs | `CLAUDE.md:1080` still talks as if `grok-build` is a live pin in the harness section; `HANDOFF_GROK.md:169` repeats that. Live pin is `grok-4.6`. |
+| **P2-6** | Docs | `HANDOFF_GROK.md:169` still reads as if `CLAUDE.md` pins `grok-build`. The live pin is `grok-4.6`; `CLAUDE.md:213-214` already marks `grok-build` retired. |
 | **P2-7** | Docs | `GESH_LLM_FAILOVER` default in CLAUDE.md (`grok,gemini`) ≠ code (`xai,grok,gemini` in `llm_failover.py:14-15`). |
 | **P2-8** | Observability | Compatibility scan: no mypy/pyright, no formatter-in-CI, no structured metrics. Score 77/100; Style & Validation 34. Not worth a rewrite. |
 
@@ -70,8 +70,8 @@ rewriting `server.py`.
 
 ## Fixes in this PR (3, all small)
 
-1. Escape `'` in `daEsc` + regression test.
-2. Autouse isolation of host `APP_BASE_URL` / `GESH_AUTH_ENABLED` + source lock.
+1. `daEsc` now emits `&#39;` for HTML text (displays as `'`). **Not** an onclick JS fix — see P0-1.
+2. Autouse isolation of host `APP_BASE_URL` / `GESH_AUTH_ENABLED` / `GESH_ALLOWED_ORIGINS`, and stub `load_dotenv` so a late import cannot refill them.
 3. README: `GESH_CORE_PAT` note, Testing commands that match CI, current gaps pointer.
 
 ---

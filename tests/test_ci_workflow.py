@@ -37,3 +37,5 @@ def test_conftest_isolates_host_dotenv_leaks():
     text = CONFTEST.read_text(encoding="utf-8")
     assert 'delenv("APP_BASE_URL"' in text
     assert 'delenv("GESH_AUTH_ENABLED"' in text
+    assert 'delenv("GESH_ALLOWED_ORIGINS"' in text
+    assert "load_dotenv" in text and "setattr" in text

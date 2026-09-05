@@ -786,12 +786,13 @@ def test_daEsc_helper_exists():
     assert re.search(r"\bfunction daEsc\b|\bdaEsc\s*=", TEMPLATE.read_text())
 
 
-def test_daEsc_escapes_apostrophe_for_single_quoted_onclick():
-    """onclick handlers interpolate daEsc(...) into single-quoted JS strings.
+def test_daEsc_escapes_apostrophe_as_html_entity():
+    """daEsc must HTML-escape `'`.
 
-    Without an apostrophe escape, a value containing `'` breaks out of the
-    handler. `_SYMBOL_RE` is a separate API fence and must not be the only
-    defence — several sinks are labels / AI text, not tickers.
+    `&#39;` is correct in HTML text (the browser displays an apostrophe).
+    It is NOT a JS-string escape: the HTML parser decodes it before
+    onclick handlers compile, so this lock does not claim those sinks
+    are closed.
     """
     src = TEMPLATE.read_text()
     match = re.search(r"^const daEsc\s*=\s*s=>.*$", src, flags=re.MULTILINE)
