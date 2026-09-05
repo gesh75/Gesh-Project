@@ -104,6 +104,20 @@ def _isolate_equity_snapshots_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.fixture(autouse=True)
+def _isolate_host_dotenv_leaks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Host `.env` is load_dotenv()'d at import (ai_analyzer, auth, …).
+
+    APP_BASE_URL=https://pay… then fails CSRF against TestClient's default
+    Origin http://testserver (CLAUDE.md 2026-07-30: ~64 failures on a machine
+    with a real .env; CI has no .env so the suite is green there).
+    GESH_AUTH_ENABLED=1 turns the login wall on and 302s unauthenticated
+    TestClient calls. Tests that need either var set it via monkeypatch.setenv.
+    """
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+    monkeypatch.delenv("GESH_AUTH_ENABLED", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_response_caches() -> None:
     """server.py keeps process-wide TTL caches (/api/chart + the per-ticker analyze
     GETs) and the per-IP rate-limit ledger. Every TestClient shares the constant
