@@ -562,16 +562,39 @@ def _dispatch(ev: dict[str, Any]) -> dict[str, Any]:
         )
         return {"action": "ignored", "email": email, "reason": "foreign_subscription"}
 
+    # Mark-only events (cancel / pause / payment_failed) and subscription_updated
+    # status writes used to apply whenever email lookup hit. A foreign checkout
+    # that LS later cancelled therefore marked a still-paying victim
+    # `cancelled`, which opened the already_cancelled rebind hole above, then
+    # the attacker's expiry revoked them. Same-sub as revoke(): an event that
+    # names a different subscription must not mutate billing_status. A missing
+    # sub_id is not this hole (invoice payloads resolve it separately); the
+    # attacker's cancel always carries data.id. Cancel-then-rebuy still works:
+    # the victim's OWN cancel is same-sub.
+    foreign_mark = bool(stored_sub and ev.get("sub_id") and ev.get("sub_id") != stored_sub)
+
     if is_activation:
         return provision(email, ev["tier"], ev["customer_id"], ev["sub_id"], eat)
     if name in _REVOKE_EVENTS or (name == "subscription_updated" and ev["status"] == "expired"):
         return revoke(email, status="expired", event_sub_id=ev["sub_id"], event_at=eat)
     if name in _MARK_ONLY_STATUS:
+        if foreign_mark:
+            logger.info(
+                "billing: ignored stale mark %s for %s (event sub=%s current=%s)",
+                name, email, ev.get("sub_id"), stored_sub,
+            )
+            return {"action": "ignored", "email": email, "reason": "stale_subscription"}
         status = _MARK_ONLY_STATUS[name]
         auth_users.set_billing(email, status=status, event_at=eat or None)
         return {"action": "mark", "email": email, "status": status}
     if name == "subscription_updated":
         # cancelled / past_due / unpaid / paused → keep access, just record status (H4)
+        if foreign_mark:
+            logger.info(
+                "billing: ignored stale mark %s for %s (event sub=%s current=%s)",
+                name, email, ev.get("sub_id"), stored_sub,
+            )
+            return {"action": "ignored", "email": email, "reason": "stale_subscription"}
         if ev["status"]:
             auth_users.set_billing(email, status=ev["status"], event_at=eat or None)
             return {"action": "mark", "email": email, "status": ev["status"]}
