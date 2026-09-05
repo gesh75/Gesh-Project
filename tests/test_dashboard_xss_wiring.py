@@ -784,3 +784,17 @@ def test_deep_nesting_fails_closed():
 
 def test_daEsc_helper_exists():
     assert re.search(r"\bfunction daEsc\b|\bdaEsc\s*=", TEMPLATE.read_text())
+
+
+def test_daEsc_escapes_apostrophe_for_single_quoted_onclick():
+    """onclick handlers interpolate daEsc(...) into single-quoted JS strings.
+
+    Without an apostrophe escape, a value containing `'` breaks out of the
+    handler. `_SYMBOL_RE` is a separate API fence and must not be the only
+    defence — several sinks are labels / AI text, not tickers.
+    """
+    src = TEMPLATE.read_text()
+    match = re.search(r"const daEsc\s*=\s*s=>[^;]+;", src)
+    assert match, "daEsc helper declaration missing"
+    body = match.group(0)
+    assert "/'/g" in body and "&#39;" in body, body
