@@ -787,8 +787,11 @@ def test_daEsc_helper_exists():
 
 
 def test_daEsc_escapes_apostrophe_for_single_quoted_onclick_sinks():
-    """daEsc omitted `'` so a payload of `');alert(1)//` could break out of
-    single-quoted JS inside onclick= (F7). The helper must emit &#39;."""
+    """HTML-text contract: daEsc must emit &#39; for apostrophes.
+
+    This does not close JS-in-onclick by itself — the HTML parser decodes
+    &#39; before the event-handler script runs. _SYMBOL_RE remains the fence.
+    """
     src = TEMPLATE.read_text()
     assert "const daEsc=" in src
     # &#39; contains a semicolon — do not slice the helper on ';'.

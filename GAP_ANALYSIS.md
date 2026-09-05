@@ -39,8 +39,8 @@ Each item has a file path and a command that would falsify it.
   proves a total fetch failure still returns a complete VaR table from
   `FALLBACK_DAILY_VOL`. The report then rendered that table with
   `var_95_status` → `✓ OK` and never mentioned degradation.
-- **Fix in this PR:** `_calibration_banner()` + render tests. Remaining work:
-  none for the banner; do not loosen the engine fallback.
+- **Fix in this PR:** `_calibration_banner()` + VaR card badge `degraded`
+  (not `✓ OK`) when calibration is not `ok`. Do not loosen the engine fallback.
 
 ### P0-2. Stale paper/gate rows still render as “today” (F-07)
 
@@ -60,7 +60,7 @@ Each item has a file path and a command that would falsify it.
 
 | ID | Area | Evidence | Small fix? |
 |---|---|---|---|
-| P1-XSS | `templates/dashboard.html:860` `daEsc` omitted `'` | Single-quoted `onclick="…('${daEsc(…)}')"` sinks at `:2145`, `:2160`, `:2279`, … API `_SYMBOL_RE` is the only other fence | **Fixed here** |
+| P1-XSS | `templates/dashboard.html:860` `daEsc` omitted `'` | HTML text/`value=` sinks now get `&#39;`. **Not a full onclick close:** the HTML parser decodes `&#39;` before event-handler JS runs, so `');alert(1)//` still breaks `homeAction('${daEsc(…)}')` (e.g. `:2145`). `_SYMBOL_RE` (`server.py:293`) remains the load-bearing fence | Partial HTML-text harden **in this PR**; JS-in-attribute still open |
 | P1-DX-env | `tests/conftest.py` did not `delenv("APP_BASE_URL")` | `auth.py` / `ai_analyzer.py` `load_dotenv()` at import; `_trusted_origins` (`server.py:1141`) then mismatches `http://testserver`. CLAUDE.md 2026-07-30 (~64 host-local fails). CI has no `.env` | **Fixed here** |
 | P1-RSI0 | `run_ai2.py:94-97,125` `rd.get("rsi") or 0` | `None` RSI becomes `RSI=0.0` in the Claude prompt (maximally oversold), and Rule 5 (`RSI>=70`) silently never fires | Yes (n/a formatter) — **not in this PR** |
 | P1-trades | `server.py:7510-7532,7614-7621` GET `/api/trades`, `/stats`, `/api/paper/summary` | No owner role check. In `tests/test_customer_leak_sweep.py:246-248` as customer-reachable. Dollar P&L is in `_MONEY_KEYS`; `entry_price` / `stop_loss` / `target_price` are not | Yes (owner gate) — **not in this PR** (touches isolation contract; needs its own test pass) |
@@ -89,7 +89,7 @@ Each item has a file path and a command that would falsify it.
 
 ## Fixes in this PR (3, all small)
 
-1. **`daEsc` apostrophe escape** — `templates/dashboard.html` + XSS / customer-view tests.
+1. **`daEsc` apostrophe escape (HTML text only)** — `templates/dashboard.html` + XSS / customer-view tests. Does **not** close JS-in-`onclick` by itself.
 2. **Autouse `delenv(APP_BASE_URL, GESH_ALLOWED_ORIGINS)`** — `tests/conftest.py` + isolation test.
 3. **Monte Carlo calibration banner** — `gen_report2.py` `_calibration_banner` + report tests.
 
