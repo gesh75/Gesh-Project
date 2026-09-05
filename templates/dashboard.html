@@ -857,7 +857,7 @@ const $=id=>document.getElementById(id);
 // automatically — the server's require_api_key accepts an owner session. So
 // protected calls just need credentials:'same-origin'; no header, no prompt.
 const authHeaders=extra=>Object.assign({},extra||{});
-const daEsc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');  // HTML-escape untrusted (AI/news/SEC) text
+const daEsc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');  // HTML-escape untrusted (AI/news/SEC) text — include ' for single-quoted onclick sinks
 // One-time cleanup of any key a previous build persisted.
 try{localStorage.removeItem('gesh_api_key');}catch(e){}
 const fmt=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
