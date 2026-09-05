@@ -322,6 +322,61 @@ def test_masthead_uses_snapshot_et_not_utc_clock(tmp_path):
     assert "Cmd-Shift-R" in report
 
 
+def test_degraded_monte_carlo_calibration_renders_banner_not_silent_ok(tmp_path):
+    """A fallback-vol VaR table must announce itself (F-09)."""
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "monte_carlo": {
+                "cvar_95": 10.0,
+                "current_equity": 1000,
+                "var_95_pct": 2.0,
+                "median": 1000,
+                "prob_profit_pct": 50,
+                "buckets": [],
+                "calibration": "degraded",
+                "calibration_degraded_symbols": ["NVDA", "MSTR"],
+            },
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    assert "MONTE CARLO CALIBRATION DEGRADED" in report
+    assert "NVDA" in report and "MSTR" in report
+    assert "fallback" in report.lower()
+
+
+def test_ok_monte_carlo_calibration_does_not_render_degraded_banner(tmp_path):
+    report = _render(
+        tmp_path,
+        {
+            "holdings": [_holding()],
+            "equity_summary": {"total": 1000, "cash": 900, "portfolio_equity": 100},
+            "monte_carlo": {
+                "cvar_95": 10.0,
+                "current_equity": 1000,
+                "var_95_pct": 2.0,
+                "median": 1000,
+                "prob_profit_pct": 50,
+                "buckets": [],
+                "calibration": "ok",
+                "calibration_degraded_symbols": [],
+            },
+            "vol_models": {},
+            "kelly": {},
+            "consensus": {},
+            "regime": {},
+            "ai_result": {},
+        },
+    )
+    assert "MONTE CARLO CALIBRATION DEGRADED" not in report
+
+
 def test_prior_et_day_snapshot_is_labeled_not_today(tmp_path):
     report = _render(
         tmp_path,
