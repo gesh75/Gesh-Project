@@ -794,7 +794,7 @@ def test_daEsc_escapes_apostrophe_for_single_quoted_onclick():
     defence — several sinks are labels / AI text, not tickers.
     """
     src = TEMPLATE.read_text()
-    match = re.search(r"const daEsc\s*=\s*s=>[^;]+;", src)
+    match = re.search(r"^const daEsc\s*=\s*s=>.*$", src, flags=re.MULTILINE)
     assert match, "daEsc helper declaration missing"
     body = match.group(0)
-    assert "/'/g" in body and "&#39;" in body, body
+    assert ".replace(/'/g,'&#39;')" in body, body
