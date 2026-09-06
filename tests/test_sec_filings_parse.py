@@ -104,13 +104,15 @@ def test_fetch_recent_filings_missing_title_and_link_are_empty_strings(monkeypat
         '<?xml version="1.0"?>'
         '<feed xmlns="http://www.w3.org/2005/Atom">'
         f"<entry><updated>{_iso_days_ago(1)}</updated></entry>"
+        f"<entry><title></title><updated>{_iso_days_ago(1)}</updated></entry>"
         "</feed>"
     )
     monkeypatch.setattr(sa.requests, "get", lambda *a, **k: _Resp(200, xml), raising=True)
     out = sa._fetch_recent_filings("0001045810", "10-Q", days_back=7)
-    assert len(out) == 1
-    assert out[0]["title"] == ""
-    assert out[0]["url"] == ""
+    assert len(out) == 2
+    assert all(f["title"] == "" for f in out)
+    assert all(f["url"] == "" for f in out)
+    assert all(isinstance(f["title"], str) for f in out)
 
 
 def test_parse_edgar_dt_rejects_garbage_and_accepts_zulu():
@@ -162,6 +164,24 @@ def test_get_cik_ticker_map_exception_is_miss(monkeypatch):
 
     monkeypatch.setattr(sa.requests, "get", fake_get, raising=True)
     assert sa._get_cik("NVDA") is None
+
+
+def test_get_cik_ticker_map_exception_does_not_poison_later_success(monkeypatch):
+    """A failed company_tickers fetch must not cache {} for the process life."""
+    atom = _atom_feed("<title>no cik</title>")
+    state = {"fail": True}
+
+    def fake_get(url, **_k):
+        if "company_tickers" in url:
+            if state["fail"]:
+                raise RuntimeError("sec down")
+            return _Resp(200, payload={"0": {"ticker": "NVDA", "cik_str": "1045810"}})
+        return _Resp(200, atom)
+
+    monkeypatch.setattr(sa.requests, "get", fake_get, raising=True)
+    assert sa._get_cik("NVDA") is None
+    state["fail"] = False
+    assert sa._get_cik("NVDA") == "0001045810"
 
 
 def test_get_cik_parses_cik_from_feed_id(monkeypatch):

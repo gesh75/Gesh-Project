@@ -86,9 +86,12 @@ def _load_ticker_cik_map() -> dict[str, str]:
                 cik = str(row.get("cik_str", "")).strip()
                 if ticker and cik:
                     mapping[ticker] = cik.zfill(10)
+            # Cache only a successful load. An exception or non-200 must not
+            # pin an empty map — that would turn a transient SEC outage into
+            # a process-lifetime miss (invented "no CIK" rather than retry).
+            _TICKER_CIK_CACHE = mapping
     except Exception:
         pass
-    _TICKER_CIK_CACHE = mapping
     return mapping
 
 
@@ -163,7 +166,7 @@ def _fetch_recent_filings(cik: str, form_type: str, days_back: int = 7) -> list[
             link_el = entry.find("atom:link", ns)
             filings.append(
                 {
-                    "title": title_el.text if title_el is not None else "",
+                    "title": (title_el.text or "") if title_el is not None else "",
                     "url": link_el.get("href", "") if link_el is not None else "",
                     "date": updated.isoformat(),
                     "form": form_type,
