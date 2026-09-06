@@ -162,10 +162,15 @@ def test_warm_batch_download_exception_is_noop(monkeypatch):
     assert price_cache.has_cached_close("TSLA") is False
 
 
+def _refuse_refetch(*_a, **_k):
+    raise AssertionError("warm_close_cache_batch must serve later reads from cache")
+
+
 def test_warm_batch_prices_each_symbol_from_its_own_column(monkeypatch):
     frame = _multi_close({"NVDA": 212.0, "TSLA": 136.0})
     monkeypatch.setattr(price_source, "yf_download", lambda *a, **k: frame, raising=True)
     price_cache.warm_close_cache_batch(["NVDA", "TSLA"])
+    monkeypatch.setattr(price_source, "yf_download", _refuse_refetch, raising=True)
     assert price_cache._cached_close("NVDA") == 212.0
     assert price_cache._cached_close("TSLA") == 136.0
     assert price_cache.prior_close("NVDA") == 211.0
@@ -177,6 +182,7 @@ def test_warm_batch_missing_column_stays_cold_not_other_ticker(monkeypatch):
     frame = _multi_close({"TSLA": 136.0})
     monkeypatch.setattr(price_source, "yf_download", lambda *a, **k: frame, raising=True)
     price_cache.warm_close_cache_batch(["NVDA", "TSLA"])
+    monkeypatch.setattr(price_source, "yf_download", _refuse_refetch, raising=True)
     assert price_cache.has_cached_close("NVDA") is False
     assert price_cache._cached_close("TSLA") == 136.0
 
@@ -198,6 +204,7 @@ def test_warm_batch_single_symbol_flat_frame_is_cached(monkeypatch):
         raising=True,
     )
     price_cache.warm_close_cache_batch(["NVDA"])
+    monkeypatch.setattr(price_source, "yf_download", _refuse_refetch, raising=True)
     assert price_cache._cached_close("NVDA") == 110.0
 
 
@@ -216,6 +223,7 @@ def test_warm_batch_outlier_uses_same_guard_as_per_symbol(monkeypatch):
         price_source, "yf_download", lambda *a, **k: _flat_close(values), raising=True
     )
     price_cache.warm_close_cache_batch(["NVDA"])
+    monkeypatch.setattr(price_source, "yf_download", _refuse_refetch, raising=True)
     cached = price_cache._cached_close("NVDA")
     assert cached != 17.16
     assert cached == 200.0
