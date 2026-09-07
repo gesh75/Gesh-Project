@@ -25,13 +25,14 @@ Key functions
 
 from __future__ import annotations
 
+import math
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import price_source  # locked yf.download adapter (thread-safety)
-from datetime import datetime, timedelta
 
+import price_source  # locked yf.download adapter (thread-safety)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -123,19 +124,24 @@ def node_crypto_correlation(
     Consensus node signature: returns (vote, detail_string).
 
     Logic:
-      High BTC correlation (>0.70)  → BEARISH  (systemic crypto risk leaks in)
-      Low BTC correlation  (<0.25)  → BULLISH  (true diversification signal)
-      Moderate / no data            → NEUTRAL
+      High BTC correlation (>=0.70) → BEARISH  (systemic crypto risk leaks in)
+      Low BTC correlation  (<=0.25) → BULLISH  (true diversification signal)
+      Missing / non-finite BTC corr → ABSTAIN  (NaN/Inf must not vote NEUTRAL)
+      Moderate                      → NEUTRAL
     """
     try:
         corrs = get_crypto_correlations([symbol], lookback_days)
         btc_corr = corrs.get("BTC-USD", {}).get(symbol)
         eth_corr = corrs.get("ETH-USD", {}).get(symbol)
 
-        if btc_corr is None:
+        if btc_corr is None or not math.isfinite(btc_corr):
             return ABSTAIN, f"CryptoCorr: no data for {symbol}"
 
-        eth_str = f" ETH={eth_corr:+.2f}" if eth_corr is not None else ""
+        eth_str = (
+            f" ETH={eth_corr:+.2f}"
+            if eth_corr is not None and math.isfinite(eth_corr)
+            else ""
+        )
         detail  = f"CryptoCorr({lookback_days}d): BTC={btc_corr:+.2f}{eth_str}"
 
         if btc_corr >= HIGH_CORR_THRESHOLD:

@@ -11,6 +11,7 @@ Loaded from source so this file does not import price_source / gesh-core.
 from __future__ import annotations
 
 import ast
+import math
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -52,6 +53,7 @@ def _load():
                 chunks.append(chunk)
     ns: dict[str, Any] = {
         "Any": Any,
+        "math": math,
         "get_crypto_correlations": lambda *a, **k: {},
     }
     exec("\n\n".join(chunks), ns)  # noqa: S102 — extracted production helpers only
@@ -117,6 +119,30 @@ def test_node_crypto_exception_abstains(monkeypatch):
     vote, detail = node_crypto_correlation("COIN")
     assert vote is None
     assert "yahoo timeout" in detail
+
+
+@pytest.mark.parametrize("btc", [float("nan"), float("inf"), float("-inf")])
+def test_node_crypto_nonfinite_btc_abstains_not_neutral(monkeypatch, btc):
+    """NaN/Inf comparisons are False, so an unguarded node voted NEUTRAL
+    (a silent 0) from an unmeasured number — same class as missing data."""
+    monkeypatch.setitem(
+        _NS, "get_crypto_correlations", lambda symbols, lookback_days=90: _btc(symbols[0], btc)
+    )
+    vote, detail = node_crypto_correlation("MSTR")
+    assert vote is None
+    assert "no data" in detail.lower()
+
+
+def test_node_crypto_nonfinite_eth_omitted_from_detail(monkeypatch):
+    monkeypatch.setitem(
+        _NS,
+        "get_crypto_correlations",
+        lambda symbols, lookback_days=90: _btc(symbols[0], 0.50, float("nan")),
+    )
+    vote, detail = node_crypto_correlation("NVDA")
+    assert vote == 0
+    assert "ETH=" not in detail
+    assert "BTC=" in detail
 
 
 def test_holding_equity_key_priority_and_rejects_non_positive():
