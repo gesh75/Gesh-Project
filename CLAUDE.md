@@ -697,6 +697,7 @@ pickle after a Yahoo 401 — `unauthenticated_rh_fallback()` (PR #258).
 
 | Surface | Routes | Notes |
 |---|---|---|
+| Home desk | `GET /api/mybook/summary` | Customer default tab. Value + catch-up chips + advisory tickets. Cached/DB only — never starts whole-book Analyze. Runbook: `docs/CUSTOMER_SURFACE.md` |
 | Analyze any ticker | `GET /api/{regime,fundamentals,analyst,news}/{symbol}` | Mechanical cards, no LLM. 5-min TTL cache + heavy rate bucket (trailing-slash prefixes — exact `/api/regime` stays normal). RH primary / yfinance fallback (VPN) |
 | AI research card | `POST /api/analyze-ticker` | One Claude call/symbol/15min (cache + per-symbol single-flight). `require_customer_or_owner` — fail-closed 503 when wall OFF without `GESH_API_KEY`. Price-grounded; 404-before-spend on unknown tickers. **Mask-exempt** (public per-share prose) |
 | Watchlist | `GET/POST /api/watchlist`, `DELETE /api/watchlist/{sym}` | Per-user, 50 cap, `watchlist` table in gesh_auth.db |
@@ -707,11 +708,14 @@ pickle after a Yahoo 401 — `unauthenticated_rh_fallback()` (PR #258).
 | Quotas | `_check_customer_quota` (server.py) | Rolling-24h caps on LIVE LLM calls only (cached free, checked before any spend). Env base × tier multiplier: observer 1× / trader 2× / **desk 5×** (`users.tier`, set by the billing webhook). Owner exempt; 0 disables; fail-open |
 | Owner metering view | `GET /usage` (owner-only) + `GET /api/usage/summary` | In `_OWNER_ONLY_PATHS`; customers 403 |
 
-Frontend: the **Analyze** tab (dashboard.html) is the whole customer UI — role-gated nav
-(`body.customer` hides `.owner-only`), watchlist chips, book table, progressive AI card.
-XSS guard: HTML builders must be `build*`-named (audited) and callers pass RAW values to
-`buildRow` (it escapes internally). Test isolation: conftest clears server caches,
-`_RATE_HITS`, flight locks, and points `AUTH_DB_PATH` at a throwaway per test.
+Frontend: customer nav is **Home / Research / Proof** (`body.customer` hides
+`.owner-only`). Home hosts the book table + catch-up hero; Research is ticker-only
+deep read + whole-book Analyze; Proof is `/track-record`. XSS guard: HTML builders
+must be `build*`-named (audited) and callers pass RAW values to `buildRow` (it
+escapes internally). Test isolation: conftest clears server caches, `_RATE_HITS`,
+flight locks, and points `AUTH_DB_PATH` at a throwaway per test. Owner ECG must
+never vote on customer consensus / radar / explainability / signal alerts / cached
+chain rows (`allow_ecg=False` or `redact_owner_ecg`).
 
 ## Daily Analysis Chain — 2026-06-10 ★★★ (the system's heartbeat)
 
