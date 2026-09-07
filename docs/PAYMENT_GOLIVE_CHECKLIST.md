@@ -133,6 +133,21 @@ the live endpoint. Refresh the snapshot via the robinhood-trading MCP →
 - [ ] Flip `launch_status.json gates.payment=true`. Monitor the first billing cycle in the
       LS dashboard (webhook 2xx rate, invoices).
 
+### Webhook identity — do not rebind a paying customer (PRs #266 / #274)
+
+`billing_sub_id` is authoritative. A second Lemon Squeezy checkout that uses a
+victim's email must not mutate that account.
+
+| Incoming event | Stored account | Handler result |
+|---|---|---|
+| Activation (`subscription_created` / provision path) whose `sub_id` ≠ stored, account still `is_active` and not already `cancelled` | keep current sub | `{action: ignored, reason: foreign_subscription}` — **ack 2xx**, do not 503 (LS would retry and later bind after a genuine cancel) |
+| Mark-only (`subscription_cancelled`, `payment_failed`, pause) or `subscription_updated` whose `sub_id` ≠ stored | keep `billing_status` | `{action: ignored, reason: stale_subscription}` |
+| `subscription_expired` / revoke | `revoke(..., event_sub_id=)` | only the **matching** sub revokes |
+| Same-sub cancel, then a later distinct activation | cancelled or `is_active=0` | rebind allowed (cancel-then-rebuy) |
+
+A `foreign_subscription` ack with no bind is success, not a missed webhook.
+Pins: `tests/test_billing.py` (`foreign_subscription` / stale-mark cases).
+
 ---
 
 ## Phase 3 — Post-launch (later)
