@@ -174,6 +174,17 @@ def test_home_hero_uses_equal_weight_flag_not_zero_total():
     assert "not available" in body.lower()
 
 
+def test_load_mybook_stats_bar_gates_total_on_equal_weight():
+    """Privacy-mode books are valued at a fixed $100k notional. The stats-bar
+    Total chip used to print that as the customer's book value; hero, footer,
+    and /mybook/report already hide it."""
+    body = _fn(TEMPLATE.read_text(), "loadMyBook")
+    stats = body[body.index("bookStats") : body.index("eqwBanner")]
+    assert "Total:" in stats
+    assert "eqw" in stats
+    assert "equal-weight" in stats
+
+
 def test_customer_boot_loads_public_macro_not_owner_regime():
     body = _fn(TEMPLATE.read_text(), "bootDesk")
     customer = body.split("loadPortfolioWithECG")[0]

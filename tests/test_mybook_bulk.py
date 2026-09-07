@@ -137,6 +137,8 @@ def test_bulk_equal_weight_makes_weights_equal_regardless_of_price(client, monke
     weights = sorted(p["portfolio_percentage"] for p in d["positions"])
     assert weights == [25.0, 25.0, 25.0, 25.0]
     assert d["equal_weight"] is True
+    # $100k notional is illustrative only — same contract as /api/mybook/summary
+    assert d["total_equity"] is None
 
 
 def test_bulk_with_sizes_disables_equal_weight(client, monkeypatch):

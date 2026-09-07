@@ -2766,8 +2766,15 @@ async function loadMyBook(){
       const pnlChip = (v.cost_basis_available && v.unrealized_pnl!=null)
         ? `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Unrealized: <span class="${cls(v.unrealized_pnl)}">${v.unrealized_pnl>=0?'+':'−'}$${daFmt(Math.abs(v.unrealized_pnl),2)}${v.unrealized_pnl_percent!=null?` (${v.unrealized_pnl_percent>=0?'+':'−'}${Math.abs(v.unrealized_pnl_percent).toFixed(1)}%)`:''}</span></span>`
         : `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Add an average cost per position to see unrealized P&L.">Unrealized: <span style="color:var(--muted)">add cost basis</span></span>`;
+      // Equal-weight books are valued at a fixed illustrative notional
+      // (_EQUAL_WEIGHT_NOTIONAL). Hero, footer, and /mybook/report already hide
+      // those dollars; the stats-bar Total chip must too — otherwise privacy
+      // mode prints "Total: $100,000.00" as if it were the customer's book.
+      const totalChip = eqw
+        ? `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)"><span style="color:var(--muted)">${daEsc(pos.length)} names · equal-weight</span></span>`
+        : `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(totalEq,2)}</b></span>`;
       bookStats = `<div style="display:flex;gap:12px;margin:0 0 10px;flex-wrap:wrap;font-size:13px">
-        <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(totalEq,2)}</b></span>
+        ${totalChip}
         <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Today's move vs the previous session's close">Day: ${dayCell}</span>
         ${pnlChip}
         <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Holdings: <b>${pos.length}</b></span>
