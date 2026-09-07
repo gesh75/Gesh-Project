@@ -2758,7 +2758,6 @@ async function loadMyBook(){
       // or an equal-weight book whose dollars are illustrative) we say so instead of
       // printing a zero that looks like a flat market.
       const v = d.valuation || {};
-      const totalEq = d.total_equity || pos.reduce((s,p)=>s+(p.equity||0),0);
       const conc = pos.length ? Math.max(...pos.map(p=>p.portfolio_percentage||0)) : 0;
       const dayCell = (v.day_change_available && v.day_change_amount!=null)
         ? `<span class="${cls(v.day_change_amount)}">${v.day_change_amount>=0?'+':'−'}$${daFmt(Math.abs(v.day_change_amount),2)}${v.day_change_percent!=null?` (${v.day_change_percent>=0?'+':'−'}${Math.abs(v.day_change_percent).toFixed(2)}%)`:''}</span>`
@@ -2767,12 +2766,12 @@ async function loadMyBook(){
         ? `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Unrealized: <span class="${cls(v.unrealized_pnl)}">${v.unrealized_pnl>=0?'+':'−'}$${daFmt(Math.abs(v.unrealized_pnl),2)}${v.unrealized_pnl_percent!=null?` (${v.unrealized_pnl_percent>=0?'+':'−'}${Math.abs(v.unrealized_pnl_percent).toFixed(1)}%)`:''}</span></span>`
         : `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Add an average cost per position to see unrealized P&L.">Unrealized: <span style="color:var(--muted)">add cost basis</span></span>`;
       // Equal-weight books are valued at a fixed illustrative notional
-      // (_EQUAL_WEIGHT_NOTIONAL). Hero, footer, and /mybook/report already hide
-      // those dollars; the stats-bar Total chip must too — otherwise privacy
-      // mode prints "Total: $100,000.00" as if it were the customer's book.
-      const totalChip = eqw
-        ? `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)"><span style="color:var(--muted)">${daEsc(pos.length)} names · equal-weight</span></span>`
-        : `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(totalEq,2)}</b></span>`;
+      // (_EQUAL_WEIGHT_NOTIONAL). Never reconstruct a dollar total from
+      // position equities — those slices ARE the $100k notional. Hero treats
+      // a null total_equity as "Value not available"; the stats-bar must too.
+      const totalChip = (eqw || d.total_equity == null)
+        ? `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)"><span style="color:var(--muted)">${eqw ? (daEsc(pos.length)+' names · equal-weight') : 'Value not available'}</span></span>`
+        : `<span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)">Total: <b style="color:var(--accent)">$${daFmt(d.total_equity,2)}</b></span>`;
       bookStats = `<div style="display:flex;gap:12px;margin:0 0 10px;flex-wrap:wrap;font-size:13px">
         ${totalChip}
         <span style="background:var(--hover);padding:4px 10px;border-radius:4px;border:1px solid var(--border)" title="Today's move vs the previous session's close">Day: ${dayCell}</span>
@@ -2797,7 +2796,7 @@ async function loadMyBook(){
       </tr>`).join('')}</tbody></table></div>
       <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:13px">
         <span style="color:var(--muted)">${(d.unpriced||[]).length?('No price data: '+d.unpriced.map(daEsc).join(', ')):''}</span>
-        <span>${eqw?('<span style="color:var(--muted)">'+daEsc(pos.length)+' names · equal-weight</span>'):('Total: <b style="color:var(--accent)">$'+daFmt(d.total_equity,2)+'</b>')}</span></div>`;
+        <span>${eqw?('<span style="color:var(--muted)">'+daEsc(pos.length)+' names · equal-weight</span>'):(d.total_equity==null?'<span style="color:var(--muted)">Value not available</span>':('Total: <b style="color:var(--accent)">$'+daFmt(d.total_equity,2)+'</b>'))}</span></div>`;
   }catch(e){ el.innerHTML=''; }
 }
 // Strict numeric parse for quantity/cost inputs. `Number()` alone accepts ''
