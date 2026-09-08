@@ -109,6 +109,20 @@ def test_cohort_stats_missing_and_non_numeric_money_is_zero_not_invented():
     assert math.isfinite(out["realized_pnl_usd"])
 
 
+def test_cohort_stats_numeric_strings_still_count():
+    """Loosely typed TEXT cells must not become $0 the way bool/NaN do."""
+    out = pp._cohort_stats(
+        [
+            _row(outcome="WIN", pnl_usd="8.0", pnl_pct="0.08", qty="1", entry_price="100"),
+            _row(outcome="LOSS", pnl_usd="-4", pnl_pct="-0.04", qty="1", entry_price="100"),
+        ]
+    )
+    assert out["realized_pnl_usd"] == pytest.approx(4.0)
+    assert out["gross_entry_notional_usd"] == pytest.approx(200.0)
+    assert out["profit_factor_usd"] == pytest.approx(2.0)
+    assert out["sum_trade_returns"] == pytest.approx(0.04)
+
+
 def test_cohort_stats_sum_trade_returns_is_not_a_portfolio_return():
     out = pp._cohort_stats(
         [

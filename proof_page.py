@@ -265,9 +265,24 @@ def _finite_float(value: Any, *, positive: bool = False) -> float | None:
 
 
 def _money(value: Any) -> float:
-    """Cohort arithmetic: usable finite number, else 0. Never bool/NaN."""
+    """Cohort arithmetic: usable finite number, else 0. Never bool/NaN.
+
+    `_finite_float` already rejects bool / NaN / Inf. Numeric strings still
+    parse — the historical `float(x or 0)` path accepted them, and a loosely
+    typed SQLite TEXT cell must not silently become $0.
+    """
+    if isinstance(value, bool):
+        return 0.0
     parsed = _finite_float(value)
-    return 0.0 if parsed is None else parsed
+    if parsed is not None:
+        return parsed
+    if isinstance(value, str):
+        try:
+            numeric = float(value.strip())
+        except ValueError:
+            return 0.0
+        return numeric if math.isfinite(numeric) else 0.0
+    return 0.0
 
 
 def _daily_analysis_unavailable(reason: str = "ledger unavailable") -> dict[str, Any]:
