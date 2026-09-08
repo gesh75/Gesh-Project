@@ -82,9 +82,7 @@ def test_cohort_stats_profit_factor_usd_bands():
 
 
 def test_cohort_stats_cost_sensitivity_is_notional_times_bps():
-    out = pp._cohort_stats(
-        [_row(outcome="WIN", pnl_usd=5.0, pnl_pct=0.01, qty=2, entry_price=250)]
-    )
+    out = pp._cohort_stats([_row(outcome="WIN", pnl_usd=5.0, pnl_pct=0.01, qty=2, entry_price=250)])
     assert out["gross_entry_notional_usd"] == pytest.approx(500.0)
     assert out["cost_sensitivity_20bp_usd"] == pytest.approx(1.0)
     assert out["cost_sensitivity_50bp_usd"] == pytest.approx(2.5)
@@ -121,4 +119,5 @@ def test_cohort_stats_sum_trade_returns_is_not_a_portfolio_return():
     # Raw sum of per-trade returns, not capital-weighted.
     assert out["sum_trade_returns"] == pytest.approx(0.45)
     assert out["total_pnl_pct"] == out["sum_trade_returns"]
-    assert out["pnl_to_gross_entry_notional"] == pytest.approx(45.0 / 1100.0)
+    # Helper rounds the capital-weighted ratio to 4 dp (45 / 1100 → 0.0409).
+    assert out["pnl_to_gross_entry_notional"] == 0.0409

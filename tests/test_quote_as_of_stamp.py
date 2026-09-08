@@ -73,7 +73,7 @@ def test_watchlist_quotes_skips_blank_rows_and_defaults_symbols(monkeypatch):
             {},
         ]
 
-    monkeypatch.setattr(df.rh, "get_quotes", _quotes)
+    monkeypatch.setattr(df.rh, "get_quotes", _quotes, raising=False)
     frame = df.get_watchlist_quotes()
     assert seen["symbols"] == df.DEFAULT_WATCHLIST
     assert list(frame["symbol"]) == ["SPY"]
@@ -94,6 +94,7 @@ def test_watchlist_quotes_zero_prev_close_is_zero_pct_not_inf(monkeypatch):
                 "updated_at": "2026-09-08T14:00:00Z",
             }
         ],
+        raising=False,
     )
     frame = df.get_watchlist_quotes(["NVDA"])
     assert frame.iloc[0]["change_pct"] == 0.0
@@ -114,6 +115,7 @@ def test_watchlist_quotes_extended_hours_when_last_missing(monkeypatch):
                 "updated_at": "2026-09-08T20:10:00Z",
             }
         ],
+        raising=False,
     )
     frame = df.get_watchlist_quotes(["HOOD"])
     assert frame.iloc[0]["last_trade_price"] == pytest.approx(101.25)
