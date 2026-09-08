@@ -8,8 +8,6 @@ have tests; this one did not).
 
 from __future__ import annotations
 
-import pytest
-
 import gemini_agent as ga
 
 
