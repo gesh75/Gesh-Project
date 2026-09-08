@@ -211,17 +211,15 @@ def _cohort_stats(rows: list[dict]) -> dict[str, Any]:
     manual wins can never leak into engine numbers)."""
     closed = len(rows)
     wins = sum(1 for r in rows if r["outcome"] == "WIN")
-    pnls = [float(r["pnl_pct"] or 0) for r in rows]
-    realized_pnl_usd = sum(float(r.get("pnl_usd") or 0) for r in rows)
+    # `_finite_float` rejects bool/NaN/non-numeric so True cannot invent $1 / 100%.
+    # Missing cells stay 0 — the same as the historical `or 0` fallback.
+    pnls = [_money(r.get("pnl_pct")) for r in rows]
+    realized_pnl_usd = sum(_money(r.get("pnl_usd")) for r in rows)
     gross_entry_notional_usd = sum(
-        abs(float(r.get("qty") or 0) * float(r.get("entry_price") or 0)) for r in rows
+        abs(_money(r.get("qty")) * _money(r.get("entry_price"))) for r in rows
     )
-    gross_wins_usd = sum(
-        float(r.get("pnl_usd") or 0) for r in rows if float(r.get("pnl_usd") or 0) > 0
-    )
-    gross_losses_usd = -sum(
-        float(r.get("pnl_usd") or 0) for r in rows if float(r.get("pnl_usd") or 0) < 0
-    )
+    gross_wins_usd = sum(p for p in (_money(r.get("pnl_usd")) for r in rows) if p > 0)
+    gross_losses_usd = -sum(p for p in (_money(r.get("pnl_usd")) for r in rows) if p < 0)
     profit_factor_usd = (
         gross_wins_usd / gross_losses_usd
         if gross_losses_usd > 0
@@ -264,6 +262,12 @@ def _finite_float(value: Any, *, positive: bool = False) -> float | None:
     if not math.isfinite(numeric) or (positive and numeric <= 0):
         return None
     return numeric
+
+
+def _money(value: Any) -> float:
+    """Cohort arithmetic: usable finite number, else 0. Never bool/NaN."""
+    parsed = _finite_float(value)
+    return 0.0 if parsed is None else parsed
 
 
 def _daily_analysis_unavailable(reason: str = "ledger unavailable") -> dict[str, Any]:
