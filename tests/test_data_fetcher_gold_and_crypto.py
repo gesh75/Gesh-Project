@@ -30,6 +30,13 @@ if "robin_stocks.robinhood" not in sys.modules:
 
 import data_fetcher as df  # noqa: E402
 
+
+def _rh(monkeypatch, **fns):
+    """Patch robin_stocks seams. raising=False so the import stub needs no attrs."""
+    for name, fn in fns.items():
+        monkeypatch.setattr(df.rh, name, fn, raising=False)
+
+
 GOLD_LEVERAGED_BP = 17_000.0
 SETTLED_CASH = 535.44
 ACCOUNT_EQUITY = 35_000.0
@@ -72,20 +79,15 @@ def _crypto_pos(code: str = "BTC", qty: str = "2", cost: str = "20000") -> dict:
 
 def test_gold_leveraged_buying_power_is_never_returned_as_cash(monkeypatch):
     """CLAUDE.md: Gold buying_power is leveraged margin. Size from settled cash."""
-    monkeypatch.setattr(
-        df.rh,
-        "load_portfolio_profile",
-        lambda: {
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {
             "equity": ACCOUNT_EQUITY,
             "extended_hours_equity": ACCOUNT_EQUITY,
             "adjusted_equity_previous_close": 34_000.0,
             "withdrawable_amount": 0,  # Gold: $0 while a deposit clears
         },
-    )
-    monkeypatch.setattr(
-        df.rh,
-        "load_account_profile",
-        lambda: {
+        load_account_profile=lambda: {
             "buying_power": GOLD_LEVERAGED_BP,
             "margin_balances": {"portfolio_cash": SETTLED_CASH},
         },
@@ -98,30 +100,20 @@ def test_gold_leveraged_buying_power_is_never_returned_as_cash(monkeypatch):
 
 
 def test_withdrawable_zero_does_not_win_over_portfolio_cash(monkeypatch):
-    monkeypatch.setattr(
-        df.rh,
-        "load_portfolio_profile",
-        lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 0},
-    )
-    monkeypatch.setattr(
-        df.rh,
-        "load_account_profile",
-        lambda: {"margin_balances": {"portfolio_cash": SETTLED_CASH}},
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 0},
+        load_account_profile=lambda: {"margin_balances": {"portfolio_cash": SETTLED_CASH}},
     )
     eq = df.get_total_equity()
     assert eq["cash"] == pytest.approx(SETTLED_CASH)
 
 
 def test_unallocated_margin_cash_used_when_portfolio_cash_missing(monkeypatch):
-    monkeypatch.setattr(
-        df.rh,
-        "load_portfolio_profile",
-        lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 0},
-    )
-    monkeypatch.setattr(
-        df.rh,
-        "load_account_profile",
-        lambda: {"margin_balances": {"unallocated_margin_cash": 400.0}},
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 0},
+        load_account_profile=lambda: {"margin_balances": {"unallocated_margin_cash": 400.0}},
     )
     eq = df.get_total_equity()
     assert eq["cash"] == pytest.approx(400.0)
@@ -129,15 +121,10 @@ def test_unallocated_margin_cash_used_when_portfolio_cash_missing(monkeypatch):
 
 
 def test_withdrawable_is_last_resort_when_margin_cash_absent(monkeypatch):
-    monkeypatch.setattr(
-        df.rh,
-        "load_portfolio_profile",
-        lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 200.0},
-    )
-    monkeypatch.setattr(
-        df.rh,
-        "load_account_profile",
-        lambda: {"margin_balances": {}},
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 200.0},
+        load_account_profile=lambda: {"margin_balances": {}},
     )
     eq = df.get_total_equity()
     assert eq["cash"] == pytest.approx(200.0)
@@ -147,12 +134,11 @@ def test_withdrawable_is_last_resort_when_margin_cash_absent(monkeypatch):
 
 
 def test_crypto_and_stock_weights_recalculated_from_combined_equity(monkeypatch):
-    monkeypatch.setattr(df.rh, "build_holdings", lambda: _stock())
-    monkeypatch.setattr(df.rh, "get_crypto_positions", lambda: [_crypto_pos()])
-    monkeypatch.setattr(
-        df.rh,
-        "get_crypto_quote",
-        lambda s: {"mark_price": "50000", "open_price": "40000"},
+    _rh(
+        monkeypatch,
+        build_holdings=lambda: _stock(),
+        get_crypto_positions=lambda: [_crypto_pos()],
+        get_crypto_quote=lambda s: {"mark_price": "50000", "open_price": "40000"},
     )
     out = df.get_portfolio_holdings()
     btc = out.loc[out["symbol"] == "BTC"].iloc[0]
@@ -167,12 +153,11 @@ def test_crypto_and_stock_weights_recalculated_from_combined_equity(monkeypatch)
 
 
 def test_unpriced_crypto_is_tagged_unavailable_not_silent_zero(monkeypatch):
-    monkeypatch.setattr(df.rh, "build_holdings", lambda: {})
-    monkeypatch.setattr(df.rh, "get_crypto_positions", lambda: [_crypto_pos()])
-    monkeypatch.setattr(
-        df.rh,
-        "get_crypto_quote",
-        lambda s: {"mark_price": "0", "bid_price": "0", "open_price": "40000"},
+    _rh(
+        monkeypatch,
+        build_holdings=lambda: {},
+        get_crypto_positions=lambda: [_crypto_pos()],
+        get_crypto_quote=lambda s: {"mark_price": "0", "bid_price": "0", "open_price": "40000"},
     )
     out = df.get_portfolio_holdings()
     row = out.iloc[0]
@@ -184,12 +169,11 @@ def test_unpriced_crypto_is_tagged_unavailable_not_silent_zero(monkeypatch):
 
 
 def test_zero_open_price_does_not_invent_infinite_change(monkeypatch):
-    monkeypatch.setattr(df.rh, "build_holdings", lambda: {})
-    monkeypatch.setattr(df.rh, "get_crypto_positions", lambda: [_crypto_pos()])
-    monkeypatch.setattr(
-        df.rh,
-        "get_crypto_quote",
-        lambda s: {"mark_price": "50", "open_price": "0"},
+    _rh(
+        monkeypatch,
+        build_holdings=lambda: {},
+        get_crypto_positions=lambda: [_crypto_pos()],
+        get_crypto_quote=lambda s: {"mark_price": "50", "open_price": "0"},
     )
     row = df.get_portfolio_holdings().iloc[0]
     assert row["current_price"] == pytest.approx(50.0)
@@ -197,13 +181,15 @@ def test_zero_open_price_does_not_invent_infinite_change(monkeypatch):
 
 
 def test_crypto_quote_exception_tags_unavailable(monkeypatch):
-    monkeypatch.setattr(df.rh, "build_holdings", lambda: {})
-    monkeypatch.setattr(df.rh, "get_crypto_positions", lambda: [_crypto_pos()])
-
     def _boom(_symbol):
         raise TimeoutError("quote timeout")
 
-    monkeypatch.setattr(df.rh, "get_crypto_quote", _boom)
+    _rh(
+        monkeypatch,
+        build_holdings=lambda: {},
+        get_crypto_positions=lambda: [_crypto_pos()],
+        get_crypto_quote=_boom,
+    )
     row = df.get_portfolio_holdings().iloc[0]
     assert row["symbol"] == "BTC"
     assert row["quantity"] == pytest.approx(2.0)
@@ -212,39 +198,35 @@ def test_crypto_quote_exception_tags_unavailable(monkeypatch):
 
 
 def test_crypto_outage_keeps_stock_book(monkeypatch):
-    monkeypatch.setattr(df.rh, "build_holdings", lambda: _stock())
-
     def _boom():
         raise ConnectionError("crypto feed down")
 
-    monkeypatch.setattr(df.rh, "get_crypto_positions", _boom)
+    _rh(monkeypatch, build_holdings=lambda: _stock(), get_crypto_positions=_boom)
     out = df.get_portfolio_holdings()
     assert list(out["symbol"]) == ["NVDA"]
     assert out.iloc[0]["portfolio_percentage"] == pytest.approx(100.0)
 
 
 def test_zero_qty_and_blank_code_crypto_rows_are_skipped(monkeypatch):
-    monkeypatch.setattr(df.rh, "build_holdings", lambda: {})
-    monkeypatch.setattr(
-        df.rh,
-        "get_crypto_positions",
-        lambda: [
+    _rh(
+        monkeypatch,
+        build_holdings=lambda: {},
+        get_crypto_positions=lambda: [
             _crypto_pos(qty="0"),
             {"quantity": "1", "currency": {"code": ""}, "cost_bases": []},
             _crypto_pos(code="ETH", qty="1", cost="3000"),
         ],
-    )
-    monkeypatch.setattr(
-        df.rh,
-        "get_crypto_quote",
-        lambda s: {"mark_price": "3000", "open_price": "3000"},
+        get_crypto_quote=lambda s: {"mark_price": "3000", "open_price": "3000"},
     )
     out = df.get_portfolio_holdings()
     assert list(out["symbol"]) == ["ETH"]
 
 
 def test_stock_nan_pe_is_none_not_a_number(monkeypatch):
-    monkeypatch.setattr(df.rh, "build_holdings", lambda: _stock(pe="nan"))
-    monkeypatch.setattr(df.rh, "get_crypto_positions", lambda: [])
+    _rh(
+        monkeypatch,
+        build_holdings=lambda: _stock(pe="nan"),
+        get_crypto_positions=lambda: [],
+    )
     row = df.get_portfolio_holdings().iloc[0]
     assert row["pe_ratio"] is None
