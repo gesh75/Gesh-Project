@@ -574,6 +574,33 @@ def _signal_gate_banner(eng: dict) -> str:
 signal_gate_banner_html = _signal_gate_banner(eng)
 
 
+def _calibration_banner(monte: dict) -> str:
+    """Disclose fallback-vol Monte Carlo so a degraded VaR cannot read as measured.
+
+    `monte_carlo.run_monte_carlo` always emits `calibration` (`ok`|`degraded`)
+    plus `calibration_degraded_symbols`. The report used to ignore both, so a
+    total price-fetch failure still published a complete VaR/CVaR table from
+    `FALLBACK_DAILY_VOL = 0.018` with a green-looking ✓ OK badge (gap F-09).
+    Missing/unknown calibration is not announced as clean — only an explicit
+    `ok` stays silent.
+    """
+    if not isinstance(monte, dict):
+        return ""
+    cal = monte.get("calibration")
+    if cal in (None, "", "ok"):
+        return ""
+    raw_syms = monte.get("calibration_degraded_symbols") or []
+    if isinstance(raw_syms, (list, tuple)):
+        extra = f" ({_esc(', '.join(str(s) for s in raw_syms))})" if raw_syms else ""
+    else:
+        extra = ""
+    return (
+        '<div class="override-banner" style="background:#f0b42915;border-color:#f0b42944;color:#f0b429">'
+        f"⚠️ MONTE CARLO CALIBRATION DEGRADED{extra} — VaR/CVaR used fallback "
+        "volatility and is a scenario, not a measured tail.</div>"
+    )
+
+
 def _provider_banner(eng: dict) -> str:
     """Disclose when a non-Anthropic model authored this analysis.
 
@@ -623,7 +650,9 @@ def _ai_freshness_banner(eng: dict) -> str:
     return ""
 
 
-provider_banner_html = _provider_banner(eng) + _ai_freshness_banner(eng)
+provider_banner_html = (
+    _provider_banner(eng) + _ai_freshness_banner(eng) + _calibration_banner(monte)
+)
 
 
 # ─── Diversification radar section (advisory-only, new non-held names) ────────
@@ -879,6 +908,9 @@ prob_display = format_optional_percent(monte.get("prob_profit_pct"), digits=0)
 mc_median_display = format_optional_usd(monte.get("median"))
 var95_display = format_optional_percent(var95_pct)
 var_col, var_badge = var_95_status(var95_pct)
+# A fallback-vol number must not wear the measured ✓ OK badge (F-09).
+if isinstance(monte, dict) and monte.get("calibration") not in (None, "", "ok"):
+    var_col, var_badge = "#f0b429", "degraded"
 cash_col = "#ff3c5a" if cash < 500 else "#00e87a"
 
 # ─── Full HTML ────────────────────────────────────────────────────────────────

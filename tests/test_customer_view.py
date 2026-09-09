@@ -382,12 +382,16 @@ def test_daesc_helper_escapes_html_payload():
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace('"', "&quot;")
+            .replace("'", "&#39;")
         )
 
     payload = "<img src=x onerror=\"fetch('/api/config',{method:'POST'})\">"
     out = daEsc(payload)
     assert "<img" not in out and "onerror" in out and "&lt;img" in out
     assert "<" not in out and ">" not in out
+    # Single-quoted onclick sinks (homeAction('${daEsc(...)}')) must not keep a raw '.
+    assert "&#39;" in daEsc("');alert(1)//")
+    assert "'" not in daEsc("');alert(1)//")
 
 
 # ─── /api/portfolio/history sparkline series must scale (Fable audit, 4th of class) ─

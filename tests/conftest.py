@@ -155,6 +155,20 @@ def no_default_origin():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_deployment_origins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Host `.env` APP_BASE_URL / GESH_ALLOWED_ORIGINS must not leak into CSRF.
+
+    `auth.py` and `ai_analyzer.py` call `load_dotenv()` at import, so a developer
+    machine with `APP_BASE_URL=https://pay.geshfinance.com` makes every TestClient
+    Origin (`http://testserver`) look forged. CI has no `.env`, which hid ~64
+    local failures (CLAUDE.md 2026-07-30). Tests that need a specific origin
+    already `setenv` it (test_csrf_hardening, test_billing, …).
+    """
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+    monkeypatch.delenv("GESH_ALLOWED_ORIGINS", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _browser_like_origin(monkeypatch: pytest.MonkeyPatch) -> None:
     from starlette.testclient import TestClient
 
