@@ -130,6 +130,44 @@ def test_withdrawable_is_last_resort_when_margin_cash_absent(monkeypatch):
     assert eq["cash"] == pytest.approx(200.0)
 
 
+def test_last_resort_withdrawable_still_ignores_account_buying_power(monkeypatch):
+    """Withdrawable is last-resort cash, not a license to read Gold margin."""
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 200.0},
+        load_account_profile=lambda: {
+            "buying_power": GOLD_LEVERAGED_BP,
+            "margin_balances": {},
+        },
+    )
+    eq = df.get_total_equity()
+    assert eq["cash"] == pytest.approx(200.0)
+    assert eq["buying_power"] == pytest.approx(200.0)
+    assert eq["buying_power"] != pytest.approx(GOLD_LEVERAGED_BP)
+
+
+def test_empty_cash_sources_do_not_fall_back_to_account_buying_power(monkeypatch):
+    """If every cash field is 0, return $0 — never Gold leveraged buying_power.
+
+    The first Gold test still has portfolio_cash, so a later 'helpful' fallback
+    to account['buying_power'] when cash is empty would pass it. $0 is honest
+    empty; $17k of margin credit would resize Kelly and the risk gates.
+    """
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 0},
+        load_account_profile=lambda: {
+            "buying_power": GOLD_LEVERAGED_BP,
+            "margin_balances": {},
+        },
+    )
+    eq = df.get_total_equity()
+    assert eq["cash"] == pytest.approx(0.0)
+    assert eq["buying_power"] == pytest.approx(0.0)
+    assert eq["cash"] != pytest.approx(GOLD_LEVERAGED_BP)
+    assert eq["buying_power"] != pytest.approx(GOLD_LEVERAGED_BP)
+
+
 # ── Crypto holdings path ──────────────────────────────────────────────────────
 
 
