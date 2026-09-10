@@ -12,6 +12,7 @@ A sized dollar gap is not a risk-gated order when Kelly's own action is HOLD
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from html import escape as _esc
 from typing import Any
 
@@ -353,6 +354,23 @@ def holding_share_caption(holding: dict, kelly: dict, total: float) -> str:
     return f"{r['size_action']} {_fmt_shares(r['shares'])} sh{d_bit}"
 
 
+def paper_audit_when_label(eng: Mapping[str, Any] | None) -> str:
+    """Caption for paper-session counts: "today" only when the stamp matches.
+
+    ``paper_gate_run_id`` is written by a successful ``run_paper_gate2`` persist.
+    A skip day leaves yesterday's session via MERGE and must not read as today
+    (gap F-07). Missing/mismatched/blank stamps are "on file".
+    """
+    if not isinstance(eng, Mapping):
+        return "on file"
+    manifest = eng.get("run_manifest") if isinstance(eng.get("run_manifest"), dict) else {}
+    run_id = str(manifest.get("run_id") or "").strip()
+    stamped = str(eng.get("paper_gate_run_id") or "").strip()
+    if run_id and stamped == run_id:
+        return "today"
+    return "on file"
+
+
 def gate_audit_html(eng: dict) -> str:
     gates = eng.get("gate_results") or []
     plan = eng.get("action_plan") or []
@@ -420,9 +438,10 @@ def gate_audit_html(eng: dict) -> str:
             "(band HOLD or already-open skip). Gated executable: 0.</td></tr>"
         )
 
+    when = paper_audit_when_label(eng)
     if close_rows:
         close_block = f"""
-    <div style="color:#e0e0e0;font-size:12px;padding:10px 4px 4px">Closed today</div>
+    <div style="color:#e0e0e0;font-size:12px;padding:10px 4px 4px">Closed {when}</div>
     <table class="action-table">
       <thead><tr><th>Symbol</th><th>Action</th><th>Shares</th><th>Outcome</th><th>P&amp;L</th><th>Notes</th></tr></thead>
       <tbody>{close_rows}</tbody>
@@ -430,11 +449,11 @@ def gate_audit_html(eng: dict) -> str:
     else:
         close_block = (
             '<div style="color:#888;font-size:11px;padding:8px 4px 2px">'
-            "No paper positions auto-closed today.</div>"
+            f"No paper positions auto-closed {when}.</div>"
         )
 
     stat_bits = [
-        f"{len(created)} paper record(s) today",
+        f"{len(created)} paper record(s) {when}",
         f"{len(closed)} auto-closed",
         f"gated executable: {executable}",
     ]

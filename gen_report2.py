@@ -505,7 +505,11 @@ def _gate_audit_section(eng: dict) -> str:
     </tr>"""
     closed_n = len(paper.get("closed") or [])
     created_n = len(paper.get("created") or [])
-    stat_bits = [f"{created_n} paper record(s) today", f"{closed_n} auto-closed"]
+    _manifest = eng.get("run_manifest") if isinstance(eng.get("run_manifest"), dict) else {}
+    _run_id = str(_manifest.get("run_id") or "").strip()
+    _stamp = str(eng.get("paper_gate_run_id") or "").strip()
+    _when = "today" if _run_id and _stamp == _run_id else "on file"
+    stat_bits = [f"{created_n} paper record(s) {_when}", f"{closed_n} auto-closed"]
     _pw = (stats.get("paper") or {}).get("win_rate_pct")
     _rw = (stats.get("real") or {}).get("win_rate_pct")
     if _pw is not None:

@@ -551,7 +551,9 @@ def main(results_path: str | Path | None = None) -> int:
     eng['gate_results']  = gate_results
     eng['trade_stats']   = trade_stats
 
-    from run_manifest import atomic_write_json
+    from run_manifest import atomic_write_json, paper_gate_provenance
+
+    eng.update(paper_gate_provenance(eng))
     atomic_write_json(results_path, eng)
 
     approved = sum(1 for g in gate_results if g['approved'])
