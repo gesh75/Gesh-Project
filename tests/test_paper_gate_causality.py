@@ -313,6 +313,36 @@ def test_recorder_failure_does_not_stop_remaining_orders(gate_mod):
     assert ("intent", "MU") in events and ("gate", "MU") in events
 
 
+def test_recorder_blocked_row_is_not_left_approved(gate_mod):
+    """Allocation block at record must not keep the 8-gate row APPROVED."""
+    events: list = []
+    intents: list = []
+
+    def blocked_rec(plan, holdings, total_eq, scanner_source="daily-analysis"):
+        events.append(("record", plan[0]["symbol"]))
+        return [{
+            "symbol": plan[0]["symbol"],
+            "action": plan[0]["action"],
+            "blocked": True,
+            "reason": "Already at max open positions (2).",
+            "code": "POSITION_CAP",
+        }]
+
+    gate_results, created = gate_mod.gate_and_execute(
+        [ORDERS[0]],
+        HOLDINGS,
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS},
+        confidence_by_sym=CONFIDENCE,
+        intent_builder=_make_intent_builder(events, intents),
+        gate_evaluate=_make_gate(events, {}),
+        recorder=blocked_rec,
+    )
+    assert gate_results[0]["approved"] is False
+    assert "max open positions" in (gate_results[0]["reason"] or "")
+    assert created[0]["blocked"] is True
+
+
 def test_order_target_pct_zero_equity_is_zero(gate_mod):
     pct = gate_mod._order_target_pct(
         {"symbol": "NVDA", "action": "BUY", "shares": 5, "current_price": 100.0},

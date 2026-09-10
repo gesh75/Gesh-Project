@@ -166,17 +166,43 @@ def test_paper_over_cap_blocked_when_auto_trade_on(trade_db, tmp_path, monkeypat
 
 
 def test_paper_position_cap_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
+    """Cap applies to open *paper* lots, not the live holdings list."""
     _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=2)
-    holdings = [{"symbol": "AAA", "equity": 1}, {"symbol": "BBB", "equity": 1}]
+    seeded = pt.run_paper_session(
+        [_plan(symbol="AAA", shares=1.0, price=10.0),
+         _plan(symbol="BBB", shares=1.0, price=10.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert all(not r.get("blocked") for r in seeded)
     out = pt.run_paper_session(
-        [_plan(shares=1.0, price=10.0)],
-        holdings=holdings,
+        [_plan(symbol="CCC", shares=1.0, price=10.0)],
+        holdings=[],
         total_portfolio=10_000,
         current_cash=100_000,
     )
     assert out[0]["blocked"] is True
     assert "max open positions" in out[0]["reason"]
-    assert tl.get_trade_history(is_paper=True) == []
+    assert "trade_id" not in out[0]
+
+
+def test_paper_buy_fills_when_live_book_exceeds_position_cap(
+    trade_db, tmp_path, monkeypatch,
+):
+    """Live names must not consume the paper session's open-position cap."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=2)
+    live = [{"symbol": f"L{i}", "equity": 1.0} for i in range(8)]
+    out = pt.run_paper_session(
+        [_plan(shares=1.0, price=10.0)],
+        holdings=live,
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert len(out) == 1
+    assert out[0].get("blocked") is not True
+    assert out[0]["trade_id"]
+    assert tl.get_trade_by_id(out[0]["trade_id"], is_paper=True)["outcome"] == "OPEN"
 
 
 def test_paper_cash_floor_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
@@ -231,8 +257,9 @@ def test_second_buy_sees_incremented_open_position_count(trade_db, monkeypatch):
         holdings=holdings,
         total_portfolio=10_000,
     )
-    # One live holding with equity>0, then first BUY increments before the second.
-    assert seen == [1, 2]
+    # Paper book starts empty; first BUY increments before the second.
+    # Live holdings (SPY) must not seed the paper cap.
+    assert seen == [0, 1]
 
 
 # ─── Auto-close ───────────────────────────────────────────────────────────────

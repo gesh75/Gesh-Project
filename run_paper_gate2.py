@@ -336,7 +336,24 @@ def gate_and_execute(
         try:
             recs = recorder([{**a, 'intent_uuid': intent.intent_uuid}],
                             holdings, total_eq, scanner_source=scanner_source)
-            created.extend({**r, 'intent_uuid': intent.intent_uuid} for r in recs or [])
+            recs = recs or []
+            created.extend({**r, 'intent_uuid': intent.intent_uuid} for r in recs)
+            blocked = next((r for r in recs if r.get("blocked")), None)
+            if blocked:
+                # Recorder is part of the causal chain: APPROVED must mean filled.
+                gate_results[-1] = {
+                    **gate_results[-1],
+                    "approved": False,
+                    "reason": blocked.get("reason") or "allocation blocked at record",
+                    "gates": {
+                        **(gate_results[-1].get("gates") or {}),
+                        "ALLOCATION": False,
+                    },
+                }
+                print(
+                    f"     ⛔ {a['symbol']} allocation blocked at record — "
+                    f"{gate_results[-1]['reason']}"
+                )
         except Exception as e:
             gate_results[-1] = {**gate_results[-1], 'record_error': str(e)}
             print(f"{_t()} [gate] paper record failed for {a['symbol']} (non-fatal): {e}")

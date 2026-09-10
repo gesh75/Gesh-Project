@@ -73,7 +73,8 @@ def run_paper_session(
         action_plan: List of action dicts from daily analysis.
                      Each must have: symbol, action, shares, current_price,
                      signal_reason (optional)
-        holdings:    Current holdings list (for open position count)
+        holdings:    Current holdings list (context only; the position cap
+                     counts open *paper* lots, not this live book)
         total_portfolio: Total portfolio value (for context logging)
         scanner_source:  Label for this session's signal source
         current_cash: Deployable cash for the cash-floor check. None skips
@@ -82,7 +83,12 @@ def run_paper_session(
     Returns:
         List of created paper trade records (with ids)
     """
-    open_positions = len([h for h in holdings if float(h.get("equity", 0)) > 0])
+    open_symbols = {
+        (t.get("symbol") or "").upper()
+        for t in get_trade_history(open_only=True, is_paper=True, limit=10_000)
+        if t.get("symbol")
+    }
+    open_positions = len(open_symbols)
     created = []
 
     for item in action_plan:
@@ -140,7 +146,9 @@ def run_paper_session(
                 notes=notes,
                 is_paper=True,
             )
-            open_positions += 1
+            if symbol not in open_symbols:
+                open_symbols.add(symbol)
+                open_positions = len(open_symbols)
             created.append({
                 "trade_id":     trade_id,
                 "symbol":       symbol,
