@@ -194,7 +194,7 @@ try:
     # Which vendor actually produced this analysis. A Grok/Gemini-driven run must
     # never be readable as a Claude run: the report, the DB provenance column and
     # engine_results.json all carry the real provider.
-    _ai_provider, _failovers = "anthropic", 0
+    _ai_provider, _failovers = 'anthropic', 0
     try:
         import llm_failover as _lf  # noqa: E402 — imported by llm_gateway already
 
