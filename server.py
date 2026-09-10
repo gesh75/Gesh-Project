@@ -7589,12 +7589,21 @@ async def paper_run_endpoint(request: Request):
     try:
         body = await request.json()
         payload = _resolved_payload()
-        total = payload["equity_summary"].get("portfolio_equity", 0)
+        eq = payload["equity_summary"]
+        total = eq.get("portfolio_equity", 0)
+        cash = eq.get("deployable")
+        if cash is None:
+            cash = eq.get("portfolio_cash", eq.get("cash"))
+        try:
+            cash_f = float(cash) if cash is not None else None
+        except (TypeError, ValueError):
+            cash_f = None
         results = run_paper_session(
             action_plan=body.get("action_plan", []),
             holdings=payload["holdings"],
             total_portfolio=total,
             scanner_source=body.get("scanner_source", "api"),
+            current_cash=cash_f,
         )
         return {"status": "ok", "data": results, "total_portfolio": total}
     except Exception as e:

@@ -57,7 +57,6 @@ def trade_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def allow_all(monkeypatch):
-    monkeypatch.setattr(pt, "load_config", lambda: {})
     monkeypatch.setattr(pt, "validate_action", lambda *a, **k: (True, ""))
 
 
@@ -95,7 +94,6 @@ def test_zero_shares_or_price_never_logs(trade_db, allow_all):
 
 
 def test_allocation_block_is_recorded_not_filled(trade_db, monkeypatch):
-    monkeypatch.setattr(pt, "load_config", lambda: {})
     monkeypatch.setattr(pt, "validate_action", lambda *a, **k: (False, "Max $ per trade exceeded"))
     out = pt.run_paper_session([_plan()], holdings=[], total_portfolio=100_000)
     assert len(out) == 1
@@ -226,7 +224,6 @@ def test_second_buy_sees_incremented_open_position_count(trade_db, monkeypatch):
         seen.append(open_positions)
         return True, ""
 
-    monkeypatch.setattr(pt, "load_config", lambda: {})
     monkeypatch.setattr(pt, "validate_action", _va)
     holdings = [{"symbol": "CASH", "equity": 0}, {"symbol": "SPY", "equity": 500}]
     pt.run_paper_session(

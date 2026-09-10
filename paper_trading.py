@@ -42,7 +42,7 @@ from trade_log import (
     get_trade_history,
     get_win_rate,
 )
-from allocation_config import load_config, validate_action
+from allocation_config import validate_action
 
 
 # ─── Risk defaults for paper trades ──────────────────────────────────────────
@@ -58,12 +58,16 @@ def run_paper_session(
     holdings: list[dict],
     total_portfolio: float,
     scanner_source: str = "daily-analysis",
+    current_cash: float | None = None,
 ) -> list[dict]:
     """
     Convert an action plan into paper trade entries.
 
     BUY/ADD open longs. TRIM/SELL close matching open longs (FIFO).
     TRIM/SELL never open a short-like row.
+
+    Paper skips live-execution permission (auto_trade) but still enforces
+    size, open-position, and cash-floor caps.
 
     Args:
         action_plan: List of action dicts from daily analysis.
@@ -72,11 +76,12 @@ def run_paper_session(
         holdings:    Current holdings list (for open position count)
         total_portfolio: Total portfolio value (for context logging)
         scanner_source:  Label for this session's signal source
+        current_cash: Deployable cash for the cash-floor check. None skips
+                      that check (callers that have a cash figure must pass it).
 
     Returns:
         List of created paper trade records (with ids)
     """
-    cfg = load_config()
     open_positions = len([h for h in holdings if float(h.get("equity", 0)) > 0])
     created = []
 
@@ -94,18 +99,26 @@ def run_paper_session(
 
         trade_usd = shares * price
 
-        # Apply allocation caps
-        ok, reason = validate_action(
+        # Financial caps always apply. Skip only live-execution permission.
+        check = validate_action(
             action, symbol, trade_usd,
             open_positions=open_positions,
+            current_cash=current_cash,
             is_options=False,
+            require_live_permission=False,
         )
-
-        # In paper mode we skip the auto_trade gate (paper always runs)
-        if not ok and "Auto-trade" not in reason:
+        ok = getattr(check, "ok", None)
+        if ok is None:
+            ok, reason = check[0], check[1]
+            code = ""
+        else:
+            reason = check.reason
+            code = getattr(check, "code", "")
+        if not ok:
             created.append({
                 "symbol": symbol, "action": action,
-                "blocked": True, "reason": reason
+                "blocked": True, "reason": reason,
+                "code": code,
             })
             continue
 

@@ -20,10 +20,10 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: 56f14d4 (v0.8.2 + PR #35 DCF tests + PR #46
-# CI fd-limit). Declared as a LITERAL on purpose — bumping the dependency then
-# requires editing this line, so the change is reviewable in the application repo.
-GESH_CORE_SHA = "56f14d4e3a8fd527a9637cc7fb1ce2042c11aee0"
+# The pinned gesh-core commit: 4d68e86 (Astra R1 — allocation caps run even
+# when auto_trade is OFF). Declared as a LITERAL on purpose — bumping the
+# dependency then requires editing this line, so the change is reviewable.
+GESH_CORE_SHA = "4d68e866d34fef86e6b3d0df1fe8923eabc8ae04"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 
