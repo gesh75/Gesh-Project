@@ -169,6 +169,28 @@ def test_validate_ticker_card_rejects_non_finite_score():
         validate_ticker_card(card, requested_symbol="AAPL", current_price=100.0)
 
 
+def test_validate_ticker_card_rejects_bool_score():
+    """True must not validate as valuation=1.0."""
+    card = _valid_ticker_card()
+    card["scores"]["valuation"] = True
+    with pytest.raises(LLMContractError, match="scores.valuation"):
+        validate_ticker_card(card, requested_symbol="AAPL", current_price=100.0)
+
+
+def test_validate_debate_case_rejects_bool_and_inf_price_target():
+    base = {
+        "thesis": "AI demand",
+        "arguments": [],
+        "price_target": 250.0,
+        "key_risk": "regulation",
+        "confidence": 70,
+    }
+    with pytest.raises(LLMContractError, match="confidence"):
+        validate_debate_case({**base, "confidence": True})
+    with pytest.raises(LLMContractError, match="price_target"):
+        validate_debate_case({**base, "price_target": float("inf")})
+
+
 def test_validate_ticker_card_rejects_wrong_grounded_price():
     card = _valid_ticker_card(price=99.0)
     with pytest.raises(LLMContractError, match="fair_value.current"):
