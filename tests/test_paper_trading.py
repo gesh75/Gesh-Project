@@ -12,6 +12,7 @@ must be rewritten.
 
 from __future__ import annotations
 
+import json
 import sys
 from types import ModuleType
 
@@ -104,15 +105,93 @@ def test_allocation_block_is_recorded_not_filled(trade_db, monkeypatch):
     assert tl.get_trade_history(is_paper=True) == []
 
 
-def test_auto_trade_gate_is_ignored_in_paper(trade_db, monkeypatch):
-    """Paper always runs — the Auto-trade live gate must not block a sim fill."""
-    monkeypatch.setattr(pt, "load_config", lambda: {})
-    monkeypatch.setattr(pt, "validate_action", lambda *a, **k: (False, "Auto-trade is disabled"))
-    out = pt.run_paper_session([_plan()], holdings=[], total_portfolio=50_000)
+def _paper_cfg(tmp_path, monkeypatch, **overrides):
+    """Point paper_trading's real validate_action at an isolated config."""
+    cfg = {
+        "auto_trade": False,
+        "max_stock_per_trade": 5_000.0,
+        "max_options_per_trade": 2_000.0,
+        "max_open_positions": 5,
+        "min_cash_buffer": 500.0,
+        "scanner_timeframe": "daily",
+        "paper_mode": True,
+    }
+    cfg.update(overrides)
+    path = tmp_path / "gesh_config.json"
+    path.write_text(json.dumps(cfg))
+    monkeypatch.setenv("GESH_CONFIG_PATH", str(path))
+    return path
+
+
+def test_auto_trade_off_does_not_block_valid_paper_fill(trade_db, tmp_path, monkeypatch):
+    """Paper skips live permission only — an under-cap BUY still fills."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_stock_per_trade=5_000.0)
+    out = pt.run_paper_session(
+        [_plan(shares=2.0, price=100.0)],
+        holdings=[],
+        total_portfolio=50_000,
+        current_cash=100_000,
+    )
     assert len(out) == 1
-    assert out[0]["blocked"] is False
+    assert out[0].get("blocked") is not True
     assert out[0]["trade_id"]
     assert tl.get_trade_by_id(out[0]["trade_id"], is_paper=True)["outcome"] == "OPEN"
+
+
+def test_paper_over_cap_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
+    """Astra R1: $200 vs $100 cap is rejected even with auto_trade OFF."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_stock_per_trade=100.0)
+    out = pt.run_paper_session(
+        [_plan(shares=2.0, price=100.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert len(out) == 1
+    assert out[0]["blocked"] is True
+    assert "exceeds max" in out[0]["reason"]
+    assert "trade_id" not in out[0]
+    assert tl.get_trade_history(is_paper=True) == []
+
+
+def test_paper_over_cap_blocked_when_auto_trade_on(trade_db, tmp_path, monkeypatch):
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=True, max_stock_per_trade=100.0)
+    out = pt.run_paper_session(
+        [_plan(shares=2.0, price=100.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0]["blocked"] is True
+    assert "exceeds max" in out[0]["reason"]
+    assert tl.get_trade_history(is_paper=True) == []
+
+
+def test_paper_position_cap_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=2)
+    holdings = [{"symbol": "AAA", "equity": 1}, {"symbol": "BBB", "equity": 1}]
+    out = pt.run_paper_session(
+        [_plan(shares=1.0, price=10.0)],
+        holdings=holdings,
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0]["blocked"] is True
+    assert "max open positions" in out[0]["reason"]
+    assert tl.get_trade_history(is_paper=True) == []
+
+
+def test_paper_cash_floor_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, min_cash_buffer=500.0)
+    out = pt.run_paper_session(
+        [_plan(shares=1.0, price=100.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=550.0,
+    )
+    assert out[0]["blocked"] is True
+    assert "minimum buffer" in out[0]["reason"]
+    assert tl.get_trade_history(is_paper=True) == []
 
 
 def test_buy_stop_and_target_use_default_percents(trade_db, allow_all):
