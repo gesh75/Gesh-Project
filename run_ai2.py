@@ -31,6 +31,7 @@ BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE))
 os.chdir(BASE)
 
+from chain_regime_context import build_regime_summary, collect_rsi_add_overrides
 from run_manifest import (
     RunManifest,
     atomic_write_json,
@@ -83,31 +84,12 @@ kelly = eng.get("kelly", {})
 monte = eng.get("monte_carlo", {})
 regime_raw = eng.get("regime", {})
 
-# Build regime summary string from the actual regimes list
-regime_lines = []
+# Build regime summary string from the actual regimes list.
+# Missing ADX/RSI/BB/%B stay n/a — ``or 0`` used to inject RSI=0.0 (P1-RSI0).
 regimes_list = regime_raw.get("regimes", []) if isinstance(regime_raw, dict) else []
-for rd in regimes_list:
-    sym = rd.get("symbol", "?")
-    reg = rd.get("regime", "UNKNOWN")
-    # `or 0` guards None VALUES (key present but null — e.g. failed OHLCV fetch);
-    # .get()'s default only covers missing keys. Crashed the chain 2026-07-10 (SPCX).
-    adx = rd.get("adx") or 0
-    rsi = rd.get("rsi") or 0
-    bb = rd.get("bb_width") or 0
-    pctb = rd.get("pct_b") or 0
-    regime_lines.append(
-        f"  {sym}: {reg} | ADX={adx:.1f} RSI={rsi:.1f} BB-Width={bb:.1f}% %B={pctb:.0f}%"
-    )
-
-# FRED macro if available
-macro_summary = regime_raw.get("macro_summary", "")
-if not macro_summary:
-    macro_summary = "FRED macro: unavailable (use yfinance proxies)"
-
-regime_summary = (
-    "MARKET REGIME CONTEXT (ADX/BB/RSI per symbol):\n"
-    + ("\n".join(regime_lines) if regime_lines else "  No per-symbol regime data")
-    + f"\n\nMACRO: {macro_summary}"
+regime_summary = build_regime_summary(
+    regimes_list,
+    regime_raw.get("macro_summary", "") if isinstance(regime_raw, dict) else "",
 )
 
 print("[ai] Regime context:\n" + regime_summary)
@@ -118,15 +100,8 @@ cash = equity_sum.get("cash") or 0  # None-safe
 total = equity_sum.get("total") or 1  # None-safe
 cash_rule_fires = cash < 500.0
 
-# Rule 5: RSI >= 70 → ADD → HOLD for that symbol
-rsi_overrides = {}
-for rd in regimes_list:
-    sym = rd.get("symbol", "?")
-    rsi = rd.get("rsi") or 0  # None-safe (failed OHLCV fetch → null rsi)
-    if rsi >= 70:
-        k_action = kelly.get(sym, {}).get("action", "HOLD")
-        if k_action in ("ADD",):
-            rsi_overrides[sym] = f"RSI={rsi:.0f}≥70 → Kelly ADD overridden to HOLD"
+# Rule 5: finite RSI >= 70 → ADD → HOLD for that symbol
+rsi_overrides = collect_rsi_add_overrides(regimes_list, kelly)
 
 override_context = ""
 if cash_rule_fires:
@@ -219,9 +194,10 @@ try:
     # Which vendor actually produced this analysis. A Grok/Gemini-driven run must
     # never be readable as a Claude run: the report, the DB provenance column and
     # engine_results.json all carry the real provider.
-    _ai_provider, _failovers = 'anthropic', 0
+    _ai_provider, _failovers = "anthropic", 0
     try:
         import llm_failover as _lf  # noqa: E402 — imported by llm_gateway already
+
         _ai_provider, _failovers = _lf.current_provenance()
     except Exception:
         pass
@@ -290,6 +266,7 @@ try:
                 _MODEL = "claude-sonnet-4-6"
             try:
                 import llm_failover as _lf  # noqa: E402
+
                 _MODEL = _lf.analysis_model_label(_MODEL)
             except Exception:
                 if _failovers:
