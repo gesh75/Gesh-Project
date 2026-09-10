@@ -100,3 +100,10 @@ def test_run_paper_gate2_persist_applies_provenance():
     assert "paper_gate_provenance" in imported
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
     assert "paper_gate_provenance" in names
+
+
+def test_gen_report2_uses_shared_when_label():
+    src = (REPO / "gen_report2.py").read_text()
+    assert "paper_audit_when_label" in src
+    assert 'f"{created_n} paper record(s) today"' not in src
+    assert 'f"{created_n} paper record(s) {_when}"' in src

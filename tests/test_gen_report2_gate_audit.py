@@ -18,12 +18,14 @@ from pathlib import Path
 
 import pytest
 
+import report_share_plan
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_gate_audit():
     tree = ast.parse((REPO_ROOT / "gen_report2.py").read_text())
-    ns: dict = {"_esc": _esc}
+    ns: dict = {"_esc": _esc, "report_share_plan": report_share_plan}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "_gate_audit_section":
             exec(compile(ast.Module(body=[node], type_ignores=[]), "gen_report2.py", "exec"), ns)
@@ -165,3 +167,30 @@ def test_zero_win_rate_is_shown_missing_win_rate_is_not(gate_audit) -> None:
         }
     )
     assert "win-rate" not in hidden
+
+
+def test_paper_records_without_stamp_are_on_file_not_today(gate_audit) -> None:
+    html = gate_audit(
+        {
+            "action_plan": [_plan()],
+            "gate_results": [_gate()],
+            "run_manifest": {"run_id": "run-today"},
+            "paper_session": {"created": [{"symbol": "HOOD"}], "closed": []},
+        }
+    )
+    assert "paper record(s) on file" in html
+    assert "paper record(s) today" not in html
+
+
+def test_paper_records_with_matching_stamp_are_today(gate_audit) -> None:
+    html = gate_audit(
+        {
+            "action_plan": [_plan()],
+            "gate_results": [_gate()],
+            "run_manifest": {"run_id": "run-today"},
+            "paper_gate_run_id": "run-today",
+            "paper_session": {"created": [{"symbol": "HOOD"}], "closed": []},
+        }
+    )
+    assert "paper record(s) today" in html
+    assert "on file" not in html
