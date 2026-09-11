@@ -270,7 +270,17 @@ def gate_and_execute(
             rationale=a.get('signal_reason'),
         )
         symbol_payload = dict(gate_payload)
-        symbol_payload['as_of'] = (quote_as_of_by_symbol or {}).get(a['symbol'])
+        quote_ts = (quote_as_of_by_symbol or {}).get(a['symbol'])
+        symbol_payload['as_of'] = quote_ts
+        if quote_ts:
+            # Stamp per-symbol provenance so DATA_FRESH cannot fall back to the
+            # transport as_of when holdings carry no quote timestamp (Astra R5).
+            provenance = dict(symbol_payload.get('quote_provenance') or {})
+            prior = dict(provenance.get(a['symbol']) or {})
+            prior['quote_as_of'] = quote_ts
+            prior.setdefault('timestamp_basis', 'quote_as_of')
+            provenance[a['symbol']] = prior
+            symbol_payload['quote_provenance'] = provenance
         if raw_score_by_sym is not None and side == 'BUY':
             try:
                 raw_score = float(raw_score_by_sym.get(a['symbol']))
