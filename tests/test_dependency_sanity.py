@@ -20,10 +20,10 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: 776cc3b (Astra R6 — reject NaN/inf/negative
+# The pinned gesh-core commit: ae450ce (Astra R6 — reject NaN/inf/negative
 # numeric safety caps). Declared as a LITERAL on purpose — bumping the
 # dependency then requires editing this line, so the change is reviewable.
-GESH_CORE_SHA = "776cc3b75dfd7febabc7f9b1a43952b32148e19a"
+GESH_CORE_SHA = "ae450cebdd280a1f16b20c29736882c44401c2aa"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 
