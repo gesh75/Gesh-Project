@@ -47,8 +47,7 @@ def _holding(symbol="NVDA", price=100.0, equity=1000.0, quantity=10.0, **extra):
     return row
 
 
-def _plan(gate_mod, holdings, kelly, *, total_eq=10_000.0, cash=2_000.0,
-          rsi=None, open_syms=None):
+def _plan(gate_mod, holdings, kelly, *, total_eq=10_000.0, cash=2_000.0, rsi=None, open_syms=None):
     return gate_mod.build_action_plan(
         holdings,
         kelly,
@@ -286,10 +285,7 @@ def test_action_plan_trim_zero_quantity_emits_nothing(gate_mod):
 
 # ── Astra R2: one cumulative cash budget ─────────────────────────────────────
 def _buy_spend(plan) -> float:
-    return sum(
-        r["shares"] * r["current_price"]
-        for r in plan if r["action"] == "BUY"
-    )
+    return sum(r["shares"] * r["current_price"] for r in plan if r["action"] == "BUY")
 
 
 def test_action_plan_batch_buys_share_one_cash_budget(gate_mod):
