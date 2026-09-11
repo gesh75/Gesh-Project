@@ -20,10 +20,10 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: 1ba83f2 (Astra R3 — missing paper books raise
-# LedgerUnavailable). Declared as a LITERAL on purpose — bumping the
+# The pinned gesh-core commit: 776cc3b (Astra R6 — reject NaN/inf/negative
+# numeric safety caps). Declared as a LITERAL on purpose — bumping the
 # dependency then requires editing this line, so the change is reviewable.
-GESH_CORE_SHA = "1ba83f238dbfa80618b860e83e70f351884732f3"
+GESH_CORE_SHA = "776cc3b75dfd7febabc7f9b1a43952b32148e19a"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 

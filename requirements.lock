@@ -6,9 +6,9 @@
 # Reproducible install:  pip install -r requirements.lock
 # Regenerate after changing requirements.txt; test-only tooling excluded.
 #
-# gesh-core is the private repo at commit 1ba83f2 — LedgerUnavailable when
-# neither paper book exists (Astra R3). The 40-char commit SHA is the only
-# unambiguous identifier. CI needs GESH_CORE_PAT to clone it.
+# gesh-core is the private repo at commit 776cc3b — Astra R6 numeric safety
+# config (NaN/inf/negative caps raise ConfigError). The 40-char commit SHA
+# is the only unambiguous identifier. CI needs GESH_CORE_PAT to clone it.
 # This SHA must equal the one in requirements.txt;
 # tests/test_dependency_sanity.py enforces that and also verifies the SHA that
 # was actually INSTALLED.
@@ -32,7 +32,7 @@ docstring_parser==0.18.0
 fastapi==0.135.3
 fredapi==0.5.2
 frozendict==2.4.7
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@1ba83f238dbfa80618b860e83e70f351884732f3
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@776cc3b75dfd7febabc7f9b1a43952b32148e19a
 google-auth==2.56.2
 google-genai==1.73.1
 h11==0.16.0
