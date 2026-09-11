@@ -1,6 +1,7 @@
 """Regression checks for required CI gate trigger coverage."""
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,3 +27,33 @@ def test_required_ci_job_manual_dispatch_runs_gate(job_name):
 
     assert condition_match, f"required CI job {job_name!r} has no trigger guard"
     assert "github.event_name == 'workflow_dispatch'" in condition_match.group("condition")
+
+
+NOTION_CONTROL = Path(__file__).parents[1] / ".github" / "workflows" / "notion-control-update.yml"
+
+
+def test_notion_control_update_truncates_summary_without_pipefail_sigpipe():
+    """Long squash-merge messages SIGPIPE `printf | head` under `set -o pipefail`.
+
+    PR #246 / run 33666867623 failed at `printf: write error: Broken pipe`
+    because head closed the pipe after 1800 bytes.
+    """
+    workflow = NOTION_CONTROL.read_text(encoding="utf-8")
+    assert "${SUMMARY:0:1800}" in workflow
+    assert "printf '%s' \"$SUMMARY\" | head" not in workflow
+
+    # Same shape as PR #246's squash-merge body: many newlines, >8KiB.
+    new = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -euo pipefail\n"
+            "SUMMARY=$(python3 -c 'print(\"feat: long\\n\"*4000)')\n"
+            "SUMMARY=${SUMMARY:0:1800}\n"
+            'echo "len=${#SUMMARY}"',
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert new.stdout.strip() == "len=1800"
