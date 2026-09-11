@@ -401,3 +401,17 @@ def test_container_as_of_still_used_when_no_per_symbol_row():
     verdict = rg.evaluate(_buy(), snap, _cfg())
     assert verdict.approved is True
     assert verdict.gates["DATA_FRESH"] is True
+
+
+def test_watchlist_row_without_timestamp_fails_closed():
+    snap = _snap(
+        as_of=_fresh_container(),
+        holdings=[],
+        watchlist=[{"symbol": "MSTR", "last_trade_price": 100.0}],
+        source="robinhood_live",
+    )
+    verdict = rg.evaluate(_buy("MSTR"), snap, _cfg())
+    assert verdict.approved is False
+    assert verdict.gates["DATA_FRESH"] is False
+    assert "Quote age unknown" in verdict.reason
+    assert "MSTR" in verdict.reason

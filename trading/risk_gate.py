@@ -210,36 +210,47 @@ def _lookup_symbol_quote(portfolio: dict[str, Any], symbol: str) -> tuple[dateti
         ts = _parse_quote_ts(raw)
         return (ts, "ok") if ts is not None else (None, "malformed")
 
-    holding_without_ts = False
+    row_without_ts = False
     holding = _row_for_symbol(portfolio.get("holdings"), symbol)
     if holding is not None:
         ts, status = _ts_from_record(holding)
         if status is not None:
             return ts, status
-        holding_without_ts = True
+        row_without_ts = True
 
     watch = _row_for_symbol(portfolio.get("watchlist"), symbol)
     if watch is not None:
         ts, status = _ts_from_record(watch)
         if status is not None:
             return ts, status
+        row_without_ts = True
 
     quotes = _mapping_record(portfolio.get("quotes"), symbol)
     if isinstance(quotes, dict):
         ts, status = _ts_from_record(quotes)
         if status is not None:
             return ts, status
+        row_without_ts = True
 
     qmap = portfolio.get("quote_as_of")
     if isinstance(qmap, dict):
-        raw = _mapping_record(qmap, symbol)
-        if raw is not None:
-            if raw == "":
+        want = _norm_symbol(symbol)
+        key_hit = False
+        raw: Any = None
+        if symbol in qmap:
+            key_hit, raw = True, qmap[symbol]
+        else:
+            for key, value in qmap.items():
+                if _norm_symbol(key) == want:
+                    key_hit, raw = True, value
+                    break
+        if key_hit:
+            if raw in (None, ""):
                 return None, "missing"
             ts = _parse_quote_ts(raw)
             return (ts, "ok") if ts is not None else (None, "malformed")
 
-    if holding_without_ts:
+    if row_without_ts:
         return None, "missing"
     return None, "no_row"
 
@@ -425,7 +436,9 @@ def evaluate(
         max_age = cfg.max_price_age_seconds_paper if cfg.paper_mode else cfg.max_price_age_seconds
         if age is None:
             gates["DATA_FRESH"] = False  # fail closed: no timestamp → cannot prove freshness
-            rejection_reason = "Quote age unknown — snapshot missing 'as_of' timestamp"
+            rejection_reason = (
+                f"Quote age unknown — no parseable quote timestamp for {intent.symbol}"
+            )
         elif age < -MAX_QUOTE_FUTURE_SKEW_SECONDS:
             gates["DATA_FRESH"] = False
             rejection_reason = (

@@ -117,7 +117,7 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
             "portfolio_percentage": round(equity / total_equity * 100, 1) if total_equity else 0.0,
         })
 
-    return {
+    payload = {
         "as_of":         raw_ts,
         "offline":       True,                       # not live — served from snapshot
         "source":        snap.get("source", "snapshot"),
@@ -138,6 +138,12 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
         "holdings":  holdings,
         "watchlist": [],                             # live quotes need RH — empty when offline
     }
+    # Astra R5: DATA_FRESH ages the selected symbol quote. MCP snapshots already
+    # carry quote_provenance; dropping it made fetched_at look like a fresh quote.
+    prov = snap.get("quote_provenance")
+    if isinstance(prov, dict) and prov:
+        payload["quote_provenance"] = prov
+    return payload
 
 
 def get_portfolio_holdings() -> pd.DataFrame:
@@ -307,14 +313,47 @@ def _newest_quote_ts(watchlist_rows: list[dict]) -> str | None:
 def build_data_payload(watchlist: list[str] | None = None) -> dict[str, Any]:
     holdings_df = get_portfolio_holdings()
     equity_info = get_total_equity()
-    watchlist_df = get_watchlist_quotes(watchlist)
+    requested = list(watchlist) if watchlist is not None else list(DEFAULT_WATCHLIST)
+    holding_syms: list[str] = []
+    if not holdings_df.empty and "symbol" in holdings_df.columns:
+        holding_syms = [str(s).upper() for s in holdings_df["symbol"].tolist() if s]
+    requested_norm = [str(s).upper() for s in requested if s]
+    quote_syms = list(dict.fromkeys(holding_syms + requested_norm))
+    if quote_syms:
+        quotes_df = get_watchlist_quotes(quote_syms)
+        all_quote_rows = (
+            quotes_df.to_dict(orient="records")
+            if quotes_df is not None and not quotes_df.empty
+            else []
+        )
+    else:
+        all_quote_rows = []
+    requested_set = set(requested_norm)
+    watchlist_rows = [
+        row for row in all_quote_rows
+        if str(row.get("symbol") or "").upper() in requested_set
+    ]
+    provenance: dict[str, Any] = {}
+    for row in all_quote_rows:
+        sym = str(row.get("symbol") or "").upper()
+        ts = row.get("updated_at")
+        if not sym or not ts:
+            continue
+        provenance[sym] = {
+            "quote_as_of": ts,
+            "timestamp_basis": "updated_at",
+            "provider": "robinhood",
+        }
     # Prefer the QUOTES' OWN newest `updated_at` over fetch-time now() — mirrored
-    # from the engine copy 2026-07-02 (rule #37).
-    watchlist_rows = watchlist_df.to_dict(orient="records")
-    as_of = _newest_quote_ts(watchlist_rows) or datetime.now(timezone.utc).isoformat()
-    return {
+    # from the engine copy 2026-07-02 (rule #37). Include holding quotes so
+    # autopilot's build_data_payload([]) still has per-symbol provenance (Astra R5).
+    as_of = _newest_quote_ts(all_quote_rows) or datetime.now(timezone.utc).isoformat()
+    payload = {
         "as_of": as_of,
         "equity_summary": equity_info,
         "holdings": holdings_df.to_dict(orient="records"),
         "watchlist": watchlist_rows,
     }
+    if provenance:
+        payload["quote_provenance"] = provenance
+    return payload
