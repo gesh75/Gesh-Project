@@ -29,6 +29,12 @@ SECURE_RUNTIME_PINS = {
     "cryptography": "50.0.1",
     "nltk": "3.10.3",
 }
+UNPATCHED_NLTK_PATH_APIS = {
+    "AveragedPerceptron",
+    "PerceptronTagger",
+    "TransitionParser",
+    "save_maxent_params",
+}
 
 
 def _pins(text: str) -> dict[str, str]:
@@ -101,6 +107,25 @@ def test_security_sensitive_runtime_pins_are_current_and_locked():
 
     assert lock.get("defusedxml") == "0.7.1", (
         "nltk 3.10.3 requires defusedxml; the fully-resolved lock must pin it"
+    )
+
+
+def test_unpatched_nltk_path_apis_are_not_used_by_product_code():
+    """Keep the scoped PYSEC-2026-3740 exception inapplicable to GESH."""
+    ignored_roots = {"_archive", "android", "career-ops", "memory-bank", "tests", "venv"}
+    findings: dict[str, list[str]] = {}
+
+    for path in ROOT.rglob("*.py"):
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] in ignored_roots:
+            continue
+        used = sorted(api for api in UNPATCHED_NLTK_PATH_APIS if api in path.read_text())
+        if used:
+            findings[str(relative)] = used
+
+    assert not findings, (
+        "PYSEC-2026-3740 affects these NLTK model-path APIs; remove the CI exception "
+        f"or isolate the calls before using them: {findings}"
     )
 
 

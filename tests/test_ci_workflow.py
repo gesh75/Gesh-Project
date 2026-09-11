@@ -39,3 +39,5 @@ def test_pip_audit_is_a_blocking_security_gate():
     assert "pip-audit -r ci-audit.lock --progress-spinner off" in executable
     assert "||" not in executable
     assert "::warning::pip-audit" not in executable
+    assert executable.count("--ignore-vuln") == 1
+    assert "--ignore-vuln PYSEC-2026-3740" in executable
