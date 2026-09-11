@@ -26,3 +26,16 @@ def test_required_ci_job_manual_dispatch_runs_gate(job_name):
 
     assert condition_match, f"required CI job {job_name!r} has no trigger guard"
     assert "github.event_name == 'workflow_dispatch'" in condition_match.group("condition")
+
+
+def test_pip_audit_is_a_blocking_security_gate():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    audit_step = workflow.split("- name: pip-audit", 1)[1].split("\n      - name:", 1)[0]
+    executable = "\n".join(
+        line for line in audit_step.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+    assert "pip-audit -r ci-audit.lock --progress-spinner off" in executable
+    assert "||" not in executable
+    assert "::warning::pip-audit" not in executable

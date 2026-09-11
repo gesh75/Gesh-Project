@@ -25,6 +25,10 @@ LOCK = ROOT / "requirements.lock"
 # dependency then requires editing this line, so the change is reviewable.
 GESH_CORE_SHA = "1ba83f238dbfa80618b860e83e70f351884732f3"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
+SECURE_RUNTIME_PINS = {
+    "cryptography": "50.0.1",
+    "nltk": "3.10.3",
+}
 
 
 def _pins(text: str) -> dict[str, str]:
@@ -80,6 +84,24 @@ def test_lock_exists_and_matches_the_core_pins():
     for pkg in ("uvicorn", "fastapi", "yfinance", "numpy", "pandas"):
         assert lock.get(pkg) == core.get(pkg), f"{pkg} drift: lock {lock.get(pkg)} vs req {core.get(pkg)}"
     assert "openbb" not in lock, "openbb must not be in the core lock"
+
+
+def test_security_sensitive_runtime_pins_are_current_and_locked():
+    """Known-vulnerable versions must not return through source/lock drift."""
+    core = _pins(REQ.read_text())
+    lock = _pins(LOCK.read_text())
+
+    for package, expected in SECURE_RUNTIME_PINS.items():
+        assert core.get(package) == expected, (
+            f"{package} source pin is {core.get(package)!r}; expected secure version {expected}"
+        )
+        assert lock.get(package) == expected, (
+            f"{package} lock pin is {lock.get(package)!r}; expected secure version {expected}"
+        )
+
+    assert lock.get("defusedxml") == "0.7.1", (
+        "nltk 3.10.3 requires defusedxml; the fully-resolved lock must pin it"
+    )
 
 
 def test_lock_pins_gesh_core_to_an_immutable_commit():
