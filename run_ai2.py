@@ -34,7 +34,9 @@ os.chdir(BASE)
 from run_manifest import (
     RunManifest,
     atomic_write_json,
+    available_rsi_by_symbol,
     chain_io_paths,
+    format_optional_metric,
     manifest_from_snapshot,
     snapshot_degraded_info,
 )
@@ -89,14 +91,12 @@ regimes_list = regime_raw.get("regimes", []) if isinstance(regime_raw, dict) els
 for rd in regimes_list:
     sym = rd.get("symbol", "?")
     reg = rd.get("regime", "UNKNOWN")
-    # `or 0` guards None VALUES (key present but null — e.g. failed OHLCV fetch);
-    # .get()'s default only covers missing keys. Crashed the chain 2026-07-10 (SPCX).
-    adx = rd.get("adx") or 0
-    rsi = rd.get("rsi") or 0
-    bb = rd.get("bb_width") or 0
-    pctb = rd.get("pct_b") or 0
+    adx = format_optional_metric(rd.get("adx"), ".1f")
+    rsi = format_optional_metric(rd.get("rsi"), ".1f")
+    bb = format_optional_metric(rd.get("bb_width"), ".1f")
+    pctb = format_optional_metric(rd.get("pct_b"), ".0f")
     regime_lines.append(
-        f"  {sym}: {reg} | ADX={adx:.1f} RSI={rsi:.1f} BB-Width={bb:.1f}% %B={pctb:.0f}%"
+        f"  {sym}: {reg} | ADX={adx} RSI={rsi} BB-Width={bb}% %B={pctb}%"
     )
 
 # FRED macro if available
@@ -120,9 +120,7 @@ cash_rule_fires = cash < 500.0
 
 # Rule 5: RSI >= 70 → ADD → HOLD for that symbol
 rsi_overrides = {}
-for rd in regimes_list:
-    sym = rd.get("symbol", "?")
-    rsi = rd.get("rsi") or 0  # None-safe (failed OHLCV fetch → null rsi)
+for sym, rsi in available_rsi_by_symbol(regimes_list).items():
     if rsi >= 70:
         k_action = kelly.get(sym, {}).get("action", "HOLD")
         if k_action in ("ADD",):

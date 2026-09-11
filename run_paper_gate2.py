@@ -39,6 +39,8 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 
 from gesh_core.trading.autopilot_core import entry_floor_blocks
+from run_manifest import available_rsi_by_symbol
+
 try:
     from gesh_core.trading.autopilot_core import precision_overlay_blocks
 except ImportError:  # pinned SHA without the overlay — fail OPEN, keep the paper chain alive
@@ -409,8 +411,7 @@ def main(results_path: str | Path | None = None) -> int:
     cash       = float(equity_sum.get('cash') or 0)
 
     regimes_list = regime_raw.get('regimes', []) if isinstance(regime_raw, dict) else []
-    rsi_by_sym = {rd.get('symbol'): float(rd.get('rsi') or 0)
-                  for rd in regimes_list if isinstance(rd, dict)}
+    rsi_by_sym = available_rsi_by_symbol(regimes_list)
 
     print(f"{_t()} [gate] holdings={len(holdings)}  total=${total_eq:,.2f}  cash=${cash:.2f}")
 
