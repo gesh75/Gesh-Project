@@ -35,6 +35,7 @@ import time
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 
 from gesh_core.trading.autopilot_core import entry_floor_blocks
@@ -153,10 +154,17 @@ def build_action_plan(
     An already-open daily-analysis paper position skips re-entry.
     TRIM share counts are ceil'd then clamped to the held quantity so a
     whole-share floor cannot drop a TRIM on a fractional position.
+
+    Cash budget (Astra R2): accepted BUY notional is subtracted from remaining
+    deployable (cash − $500). Holdings list order is the allocation order.
+    Proposed TRIM/SELL proceeds are not added back.
     """
     rsi_by_sym = {} if rsi_by_sym is None else rsi_by_sym
     open_paper_symbols = set() if open_paper_symbols is None else open_paper_symbols
     cash_blocked = cash < CASH_BUFFER_USD
+    remaining = Decimal(str(cash)) - Decimal(str(CASH_BUFFER_USD))
+    if remaining < 0:
+        remaining = Decimal("0")
     action_plan: list[dict] = []
 
     for h in holdings:
@@ -185,10 +193,20 @@ def build_action_plan(
                                     'current_price': price,
                                     'signal_reason': f'Rule 5: RSI={rsi_by_sym[sym]:.0f}>=70 — ADD overridden'})
                 continue
-            usd    = max(0.0, opt / 100 * total_eq - equity)
-            usd    = min(usd, max(0.0, cash - CASH_BUFFER_USD))   # keep the $500 buffer
-            shares = math.floor(usd / price)
+            usd = (
+                Decimal(str(opt)) / Decimal(100) * Decimal(str(total_eq))
+                - Decimal(str(equity))
+            )
+            if usd < 0:
+                usd = Decimal("0")
+            usd = min(usd, remaining)
+            price_d = Decimal(str(price))
+            shares = (
+                int((usd / price_d).to_integral_value(rounding=ROUND_FLOOR))
+                if price_d > 0 else 0
+            )
             if shares > 0:
+                remaining -= Decimal(shares) * price_d
                 action_plan.append({'symbol': sym, 'action': 'BUY', 'shares': shares,
                                     'current_price': price,
                                     'signal_reason': f'Kelly {k_act}: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%'})
