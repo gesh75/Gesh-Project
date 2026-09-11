@@ -112,13 +112,14 @@ def test_security_sensitive_runtime_pins_are_current_and_locked():
 
 def test_unpatched_nltk_path_apis_are_not_used_by_product_code():
     """Keep the scoped PYSEC-2026-3740 exception inapplicable to GESH."""
-    ignored_roots = {"_archive", "android", "career-ops", "memory-bank", "tests", "venv"}
+    source_paths = list(ROOT.glob("*.py"))
+    for package_dir in ("routers", "scripts", "security", "trading", "vendor"):
+        source_paths.extend((ROOT / package_dir).rglob("*.py"))
+
     findings: dict[str, list[str]] = {}
 
-    for path in ROOT.rglob("*.py"):
+    for path in source_paths:
         relative = path.relative_to(ROOT)
-        if relative.parts[0] in ignored_roots:
-            continue
         used = sorted(api for api in UNPATCHED_NLTK_PATH_APIS if api in path.read_text())
         if used:
             findings[str(relative)] = used
