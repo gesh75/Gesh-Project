@@ -13,7 +13,6 @@ def sandbox_db(tmp_path, monkeypatch):
     path = tmp_path / "paper.db"
     monkeypatch.setattr(trade_log, "DB_PATH", path)
     monkeypatch.setattr(trade_log, "_initialized_paths", set())
-    monkeypatch.setattr(paper_trading, "load_config", lambda: {})
     monkeypatch.setattr(
         paper_trading,
         "validate_action",
