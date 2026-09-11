@@ -216,9 +216,12 @@ def test_input_orders_are_not_mutated(gate_mod):
 
 def test_each_symbol_uses_its_own_provider_quote_timestamp(gate_mod):
     seen: dict[str, str] = {}
+    provenance: dict[str, str] = {}
 
     def evaluate(intent, payload):
         seen[intent.symbol] = payload["as_of"]
+        rec = (payload.get("quote_provenance") or {}).get(intent.symbol) or {}
+        provenance[intent.symbol] = rec.get("quote_as_of")
         return SimpleNamespace(approved=False, reason="test", gates={})
 
     gate_mod.gate_and_execute(
@@ -239,6 +242,10 @@ def test_each_symbol_uses_its_own_provider_quote_timestamp(gate_mod):
         "NVDA": "2026-07-17T19:59:59Z",
         "MU": "2026-07-17T19:58:00Z",
     }
+    assert provenance == seen, (
+        "daily-chain substitution must also stamp quote_provenance so the "
+        "gate cannot fall back to the transport as_of"
+    )
 
 
 # ── real confidence derivation: consensus first, kelly win_rate fallback ──────
@@ -320,13 +327,15 @@ def test_recorder_blocked_row_is_not_left_approved(gate_mod):
 
     def blocked_rec(plan, holdings, total_eq, scanner_source="daily-analysis"):
         events.append(("record", plan[0]["symbol"]))
-        return [{
-            "symbol": plan[0]["symbol"],
-            "action": plan[0]["action"],
-            "blocked": True,
-            "reason": "Already at max open positions (2).",
-            "code": "POSITION_CAP",
-        }]
+        return [
+            {
+                "symbol": plan[0]["symbol"],
+                "action": plan[0]["action"],
+                "blocked": True,
+                "reason": "Already at max open positions (2).",
+                "code": "POSITION_CAP",
+            }
+        ]
 
     gate_results, created = gate_mod.gate_and_execute(
         [ORDERS[0]],
@@ -430,8 +439,11 @@ def test_buy_blocked_by_precision_overlay_even_above_floor(gate_mod, monkeypatch
             "NVDA": {
                 "verdict": "STRONG BUY",
                 "votes": {
-                    "Momentum": 1, "Trend": 1, "Rel.Strength": -1,
-                    "Volume": 1, "Macro": 1,
+                    "Momentum": 1,
+                    "Trend": 1,
+                    "Rel.Strength": -1,
+                    "Volume": 1,
+                    "Macro": 1,
                 },
                 "bullish": 4,
                 "bearish": 1,
