@@ -32,7 +32,8 @@ def test_pip_audit_is_a_blocking_security_gate():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     audit_step = workflow.split("- name: pip-audit", 1)[1].split("\n      - name:", 1)[0]
     executable = "\n".join(
-        line for line in audit_step.splitlines()
+        line
+        for line in audit_step.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
 

@@ -191,7 +191,12 @@ jobs:
           # PAT. Audit everything else from the reviewed lock; core stays gated
           # by the credential-scoped install in the test job.
           grep -v '^gesh-core @' requirements.lock > ci-audit.lock
-          pip-audit -r ci-audit.lock --progress-spinner off --strict
+          # NLTK 3.10.3 is the latest release, but upstream has no patch for
+          # PYSEC-2026-3740. It affects caller-controlled model-path APIs; GESH
+          # uses only VADER sentiment. test_dependency_sanity.py fails if product
+          # code starts using an affected API. Remove this exception when fixed.
+          pip-audit -r ci-audit.lock --progress-spinner off --strict \
+            --ignore-vuln PYSEC-2026-3740
       - name: bandit (high severity / high confidence only)
         run: |
           # -lll = HIGH severity only; -iii = HIGH confidence only — avoids
