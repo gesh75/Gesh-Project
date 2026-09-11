@@ -30,6 +30,7 @@ from .state import (
     log_intent,
     paper_realized_pnl_usd_today,
 )
+from gesh_core.trading.state import LedgerUnavailable
 
 # Shared seam-free risk-gate primitives — single source of truth in gesh-core
 # (Phase 3.5). GateVerdict (the verdict type execution.py also imports),
@@ -159,7 +160,10 @@ def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
         base = cfg.paper_cash_usd or 0.0
         if base <= 0:
             return 0.0
-        return paper_realized_pnl_usd_today() / base
+        try:
+            return paper_realized_pnl_usd_today() / base
+        except LedgerUnavailable:
+            return None
     eq_summary = portfolio.get("equity_summary", {})
     prev = float(eq_summary.get("adjusted_equity_previous_close", 0) or 0)
     curr = float(eq_summary.get("portfolio_equity", 0) or 0)
@@ -272,11 +276,17 @@ def evaluate(
     # 7. Daily loss
     if rejection_reason is None:
         pnl = _daily_pnl_pct(portfolio_snapshot, cfg)
-        gates["DAILY_LOSS"] = pnl >= -cfg.max_daily_loss_pct
-        if not gates["DAILY_LOSS"]:
+        if pnl is None:
+            gates["DAILY_LOSS"] = False
             rejection_reason = (
-                f"Daily P&L {pnl:+.2%} exceeds max loss {-cfg.max_daily_loss_pct:+.2%}"
+                "Paper ledger unavailable — cannot prove daily loss"
             )
+        else:
+            gates["DAILY_LOSS"] = pnl >= -cfg.max_daily_loss_pct
+            if not gates["DAILY_LOSS"]:
+                rejection_reason = (
+                    f"Daily P&L {pnl:+.2%} exceeds max loss {-cfg.max_daily_loss_pct:+.2%}"
+                )
     else:
         gates["DAILY_LOSS"] = False
 

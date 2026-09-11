@@ -16,12 +16,11 @@ rebasing those tests.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
+from gesh_core.db_path import resolve_db_path
 
 import trade_log as tl
-from gesh_core.db_path import resolve_db_path
 
 pytestmark = pytest.mark.unit
 

@@ -20,10 +20,10 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: 4d68e86 (Astra R1 — allocation caps run even
-# when auto_trade is OFF). Declared as a LITERAL on purpose — bumping the
+# The pinned gesh-core commit: 1ba83f2 (Astra R3 — missing paper books raise
+# LedgerUnavailable). Declared as a LITERAL on purpose — bumping the
 # dependency then requires editing this line, so the change is reviewable.
-GESH_CORE_SHA = "4d68e866d34fef86e6b3d0df1fe8923eabc8ae04"
+GESH_CORE_SHA = "1ba83f238dbfa80618b860e83e70f351884732f3"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 

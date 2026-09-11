@@ -24,29 +24,12 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-_PRIMARY = Path(__file__).parent / "gesh_financial.db"
-_FALLBACK = Path("/tmp/gesh_trades.db")
+from gesh_core.db_path import resolve_db_path as _resolve_db
 
-def _resolve_db() -> Path:
-    """
-    VirtioFS (macOS shared folder via FUSE) does not support SQLite's
-    file-locking for DDL writes. If the primary DB path is on a FUSE mount,
-    fall back to a local path (/tmp/gesh_trades.db) for trade_log and
-    paper_trades tables. Analysis data still lives on the primary DB via db.py.
-    """
-    try:
-        con = sqlite3.connect(str(_PRIMARY))
-        con.execute("CREATE TABLE IF NOT EXISTS _tl_probe (x INTEGER)")
-        con.execute("DROP TABLE IF EXISTS _tl_probe")
-        con.commit()
-        con.close()
-        return _PRIMARY
-    except sqlite3.OperationalError:
-        return _FALLBACK
-
+# Same resolver as db.py / trading.state. GESH_DB_PATH → cwd/gesh_financial.db.
+# Unusable paths fail closed; do not silently write /tmp/gesh_trades.db (Astra R3).
 DB_PATH = _resolve_db()
 
 # ─── Schema ───────────────────────────────────────────────────────────────────
