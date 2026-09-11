@@ -7,7 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from run_manifest import RunManifest, atomic_write_json, chain_io_paths, report_output_path
+from run_manifest import (
+    RunManifest,
+    atomic_write_json,
+    available_rsi_by_symbol,
+    chain_io_paths,
+    clear_run_scoped_outputs,
+    format_optional_metric,
+    report_output_path,
+)
 
 UTC = timezone.utc
 
@@ -81,3 +89,57 @@ def test_degraded_report_can_never_replace_current_report(tmp_path: Path) -> Non
         )
         == current
     )
+
+
+def test_new_run_clears_gate_outputs_and_fossils_without_mutating_input() -> None:
+    previous = {
+        "action_plan": [{"symbol": "OLD"}],
+        "gate_results": [{"approved": True}],
+        "paper_session": {"created": [{"id": 1}]},
+        "trade_stats": {"paper": {"wins": 1}},
+        "dod_delta": {"stale": True},
+        "cash_unlock": {"stale": True},
+        "screener": {"picks": ["KEEP"]},
+    }
+
+    fresh = clear_run_scoped_outputs(previous)
+
+    assert fresh == {"screener": {"picks": ["KEEP"]}}
+    assert previous["action_plan"] == [{"symbol": "OLD"}]
+    assert previous["dod_delta"] == {"stale": True}
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), "not-a-number", True])
+def test_optional_metric_formats_unavailable_as_na(value: object) -> None:
+    assert format_optional_metric(value, ".1f") == "n/a"
+
+
+def test_optional_metric_preserves_a_measured_zero() -> None:
+    assert format_optional_metric(0, ".1f") == "0.0"
+    assert format_optional_metric(12.345, ".1f") == "12.3"
+
+
+def test_available_rsi_map_omits_unknown_and_preserves_measured_zero() -> None:
+    rows = [
+        {"symbol": "UNKNOWN", "rsi": None},
+        {"symbol": "MISSING"},
+        {"symbol": "NAN", "rsi": float("nan")},
+        {"symbol": "ZERO", "rsi": 0},
+        {"symbol": "HOT", "rsi": 72.5},
+        {"rsi": 55},
+    ]
+
+    assert available_rsi_by_symbol(rows) == {"ZERO": 0.0, "HOT": 72.5}
+
+
+def test_daily_chain_scripts_use_run_scope_and_optional_metric_helpers() -> None:
+    root = Path(__file__).resolve().parents[1]
+    engines = (root / "run_engines2.py").read_text()
+    ai = (root / "run_ai2.py").read_text()
+    gate = (root / "run_paper_gate2.py").read_text()
+
+    assert "clear_run_scoped_outputs(results)" in engines
+    assert engines.count("format_optional_metric(") >= 2
+    assert ai.count("format_optional_metric(") >= 4
+    assert "available_rsi_by_symbol(regimes_list)" in ai
+    assert "available_rsi_by_symbol(regimes_list)" in gate
