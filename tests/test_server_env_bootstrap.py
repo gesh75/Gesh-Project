@@ -34,9 +34,7 @@ def test_server_loads_repo_dotenv_before_env_sensitive_imports(
     shutil.copy(ROOT / "server.py", checkout / "server.py")
     (checkout / ".env").write_text(f"{PROBE}=from-repo-dotenv\n", encoding="utf-8")
     (checkout / "llm_gateway.py").write_text(
-        "import os\n"
-        f"print(os.environ.get({PROBE!r}, 'missing'))\n"
-        "raise SystemExit(0)\n",
+        f"import os\nprint(os.environ.get({PROBE!r}, 'missing'))\nraise SystemExit(0)\n",
         encoding="utf-8",
     )
 
