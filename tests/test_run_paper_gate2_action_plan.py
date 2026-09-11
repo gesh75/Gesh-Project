@@ -130,6 +130,25 @@ def test_action_plan_rsi_69_does_not_override(gate_mod):
     assert _row(plan, "NVDA")["action"] == "BUY"
 
 
+def test_action_plan_missing_rsi_is_not_defaulted_to_zero(gate_mod):
+    missing = object()
+
+    class UnknownRSI(dict):
+        def get(self, key, default=missing):
+            assert default is missing, "missing RSI must stay absent, not become numeric zero"
+            return super().get(key)
+
+    plan = _plan(
+        gate_mod,
+        [_holding()],
+        {"NVDA": {"action": "ADD", "optimal_pct": 25}},
+        rsi=UnknownRSI(),
+        cash=5_000.0,
+    )
+
+    assert _row(plan, "NVDA")["action"] == "BUY"
+
+
 # ── skip re-entry ────────────────────────────────────────────────────────────
 def test_action_plan_open_paper_skips_reentry(gate_mod):
     plan = _plan(

@@ -190,7 +190,8 @@ def build_action_plan(
                                     'current_price': price,
                                     'signal_reason': 'Rule 8: cash < $500 — ADD blocked'})
                 continue
-            if rsi_by_sym.get(sym, 0) >= 70:
+            rsi = rsi_by_sym.get(sym)
+            if rsi is not None and rsi >= 70:
                 action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
                                     'current_price': price,
                                     'signal_reason': f'Rule 5: RSI={rsi_by_sym[sym]:.0f}>=70 — ADD overridden'})
