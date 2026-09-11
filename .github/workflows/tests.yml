@@ -191,12 +191,7 @@ jobs:
           # PAT. Audit everything else from the reviewed lock; core stays gated
           # by the credential-scoped install in the test job.
           grep -v '^gesh-core @' requirements.lock > ci-audit.lock
-          # Soft-fail first wave: report CVEs without blocking merge until the
-          # dependency triage backlog is cleared. Bandit (below) remains hard.
-          pip-audit -r ci-audit.lock --progress-spinner off || {
-            echo "::warning::pip-audit reported vulnerabilities — see log; not failing the gate yet"
-            exit 0
-          }
+          pip-audit -r ci-audit.lock --progress-spinner off --strict
       - name: bandit (high severity / high confidence only)
         run: |
           # -lll = HIGH severity only; -iii = HIGH confidence only — avoids
