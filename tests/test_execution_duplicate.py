@@ -121,6 +121,11 @@ def test_paper_place_concurrent_same_logical_order_is_one_fill(sandbox_db, monke
     assert simulated.ok is True
     assert duplicate.ok is False
     assert duplicate.order_row_id == simulated.order_row_id
-    assert _count("SELECT COUNT(*) FROM orders WHERE client_order_id = ?", (simulated.client_order_id,)) == 1
+    assert (
+        _count(
+            "SELECT COUNT(*) FROM orders WHERE client_order_id = ?", (simulated.client_order_id,)
+        )
+        == 1
+    )
     assert _count("SELECT COUNT(*) FROM paper_stops WHERE symbol = 'HOOD' AND active = 1") == 1
     assert len(alerts) == 1

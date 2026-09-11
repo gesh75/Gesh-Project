@@ -26,6 +26,7 @@ import sqlite3
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
+from . import state as _trading_state
 from .alerts import alert_order_fill, alert_rejection
 from .config import RiskConfig, load_risk_config
 from .contract import TradeIntent
@@ -73,6 +74,43 @@ def _client_order_id(intent: TradeIntent) -> str:
         ]
     )
     return "gesh-" + hashlib.sha256(seed.encode()).hexdigest()[:16]
+
+
+def _order_by_client_id(client_order_id: str) -> dict[str, Any] | None:
+    """Look up the existing orders row for a UNIQUE replay. DB_PATH is read at
+    call time so tests can sandbox the ledger."""
+    with sqlite3.connect(_trading_state.DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT * FROM orders WHERE client_order_id = ?",
+            (client_order_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _duplicate_result(
+    intent: TradeIntent,
+    coid: str,
+    qty: float | None,
+    price: float | None,
+    mode: Mode,
+) -> OrderResult:
+    """UNIQUE collision: return the existing row, do not treat it as a new fill."""
+    existing = _order_by_client_id(coid) or {}
+    return OrderResult(
+        ok=False,
+        status="DUPLICATE",
+        mode=existing.get("mode") or mode,
+        client_order_id=coid,
+        order_row_id=existing.get("id"),
+        symbol=intent.symbol,
+        action=intent.action,
+        qty=existing.get("qty", qty),
+        target_price=existing.get("target_price", price),
+        fill_price=existing.get("fill_price"),
+        fill_qty=existing.get("fill_qty"),
+        error="duplicate client_order_id — existing order reused",
+    )
 
 
 def _paper_position(symbol: str) -> dict[str, float] | None:
@@ -189,6 +227,10 @@ def place(
             error=verdict.reason,
             response={"gates": verdict.gates},
         )
+        if row_id is None:
+            return _duplicate_result(
+                intent, coid, qty, price, "paper" if cfg.paper_mode else "live"
+            )
         alert_rejection(
             intent.symbol, intent.action, verdict.reason or "", verdict.gates, intent.confidence
         )
@@ -220,6 +262,10 @@ def place(
             target_price=price,
             response={"note": "HOLD — no order placed"},
         )
+        if row_id is None:
+            return _duplicate_result(
+                intent, coid, 0.0, price, "paper" if cfg.paper_mode else "live"
+            )
         return OrderResult(
             ok=True,
             status="SIMULATED",
@@ -252,6 +298,10 @@ def place(
             error=err,
             response={"note": "missing reference price — order not placed"},
         )
+        if row_id is None:
+            return _duplicate_result(
+                intent, coid, qty, price, "paper" if cfg.paper_mode else "live"
+            )
         return OrderResult(
             ok=False,
             status="ERROR",
@@ -289,6 +339,10 @@ def place(
             target_price=price,
             response={"note": skip_note},
         )
+        if row_id is None:
+            return _duplicate_result(
+                intent, coid, qty, price, "paper" if cfg.paper_mode else "live"
+            )
         return OrderResult(
             ok=False,
             status="SKIPPED",
@@ -327,6 +381,8 @@ def place(
                 "note": f"paper-mode fill with 0.10% slippage (last={price} fill={fill_price})"
             },
         )
+        if row_id is None:
+            return _duplicate_result(intent, coid, qty, price, "paper")
         _sync_paper_stop(intent, fill_price, row_id)
         alert_order_fill(
             intent.symbol,
