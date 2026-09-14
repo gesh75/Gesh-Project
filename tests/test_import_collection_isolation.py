@@ -88,6 +88,7 @@ def test_import_product_modules_against_readonly_sentinel(tmp_path):
         capture_output=True,
         text=True,
         check=False,
+        timeout=30,
     )
     assert proc.returncode == 0, proc.stderr
     after = sentinel.stat()

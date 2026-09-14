@@ -28,10 +28,18 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+class _NetworkBlocked(RuntimeError):
+    """Raised if collection or a test attempts a real network connection."""
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Astra R7: temp DB/auth paths and network deny before collection imports."""
     root = Path(tempfile.mkdtemp(prefix="gesh-project-test-"))
     config._gesh_r7_root = root  # type: ignore[attr-defined]
+    config._gesh_had_db = "GESH_DB_PATH" in os.environ  # type: ignore[attr-defined]
+    config._gesh_prev_db = os.environ.get("GESH_DB_PATH")  # type: ignore[attr-defined]
+    config._gesh_had_auth = "GESH_AUTH_DB" in os.environ  # type: ignore[attr-defined]
+    config._gesh_prev_auth = os.environ.get("GESH_AUTH_DB")  # type: ignore[attr-defined]
     os.environ["GESH_DB_PATH"] = str(root / "gesh_financial.db")
     os.environ["GESH_AUTH_DB"] = str(root / "gesh_auth.db")
 
@@ -61,6 +69,14 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         import curl_cffi
 
         curl_cffi.Curl.perform = orig_curl  # type: ignore[method-assign]
+    if getattr(config, "_gesh_had_db", False):
+        os.environ["GESH_DB_PATH"] = config._gesh_prev_db  # type: ignore[attr-defined]
+    else:
+        os.environ.pop("GESH_DB_PATH", None)
+    if getattr(config, "_gesh_had_auth", False):
+        os.environ["GESH_AUTH_DB"] = config._gesh_prev_auth  # type: ignore[attr-defined]
+    else:
+        os.environ.pop("GESH_AUTH_DB", None)
     root = getattr(config, "_gesh_r7_root", None)
     if root is not None:
         shutil.rmtree(root, ignore_errors=True)
@@ -69,10 +85,6 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def repo_root() -> Path:
     return REPO_ROOT
-
-
-class _NetworkBlocked(RuntimeError):
-    """Raised if a test attempts a real network connection."""
 
 
 @pytest.fixture(autouse=True)
@@ -152,6 +164,7 @@ def _isolate_equity_snapshots_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         "trading.state",
         "gesh_core.trading.state",
         "consensus",
+        "schedule_gate",
     ):
         mod = sys.modules.get(modname)
         if mod is not None and hasattr(mod, "DB_PATH"):

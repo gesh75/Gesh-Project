@@ -29,7 +29,7 @@ gesh_core_config = pytest.importorskip(
     reason="gesh-core not installed in this environment",
 )
 
-PINNED_SHA = "17ca3d7b334080d4b9f05c79cc9b43a02d4fcea8"
+PINNED_SHA = "1d16aac7ecb5bf7a1bc687c8f78652f28a24bfe0"
 
 # Guard against gesh-core installs that predate the strict-config PR (#8).
 # pytest.importorskip only catches ImportError; if the module is importable
