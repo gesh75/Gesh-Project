@@ -5,6 +5,7 @@ set temporary DB/auth paths and deny network before any application import,
 and every state writer — not only db/auth/signal_history — must resolve inside
 the disposable test root.
 """
+
 from __future__ import annotations
 
 import os
@@ -24,9 +25,7 @@ def _clean_env(**extra: str) -> dict[str, str]:
     env.pop("GESH_DB_PATH", None)
     env.pop("GESH_AUTH_DB", None)
     existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = os.pathsep.join(
-        p for p in (str(REPO_ROOT), existing) if p
-    )
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(REPO_ROOT), existing) if p)
     env.update(extra)
     return env
 

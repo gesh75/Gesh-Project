@@ -20,10 +20,11 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: c0ed332 (Astra R8 — Kelly max drawdown includes
-# starting equity). Declared as a LITERAL on purpose — bumping the
-# dependency then requires editing this line, so the change is reviewable.
-GESH_CORE_SHA = "c0ed33282c6e041944f4e458ab2372bcce153ea3"
+# The pinned gesh-core commit: 8ea014e (Astra R7 — import-time db_path is
+# path-only; CREATE/DROP probe is ensure_db_writable). Declared as a LITERAL
+# on purpose — bumping the dependency then requires editing this line, so the
+# change is reviewable.
+GESH_CORE_SHA = "8ea014eedbfdb1a319f5261fb54f1989b70b4089"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 
 

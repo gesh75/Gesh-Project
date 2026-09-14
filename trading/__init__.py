@@ -8,10 +8,11 @@ Tiers:
   execution      : broker wrapper (paper mode now, live mode later)
   state          : 3 SQLite tables (trade_intents, risk_decisions, orders)
 
-Boot order: state.init_trading_tables() runs on first import.
+Schema initialization is explicit: server.py and autopilot call
+init_trading_tables(). Importing this package does not CREATE/DROP against
+the operational DB (Astra R7).
 """
 
 from .state import init_trading_tables
 
-# Auto-init the schema so callers never have to remember.
-init_trading_tables()
+__all__ = ["init_trading_tables"]

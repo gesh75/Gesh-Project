@@ -266,5 +266,6 @@ def test_trade_log_unusable_path_does_not_fall_back_to_tmp(tmp_path, monkeypatch
     target = tmp_path / "corrupt.db"
     target.write_bytes(b"not a sqlite database")
     monkeypatch.setenv("GESH_DB_PATH", str(target))
+    assert tl._resolve_db() == target
     with pytest.raises(sqlite3.DatabaseError):
-        tl._resolve_db()
+        tl._ensure_writable(target)
