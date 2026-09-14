@@ -505,7 +505,8 @@ def _gate_audit_section(eng: dict) -> str:
     </tr>"""
     closed_n = len(paper.get("closed") or [])
     created_n = len(paper.get("created") or [])
-    stat_bits = [f"{created_n} paper record(s) today", f"{closed_n} auto-closed"]
+    _when = report_share_plan.paper_audit_when_label(eng)
+    stat_bits = [f"{created_n} paper record(s) {_when}", f"{closed_n} auto-closed"]
     _pw = (stats.get("paper") or {}).get("win_rate_pct")
     _rw = (stats.get("real") or {}).get("win_rate_pct")
     if _pw is not None:

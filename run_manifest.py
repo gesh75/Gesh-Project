@@ -180,6 +180,30 @@ def manifest_from_snapshot(
     )
 
 
+def paper_gate_provenance(
+    eng: Mapping[str, Any],
+    *,
+    now: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Stamp that this run's paper/gate rows belong to ``run_manifest.run_id``.
+
+    The daily report used to hardcode "N paper record(s) today" even when
+    ``run_paper_gate2`` skipped and MERGE kept yesterday's session (gap F-07).
+    A matching ``paper_gate_run_id`` is the only conclusive "today" signal.
+    """
+    manifest = eng.get("run_manifest") if isinstance(eng.get("run_manifest"), dict) else {}
+    if now is None:
+        stamped = _iso(datetime.now(UTC))
+    elif isinstance(now, datetime):
+        stamped = _iso(now)
+    else:
+        stamped = str(now)
+    return {
+        "paper_gate_run_id": manifest.get("run_id"),
+        "paper_gate_ran_at": stamped,
+    }
+
+
 def report_output_path(base: Path, engine_results: Mapping[str, Any], *, requested: Path) -> Path:
     manifest = engine_results.get("run_manifest") or {}
     degraded = bool(manifest.get("degraded", engine_results.get("degraded", False)))

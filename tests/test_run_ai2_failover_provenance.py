@@ -99,4 +99,8 @@ def test_run_ai2_stamps_engine_results_and_rewrites_db_model():
     assert "WARNING: ANTHROPIC UNAVAILABLE" in src
     assert "(FAILOVER, anthropic down)" in src
     # Fail-safe: a broken import must not invent a failover.
-    assert "_ai_provider, _failovers = 'anthropic', 0" in src
+    # Accept either quote style so a formatter cannot hide a real revert.
+    assert (
+        "_ai_provider, _failovers = 'anthropic', 0" in src
+        or '_ai_provider, _failovers = "anthropic", 0' in src
+    )
