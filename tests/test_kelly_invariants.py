@@ -190,6 +190,12 @@ def test_max_drawdown_non_positive():
         assert kelly._max_drawdown(_series(kind, seed=seed)) <= 0.0
 
 
+def test_max_drawdown_includes_starting_equity():
+    """Opening −10% then flat is −10% drawdown, not 0 (Astra R8)."""
+    returns = np.array([-0.10] + [0.0] * 40, dtype=float)
+    assert kelly._max_drawdown(returns) == pytest.approx(-10.0)
+
+
 # ─────────────────── run_kelly_analysis (portfolio) invariants ───────────────
 
 @pytest.fixture
