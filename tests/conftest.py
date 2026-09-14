@@ -15,6 +15,7 @@ trading/risk_gate.py) are imported read-only and never modified.
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -60,6 +61,9 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         import curl_cffi
 
         curl_cffi.Curl.perform = orig_curl  # type: ignore[method-assign]
+    root = getattr(config, "_gesh_r7_root", None)
+    if root is not None:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")
