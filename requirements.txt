@@ -76,7 +76,7 @@ tenacity==9.1.4
 # coercing to False. Missing still selects the conservative default.
 # NOTE: d4e9f46 is 2 commits PAST the v0.6.1 tag (f11c460) and still declares
 # __version__ "0.6.1" — the commit SHA is the only unambiguous identifier.
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@8ea014eedbfdb1a319f5261fb54f1989b70b4089
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@17ca3d7b334080d4b9f05c79cc9b43a02d4fcea8
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core
 # PR105-RUN-02: pinned to match requirements.lock — an unpinned direct dep lets a
