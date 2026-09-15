@@ -28,6 +28,12 @@ from typing import Any
 
 from gesh_core.db_path import resolve_db_path as _resolve_db
 
+try:
+    from gesh_core.db_path import ensure_db_writable as _ensure_writable
+except ImportError:  # pin lag vs editable checkout (Astra R7)
+    def _ensure_writable(path=None):
+        return _resolve_db() if path is None else path
+
 # Same resolver as db.py / trading.state. GESH_DB_PATH → cwd/gesh_financial.db.
 # Unusable paths fail closed; do not silently write /tmp/gesh_trades.db (Astra R3).
 DB_PATH = _resolve_db()
@@ -98,6 +104,7 @@ def _ensure_schema(con: sqlite3.Connection, path) -> None:
 
 @contextmanager
 def _conn():
+    _ensure_writable(DB_PATH)
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     try:

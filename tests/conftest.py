@@ -14,8 +14,11 @@ trading/risk_gate.py) are imported read-only and never modified.
 
 from __future__ import annotations
 
+import os
+import shutil
 import socket
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -25,13 +28,63 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+class _NetworkBlocked(RuntimeError):
+    """Raised if collection or a test attempts a real network connection."""
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Astra R7: temp DB/auth paths and network deny before collection imports."""
+    root = Path(tempfile.mkdtemp(prefix="gesh-project-test-"))
+    config._gesh_r7_root = root  # type: ignore[attr-defined]
+    config._gesh_had_db = "GESH_DB_PATH" in os.environ  # type: ignore[attr-defined]
+    config._gesh_prev_db = os.environ.get("GESH_DB_PATH")  # type: ignore[attr-defined]
+    config._gesh_had_auth = "GESH_AUTH_DB" in os.environ  # type: ignore[attr-defined]
+    config._gesh_prev_auth = os.environ.get("GESH_AUTH_DB")  # type: ignore[attr-defined]
+    os.environ["GESH_DB_PATH"] = str(root / "gesh_financial.db")
+    os.environ["GESH_AUTH_DB"] = str(root / "gesh_auth.db")
+
+    def _blocked(*_args: object, **_kwargs: object) -> None:
+        raise _NetworkBlocked(
+            "Network access attempted during collection or an offline unit test — "
+            "a dependency (yfinance/Anthropic/Robinhood) was not mocked."
+        )
+
+    config._gesh_orig_connect = socket.socket.connect  # type: ignore[attr-defined]
+    socket.socket.connect = _blocked  # type: ignore[method-assign]
+    try:
+        import curl_cffi
+    except ImportError:
+        config._gesh_orig_curl_perform = None  # type: ignore[attr-defined]
+    else:
+        config._gesh_orig_curl_perform = curl_cffi.Curl.perform  # type: ignore[attr-defined]
+        curl_cffi.Curl.perform = _blocked  # type: ignore[method-assign]
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    orig = getattr(config, "_gesh_orig_connect", None)
+    if orig is not None:
+        socket.socket.connect = orig  # type: ignore[method-assign]
+    orig_curl = getattr(config, "_gesh_orig_curl_perform", None)
+    if orig_curl is not None:
+        import curl_cffi
+
+        curl_cffi.Curl.perform = orig_curl  # type: ignore[method-assign]
+    if getattr(config, "_gesh_had_db", False):
+        os.environ["GESH_DB_PATH"] = config._gesh_prev_db  # type: ignore[attr-defined]
+    else:
+        os.environ.pop("GESH_DB_PATH", None)
+    if getattr(config, "_gesh_had_auth", False):
+        os.environ["GESH_AUTH_DB"] = config._gesh_prev_auth  # type: ignore[attr-defined]
+    else:
+        os.environ.pop("GESH_AUTH_DB", None)
+    root = getattr(config, "_gesh_r7_root", None)
+    if root is not None:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 @pytest.fixture(scope="session")
 def repo_root() -> Path:
     return REPO_ROOT
-
-
-class _NetworkBlocked(RuntimeError):
-    """Raised if a test attempts a real network connection."""
 
 
 @pytest.fixture(autouse=True)
@@ -99,8 +152,23 @@ def _isolate_equity_snapshots_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     unisolated data source. Same zero-real-DB-writes contract as the auth and
     signal-history DBs above; db.py's own docstring documents this exact
     monkeypatch as the supported override."""
+    book = tmp_path / "equity_snapshots_isolated.db"
+    monkeypatch.setenv("GESH_DB_PATH", str(book))
     import db
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "equity_snapshots_isolated.db", raising=False)
+    monkeypatch.setattr(db, "DB_PATH", book, raising=False)
+    # Astra R7: isolate every state writer, not only the db alias. db.py and
+    # trading.state must keep the same file (R3 one-book contract).
+    for modname in (
+        "gesh_core.db",
+        "trade_log",
+        "trading.state",
+        "gesh_core.trading.state",
+        "consensus",
+        "schedule_gate",
+    ):
+        mod = sys.modules.get(modname)
+        if mod is not None and hasattr(mod, "DB_PATH"):
+            monkeypatch.setattr(mod, "DB_PATH", book, raising=False)
 
 
 @pytest.fixture(autouse=True)

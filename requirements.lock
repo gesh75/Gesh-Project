@@ -6,8 +6,8 @@
 # Reproducible install:  pip install -r requirements.lock
 # Regenerate after changing requirements.txt; test-only tooling excluded.
 #
-# gesh-core is the private repo at commit c0ed332 — Astra R8 Kelly max
-# drawdown includes starting equity. The 40-char commit SHA is the only
+# gesh-core is the private repo at commit 1d16aac — Astra R7 import-time
+# db_path is path-only; CREATE/DROP probe is ensure_db_writable. The 40-char commit SHA is the only
 # unambiguous identifier. CI needs GESH_CORE_PAT to clone it.
 # This SHA must equal the one in requirements.txt;
 # tests/test_dependency_sanity.py enforces that and also verifies the SHA that
@@ -32,7 +32,7 @@ docstring_parser==0.18.0
 fastapi==0.135.3
 fredapi==0.5.2
 frozendict==2.4.7
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@c0ed33282c6e041944f4e458ab2372bcce153ea3
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@1d16aac7ecb5bf7a1bc687c8f78652f28a24bfe0
 google-auth==2.56.2
 google-genai==1.73.1
 h11==0.16.0
