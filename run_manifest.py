@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +15,52 @@ from typing import Any
 
 UTC = timezone.utc
 DEGRADED_AFTER_S_DEFAULT = 3600.0
+RUN_SCOPED_OUTPUT_KEYS = frozenset(
+    {
+        "action_plan",
+        "gate_results",
+        "paper_session",
+        "trade_stats",
+        "dod_delta",
+        "cash_unlock",
+    }
+)
+
+
+def clear_run_scoped_outputs(previous: Mapping[str, Any] | object) -> dict[str, Any]:
+    """Copy durable cache entries while dropping outputs owned by one chain run."""
+    if not isinstance(previous, Mapping):
+        return {}
+    return {key: value for key, value in previous.items() if key not in RUN_SCOPED_OUTPUT_KEYS}
+
+
+def _finite_optional_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def format_optional_metric(value: object, format_spec: str) -> str:
+    """Format an observed metric; missing or non-finite values stay unavailable."""
+    number = _finite_optional_float(value)
+    return "n/a" if number is None else format(number, format_spec)
+
+
+def available_rsi_by_symbol(regimes: Iterable[object]) -> dict[str, float]:
+    """Return only observed finite RSI values, retaining a genuine measured zero."""
+    result: dict[str, float] = {}
+    for row in regimes:
+        if not isinstance(row, Mapping):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        rsi = _finite_optional_float(row.get("rsi"))
+        if symbol and rsi is not None:
+            result[symbol] = rsi
+    return result
 
 
 def _parse_utc(value: datetime | str) -> datetime:

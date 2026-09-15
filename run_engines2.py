@@ -45,6 +45,8 @@ os.chdir(BASE)
 from run_manifest import (
     atomic_write_json,
     chain_io_paths,
+    clear_run_scoped_outputs,
+    format_optional_metric,
     manifest_from_snapshot,
     snapshot_degraded_info,
 )
@@ -87,6 +89,10 @@ try:
         results = json.load(_f)
 except Exception:
     results = {}
+# Paper/gate outputs describe exactly one run. A degraded run skips step 4, so
+# carrying them through this merge would label yesterday's decisions as today's.
+# The same boundary also removes historical keys that no current stage produces.
+results = clear_run_scoped_outputs(results)
 
 results.update(
     {
@@ -137,11 +143,11 @@ try:
     for rd in regime_data.get("regimes") or []:
         if not isinstance(rd, dict):
             continue
-        _adx = float(rd.get("adx") or 0)
-        _rsi = float(rd.get("rsi") or 0)
+        _adx = format_optional_metric(rd.get("adx"), ".1f")
+        _rsi = format_optional_metric(rd.get("rsi"), ".1f")
         regime_summary_lines.append(
             f"  {rd.get('symbol', '?')}: {rd.get('regime', 'UNKNOWN')}  "
-            f"ADX={_adx:.1f}  RSI={_rsi:.1f}"
+            f"ADX={_adx}  RSI={_rsi}"
         )
     regime_summary = "MARKET REGIME CONTEXT:\n" + "\n".join(regime_summary_lines)
     print(regime_summary)
