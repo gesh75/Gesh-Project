@@ -140,6 +140,38 @@ def _order_target_pct(order: dict, holdings: list[dict], total_eq: float) -> flo
 CASH_BUFFER_USD = 500.0  # Rule 8: never deploy the last $500
 
 
+def _folded_get(
+    mapping: Mapping[str, object] | None, key: object, default: object = None
+) -> object:
+    """Case-insensitive mapping lookup (exact, then upper, then scan)."""
+    if not isinstance(mapping, Mapping) or key is None:
+        return default
+    if key in mapping:
+        return mapping[key]
+    upper = str(key).upper()
+    if upper in mapping:
+        return mapping[upper]
+    for existing, value in mapping.items():
+        if str(existing).upper() == upper:
+            return value
+    return default
+
+
+def _folded_float(
+    mapping: Mapping[str, object] | None,
+    key: object,
+    default: float | None = None,
+) -> float | None:
+    """Case-insensitive numeric lookup. Missing / non-numeric stay ``default``."""
+    raw = _folded_get(mapping, key, default)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_action_plan(
     holdings: list[dict],
     kelly: Mapping[str, object] | None,
@@ -173,7 +205,8 @@ def build_action_plan(
         sym    = h.get('symbol')
         price  = float(h.get('price') or h.get('current_price') or 0)
         equity = float(h.get('equity') or 0)
-        k      = kelly.get(sym, {}) if isinstance(kelly, dict) else {}
+        k_raw  = _folded_get(kelly if isinstance(kelly, dict) else {}, sym, {})
+        k      = k_raw if isinstance(k_raw, dict) else {}
         k_act  = (k.get('action') or 'HOLD').upper()
         opt    = float(k.get('optimal_pct') or 0)
         if price <= 0 or not sym:
@@ -190,11 +223,11 @@ def build_action_plan(
                                     'current_price': price,
                                     'signal_reason': 'Rule 8: cash < $500 — ADD blocked'})
                 continue
-            rsi = rsi_by_sym.get(sym)
+            rsi = _folded_float(rsi_by_sym, sym)
             if rsi is not None and rsi >= 70:
                 action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
                                     'current_price': price,
-                                    'signal_reason': f'Rule 5: RSI={rsi_by_sym[sym]:.0f}>=70 — ADD overridden'})
+                                    'signal_reason': f'Rule 5: RSI={rsi:.0f}>=70 — ADD overridden'})
                 continue
             usd = (
                 Decimal(str(opt)) / Decimal(100) * Decimal(str(total_eq))
@@ -266,27 +299,28 @@ def gate_and_execute(
     created: list[dict] = []
     for a in executable:
         side = 'BUY' if a['action'] == 'BUY' else 'SELL'  # TRIM → SELL for the gate contract
+        raw_conf = _folded_float(confidence_by_sym, a['symbol'], 0.0)
         intent = intent_builder(
             a['symbol'], side,
-            confidence=float(confidence_by_sym.get(a['symbol'], 0.0)),
+            confidence=0.0 if raw_conf is None else raw_conf,
             target_position_pct=_order_target_pct(a, holdings, total_eq),
             rationale=a.get('signal_reason'),
         )
         symbol_payload = dict(gate_payload)
-        quote_ts = (quote_as_of_by_symbol or {}).get(a['symbol'])
+        quote_ts = _folded_get(quote_as_of_by_symbol, a['symbol'])
         symbol_payload['as_of'] = quote_ts
         if quote_ts:
             # Stamp per-symbol provenance so DATA_FRESH cannot fall back to the
             # transport as_of when holdings carry no quote timestamp (Astra R5).
             provenance = dict(symbol_payload.get('quote_provenance') or {})
-            prior = dict(provenance.get(a['symbol']) or {})
+            prior = dict(_folded_get(provenance, a['symbol'], {}) or {})
             prior['quote_as_of'] = quote_ts
             prior.setdefault('timestamp_basis', 'quote_as_of')
             provenance[a['symbol']] = prior
             symbol_payload['quote_provenance'] = provenance
         if raw_score_by_sym is not None and side == 'BUY':
             try:
-                raw_score = float(raw_score_by_sym.get(a['symbol']))
+                raw_score = float(_folded_get(raw_score_by_sym, a['symbol']))
             except (TypeError, ValueError):
                 raw_score = 0.0
             if entry_floor_blocks(side, raw_score, min_entry_score):
@@ -307,8 +341,10 @@ def gate_and_execute(
                 continue
         if side == 'BUY':
             overlay_row: dict = {}
-            if consensus_by_sym and isinstance(consensus_by_sym.get(a['symbol']), dict):
-                overlay_row = consensus_by_sym[a['symbol']]
+            if consensus_by_sym:
+                overlay_src = _folded_get(consensus_by_sym, a['symbol'], {})
+                if isinstance(overlay_src, dict):
+                    overlay_row = overlay_src
             try:
                 overlay = precision_overlay_blocks(side, overlay_row)
             except Exception as e:  # noqa: BLE001 — overlay must never abort the paper chain

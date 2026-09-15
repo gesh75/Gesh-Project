@@ -9,12 +9,25 @@ MCP-built live_portfolio_snapshot.json into the exact shape build_data_payload()
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
-import data_fetcher as df
+if "robin_stocks" not in sys.modules:
+    try:
+        import robin_stocks.robinhood  # noqa: F401
+    except ModuleNotFoundError:
+        _rh_pkg = ModuleType("robin_stocks")
+        _rh = ModuleType("robin_stocks.robinhood")
+        _rh.build_holdings = lambda: {}
+        _rh_pkg.robinhood = _rh
+        sys.modules["robin_stocks"] = _rh_pkg
+        sys.modules["robin_stocks.robinhood"] = _rh
+
+import data_fetcher as df  # noqa: E402
 
 
 def _fresh_ts(age_seconds: int = 3600) -> str:
@@ -89,6 +102,12 @@ def test_snapshot_does_not_invent_quote_provenance(tmp_path):
     assert "quote_provenance" not in payload
 
 
+@pytest.mark.parametrize("prov", [{}, "oops", [], 0, None])
+def test_snapshot_drops_empty_or_non_dict_quote_provenance(tmp_path, prov):
+    payload = df.load_snapshot_payload(_write_snap(tmp_path, quote_provenance=prov))
+    assert "quote_provenance" not in payload
+
+
 def test_build_data_payload_quotes_holdings_when_watchlist_empty(monkeypatch):
     """Autopilot calls build_data_payload([]). Holdings must still be quoted."""
     import pandas as pd
@@ -141,6 +160,49 @@ def test_build_data_payload_quotes_holdings_when_watchlist_empty(monkeypatch):
     assert payload["watchlist"] == []
     # container as_of may equal the quote, but must not be a later fetch-time now()
     assert payload["as_of"] == "2026-06-03T16:00:00+00:00"
+
+
+def test_build_data_payload_blank_updated_at_does_not_invent_provenance(monkeypatch):
+    """A quoted holding with no timestamp must not mint quote_provenance.
+
+    DATA_FRESH ages quote_provenance / as_of. Inventing a fetch-time stamp for
+    a blank updated_at would make a stale book look fresh.
+    """
+    import pandas as pd
+
+    holdings = pd.DataFrame(
+        [
+            {
+                "symbol": "NVDA",
+                "quantity": 1,
+                "average_buy_price": 90.0,
+                "equity": 100.0,
+                "percent_change": 0.0,
+                "equity_change": 10.0,
+                "current_price": 100.0,
+                "type": "stock",
+                "pe_ratio": None,
+                "portfolio_percentage": 100.0,
+            }
+        ]
+    )
+    monkeypatch.setattr(df, "get_portfolio_holdings", lambda: holdings)
+    monkeypatch.setattr(
+        df,
+        "get_total_equity",
+        lambda: {
+            "cash": 500.0,
+            "portfolio_equity": 100.0,
+            "adjusted_equity_previous_close": 100.0,
+        },
+    )
+
+    def fake_quotes(symbols=None):
+        return pd.DataFrame([{"symbol": "NVDA", "last_trade_price": 100.0, "updated_at": None}])
+
+    monkeypatch.setattr(df, "get_watchlist_quotes", fake_quotes)
+    payload = df.build_data_payload([])
+    assert "quote_provenance" not in payload
 
 
 def test_snapshot_maps_to_payload_shape(tmp_path):

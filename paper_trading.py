@@ -179,6 +179,15 @@ def run_paper_session(
                 "reason": "No open paper long to trim/sell",
             })
             continue
+        still_open = any(
+            (t.get("symbol") or "").upper() == symbol
+            for t in get_trade_history(
+                symbol=symbol, open_only=True, is_paper=True, limit=10_000
+            )
+        )
+        if not still_open:
+            open_symbols.discard(symbol)
+            open_positions = len(open_symbols)
         for rec in closed_rows:
             created.append({
                 "trade_id":      rec.get("id"),

@@ -179,6 +179,28 @@ def atomic_write_json(path: str | Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def promote_manifest_if_stale(
+    manifest: RunManifest,
+    degraded_info: Mapping[str, Any],
+) -> RunManifest:
+    """Restamp a clean manifest as degraded when AI-time age trips the threshold.
+
+    Keeps the same ``run_id``, ``started_at``, and per-symbol ``quote_as_of`` so
+    a late remanifest cannot look like a new chain run. Already-degraded and
+    still-fresh manifests are returned unchanged.
+    """
+    if not degraded_info.get("degraded") or manifest.degraded:
+        return manifest
+    return RunManifest.create(
+        run_id=manifest.run_id,
+        source=manifest.input_source,
+        snapshot_as_of=manifest.snapshot_as_of,
+        now=manifest.started_at,
+        degraded=True,
+        quote_as_of=manifest.quote_as_of,
+    )
+
+
 def snapshot_degraded_info(
     snapshot: Mapping[str, Any], threshold_s: float | None = None, *, now: datetime | None = None
 ) -> dict[str, Any]:

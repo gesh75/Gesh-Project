@@ -14,6 +14,7 @@ from run_manifest import (
     chain_io_paths,
     clear_run_scoped_outputs,
     format_optional_metric,
+    promote_manifest_if_stale,
     report_output_path,
 )
 
@@ -143,3 +144,47 @@ def test_daily_chain_scripts_use_run_scope_and_optional_metric_helpers() -> None
     assert ai.count("format_optional_metric(") >= 4
     assert "available_rsi_by_symbol(regimes_list)" in ai
     assert "available_rsi_by_symbol(regimes_list)" in gate
+    assert "promote_manifest_if_stale(" in ai
+
+
+def test_promote_manifest_if_stale_keeps_run_id_and_quotes() -> None:
+    quotes = {"NVDA": "2026-07-17T19:59:59Z"}
+    manifest = RunManifest.create(
+        run_id="run-abc",
+        source="robinhood_mcp",
+        snapshot_as_of="2026-07-17T20:00:00Z",
+        degraded=False,
+        quote_as_of=quotes,
+        now="2026-07-17T20:01:00Z",
+    )
+    promoted = promote_manifest_if_stale(manifest, {"degraded": True})
+    assert promoted is not manifest
+    assert promoted.degraded is True
+    assert promoted.run_id == "run-abc"
+    assert promoted.input_source == "robinhood_mcp"
+    assert promoted.started_at == manifest.started_at
+    assert promoted.snapshot_as_of == manifest.snapshot_as_of
+    assert promoted.quote_as_of["NVDA"] == manifest.quote_as_of["NVDA"]
+
+
+def test_promote_manifest_if_stale_is_identity_when_already_degraded() -> None:
+    manifest = RunManifest.create(
+        run_id="run-xyz",
+        source="robinhood_mcp",
+        snapshot_as_of="2026-07-17T20:00:00Z",
+        degraded=True,
+        now="2026-07-17T20:01:00Z",
+    )
+    assert promote_manifest_if_stale(manifest, {"degraded": True}) is manifest
+
+
+def test_promote_manifest_if_stale_is_identity_when_still_fresh() -> None:
+    manifest = RunManifest.create(
+        run_id="run-fresh",
+        source="robinhood_mcp",
+        snapshot_as_of="2026-07-17T20:00:00Z",
+        degraded=False,
+        now="2026-07-17T20:01:00Z",
+    )
+    assert promote_manifest_if_stale(manifest, {"degraded": False}) is manifest
+    assert promote_manifest_if_stale(manifest, {}) is manifest
