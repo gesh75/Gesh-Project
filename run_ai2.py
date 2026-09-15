@@ -38,6 +38,7 @@ from run_manifest import (
     chain_io_paths,
     format_optional_metric,
     manifest_from_snapshot,
+    promote_manifest_if_stale,
     snapshot_degraded_info,
 )
 
@@ -61,15 +62,7 @@ try:
     _manifest = RunManifest.from_dict(eng["run_manifest"])
 except (KeyError, TypeError, ValueError):
     _manifest = manifest_from_snapshot(eng.get("snapshot", {}))
-if _degraded_info["degraded"] and not _manifest.degraded:
-    _manifest = RunManifest.create(
-        run_id=_manifest.run_id,
-        source=_manifest.input_source,
-        snapshot_as_of=_manifest.snapshot_as_of,
-        now=_manifest.started_at,
-        degraded=True,
-        quote_as_of=_manifest.quote_as_of,
-    )
+_manifest = promote_manifest_if_stale(_manifest, _degraded_info)
 eng["run_manifest"] = _manifest.to_dict()
 atomic_write_json(manifest_out, _manifest.to_dict())
 if _degraded_info["degraded"]:
