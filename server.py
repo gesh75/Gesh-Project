@@ -19,6 +19,11 @@ import uvicorn
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from dotenv import load_dotenv
+
+# Bootstrap this checkout's config before modules capture environment values at
+# import time. Existing process/launchd variables remain authoritative.
+load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
 
 import llm_gateway
 import price_source  # locked yf.download adapter (thread-safety)
@@ -7507,7 +7512,7 @@ async def sector_hot_batch(request: Request):
 # ─── Trade Log ────────────────────────────────────────────────────────────────
 
 
-@app.get("/api/trades")
+@app.get("/api/trades", dependencies=[Depends(require_api_key)])
 def get_trades(
     symbol: str = None,
     limit: int = Query(50, ge=1, le=500),
@@ -7522,7 +7527,7 @@ def get_trades(
         raise _server_error(e)
 
 
-@app.get("/api/trades/stats")
+@app.get("/api/trades/stats", dependencies=[Depends(require_api_key)])
 def trade_stats(days: int = 30, paper: bool = False):
     """Win rate, P&L stats, scanner performance for last N days."""
     try:
@@ -7620,7 +7625,7 @@ def paper_check_closes():
         raise _server_error(e)
 
 
-@app.get("/api/paper/summary")
+@app.get("/api/paper/summary", dependencies=[Depends(require_api_key)])
 def paper_summary_endpoint(days: int = 7):
     """Paper vs live performance summary for last N days."""
     try:
