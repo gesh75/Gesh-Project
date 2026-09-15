@@ -308,6 +308,96 @@ def test_quote_as_of_lookup_is_casefold(gate_mod):
     assert provenance == seen
 
 
+def test_gate_confidence_lookup_is_casefold(gate_mod):
+    """Kelly/consensus maps are UPPER; a lowercase plan symbol must not get 0.0."""
+    orders = [
+        {
+            "symbol": "nvda",
+            "action": "BUY",
+            "shares": 5,
+            "current_price": 100.0,
+            "signal_reason": "Kelly ADD",
+        }
+    ]
+    r = _run(
+        gate_mod,
+        orders=orders,
+        conf={"NVDA": 0.89},
+        verdicts={"nvda": False},
+    )
+    assert r.intents[0].confidence == pytest.approx(0.89)
+
+
+def test_gate_raw_score_lookup_is_casefold(gate_mod):
+    """Entry floor must see UPPER consensus raw_score for a lowercase BUY."""
+    orders = [
+        {
+            "symbol": "nvda",
+            "action": "BUY",
+            "shares": 5,
+            "current_price": 100.0,
+            "signal_reason": "Kelly ADD",
+        }
+    ]
+    r = _run(
+        gate_mod,
+        orders=orders,
+        conf={"NVDA": 0.89},
+        raw_score_by_sym={"NVDA": 0.237},
+        min_entry_score=0.35,
+    )
+    nvda = next(g for g in r.gate_results if g["symbol"] == "nvda")
+    assert nvda["approved"] is False
+    assert "entry floor" in (nvda["reason"] or "").lower()
+    assert ("record", "nvda") not in r.events
+
+
+def test_gate_consensus_overlay_lookup_is_casefold(gate_mod, monkeypatch):
+    """Precision overlay must see UPPER consensus votes for a lowercase BUY."""
+
+    class _Block:
+        blocked = True
+        reason = "Rel.Strength bearish"
+
+    class _Open:
+        blocked = False
+        reason = "ok"
+
+    def _overlay(action, row=None):  # noqa: ARG001
+        votes = (row or {}).get("votes") or {}
+        if votes.get("Rel.Strength") == -1:
+            return _Block()
+        return _Open()
+
+    monkeypatch.setattr(gate_mod, "precision_overlay_blocks", _overlay)
+    orders = [
+        {
+            "symbol": "nvda",
+            "action": "BUY",
+            "shares": 5,
+            "current_price": 100.0,
+            "signal_reason": "Kelly ADD",
+        }
+    ]
+    r = _run(
+        gate_mod,
+        orders=orders,
+        conf={"NVDA": 0.89},
+        raw_score_by_sym={"NVDA": 0.62},
+        min_entry_score=0.50,
+        consensus_by_sym={
+            "NVDA": {
+                "verdict": "STRONG BUY",
+                "votes": {"Rel.Strength": -1},
+            }
+        },
+    )
+    nvda = next(g for g in r.gate_results if g["symbol"] == "nvda")
+    assert nvda["approved"] is False
+    assert "precision overlay" in (nvda["reason"] or "").lower()
+    assert ("record", "nvda") not in r.events
+
+
 # ── real confidence derivation: consensus first, kelly win_rate fallback ──────
 def test_build_confidence_map_uses_real_signals(gate_mod):
     consensus = {"NVDA": {"confidence": 89.0}}

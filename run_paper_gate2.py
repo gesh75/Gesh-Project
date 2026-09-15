@@ -157,6 +157,21 @@ def _folded_get(
     return default
 
 
+def _folded_float(
+    mapping: Mapping[str, object] | None,
+    key: object,
+    default: float | None = None,
+) -> float | None:
+    """Case-insensitive numeric lookup. Missing / non-numeric stay ``default``."""
+    raw = _folded_get(mapping, key, default)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_action_plan(
     holdings: list[dict],
     kelly: Mapping[str, object] | None,
@@ -208,7 +223,7 @@ def build_action_plan(
                                     'current_price': price,
                                     'signal_reason': 'Rule 8: cash < $500 — ADD blocked'})
                 continue
-            rsi = _folded_get(rsi_by_sym, sym)
+            rsi = _folded_float(rsi_by_sym, sym)
             if rsi is not None and rsi >= 70:
                 action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
                                     'current_price': price,
@@ -284,9 +299,10 @@ def gate_and_execute(
     created: list[dict] = []
     for a in executable:
         side = 'BUY' if a['action'] == 'BUY' else 'SELL'  # TRIM → SELL for the gate contract
+        raw_conf = _folded_float(confidence_by_sym, a['symbol'], 0.0)
         intent = intent_builder(
             a['symbol'], side,
-            confidence=float(confidence_by_sym.get(a['symbol'], 0.0)),
+            confidence=0.0 if raw_conf is None else raw_conf,
             target_position_pct=_order_target_pct(a, holdings, total_eq),
             rationale=a.get('signal_reason'),
         )
@@ -304,7 +320,7 @@ def gate_and_execute(
             symbol_payload['quote_provenance'] = provenance
         if raw_score_by_sym is not None and side == 'BUY':
             try:
-                raw_score = float(raw_score_by_sym.get(a['symbol']))
+                raw_score = float(_folded_get(raw_score_by_sym, a['symbol']))
             except (TypeError, ValueError):
                 raw_score = 0.0
             if entry_floor_blocks(side, raw_score, min_entry_score):
@@ -325,8 +341,10 @@ def gate_and_execute(
                 continue
         if side == 'BUY':
             overlay_row: dict = {}
-            if consensus_by_sym and isinstance(consensus_by_sym.get(a['symbol']), dict):
-                overlay_row = consensus_by_sym[a['symbol']]
+            if consensus_by_sym:
+                overlay_src = _folded_get(consensus_by_sym, a['symbol'], {})
+                if isinstance(overlay_src, dict):
+                    overlay_row = overlay_src
             try:
                 overlay = precision_overlay_blocks(side, overlay_row)
             except Exception as e:  # noqa: BLE001 — overlay must never abort the paper chain

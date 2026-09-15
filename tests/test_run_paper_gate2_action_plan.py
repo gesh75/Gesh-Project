@@ -174,6 +174,32 @@ def test_action_plan_kelly_lookup_is_casefold(gate_mod):
     assert row["shares"] == 25
 
 
+def test_action_plan_string_rsi_still_overrides(gate_mod):
+    """A numeric RSI stored as text must still fire Rule 5, not TypeError."""
+    plan = _plan(
+        gate_mod,
+        [_holding()],
+        {"NVDA": {"action": "ADD", "optimal_pct": 25}},
+        rsi={"NVDA": "72"},
+        cash=5_000.0,
+    )
+    row = _row(plan, "NVDA")
+    assert row["action"] == "HOLD"
+    assert "Rule 5" in row["signal_reason"]
+    assert "72" in row["signal_reason"]
+
+
+def test_action_plan_non_numeric_rsi_does_not_override(gate_mod):
+    plan = _plan(
+        gate_mod,
+        [_holding()],
+        {"NVDA": {"action": "ADD", "optimal_pct": 25}},
+        rsi={"NVDA": "n/a"},
+        cash=5_000.0,
+    )
+    assert _row(plan, "NVDA")["action"] == "BUY"
+
+
 def test_action_plan_rsi_69_does_not_override(gate_mod):
     plan = _plan(
         gate_mod,
