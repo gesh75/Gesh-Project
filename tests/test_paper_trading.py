@@ -37,10 +37,16 @@ if "gesh_core" not in sys.modules:
         _ac = ModuleType("gesh_core.allocation_config")
         _ac.load_config = lambda: {}
         _ac.validate_action = lambda *a, **k: (True, "")
+        _dbp = ModuleType("gesh_core.db_path")
+        _dbp.resolve_db_path = lambda path=None: path or "gesh_financial.db"
+        _dbp.ensure_db_writable = lambda path=None: path or "gesh_financial.db"
         _gc = ModuleType("gesh_core")
+        _gc.__path__ = []
         _gc.allocation_config = _ac
+        _gc.db_path = _dbp
         sys.modules["gesh_core"] = _gc
         sys.modules["gesh_core.allocation_config"] = _ac
+        sys.modules["gesh_core.db_path"] = _dbp
 
 import paper_trading as pt  # noqa: E402
 import trade_log as tl  # noqa: E402
@@ -169,8 +175,7 @@ def test_paper_position_cap_blocked_when_auto_trade_off(trade_db, tmp_path, monk
     """Cap applies to open *paper* lots, not the live holdings list."""
     _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=2)
     seeded = pt.run_paper_session(
-        [_plan(symbol="AAA", shares=1.0, price=10.0),
-         _plan(symbol="BBB", shares=1.0, price=10.0)],
+        [_plan(symbol="AAA", shares=1.0, price=10.0), _plan(symbol="BBB", shares=1.0, price=10.0)],
         holdings=[],
         total_portfolio=10_000,
         current_cash=100_000,
@@ -188,7 +193,9 @@ def test_paper_position_cap_blocked_when_auto_trade_off(trade_db, tmp_path, monk
 
 
 def test_paper_buy_fills_when_live_book_exceeds_position_cap(
-    trade_db, tmp_path, monkeypatch,
+    trade_db,
+    tmp_path,
+    monkeypatch,
 ):
     """Live names must not consume the paper session's open-position cap."""
     _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=2)
@@ -260,6 +267,74 @@ def test_second_buy_sees_incremented_open_position_count(trade_db, monkeypatch):
     # Paper book starts empty; first BUY increments before the second.
     # Live holdings (SPY) must not seed the paper cap.
     assert seen == [0, 1]
+
+
+def _cap_one_open(action, symbol, trade_usd, open_positions=0, **kw):
+    """Local stand-in for allocation_config.validate_action's position cap."""
+    if action in ("BUY", "ADD") and open_positions >= 1:
+        return False, "max open positions reached"
+    return True, ""
+
+
+def test_full_trim_releases_session_position_cap(trade_db, monkeypatch):
+    """A full TRIM must free the slot so a later BUY in the same plan can fill."""
+    monkeypatch.setattr(pt, "validate_action", _cap_one_open)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=2.0, price=10.0),
+            _plan(symbol="AAA", action="TRIM", shares=2.0, price=11.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert [r.get("blocked") for r in out] == [False, False, False]
+    assert out[2]["symbol"] == "BBB"
+    assert out[2]["trade_id"]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert {r["symbol"] for r in open_rows} == {"BBB"}
+
+
+def test_partial_trim_keeps_session_position_cap(trade_db, monkeypatch):
+    """A leftover long still occupies the cap — a second name must stay blocked."""
+    monkeypatch.setattr(pt, "validate_action", _cap_one_open)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=2.0, price=10.0),
+            _plan(symbol="AAA", action="TRIM", shares=1.0, price=11.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0].get("blocked") is not True
+    assert out[1].get("blocked") is not True
+    assert out[1].get("closed") is True
+    assert out[2]["blocked"] is True
+    assert "max open positions" in out[2]["reason"]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert {r["symbol"] for r in open_rows} == {"AAA"}
+
+
+def test_trim_without_open_long_does_not_decrement_cap(trade_db, monkeypatch):
+    monkeypatch.setattr(pt, "validate_action", _cap_one_open)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="ZZZ", action="TRIM", shares=1.0, price=10.0),
+            _plan(symbol="AAA", shares=1.0, price=10.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0]["blocked"] is True
+    assert "No open paper long" in out[0]["reason"]
+    assert out[1].get("blocked") is not True
+    assert out[2]["blocked"] is True
+    assert "max open positions" in out[2]["reason"]
 
 
 # ─── Auto-close ───────────────────────────────────────────────────────────────

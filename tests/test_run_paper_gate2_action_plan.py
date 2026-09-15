@@ -12,9 +12,35 @@ from __future__ import annotations
 
 import ast
 import importlib
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
+
+if "gesh_core" not in sys.modules:
+    try:
+        import gesh_core  # noqa: F401
+    except ModuleNotFoundError:
+
+        def _entry_floor_blocks(side, raw_score, min_entry_score=0.50):
+            if str(side).upper() != "BUY":
+                return False
+            try:
+                return float(raw_score) < float(min_entry_score)
+            except (TypeError, ValueError):
+                return True
+
+        _auto = ModuleType("gesh_core.trading.autopilot_core")
+        _auto.entry_floor_blocks = _entry_floor_blocks
+        _auto.precision_overlay_blocks = lambda *a, **k: None
+        _gc = ModuleType("gesh_core")
+        _tr = ModuleType("gesh_core.trading")
+        _tr.autopilot_core = _auto
+        _gc.trading = _tr
+        sys.modules["gesh_core"] = _gc
+        sys.modules["gesh_core.trading"] = _tr
+        sys.modules["gesh_core.trading.autopilot_core"] = _auto
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "run_paper_gate2.py"
@@ -116,6 +142,36 @@ def test_action_plan_rsi_at_70_overrides_add(gate_mod):
         rsi={"NVDA": 70.0},
     )
     assert _row(plan, "NVDA")["action"] == "HOLD"
+
+
+def test_action_plan_rsi_lookup_is_casefold(gate_mod):
+    """available_rsi_by_symbol stores UPPER keys; holdings may not."""
+    plan = _plan(
+        gate_mod,
+        [_holding(symbol="hood")],
+        {"hood": {"action": "ADD", "optimal_pct": 25}},
+        rsi={"HOOD": 81.0},
+        cash=5_000.0,
+    )
+    row = _row(plan, "hood")
+    assert row["action"] == "HOLD"
+    assert row["shares"] == 0
+    assert "Rule 5" in row["signal_reason"]
+    assert "81" in row["signal_reason"]
+
+
+def test_action_plan_kelly_lookup_is_casefold(gate_mod):
+    """Engine Kelly is keyed UPPER; a lowercase holding must still size."""
+    plan = _plan(
+        gate_mod,
+        [_holding(symbol="nvda", equity=0.0, quantity=0)],
+        {"NVDA": {"action": "ADD", "optimal_pct": 25}},
+        cash=5_000.0,
+        total_eq=10_000.0,
+    )
+    row = _row(plan, "nvda")
+    assert row["action"] == "BUY"
+    assert row["shares"] == 25
 
 
 def test_action_plan_rsi_69_does_not_override(gate_mod):

@@ -129,3 +129,118 @@ def test_paper_place_concurrent_same_logical_order_is_one_fill(sandbox_db, monke
     )
     assert _count("SELECT COUNT(*) FROM paper_stops WHERE symbol = 'HOOD' AND active = 1") == 1
     assert len(alerts) == 1
+
+
+def _rejected(reason="MARKET_HOURS: closed") -> GateVerdict:
+    return GateVerdict(
+        approved=False,
+        reason=reason,
+        gates={"MARKET_HOURS": False},
+        intent_id=1,
+        decision_id=1,
+    )
+
+
+def test_paper_place_rejected_replay_is_duplicate_not_a_fill(sandbox_db, monkeypatch):
+    """Same-minute retry after a reject must not mint a SIMULATED fill.
+
+    client_order_id ignores status, so a later APPROVED intent collides on the
+    REJECTED row and must stay DUPLICATE — no stop, no fill alert, one orders row.
+    """
+    fills: list[tuple] = []
+    rejects: list[tuple] = []
+    monkeypatch.setattr(execution, "alert_order_fill", lambda *a, **k: fills.append(a))
+    monkeypatch.setattr(execution, "alert_rejection", lambda *a, **k: rejects.append(a))
+
+    intent = replace(
+        manual("HOOD", "BUY", confidence=0.9, target_position_pct=0.02),
+        generated_at="2026-09-11T14:01:00+00:00",
+    )
+    snap = _snap(10_000.0, "HOOD", 100.0)
+    first = execution.place(intent, _rejected(), snap, _cfg())
+    second = execution.place(intent, _approved(), snap, _cfg())
+
+    assert first.status == "REJECTED"
+    assert first.ok is False
+    assert second.status == "DUPLICATE"
+    assert second.ok is False
+    assert second.order_row_id == first.order_row_id
+    assert second.fill_price is None
+    assert second.fill_qty is None
+    assert (
+        _count(
+            "SELECT COUNT(*) FROM orders WHERE client_order_id = ?",
+            (first.client_order_id,),
+        )
+        == 1
+    )
+    assert _count("SELECT COUNT(*) FROM paper_stops WHERE symbol = 'HOOD' AND active = 1") == 0
+    assert fills == []
+    assert len(rejects) == 1
+
+
+def test_paper_place_error_replay_is_duplicate_not_a_fill(sandbox_db, monkeypatch):
+    fills: list[tuple] = []
+    monkeypatch.setattr(execution, "alert_order_fill", lambda *a, **k: fills.append(a))
+
+    intent = replace(
+        manual("HOOD", "BUY", confidence=0.9, target_position_pct=0.02),
+        generated_at="2026-09-11T14:01:00+00:00",
+    )
+    empty = {"equity_summary": {"portfolio_equity": 10_000.0}, "holdings": [], "watchlist": []}
+    priced = _snap(10_000.0, "HOOD", 100.0)
+    first = execution.place(intent, _approved(), empty, _cfg())
+    second = execution.place(intent, _approved(), priced, _cfg())
+
+    assert first.status == "ERROR"
+    assert first.ok is False
+    assert second.status == "DUPLICATE"
+    assert second.ok is False
+    assert second.order_row_id == first.order_row_id
+    assert second.fill_price is None
+    assert _count("SELECT COUNT(*) FROM orders") == 1
+    assert fills == []
+
+
+def test_paper_place_skipped_replay_is_duplicate_not_a_new_skip(sandbox_db, monkeypatch):
+    fills: list[tuple] = []
+    monkeypatch.setattr(execution, "alert_order_fill", lambda *a, **k: fills.append(a))
+
+    intent = replace(
+        manual("HOOD", "BUY", confidence=0.9, target_position_pct=0.0),
+        generated_at="2026-09-11T14:01:00+00:00",
+    )
+    snap = _snap(10_000.0, "HOOD", 100.0)
+    first = execution.place(intent, _approved(), snap, _cfg())
+    second = execution.place(intent, _approved(), snap, _cfg())
+
+    assert first.status == "SKIPPED"
+    assert first.ok is False
+    assert second.status == "DUPLICATE"
+    assert second.ok is False
+    assert second.order_row_id == first.order_row_id
+    assert _count("SELECT COUNT(*) FROM orders") == 1
+    assert fills == []
+
+
+def test_safe_log_non_unique_integrity_error_is_reraised(sandbox_db, monkeypatch):
+    def _boom(**kwargs):
+        raise sqlite3.IntegrityError("NOT NULL constraint failed: orders.symbol")
+
+    monkeypatch.setattr(execution, "log_order", _boom)
+    with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+        execution._safe_log(client_order_id="gesh-test", symbol="HOOD")
+
+
+def test_duplicate_result_when_existing_row_missing(sandbox_db, monkeypatch):
+    monkeypatch.setattr(execution, "_order_by_client_id", lambda _coid: None)
+    intent = replace(
+        manual("HOOD", "BUY", confidence=0.9, target_position_pct=0.02),
+        generated_at="2026-09-11T14:01:00+00:00",
+    )
+    result = execution._duplicate_result(intent, "gesh-missing", 1.0, 100.0, "paper")
+    assert result.ok is False
+    assert result.status == "DUPLICATE"
+    assert result.order_row_id is None
+    assert result.fill_price is None
+    assert result.error and "duplicate" in result.error

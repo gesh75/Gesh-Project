@@ -12,11 +12,36 @@ from __future__ import annotations
 
 import ast
 import importlib
+import sys
 import uuid as uuid_mod
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
+
+if "gesh_core" not in sys.modules:
+    try:
+        import gesh_core  # noqa: F401
+    except ModuleNotFoundError:
+
+        def _entry_floor_blocks(side, raw_score, min_entry_score=0.50):
+            if str(side).upper() != "BUY":
+                return False
+            try:
+                return float(raw_score) < float(min_entry_score)
+            except (TypeError, ValueError):
+                return True
+
+        _auto = ModuleType("gesh_core.trading.autopilot_core")
+        _auto.entry_floor_blocks = _entry_floor_blocks
+        _auto.precision_overlay_blocks = lambda *a, **k: None
+        _gc = ModuleType("gesh_core")
+        _tr = ModuleType("gesh_core.trading")
+        _tr.autopilot_core = _auto
+        _gc.trading = _tr
+        sys.modules["gesh_core"] = _gc
+        sys.modules["gesh_core.trading"] = _tr
+        sys.modules["gesh_core.trading.autopilot_core"] = _auto
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "run_paper_gate2.py"
@@ -246,6 +271,41 @@ def test_each_symbol_uses_its_own_provider_quote_timestamp(gate_mod):
         "daily-chain substitution must also stamp quote_provenance so the "
         "gate cannot fall back to the transport as_of"
     )
+
+
+def test_quote_as_of_lookup_is_casefold(gate_mod):
+    """run_manifest.quote_as_of is UPPER; a lowercase plan symbol must still stamp."""
+    seen: dict[str, str] = {}
+    provenance: dict[str, str] = {}
+    orders = [
+        {
+            "symbol": "nvda",
+            "action": "BUY",
+            "shares": 5,
+            "current_price": 100.0,
+            "signal_reason": "Kelly ADD",
+        }
+    ]
+
+    def evaluate(intent, payload):
+        seen[intent.symbol] = payload["as_of"]
+        rec = (payload.get("quote_provenance") or {}).get(intent.symbol) or {}
+        provenance[intent.symbol] = rec.get("quote_as_of")
+        return SimpleNamespace(approved=False, reason="test", gates={})
+
+    gate_mod.gate_and_execute(
+        orders,
+        [{"symbol": "nvda", "equity": 0.0, "price": 100.0}],
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS, "as_of": "transport-time"},
+        confidence_by_sym={"nvda": 0.89},
+        quote_as_of_by_symbol={"NVDA": "2026-07-17T19:59:59Z"},
+        intent_builder=_make_intent_builder([], []),
+        gate_evaluate=evaluate,
+        recorder=_make_recorder([], []),
+    )
+    assert seen == {"nvda": "2026-07-17T19:59:59Z"}
+    assert provenance == seen
 
 
 # ── real confidence derivation: consensus first, kelly win_rate fallback ──────
