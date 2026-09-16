@@ -7,6 +7,9 @@ def optional_float(value) -> float | None:
     """Parse a finite float. Missing, blank, or non-numeric values stay unknown."""
     if value is None or value == "":
         return None
+    # bool is a numeric subclass: True must not become 1.0% / $1 / green VaR.
+    if isinstance(value, bool):
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
