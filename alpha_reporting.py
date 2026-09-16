@@ -21,9 +21,10 @@ def optional_float(value) -> float | None:
 
 def format_alpha_percent(value: float | None) -> str:
     """Format a benchmark percentage without inventing unavailable values."""
-    if value is None:
+    parsed = optional_float(value)
+    if parsed is None:
         return "n/a"
-    return f"{value:+.1f}%"
+    return f"{parsed:+.1f}%"
 
 
 def format_optional_percent(value: float | None, *, digits: int = 1) -> str:
@@ -75,6 +76,7 @@ def cvar_95_pct(monte: dict | None) -> float | None:
 
 def alpha_value_color(value: float | None, *, neutral: str = "#888") -> str:
     """Return the report color for a benchmark value."""
-    if value is None:
+    parsed = optional_float(value)
+    if parsed is None:
         return neutral
-    return "#00e87a" if value >= 0 else "#ff3c5a"
+    return "#00e87a" if parsed >= 0 else "#ff3c5a"
