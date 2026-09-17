@@ -3,7 +3,9 @@
 The 12:30 ET job emits intents when |current − Kelly target| > 5 percentage
 points. The comparison is strict ``> 0.05`` on fractions (10% vs 15% is
 exactly 5pp and must stay quiet). Missing ``portfolio_percentage`` is treated
-as 0%, so an unlabelled holding looks fully drifted.
+as 0%, so an unlabelled holding looks fully drifted. HOLD / missing-target
+intents must not be coerced to flatten-to-zero; SELL's genuine ``0.0`` still
+fires.
 
 Fully offline: login, snapshot, consensus, gate, and broker are stubbed.
 """
@@ -39,13 +41,13 @@ def _snapshot(pct=10.0, symbol="MSTR") -> dict:
     }
 
 
-def _drive(monkeypatch, snapshot, target_pct, *, approved=True):
+def _drive(monkeypatch, snapshot, target_pct, *, approved=True, action="BUY"):
     placed: list[TradeIntent] = []
 
     def fake_from_consensus(row, max_position_pct=0.02):
         return TradeIntent(
             symbol=row.get("symbol") or "MSTR",
-            action="BUY",
+            action=action,
             confidence=0.9,
             source="consensus",
             target_position_pct=target_pct,
@@ -118,3 +120,24 @@ def test_auth_failure_never_places(monkeypatch):
     monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
     autopilot.midday_rebalance()
     assert placed == []
+
+
+def test_hold_with_missing_target_does_not_place(monkeypatch):
+    """HOLD leaves target_position_pct=None. Coercing that to 0.0 would treat a
+    10% holding as 10pp of flatten drift, write a qty-0 SIMULATED HOLD, and
+    consume the daily order cap."""
+    placed = _drive(monkeypatch, _snapshot(10.0), target_pct=None, action="HOLD")
+    assert placed == []
+
+
+def test_buy_without_target_does_not_place(monkeypatch):
+    placed = _drive(monkeypatch, _snapshot(10.0), target_pct=None, action="BUY")
+    assert placed == []
+
+
+def test_sell_flatten_to_zero_still_places(monkeypatch):
+    """SELL's genuine target 0.0 is not the HOLD missing-target case."""
+    placed = _drive(monkeypatch, _snapshot(10.0), target_pct=0.0, action="SELL")
+    assert len(placed) == 1
+    assert placed[0].action == "SELL"
+    assert placed[0].target_position_pct == 0.0

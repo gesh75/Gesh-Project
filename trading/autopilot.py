@@ -423,8 +423,21 @@ def midday_rebalance() -> None:
             row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
             intent = from_consensus(row, max_position_pct=cfg.max_position_pct)
 
-            # Drift check: current_pct vs target_pct
-            target_pct = intent.target_position_pct or 0.0
+            # HOLD / INSUFFICIENT leave target_position_pct=None. Coercing that
+            # with `or 0.0` makes a 15% holding look like 15pp of flatten drift,
+            # evaluate() HOLD-shortcuts (no ORDER_RATE), and place() writes a
+            # qty-0 SIMULATED HOLD that still consumes the daily cap — later
+            # genuine TRIM/ADD and the 15:55 stop-loss SELLs then get
+            # "Daily order cap reached". Skip unless this is a real BUY/SELL
+            # with an explicit target. SELL's genuine 0.0 still fires.
+            if intent.action not in ("BUY", "SELL") or intent.target_position_pct is None:
+                logger.debug(
+                    "  %s midday skip: action=%s target=%s",
+                    sym, intent.action, intent.target_position_pct,
+                )
+                continue
+
+            target_pct = intent.target_position_pct
             drift = abs(current_pct - target_pct)
 
             if drift > 0.05:   # >5% absolute drift from Kelly-optimal
