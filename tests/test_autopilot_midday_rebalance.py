@@ -1,0 +1,120 @@
+"""First-execution tests for trading.autopilot.midday_rebalance().
+
+The 12:30 ET job emits intents when |current − Kelly target| > 5 percentage
+points. The comparison is strict ``> 0.05`` on fractions (10% vs 15% is
+exactly 5pp and must stay quiet). Missing ``portfolio_percentage`` is treated
+as 0%, so an unlabelled holding looks fully drifted.
+
+Fully offline: login, snapshot, consensus, gate, and broker are stubbed.
+"""
+
+from __future__ import annotations
+
+import types
+
+import pytest
+
+pytest.importorskip("gesh_core", reason="gesh-core not installed in this environment")
+
+from trading import autopilot
+from trading.contract import TradeIntent
+
+pytestmark = pytest.mark.unit
+
+
+def _snapshot(pct=10.0, symbol="MSTR") -> dict:
+    holding = {
+        "symbol": symbol,
+        "equity": 10_000.0,
+        "average_buy_price": 250.0,
+        "current_price": 300.0,
+    }
+    if pct is not None:
+        holding["portfolio_percentage"] = pct
+    return {
+        "as_of": "2026-06-03T16:30:00+00:00",
+        "equity_summary": {"portfolio_equity": 100_000.0},
+        "holdings": [holding],
+        "watchlist": [],
+    }
+
+
+def _drive(monkeypatch, snapshot, target_pct, *, approved=True):
+    placed: list[TradeIntent] = []
+
+    def fake_from_consensus(row, max_position_pct=0.02):
+        return TradeIntent(
+            symbol=row.get("symbol") or "MSTR",
+            action="BUY",
+            confidence=0.9,
+            source="consensus",
+            target_position_pct=target_pct,
+        )
+
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
+    monkeypatch.setattr(
+        autopilot, "_load_consensus", lambda: (lambda *a, **k: {"symbol": "MSTR"})
+    )
+    monkeypatch.setattr(autopilot, "from_consensus", fake_from_consensus)
+    monkeypatch.setattr(
+        autopilot,
+        "evaluate",
+        lambda intent, snap, cfg=None: types.SimpleNamespace(
+            approved=approved, reason="ok" if approved else "rejected"
+        ),
+    )
+    monkeypatch.setattr(autopilot, "place", lambda intent, *a, **k: placed.append(intent))
+    autopilot.midday_rebalance()
+    return placed
+
+
+def test_drift_below_five_percent_does_not_place(monkeypatch):
+    placed = _drive(monkeypatch, _snapshot(10.0), target_pct=0.14)
+    assert placed == []
+
+
+def test_drift_above_five_percent_places_once(monkeypatch):
+    placed = _drive(monkeypatch, _snapshot(10.0), target_pct=0.16)
+    assert len(placed) == 1
+    assert placed[0].symbol == "MSTR"
+    assert placed[0].target_position_pct == 0.16
+
+
+def test_drift_exactly_five_percent_is_within_tolerance(monkeypatch):
+    placed = _drive(monkeypatch, _snapshot(10.0), target_pct=0.15)
+    assert placed == []
+
+
+def test_missing_portfolio_percentage_is_zero_and_can_place(monkeypatch):
+    placed = _drive(monkeypatch, _snapshot(pct=None), target_pct=0.20)
+    assert len(placed) == 1
+
+
+def test_blank_symbol_is_skipped(monkeypatch):
+    snap = _snapshot(10.0)
+    snap["holdings"][0]["symbol"] = ""
+    placed = _drive(monkeypatch, snap, target_pct=0.20)
+    assert placed == []
+
+
+def test_rejected_verdict_still_reaches_place(monkeypatch):
+    placed = _drive(monkeypatch, _snapshot(10.0), target_pct=0.20, approved=False)
+    assert len(placed) == 1
+
+
+def test_no_holdings_is_noop(monkeypatch):
+    snap = _snapshot(10.0)
+    snap["holdings"] = []
+    placed = _drive(monkeypatch, snap, target_pct=0.20)
+    assert placed == []
+
+
+def test_auth_failure_never_places(monkeypatch):
+    placed: list = []
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: False)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: _snapshot()))
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: (lambda *a, **k: {}))
+    monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
+    autopilot.midday_rebalance()
+    assert placed == []

@@ -121,6 +121,36 @@ def test_restored_candidates_survive_restart(sandbox_db, monkeypatch):
     autopilot._CANDIDATES.clear()
 
 
+def test_paper_book_read_failure_skips_sweep_and_pages(sandbox_db, monkeypatch):
+    """A book-read exception must not silently skip stops without an alert."""
+    sandbox_db.log_order(
+        intent_id=1, decision_id=None, mode="paper", client_order_id="t-buy-fail",
+        status="SIMULATED", symbol="HOOD", action="BUY",
+        qty=5.0, target_price=100.0, fill_price=100.0, fill_qty=5.0,
+    )
+    sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
+
+    captured: list = []
+    alerts: list = []
+    _wire(monkeypatch, _snapshot(price=90.0), captured)
+    monkeypatch.setenv("PAPER_MODE", "true")
+    monkeypatch.setattr(
+        autopilot,
+        "paper_open_positions",
+        lambda: (_ for _ in ()).throw(RuntimeError("db locked")),
+    )
+    monkeypatch.setattr(
+        autopilot, "alert_error", lambda job, msg: alerts.append((job, msg))
+    )
+
+    autopilot.close_risk_check()
+
+    assert captured == []
+    assert len(alerts) == 1
+    assert alerts[0][0] == "close_risk_check"
+    assert "stop sweep skipped" in alerts[0][1]
+
+
 def test_stale_candidates_are_not_restored(sandbox_db):
     import json
 
