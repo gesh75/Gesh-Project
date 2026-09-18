@@ -69,6 +69,22 @@ def test_sell_is_never_gated_by_the_floor(sandbox_db, monkeypatch):
     assert "EXIT" in cands  # managed exit — conviction floor applies to entries only
 
 
+def _must_not_run(label: str):
+    """Return a *run* callback that must never be invoked.
+
+    ``pre_market_scan`` calls ``_load_data_fetcher()`` / ``_load_consensus()``
+    (the import loaders) *before* the auth and empty-watchlist early returns.
+    The loaders themselves are therefore expected to run; only the returned
+    fetch / consensus functions must stay unused. Stubbing the loader to throw
+    is a false failure — GHA 35333370555.
+    """
+
+    def _run(*_a, **_k):
+        raise RuntimeError(label)
+
+    return _run
+
+
 def test_empty_watchlist_does_not_wipe_prior_candidates(sandbox_db, monkeypatch):
     """A blank watchlist returns before the atomic swap — yesterday's book stays."""
     prior = TradeIntent(
@@ -81,9 +97,7 @@ def test_empty_watchlist_does_not_wipe_prior_candidates(sandbox_db, monkeypatch)
         "_load_data_fetcher",
         lambda: lambda _s: {"holdings": [], "watchlist": [], "equity_summary": {}},
     )
-    monkeypatch.setattr(
-        autopilot, "_load_consensus", lambda: (_ for _ in ()).throw(RuntimeError("unused"))
-    )
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: _must_not_run("unused"))
     monkeypatch.setattr(autopilot, "alert_scan_summary", lambda *a, **k: None)
 
     autopilot.pre_market_scan()
@@ -100,7 +114,7 @@ def test_auth_failure_does_not_wipe_prior_candidates(sandbox_db, monkeypatch):
     monkeypatch.setattr(
         autopilot,
         "_load_data_fetcher",
-        lambda: (_ for _ in ()).throw(RuntimeError("must not fetch after auth fail")),
+        lambda: _must_not_run("must not fetch after auth fail"),
     )
 
     autopilot.pre_market_scan()

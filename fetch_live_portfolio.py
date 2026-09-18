@@ -73,13 +73,21 @@ def _load_from_json() -> tuple[list, dict, float] | None:
         _log(f'portfolio_live.json parse error: {exc}')
         return None
 
+    # Same honesty as _load_from_db: a list/string/number must not crash the
+    # fallback chain. AttributeError on .get() used to abort load_portfolio().
+    if not isinstance(payload, dict):
+        _log('portfolio_live.json is not an object — skipping')
+        return None
+
     exported_at_str = payload.get('exported_at', '')
     try:
         exported_at = datetime.fromisoformat(exported_at_str)
         if exported_at.tzinfo is None:
             exported_at = exported_at.replace(tzinfo=timezone.utc)
         age_min = (datetime.now(timezone.utc) - exported_at).total_seconds() / 60
-    except ValueError:
+    except (ValueError, TypeError):
+        # null / int / list stamps are unparseable — treat as stale, same as
+        # a garbage string. TypeError used to escape and abort the chain.
         age_min = 9999
 
     if age_min > MAX_JSON_AGE_MINUTES:

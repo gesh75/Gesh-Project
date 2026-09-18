@@ -67,6 +67,14 @@ def test_json_parse_error_is_none(isolated_paths):
     assert loader._load_from_json() is None
 
 
+def test_json_non_object_payload_is_none(isolated_paths):
+    """A top-level list/string must skip, not AttributeError on .get()."""
+    loader.LIVE_JSON.write_text(json.dumps([{"symbol": "HOOD"}]))
+    assert loader._load_from_json() is None
+    loader.LIVE_JSON.write_text(json.dumps("not-an-object"))
+    assert loader._load_from_json() is None
+
+
 def test_json_empty_holdings_is_none(isolated_paths):
     _write_json(loader.LIVE_JSON, holdings=[])
     assert loader._load_from_json() is None
@@ -102,6 +110,22 @@ def test_json_exactly_max_age_is_accepted(isolated_paths, monkeypatch):
 
 def test_json_unparseable_exported_at_is_stale_skip(isolated_paths):
     _write_json(loader.LIVE_JSON, exported_at="not-a-date")
+    assert loader._load_from_json() is None
+
+
+@pytest.mark.parametrize("exported_at", [None, 123, ["2026-09-18"]])
+def test_json_non_string_exported_at_is_stale_skip(isolated_paths, exported_at):
+    """null / int / list stamps used to raise TypeError and abort the chain.
+
+    ``_write_json(..., exported_at=None)`` means “synthesize a stamp”, so the
+    null case is written directly.
+    """
+    payload = {
+        "exported_at": exported_at,
+        "holdings": [{"symbol": "HOOD", "equity": 100.0}],
+        "equity_summary": {"portfolio_equity": 100.0},
+    }
+    loader.LIVE_JSON.write_text(json.dumps(payload))
     assert loader._load_from_json() is None
 
 
