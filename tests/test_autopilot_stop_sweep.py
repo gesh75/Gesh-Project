@@ -5,6 +5,7 @@ field, and the SELL intent it built omitted target_position_pct so the gate
 rejected it as malformed. The fixed sweep reads the PAPER book + stops recorded
 at fill time and emits a VALID full-close SELL.
 """
+
 from __future__ import annotations
 
 import types
@@ -23,15 +24,18 @@ def sandbox_db(tmp_path, monkeypatch):
 
 def _wire(monkeypatch, snapshot, captured):
     monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
-    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda syms: snapshot))
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda syms: snapshot)
     monkeypatch.setattr(autopilot, "alert_daily_pnl", lambda *a, **k: None)
     monkeypatch.setattr(
-        autopilot, "evaluate",
+        autopilot,
+        "evaluate",
         lambda intent, snap, cfg=None: types.SimpleNamespace(
-            approved=True, reason=None, gates={}, intent_id=1, decision_id=1),
+            approved=True, reason=None, gates={}, intent_id=1, decision_id=1
+        ),
     )
     monkeypatch.setattr(
-        autopilot, "place",
+        autopilot,
+        "place",
         lambda intent, verdict, snap, cfg=None: captured.append(intent),
     )
 
@@ -50,9 +54,17 @@ def _snapshot(price: float) -> dict:
 
 def test_breached_paper_stop_emits_valid_full_close_sell(sandbox_db, monkeypatch):
     sandbox_db.log_order(
-        intent_id=1, decision_id=None, mode="paper", client_order_id="t-buy",
-        status="SIMULATED", symbol="HOOD", action="BUY",
-        qty=5.0, target_price=100.0, fill_price=100.0, fill_qty=5.0,
+        intent_id=1,
+        decision_id=None,
+        mode="paper",
+        client_order_id="t-buy",
+        status="SIMULATED",
+        symbol="HOOD",
+        action="BUY",
+        qty=5.0,
+        target_price=100.0,
+        fill_price=100.0,
+        fill_qty=5.0,
     )
     sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
 
@@ -72,9 +84,17 @@ def test_breached_paper_stop_emits_valid_full_close_sell(sandbox_db, monkeypatch
 
 def test_no_breach_no_sell(sandbox_db, monkeypatch):
     sandbox_db.log_order(
-        intent_id=1, decision_id=None, mode="paper", client_order_id="t-buy2",
-        status="SIMULATED", symbol="HOOD", action="BUY",
-        qty=5.0, target_price=100.0, fill_price=100.0, fill_qty=5.0,
+        intent_id=1,
+        decision_id=None,
+        mode="paper",
+        client_order_id="t-buy2",
+        status="SIMULATED",
+        symbol="HOOD",
+        action="BUY",
+        qty=5.0,
+        target_price=100.0,
+        fill_price=100.0,
+        fill_qty=5.0,
     )
     sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
 
@@ -92,8 +112,10 @@ def test_paper_mode_skips_live_holdings_sweep(sandbox_db, monkeypatch):
     The paper-book sweep above is authoritative in paper mode (here it's empty)."""
     snap = {
         "as_of": "2026-07-02T15:55:00+00:00",
-        "equity_summary": {"portfolio_equity": 10_000.0,
-                           "adjusted_equity_previous_close": 10_000.0},
+        "equity_summary": {
+            "portfolio_equity": 10_000.0,
+            "adjusted_equity_previous_close": 10_000.0,
+        },
         "holdings": [{"symbol": "AAPL", "current_price": 90.0, "stop_loss": 95.0}],  # breached
         "watchlist": [],
     }
@@ -102,7 +124,7 @@ def test_paper_mode_skips_live_holdings_sweep(sandbox_db, monkeypatch):
     monkeypatch.setenv("PAPER_MODE", "true")
 
     autopilot.close_risk_check()
-    assert captured == []          # live sweep skipped in paper mode; no paper position for AAPL
+    assert captured == []  # live sweep skipped in paper mode; no paper position for AAPL
 
 
 def test_restored_candidates_survive_restart(sandbox_db, monkeypatch):
@@ -113,7 +135,9 @@ def test_restored_candidates_survive_restart(sandbox_db, monkeypatch):
     from zoneinfo import ZoneInfo
 
     today = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
-    state.set_marker("premarket_candidates", json.dumps({"date": today, "symbols": ["HOOD", "NVDA"]}))
+    state.set_marker(
+        "premarket_candidates", json.dumps({"date": today, "symbols": ["HOOD", "NVDA"]})
+    )
 
     autopilot._CANDIDATES.clear()
     autopilot._restore_candidates()
@@ -128,3 +152,109 @@ def test_stale_candidates_are_not_restored(sandbox_db):
     autopilot._CANDIDATES.clear()
     autopilot._restore_candidates()
     assert autopilot._CANDIDATES == {}
+
+
+def test_price_equal_to_stop_is_not_a_breach(sandbox_db, monkeypatch):
+    """Sweep is strict ``price < stop`` — printing at the stop is not a sell."""
+    sandbox_db.log_order(
+        intent_id=1,
+        decision_id=None,
+        mode="paper",
+        client_order_id="t-eq",
+        status="SIMULATED",
+        symbol="HOOD",
+        action="BUY",
+        qty=5.0,
+        target_price=100.0,
+        fill_price=100.0,
+        fill_qty=5.0,
+    )
+    sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
+
+    captured: list = []
+    _wire(monkeypatch, _snapshot(price=95.0), captured)
+    monkeypatch.setenv("PAPER_MODE", "true")
+
+    autopilot.close_risk_check()
+    assert captured == []
+
+
+def test_zero_mark_never_fires_a_stop(sandbox_db, monkeypatch):
+    """A $0 quote is missing data, not a breach — ``if stop and price``."""
+    sandbox_db.log_order(
+        intent_id=1,
+        decision_id=None,
+        mode="paper",
+        client_order_id="t-zero",
+        status="SIMULATED",
+        symbol="HOOD",
+        action="BUY",
+        qty=5.0,
+        target_price=100.0,
+        fill_price=100.0,
+        fill_qty=5.0,
+    )
+    sandbox_db.record_stop(symbol="HOOD", entry_price=100.0, stop_price=95.0)
+
+    captured: list = []
+    _wire(monkeypatch, _snapshot(price=0.0), captured)
+    monkeypatch.setenv("PAPER_MODE", "true")
+
+    autopilot.close_risk_check()
+    assert captured == []
+
+
+def test_live_mode_holdings_sweep_emits_full_close(sandbox_db, monkeypatch):
+    """LIVE mode is the only path that may sweep a broker holding's stop_loss."""
+    snap = {
+        "as_of": "2026-07-02T15:55:00+00:00",
+        "equity_summary": {
+            "portfolio_equity": 10_000.0,
+            "adjusted_equity_previous_close": 10_000.0,
+        },
+        "holdings": [{"symbol": "AAPL", "current_price": 90.0, "stop_loss": 95.0}],
+        "watchlist": [],
+    }
+    captured: list = []
+    _wire(monkeypatch, snap, captured)
+    monkeypatch.setenv("PAPER_MODE", "false")
+
+    autopilot.close_risk_check()
+
+    assert len(captured) == 1
+    intent = captured[0]
+    assert intent.action == "SELL"
+    assert intent.symbol == "AAPL"
+    assert intent.target_position_pct == 0.0
+    assert intent.source == "stop_sweep"
+    assert intent.validate() == []
+
+
+def test_zero_prev_close_daily_pnl_is_zero_not_inf(sandbox_db, monkeypatch):
+    """``prev_close > 0`` is the divide-by-zero guard — $0 yesterday is 0%, not inf."""
+    snap = {
+        "as_of": "2026-07-02T15:55:00+00:00",
+        "equity_summary": {
+            "portfolio_equity": 10_000.0,
+            "adjusted_equity_previous_close": 0.0,
+        },
+        "holdings": [],
+        "watchlist": [],
+    }
+    seen: dict = {}
+
+    def _capture_pnl(equity, prev_close, daily_pnl, *_a, **_k):
+        seen["equity"] = equity
+        seen["prev_close"] = prev_close
+        seen["daily_pnl"] = daily_pnl
+
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda _s: snap)
+    monkeypatch.setattr(autopilot, "alert_daily_pnl", _capture_pnl)
+    monkeypatch.setenv("PAPER_MODE", "true")
+
+    autopilot.close_risk_check()
+    assert seen["equity"] == 10_000.0
+    assert seen["prev_close"] == 0.0
+    assert seen["daily_pnl"] == 0.0
+    assert seen["daily_pnl"] != float("inf")

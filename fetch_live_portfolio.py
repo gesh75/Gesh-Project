@@ -89,8 +89,12 @@ def _load_from_json() -> tuple[list, dict, float] | None:
     holdings   = payload.get('holdings', [])
     equity_sum = payload.get('equity_summary', {})
 
-    if not holdings:
+    # Same honesty as _load_from_db: a dict/string must not be treated as a book.
+    if not isinstance(holdings, list) or not holdings:
         _log('portfolio_live.json has no holdings — skipping')
+        return None
+    if not isinstance(equity_sum, dict):
+        _log('portfolio_live.json equity_summary is not an object — skipping')
         return None
 
     _log(f'✅ Source 1: portfolio_live.json — {len(holdings)} holdings, age {age_min:.0f} min')

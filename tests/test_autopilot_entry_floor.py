@@ -6,11 +6,13 @@ pre_market_scan must ALSO gate new BUYs on the consensus raw_score
 test_entry_conviction_floor.py so the two autopilot copies can't drift apart.
 Fully offline: login, fetcher, consensus, alerts, and the DB are all stubbed.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from trading import autopilot, state
+from trading.contract import TradeIntent
 
 
 @pytest.fixture
@@ -22,8 +24,12 @@ def sandbox_db(tmp_path, monkeypatch):
 
 def _row(symbol: str, verdict: str, raw_score: float, confidence: float = 89.0) -> dict:
     return {
-        "symbol": symbol, "verdict": verdict, "raw_score": raw_score,
-        "confidence": confidence, "active_nodes": 8, "total_nodes": 9,
+        "symbol": symbol,
+        "verdict": verdict,
+        "raw_score": raw_score,
+        "confidence": confidence,
+        "active_nodes": 8,
+        "total_nodes": 9,
     }
 
 
@@ -35,10 +41,11 @@ def _drive(monkeypatch, rows_by_symbol: dict[str, dict]) -> dict:
         "equity_summary": {"portfolio_equity": 100_000.0},
     }
     monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda *a, **k: True)
-    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _syms: snapshot))
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda _syms: snapshot)
     monkeypatch.setattr(
-        autopilot, "_load_consensus",
-        lambda: (lambda sym, **kw: rows_by_symbol[sym]),
+        autopilot,
+        "_load_consensus",
+        lambda: lambda sym, **kw: rows_by_symbol[sym],
     )
     monkeypatch.setattr(autopilot, "alert_scan_summary", lambda *a, **k: None)
     autopilot.pre_market_scan()
@@ -60,3 +67,63 @@ def test_solid_buy_at_floor_is_kept(sandbox_db, monkeypatch):
 def test_sell_is_never_gated_by_the_floor(sandbox_db, monkeypatch):
     cands = _drive(monkeypatch, {"EXIT": _row("EXIT", "SELL", -0.26)})
     assert "EXIT" in cands  # managed exit — conviction floor applies to entries only
+
+
+def test_empty_watchlist_does_not_wipe_prior_candidates(sandbox_db, monkeypatch):
+    """A blank watchlist returns before the atomic swap — yesterday's book stays."""
+    prior = TradeIntent(
+        symbol="HOOD", action="BUY", confidence=0.9, source="consensus", target_position_pct=0.02
+    )
+    autopilot._CANDIDATES["HOOD"] = (prior, {"verdict": "BUY"})
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda *a, **k: True)
+    monkeypatch.setattr(
+        autopilot,
+        "_load_data_fetcher",
+        lambda: lambda _s: {"holdings": [], "watchlist": [], "equity_summary": {}},
+    )
+    monkeypatch.setattr(
+        autopilot, "_load_consensus", lambda: (_ for _ in ()).throw(RuntimeError("unused"))
+    )
+    monkeypatch.setattr(autopilot, "alert_scan_summary", lambda *a, **k: None)
+
+    autopilot.pre_market_scan()
+    assert "HOOD" in autopilot._CANDIDATES
+    autopilot._CANDIDATES.clear()
+
+
+def test_auth_failure_does_not_wipe_prior_candidates(sandbox_db, monkeypatch):
+    prior = TradeIntent(
+        symbol="HOOD", action="BUY", confidence=0.9, source="consensus", target_position_pct=0.02
+    )
+    autopilot._CANDIDATES["HOOD"] = (prior, {"verdict": "BUY"})
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda *a, **k: False)
+    monkeypatch.setattr(
+        autopilot,
+        "_load_data_fetcher",
+        lambda: (_ for _ in ()).throw(RuntimeError("must not fetch after auth fail")),
+    )
+
+    autopilot.pre_market_scan()
+    assert "HOOD" in autopilot._CANDIDATES
+    autopilot._CANDIDATES.clear()
+
+
+def test_completed_hold_scan_replaces_prior_candidates(sandbox_db, monkeypatch):
+    """A finished scan with no actionable names IS the new book — wipe, don't keep ghosts."""
+    prior = TradeIntent(
+        symbol="OLD", action="BUY", confidence=0.9, source="consensus", target_position_pct=0.02
+    )
+    autopilot._CANDIDATES["OLD"] = (prior, {"verdict": "BUY"})
+    cands = _drive(monkeypatch, {"FLAT": _row("FLAT", "HOLD", 0.10)})
+    assert cands == {}
+    assert "OLD" not in cands
+
+
+def test_precision_overlay_blocks_buy_even_above_floor(sandbox_db, monkeypatch):
+    class _Block:
+        blocked = True
+        reason = "Rel.Strength bearish"
+
+    monkeypatch.setattr(autopilot, "precision_overlay_blocks", lambda action, row=None: _Block())
+    cands = _drive(monkeypatch, {"NVDA": _row("NVDA", "STRONG BUY", 0.70)})
+    assert "NVDA" not in cands

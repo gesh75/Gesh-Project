@@ -87,6 +87,7 @@ finally:
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def snapshot() -> dict:
     """Representative open-window snapshot: one held + watchlist quote."""
@@ -119,6 +120,7 @@ def _reset_candidates(monkeypatch):
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
 class _Verdict:
     def __init__(self, approved: bool, reason: str = "ok") -> None:
         self.approved = approved
@@ -133,6 +135,7 @@ class _Result:
 
 
 # ─── Tests ───────────────────────────────────────────────────────────────────
+
 
 def test_open_window_executes_candidate_without_nameerror(monkeypatch, snapshot):
     """A strong-buy candidate must survive open_window and reach place()."""
@@ -151,7 +154,7 @@ def test_open_window_executes_candidate_without_nameerror(monkeypatch, snapshot)
             "symbol": symbol,
             "verdict": "STRONG BUY",
             "raw_score": 0.7,
-            "confidence": 90.0,   # 0..100 → 0.9 after from_consensus
+            "confidence": 90.0,  # 0..100 → 0.9 after from_consensus
             "active_nodes": 8,
             "total_nodes": 9,
         }
@@ -164,8 +167,11 @@ def test_open_window_executes_candidate_without_nameerror(monkeypatch, snapshot)
 
     # Pre-seed a candidate as pre_market_scan would have.
     seed_intent = TradeIntent(
-        symbol="MSTR", action="BUY", confidence=0.9,
-        source="consensus", target_position_pct=0.02,
+        symbol="MSTR",
+        action="BUY",
+        confidence=0.9,
+        source="consensus",
+        target_position_pct=0.02,
     )
     autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
 
@@ -173,7 +179,7 @@ def test_open_window_executes_candidate_without_nameerror(monkeypatch, snapshot)
     # exactly like pre_market_scan and midday_rebalance — patch that seam.
     monkeypatch.setattr(autopilot, "_load_consensus", lambda: fake_consensus)
     monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
-    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda _: snapshot)
     monkeypatch.setattr(autopilot, "evaluate", lambda intent, snap, cfg: _Verdict(True))
     monkeypatch.setattr(autopilot, "place", fake_place)
 
@@ -192,8 +198,8 @@ def test_open_window_executes_candidate_without_nameerror(monkeypatch, snapshot)
     call = captured["call"]
     assert call["symbol"] == "MSTR"
     assert call["total_portfolio"] == 100_000.0
-    assert call["equity"] == 5_000.0          # from the held position
-    assert call["avg_cost"] == 250.0          # from average_buy_price
+    assert call["equity"] == 5_000.0  # from the held position
+    assert call["avg_cost"] == 250.0  # from average_buy_price
     assert call["current_price"] == 300.0
 
 
@@ -225,19 +231,23 @@ def test_open_window_swallows_consensus_error_and_rejects(monkeypatch, snapshot)
     This recreates the *behavioural* shape of the original bug (every candidate
     silently rejected) and proves the recovery path is intentional, not a crash.
     """
+
     def boom(*a, **k):
         raise RuntimeError("consensus exploded")
 
     placed: list = []
     seed_intent = TradeIntent(
-        symbol="MSTR", action="BUY", confidence=0.9,
-        source="consensus", target_position_pct=0.02,
+        symbol="MSTR",
+        action="BUY",
+        confidence=0.9,
+        source="consensus",
+        target_position_pct=0.02,
     )
     autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
 
     monkeypatch.setattr(autopilot, "_load_consensus", lambda: boom)
     monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
-    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda _: snapshot)
     monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
 
     autopilot.open_window()  # must not raise
@@ -248,10 +258,12 @@ def test_open_window_swallows_consensus_error_and_rejects(monkeypatch, snapshot)
 def test_open_window_consumes_marker_before_execution(monkeypatch, snapshot):
     """A completed handoff cannot be restored and executed again after restart."""
     marker = {
-        "value": json.dumps({
-            "date": autopilot._et_today(),
-            "symbols": ["MSTR"],
-        })
+        "value": json.dumps(
+            {
+                "date": autopilot._et_today(),
+                "symbols": ["MSTR"],
+            }
+        )
     }
     placed: list[TradeIntent] = []
 
@@ -267,11 +279,13 @@ def test_open_window_consumes_marker_before_execution(monkeypatch, snapshot):
 
     monkeypatch.setattr(autopilot, "get_marker", lambda _name: marker["value"])
     monkeypatch.setattr(
-        autopilot, "set_marker", lambda _name, value: marker.__setitem__("value", value),
+        autopilot,
+        "set_marker",
+        lambda _name, value: marker.__setitem__("value", value),
     )
     monkeypatch.setattr(autopilot, "_load_consensus", lambda: fake_consensus)
     monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
-    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda _: snapshot)
     monkeypatch.setattr(autopilot, "evaluate", lambda *args: _Verdict(True))
     monkeypatch.setattr(
         autopilot,
@@ -287,3 +301,86 @@ def test_open_window_consumes_marker_before_execution(monkeypatch, snapshot):
     autopilot._CANDIDATES.clear()
     autopilot.open_window()
     assert len(placed) == 1
+
+
+def test_open_window_auth_failure_places_nothing(monkeypatch, snapshot):
+    placed: list = []
+    seed_intent = TradeIntent(
+        symbol="MSTR",
+        action="BUY",
+        confidence=0.9,
+        source="consensus",
+        target_position_pct=0.02,
+    )
+    autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: False)
+    monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
+
+    autopilot.open_window()
+    assert placed == []
+    assert "MSTR" in autopilot._CANDIDATES  # consume never ran
+
+
+def test_open_window_weakened_hold_skips_place(monkeypatch, snapshot):
+    placed: list = []
+
+    def flat_consensus(symbol, **kwargs):
+        return {
+            "symbol": symbol,
+            "verdict": "HOLD",
+            "raw_score": 0.05,
+            "confidence": 90.0,
+            "active_nodes": 8,
+            "total_nodes": 9,
+        }
+
+    seed_intent = TradeIntent(
+        symbol="MSTR",
+        action="BUY",
+        confidence=0.9,
+        source="consensus",
+        target_position_pct=0.02,
+    )
+    autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: flat_consensus)
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda _: snapshot)
+    monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
+
+    autopilot.open_window()
+    assert placed == []
+
+
+def test_open_window_precision_overlay_blocks_buy(monkeypatch, snapshot):
+    class _Block:
+        blocked = True
+        reason = "Rel.Strength bearish"
+
+    placed: list = []
+
+    def strong_consensus(symbol, **kwargs):
+        return {
+            "symbol": symbol,
+            "verdict": "STRONG BUY",
+            "raw_score": 0.70,
+            "confidence": 90.0,
+            "active_nodes": 8,
+            "total_nodes": 9,
+        }
+
+    seed_intent = TradeIntent(
+        symbol="MSTR",
+        action="BUY",
+        confidence=0.9,
+        source="consensus",
+        target_position_pct=0.02,
+    )
+    autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
+    monkeypatch.setattr(autopilot, "precision_overlay_blocks", lambda *a, **k: _Block())
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: strong_consensus)
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: lambda _: snapshot)
+    monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
+
+    autopilot.open_window()
+    assert placed == []
