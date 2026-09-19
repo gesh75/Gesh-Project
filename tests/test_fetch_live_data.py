@@ -51,11 +51,14 @@ def test_snapshot_cli_without_runtime_input_fails_closed(monkeypatch, capsys):
         (float("-inf"), 0.0),
         ("not-a-number", 0.0),
         ({}, 0.0),
-        (10**10000, 0.0),  # OverflowError from float(), never crash
     ],
 )
 def test_money_rejects_bool_nan_and_unparseable(raw, expected):
     assert fetch_live_data._money(raw) == expected
+
+
+def test_money_overflow_is_default_not_crash():
+    assert fetch_live_data._money(10**10000) == 0.0
 
 
 def test_day_change_zero_prev_is_zero_pct_not_inf():

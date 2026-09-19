@@ -102,10 +102,14 @@ def test_surprise_pct_honesty(actual, estimate, expected):
 
 @pytest.mark.parametrize(
     "raw",
-    [True, False, None, float("nan"), float("inf"), float("-inf"), "x", {}, 10**10000],
+    [True, False, None, float("nan"), float("inf"), float("-inf"), "x", {}],
 )
 def test_eps_num_rejects_bool_nonfinite_and_unparseable(raw):
     assert ev._eps_num(raw) is None
+
+
+def test_eps_num_overflow_is_unknown_not_crash():
+    assert ev._eps_num(10**10000) is None
 
 
 def test_finnhub_bool_actual_is_not_one_eps(monkeypatch):
