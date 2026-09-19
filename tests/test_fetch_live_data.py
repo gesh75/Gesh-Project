@@ -51,6 +51,7 @@ def test_snapshot_cli_without_runtime_input_fails_closed(monkeypatch, capsys):
         (float("-inf"), 0.0),
         ("not-a-number", 0.0),
         ({}, 0.0),
+        (10**10000, 0.0),  # OverflowError from float(), never crash
     ],
 )
 def test_money_rejects_bool_nan_and_unparseable(raw, expected):
@@ -168,6 +169,14 @@ def test_load_cache_missing_cached_at_is_none(tmp_path, monkeypatch):
     cache = tmp_path / "gesh_live_cache.json"
     monkeypatch.setattr(fetch_live_data, "CACHE_FILE", cache)
     cache.write_text(json.dumps({"holdings": []}))
+    assert fetch_live_data.load_cache() is None
+
+
+@pytest.mark.parametrize("payload", ["[]", "null", '"stale"', "12"])
+def test_load_cache_non_object_json_is_none(tmp_path, monkeypatch, payload):
+    cache = tmp_path / "gesh_live_cache.json"
+    monkeypatch.setattr(fetch_live_data, "CACHE_FILE", cache)
+    cache.write_text(payload)
     assert fetch_live_data.load_cache() is None
 
 

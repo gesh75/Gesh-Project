@@ -21,7 +21,7 @@ def canonical_pct_diff(fair_value: dict | None) -> float:
 
     +% = estimate ABOVE price (undervalued / upside), matching the dashboard and the
     fvb-under/over badges. Returns 0.0 (neutral — no tilt) when estimate/current are
-    missing, non-finite, or current == 0, rather than trusting the model's own value.
+    missing, boolean, non-finite, or current == 0, rather than trusting the model's own value.
     """
     if not isinstance(fair_value, dict):
         return 0.0

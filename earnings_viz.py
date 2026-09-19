@@ -12,6 +12,7 @@ Both degrade to {"available": False, "reason": ...}; never raises.
 
 from __future__ import annotations
 
+import math
 import os
 
 import requests
@@ -19,24 +20,24 @@ import requests
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; GESH/1.0)"}
 
 
-def surprise_pct(actual, estimate) -> float | None:
-    """EPS surprise % vs estimate. $0/None/bool/NaN estimate is unknown, never inf."""
-    if isinstance(actual, bool) or isinstance(estimate, bool):
-        return None
-    if actual is None or estimate in (None, 0):
+def _eps_num(value) -> float | None:
+    """Parse an EPS figure. Bool/None/NaN/inf/unparseable is unknown, never 1.0 from True."""
+    if value is None or isinstance(value, bool) or type(value).__name__ in {"bool_", "bool8"}:
         return None
     try:
-        actual_f = float(actual)
-        estimate_f = float(estimate)
-    except (TypeError, ValueError):
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
         return None
-    if (
-        actual_f != actual_f
-        or estimate_f != estimate_f
-        or estimate_f == 0
-        or actual_f in (float("inf"), float("-inf"))
-        or estimate_f in (float("inf"), float("-inf"))
-    ):
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def surprise_pct(actual, estimate) -> float | None:
+    """EPS surprise % vs estimate. $0/None/bool/NaN estimate is unknown, never inf."""
+    actual_f = _eps_num(actual)
+    estimate_f = _eps_num(estimate)
+    if actual_f is None or estimate_f is None or estimate_f == 0:
         return None
     return round((actual_f - estimate_f) / abs(estimate_f) * 100, 1)
 
@@ -57,7 +58,7 @@ def _from_finnhub(symbol: str) -> list[dict] | None:
         rows = r.json() or []
         out = []
         for e in rows:
-            actual, est = e.get("actual"), e.get("estimate")
+            actual, est = _eps_num(e.get("actual")), _eps_num(e.get("estimate"))
             if actual is None and est is None:
                 continue
             surprise = surprise_pct(actual, est)
@@ -86,12 +87,8 @@ def _from_yfinance(symbol: str) -> list[dict] | None:
         for idx, row in df.iterrows():
             actual = row.get("Reported EPS")
             est = row.get("EPS Estimate")
-            if actual is None and est is None:
-                continue
-            act = (
-                None if actual != actual else (float(actual) if actual is not None else None)
-            )  # NaN guard
-            es = None if est != est else (float(est) if est is not None else None)
+            act = _eps_num(actual)
+            es = _eps_num(est)
             if act is None and es is None:
                 continue
             surprise = surprise_pct(act, es)

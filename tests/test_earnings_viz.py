@@ -91,11 +91,40 @@ def test_empty_symbol():
         (1.00, float("nan"), None),
         (float("inf"), 1.00, None),
         (float("-inf"), 1.00, None),
+        (1.00, float("inf"), None),
+        (1.00, float("-inf"), None),
         ("x", 1.00, None),
     ],
 )
 def test_surprise_pct_honesty(actual, estimate, expected):
     assert ev.surprise_pct(actual, estimate) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [True, False, None, float("nan"), float("inf"), float("-inf"), "x", {}, 10**10000],
+)
+def test_eps_num_rejects_bool_nonfinite_and_unparseable(raw):
+    assert ev._eps_num(raw) is None
+
+
+def test_finnhub_bool_actual_is_not_one_eps(monkeypatch):
+    """JSON true must not become 1.0 EPS on the chart or invent a -0% miss vs $1."""
+    monkeypatch.setenv("FINNHUB_API_KEY", "k")
+    monkeypatch.setattr(
+        ev.requests,
+        "get",
+        lambda *a, **k: _Resp(
+            200,
+            [{"period": "2026-03-31", "actual": True, "estimate": 1.00}],
+        ),
+    )
+    out = ev.get_earnings("AAPL")
+    assert out["available"] is True
+    assert out["quarters"][-1]["eps_actual"] is None
+    assert out["quarters"][-1]["surprise_pct"] is None
+    assert out["scored_count"] == 0
+    assert out["avg_surprise_pct"] is None
 
 
 def test_zero_estimate_row_stays_unscored(monkeypatch):

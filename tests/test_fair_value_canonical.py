@@ -64,8 +64,12 @@ def test_js_daFvPct_uses_same_formula():
     m = re.search(r"function daFvPct\(fv\)\{.*?\}", html, re.S)
     assert m, "daFvPct not found"
     body = m.group(0)
-    assert "fv.estimate-fv.current" in body.replace(" ", "")
+    compact = body.replace(" ", "")
+    assert "fv.estimate-fv.current" in compact
     assert "Math.abs(fv.current)" in body
+    # Mirror canonical_pct_diff: JSON true is not $1 of estimate/price.
+    assert "typeoffv.estimate==='boolean'" in compact
+    assert "typeoffv.current==='boolean'" in compact
 
 
 # ── Codex #4: canonicalize at the WRITE boundary, not only on read ──────────────

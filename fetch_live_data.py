@@ -14,6 +14,7 @@ Called by:
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -32,13 +33,13 @@ os.chdir(PROJECT_DIR)
 
 def _money(value, default: float = 0.0) -> float:
     """Parse a money field. Bool/NaN/inf/unparseable is ``default``, never $1 from True."""
-    if isinstance(value, bool) or value is None:
+    if value is None or isinstance(value, bool) or type(value).__name__ in {"bool_", "bool8"}:
         return default
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
-    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+    if not math.isfinite(parsed):
         return default
     return parsed
 
