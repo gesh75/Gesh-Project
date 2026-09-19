@@ -9,6 +9,7 @@ decision could disagree on whether a name is over/undervalued (Codex finding #2)
 This helper is the single source of truth on the Python side; the JS `daFvPct`
 mirrors the exact same formula. Use it anywhere a fair-value gap feeds a decision.
 """
+
 from __future__ import annotations
 
 import copy
@@ -24,9 +25,14 @@ def canonical_pct_diff(fair_value: dict | None) -> float:
     """
     if not isinstance(fair_value, dict):
         return 0.0
+    est_raw = fair_value.get("estimate")
+    cur_raw = fair_value.get("current")
+    # True is not $1 of estimate/price — same honesty class as optional_float.
+    if isinstance(est_raw, bool) or isinstance(cur_raw, bool):
+        return 0.0
     try:
-        est = float(fair_value.get("estimate"))
-        cur = float(fair_value.get("current"))
+        est = float(est_raw)
+        cur = float(cur_raw)
     except (TypeError, ValueError):
         return 0.0
     if not math.isfinite(est) or not math.isfinite(cur) or cur == 0:

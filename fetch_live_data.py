@@ -29,6 +29,33 @@ CACHE_MAX_AGE_SEC = 1800  # 30 min — beyond this the skill falls back to DB
 sys.path.insert(0, str(PROJECT_DIR))
 os.chdir(PROJECT_DIR)
 
+
+def _money(value, default: float = 0.0) -> float:
+    """Parse a money field. Bool/NaN/inf/unparseable is ``default``, never $1 from True."""
+    if isinstance(value, bool) or value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        return default
+    return parsed
+
+
+def apply_day_change(equity_summary: dict) -> dict:
+    """Write ``day_change`` / ``day_change_pct`` onto an equity_summary dict.
+
+    ``prev == 0`` (missing, bool, NaN, or literal $0) is 0.0%, never inf.
+    Mutates and returns the same dict so callers can chain.
+    """
+    prev = _money(equity_summary.get("adjusted_equity_previous_close"))
+    curr = _money(equity_summary.get("portfolio_equity"))
+    equity_summary["day_change"] = round(curr - prev, 2)
+    equity_summary["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0.0, 2)
+    return equity_summary
+
+
 # Load .env
 try:
     from dotenv import load_dotenv
@@ -141,12 +168,7 @@ def fetch_and_cache(logout_after: bool = True) -> dict:
     print("[live_data] Fetching live portfolio …")
     payload = build_data_payload()
 
-    # Enrich equity_summary
-    eq = payload["equity_summary"]
-    prev = eq.get("adjusted_equity_previous_close", 0) or 0
-    curr = eq.get("portfolio_equity", 0) or 0
-    eq["day_change"] = round(curr - prev, 2)
-    eq["day_change_pct"] = round(((curr - prev) / prev * 100) if prev else 0.0, 2)
+    apply_day_change(payload["equity_summary"])
 
     # Normalise holding keys so analysis engines find what they expect
     for h in payload.get("holdings", []):
@@ -211,8 +233,8 @@ def write_snapshot_from_screenshot(
     """
     enriched: list[dict] = []
     for h in holdings:
-        price = float(h.get("price", h.get("current_price", 0)))
-        qty = float(h.get("quantity", h.get("shares", 0)))
+        price = _money(h.get("price", h.get("current_price", 0)))
+        qty = _money(h.get("quantity", h.get("shares", 0)))
         eq = round(price * qty, 2)
         enriched.append(
             {
@@ -222,8 +244,8 @@ def write_snapshot_from_screenshot(
                 "current_price": price,
                 "equity": eq,
                 "shares": qty,
-                "average_buy_price": float(h.get("average_buy_price", 0)),
-                "day_change_pct": float(h.get("day_chg_pct", h.get("day_change_pct", 0))),
+                "average_buy_price": _money(h.get("average_buy_price", 0)),
+                "day_change_pct": _money(h.get("day_chg_pct", h.get("day_change_pct", 0))),
             }
         )
 
@@ -231,12 +253,12 @@ def write_snapshot_from_screenshot(
         "holdings": enriched,
         "equity_summary": {
             "portfolio_equity": round(sum(h["equity"] for h in enriched), 2),
-            "portfolio_value": total_value,
-            "buying_power": buying_power,
-            "withdrawable_amount": buying_power,
-            "day_change": day_change,
-            "day_change_pct": day_chg_pct,
-            "adjusted_equity_previous_close": round(total_value - day_change, 2),
+            "portfolio_value": _money(total_value),
+            "buying_power": _money(buying_power),
+            "withdrawable_amount": _money(buying_power),
+            "day_change": _money(day_change),
+            "day_change_pct": _money(day_chg_pct),
+            "adjusted_equity_previous_close": round(_money(total_value) - _money(day_change), 2),
         },
         "_source": source,
     }
