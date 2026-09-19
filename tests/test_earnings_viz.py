@@ -7,9 +7,13 @@ honest 'unavailable' degrade.
 from __future__ import annotations
 
 import pytest
-from starlette.testclient import TestClient
 
 import earnings_viz as ev
+
+try:
+    from starlette.testclient import TestClient
+except ImportError:  # unit tests do not need the HTTP client
+    TestClient = None
 
 
 class _Resp:
@@ -86,6 +90,7 @@ def test_empty_symbol():
         (1.00, False, None),
         (1.00, float("nan"), None),
         (float("inf"), 1.00, None),
+        (float("-inf"), 1.00, None),
         ("x", 1.00, None),
     ],
 )
@@ -132,6 +137,8 @@ def test_finnhub_exception_falls_through_to_yf(monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch):
+    if TestClient is None:
+        pytest.skip("starlette not installed")
     import server
 
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: False)

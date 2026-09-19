@@ -30,7 +30,13 @@ def surprise_pct(actual, estimate) -> float | None:
         estimate_f = float(estimate)
     except (TypeError, ValueError):
         return None
-    if actual_f != actual_f or estimate_f != estimate_f or estimate_f == 0:
+    if (
+        actual_f != actual_f
+        or estimate_f != estimate_f
+        or estimate_f == 0
+        or actual_f in (float("inf"), float("-inf"))
+        or estimate_f in (float("inf"), float("-inf"))
+    ):
         return None
     return round((actual_f - estimate_f) / abs(estimate_f) * 100, 1)
 
