@@ -77,7 +77,7 @@ def _make_gate(events: list, verdicts: dict):
 
 
 def _make_recorder(events: list, calls: list):
-    def record(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def record(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         events.append(("record", plan[0]["symbol"]))
         calls.append(plan)
         return [{"id": len(calls), "symbol": plan[0]["symbol"]}]
@@ -264,7 +264,7 @@ def test_recorder_exception_sets_record_error_without_fill(gate_mod):
     events: list = []
     intents: list = []
 
-    def boom(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def boom(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         events.append(("record", plan[0]["symbol"]))
         raise RuntimeError("db locked")
 
@@ -292,7 +292,7 @@ def test_recorder_failure_does_not_stop_remaining_orders(gate_mod):
     intents: list = []
     rec_calls: list = []
 
-    def flaky(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def flaky(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         sym = plan[0]["symbol"]
         events.append(("record", sym))
         if sym == "NVDA":
@@ -325,7 +325,7 @@ def test_recorder_blocked_row_is_not_left_approved(gate_mod):
     events: list = []
     intents: list = []
 
-    def blocked_rec(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def blocked_rec(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         events.append(("record", plan[0]["symbol"]))
         return [
             {

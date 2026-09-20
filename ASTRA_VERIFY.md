@@ -23,8 +23,9 @@ Leftovers **this PR** (R1 recorder, not the planner):
 
 1. Two session BUYs each saw the **starting** `current_cash`, so `/api/paper/run` could overspend the $500 buffer.
 2. A full TRIM/SELL left `open_positions` occupied, so a later BUY in the same plan stayed capped.
+3. Daily-chain `gate_and_execute` records **one order per call** and never passed cash into the recorder, so (1) could not fire on the 10:30 book. Remaining cash is now threaded; TRIM proceeds stay unspent; a blocked record does not decrement. Sizing cash prefers `equity_summary.deployable`.
 
-Still open elsewhere (do not duplicate here): draft **#301** covers UNIQUE replay after REJECTED/ERROR/SKIPPED, casefolded Kelly/RSI/`quote_as_of` keys, and AI-time remanifest identity. Paper-mode `CASH_FLOOR` still uses `cfg.paper_cash_usd` (rule #32), not live cash — that is deliberate.
+Still open elsewhere (do not duplicate here): draft **#301** covers UNIQUE replay after REJECTED/ERROR/SKIPPED, casefolded Kelly/RSI/`quote_as_of` keys, and AI-time remanifest identity. Paper-mode `CASH_FLOOR` still uses `cfg.paper_cash_usd` (rule #32), not live cash — that is deliberate. Customer `/api/analyst` + `/api/fundamentals` owner-session spend is **#260**, not this PR.
 
 ---
 
