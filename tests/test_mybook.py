@@ -60,6 +60,56 @@ def test_set_get_remove_roundtrip(au):
     assert [p["symbol"] for p in au.get_positions("a@x.com")] == ["AAPL"]
 
 
+def test_set_position_omitted_cost_preserves_existing_basis(au):
+    """Share-only upsert must not NULL out a stored average cost."""
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    assert au.set_position("a@x.com", "AAPL", 12) is True
+    row = au.get_positions("a@x.com")[0]
+    assert row["shares"] == 12.0
+    assert row["avg_cost"] == 150.0
+
+
+def test_set_position_explicit_cost_still_updates(au):
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=160.0) is True
+    assert au.get_positions("a@x.com")[0]["avg_cost"] == 160.0
+
+
+def test_set_position_explicit_zero_cost_still_updates(au):
+    """Callers that pass 0 mean clear-to-zero, not omit."""
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=0) is True
+    assert au.get_positions("a@x.com")[0]["avg_cost"] == 0.0
+
+
+def test_set_position_blank_string_cost_preserves_basis(au):
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    assert au.set_position("a@x.com", "AAPL", 11, avg_cost="") is True
+    row = au.get_positions("a@x.com")[0]
+    assert row["shares"] == 11.0
+    assert row["avg_cost"] == 150.0
+
+
+def test_set_position_bool_cost_does_not_wipe_basis(au):
+    """JSON true/false must not become $1 / $0 and overwrite a stored basis."""
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    assert au.set_position("a@x.com", "AAPL", 12, avg_cost=True) is False
+    assert au.set_position("a@x.com", "AAPL", 12, avg_cost=False) is False
+    row = au.get_positions("a@x.com")[0]
+    assert row["shares"] == 10.0
+    assert row["avg_cost"] == 150.0
+
+
+def test_set_position_overflow_cost_does_not_wipe_basis(au):
+    """Standalone (not a parametrize id): float(10**10000) is OverflowError."""
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    huge = 10**10000
+    assert au.set_position("a@x.com", "AAPL", 12, avg_cost=huge) is False
+    row = au.get_positions("a@x.com")[0]
+    assert row["shares"] == 10.0
+    assert row["avg_cost"] == 150.0
+
+
 def test_positions_per_user_isolated(au):
     au.set_position("a@x.com", "NVDA", 1)
     au.set_position("b@x.com", "TSLA", 2)
@@ -72,6 +122,8 @@ def test_set_position_rejects_garbage(au):
     assert au.set_position("a@x.com", "NVDA", -5) is False      # negative
     assert au.set_position("a@x.com", "NVDA", "lots") is False  # non-numeric
     assert au.set_position("a@x.com", "NVDA", 1, avg_cost="x") is False
+    assert au.set_position("a@x.com", "NVDA", True) is False    # True is not 1 share
+    assert au.set_position("a@x.com", "NVDA", 1, avg_cost=True) is False
     assert au.get_positions("a@x.com") == []
 
 
@@ -169,6 +221,52 @@ def test_book_crud_and_valuation(client, monkeypatch):
     c.delete("/api/mybook/NVDA")
     d = c.get("/api/mybook").json()["data"]
     assert [p["symbol"] for p in d["positions"]] == ["AAPL"]
+
+
+def test_book_share_update_without_cost_keeps_basis(client, monkeypatch):
+    """The add form is also the share editor; blank Average cost must not wipe basis."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post(
+        "/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150}
+    ).status_code == 200
+    r = c.post("/api/mybook", json={"symbol": "AAPL", "shares": 12, "avg_cost": None})
+    assert r.status_code == 200
+    stored = [p for p in server.auth_users.get_positions("cust@x.com") if p["symbol"] == "AAPL"]
+    assert stored and stored[0]["shares"] == 12.0
+    assert stored[0]["avg_cost"] == 150.0
+    aapl = [p for p in r.json()["data"]["positions"] if p["symbol"] == "AAPL"][0]
+    assert aapl["average_buy_price"] == 150.0
+
+
+def test_book_share_update_omitted_cost_key_keeps_basis(client, monkeypatch):
+    """The add form may omit avg_cost entirely; same preserve-on-update contract."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post(
+        "/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150}
+    ).status_code == 200
+    r = c.post("/api/mybook", json={"symbol": "AAPL", "shares": 12})
+    assert r.status_code == 200
+    stored = [p for p in server.auth_users.get_positions("cust@x.com") if p["symbol"] == "AAPL"]
+    assert stored and stored[0]["shares"] == 12.0
+    assert stored[0]["avg_cost"] == 150.0
+
+
+def test_book_bool_cost_is_rejected_not_one_dollar(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post(
+        "/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150}
+    ).status_code == 200
+    r = c.post("/api/mybook", json={"symbol": "AAPL", "shares": 12, "avg_cost": True})
+    assert r.status_code == 400
+    stored = [p for p in server.auth_users.get_positions("cust@x.com") if p["symbol"] == "AAPL"]
+    assert stored and stored[0]["shares"] == 10.0
+    assert stored[0]["avg_cost"] == 150.0
 
 
 def test_book_unpriced_symbol_reported_not_dropped_silently(client, monkeypatch):

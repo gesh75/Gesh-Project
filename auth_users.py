@@ -1743,28 +1743,47 @@ def set_position(email: str, symbol: str, shares: float, avg_cost: float | None 
     """Upsert one position on the user's book. Returns False on invalid input or
     when adding a NEW symbol would exceed the cap (updating an existing one is
     always allowed). Symbols stored UPPER; shares must be > 0 (use
-    remove_position to delete)."""
+    remove_position to delete).
+
+    On update, ``avg_cost=None`` keeps the stored cost basis. Callers that want
+    to change cost must pass an explicit number (including 0).
+    """
     user_id = resolve_user_id(email)
     sym = (symbol or "").strip().upper()
     try:
+        # JSON/Python bools are ints: True must not become 1 share or $1 cost,
+        # and False must not overwrite a stored basis with $0.
+        if isinstance(shares, bool) or isinstance(avg_cost, bool):
+            return False
         sh = float(shares)
         ac = None if avg_cost in (None, "") else float(avg_cost)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
     if (
         not user_id
         or not sym
+        or not math.isfinite(sh)
         or not (0 < sh < 1e9)
-        or (ac is not None and not (0 <= ac < 1e9))
+        or (ac is not None and (not math.isfinite(ac) or not (0 <= ac < 1e9)))
     ):
         return False
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        if con.execute(
-            "SELECT 1 FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym)
-        ).fetchone():
-            con.execute("UPDATE customer_positions SET shares=?, avg_cost=?, updated_at=? "
-                        "WHERE user_id=? AND symbol=?", (sh, ac, now, user_id, sym))
+        existing = con.execute(
+            "SELECT avg_cost FROM customer_positions WHERE user_id=? AND symbol=?",
+            (user_id, sym),
+        ).fetchone()
+        if existing:
+            # Omit cost on an update (the form leaves Average cost blank when
+            # only shares change) must keep the stored basis. Passing None used
+            # to UPDATE avg_cost=NULL and wipe unrealized P&L.
+            if ac is None:
+                ac = existing["avg_cost"]
+            con.execute(
+                "UPDATE customer_positions SET shares=?, avg_cost=?, updated_at=? "
+                "WHERE user_id=? AND symbol=?",
+                (sh, ac, now, user_id, sym),
+            )
             return True
         # Single-statement cap check (same concurrency shape as add_watch).
         cur = con.execute(

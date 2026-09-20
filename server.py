@@ -5724,9 +5724,11 @@ async def mybook_bulk(request: Request):
     positions, not one at a time". Body: {"text": "<lines>", "replace": true?} or {"symbols": [...]}.
 
     - If "replace": true, clears the existing book first (perfect after a bad symbols-only bulk).
-    - Privacy path: paste TICKERS ONLY (no share counts) → sets equal-weight mode (sizes private, 1/N weighting).
+    - Privacy path: paste TICKERS ONLY (no share counts) onto an empty / already
+      equal-weight book → sets equal-weight mode (sizes private, 1/N weighting).
     - Paste with counts (e.g. "AAPL 120") → honors real shares and turns equal-weight off.
-    - Existing positions are upserted unless replace=true; the per-user cap (100) still applies (overflow → skipped_cap).
+    - Ticker-only lines never overwrite an existing row (same as import-watchlist).
+      Sized lines still upsert. The per-user cap (100) still applies (overflow → skipped_cap).
     """
     email = _session_email(request)
     if not email:
@@ -5742,16 +5744,29 @@ async def mybook_bulk(request: Request):
     replace = bool((body or {}).get("replace"))
     if replace:
         auth_users.clear_positions(email)
+    existing = auth_users.get_positions(email)
+    existing_syms = {p["symbol"] for p in existing}
+    sized_book = bool(existing) and not auth_users.get_equal_weight(email)
     items, invalid = _parse_bulk_book(text)
     any_sized = any(it["shares"] is not None for it in items)
     imported, skipped_cap = [], []
     for it in items:
+        if it["shares"] is None and it["symbol"] in existing_syms:
+            # Placeholder line — do not clobber a real size / cost basis.
+            continue
         shares = it["shares"] if it["shares"] is not None else 1.0  # placeholder for symbols-only
         ok = auth_users.set_position(email, it["symbol"], shares, it["avg_cost"])
         (imported if ok else skipped_cap).append(it["symbol"])
+        if ok:
+            existing_syms.add(it["symbol"])
     if imported:
-        # Symbols-only paste → equal-weight (sizes private); any explicit size → real weights.
-        auth_users.set_equal_weight(email, not any_sized)
+        # Symbols-only paste onto an empty/EW book → equal-weight. A ticker-only
+        # merge must not flip a sized book into privacy mode. Any explicit size
+        # turns equal-weight off.
+        if any_sized:
+            auth_users.set_equal_weight(email, False)
+        elif not sized_book:
+            auth_users.set_equal_weight(email, True)
     return {
         "status": "ok",
         "imported": imported,
