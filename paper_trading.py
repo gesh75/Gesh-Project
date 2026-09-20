@@ -67,7 +67,9 @@ def run_paper_session(
     TRIM/SELL never open a short-like row.
 
     Paper skips live-execution permission (auto_trade) but still enforces
-    size, open-position, and cash-floor caps.
+    size, open-position, and cash-floor caps. Accepted BUY/ADD notional is
+    subtracted from remaining cash (TRIM/SELL proceeds are not added back).
+    A full TRIM/SELL frees the in-session open-position slot.
 
     Args:
         action_plan: List of action dicts from daily analysis.
@@ -89,6 +91,7 @@ def run_paper_session(
         if t.get("symbol")
     }
     open_positions = len(open_symbols)
+    remaining_cash = current_cash
     created = []
 
     for item in action_plan:
@@ -109,7 +112,7 @@ def run_paper_session(
         check = validate_action(
             action, symbol, trade_usd,
             open_positions=open_positions,
-            current_cash=current_cash,
+            current_cash=remaining_cash,
             is_options=False,
             require_live_permission=False,
         )
@@ -149,6 +152,8 @@ def run_paper_session(
             if symbol not in open_symbols:
                 open_symbols.add(symbol)
                 open_positions = len(open_symbols)
+            if remaining_cash is not None:
+                remaining_cash = remaining_cash - trade_usd
             created.append({
                 "trade_id":     trade_id,
                 "symbol":       symbol,
@@ -179,6 +184,15 @@ def run_paper_session(
                 "reason": "No open paper long to trim/sell",
             })
             continue
+        still_open = any(
+            (t.get("symbol") or "").upper() == symbol
+            for t in get_trade_history(
+                symbol=symbol, open_only=True, is_paper=True, limit=10_000
+            )
+        )
+        if not still_open:
+            open_symbols.discard(symbol)
+            open_positions = len(open_symbols)
         for rec in closed_rows:
             created.append({
                 "trade_id":      rec.get("id"),
