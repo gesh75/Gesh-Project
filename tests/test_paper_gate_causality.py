@@ -77,7 +77,7 @@ def _make_gate(events: list, verdicts: dict):
 
 
 def _make_recorder(events: list, calls: list):
-    def record(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def record(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         events.append(("record", plan[0]["symbol"]))
         calls.append(plan)
         return [{"id": len(calls), "symbol": plan[0]["symbol"]}]
@@ -264,7 +264,7 @@ def test_recorder_exception_sets_record_error_without_fill(gate_mod):
     events: list = []
     intents: list = []
 
-    def boom(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def boom(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         events.append(("record", plan[0]["symbol"]))
         raise RuntimeError("db locked")
 
@@ -292,7 +292,7 @@ def test_recorder_failure_does_not_stop_remaining_orders(gate_mod):
     intents: list = []
     rec_calls: list = []
 
-    def flaky(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def flaky(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         sym = plan[0]["symbol"]
         events.append(("record", sym))
         if sym == "NVDA":
@@ -325,7 +325,7 @@ def test_recorder_blocked_row_is_not_left_approved(gate_mod):
     events: list = []
     intents: list = []
 
-    def blocked_rec(plan, holdings, total_eq, scanner_source="daily-analysis"):
+    def blocked_rec(plan, holdings, total_eq, scanner_source="daily-analysis", **_):
         events.append(("record", plan[0]["symbol"]))
         return [
             {
@@ -350,6 +350,129 @@ def test_recorder_blocked_row_is_not_left_approved(gate_mod):
     assert gate_results[0]["approved"] is False
     assert "max open positions" in (gate_results[0]["reason"] or "")
     assert created[0]["blocked"] is True
+
+
+def _buy(symbol: str, shares: float = 1.0, price: float = 80.0) -> dict:
+    return {
+        "symbol": symbol,
+        "action": "BUY",
+        "shares": shares,
+        "current_price": price,
+        "signal_reason": "Kelly ADD",
+    }
+
+
+def test_gate_recorder_sees_decremented_cash_across_buys(gate_mod):
+    """Daily chain records one order per call — remaining cash must still shrink.
+
+    $600 − $80 first BUY leaves $520 for the second recorder call. Passing the
+    starting cash (or omitting it) would skip the session floor we added to
+    run_paper_session.
+    """
+    seen: list[tuple[str, float | None]] = []
+
+    def record(plan, holdings, total_eq, scanner_source="daily-analysis", current_cash=None, **_):
+        seen.append((plan[0]["symbol"], current_cash))
+        return [{"symbol": plan[0]["symbol"], "blocked": False}]
+
+    gate_mod.gate_and_execute(
+        [_buy("AAA"), _buy("BBB")],
+        HOLDINGS,
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS},
+        confidence_by_sym={"AAA": 0.9, "BBB": 0.9},
+        intent_builder=_make_intent_builder([], []),
+        gate_evaluate=_make_gate([], {}),
+        recorder=record,
+        current_cash=600.0,
+    )
+    assert seen == [("AAA", 600.0), ("BBB", 520.0)]
+
+
+def test_gate_recorder_does_not_spend_trim_proceeds(gate_mod):
+    seen: list[tuple[str, str, float | None]] = []
+
+    def record(plan, holdings, total_eq, scanner_source="daily-analysis", current_cash=None, **_):
+        seen.append((plan[0]["symbol"], plan[0]["action"], current_cash))
+        return [{"symbol": plan[0]["symbol"], "blocked": False}]
+
+    gate_mod.gate_and_execute(
+        [
+            _buy("AAA"),
+            {
+                "symbol": "AAA",
+                "action": "TRIM",
+                "shares": 1.0,
+                "current_price": 80.0,
+                "signal_reason": "Kelly TRIM",
+            },
+            _buy("BBB"),
+        ],
+        HOLDINGS,
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS},
+        confidence_by_sym={"AAA": 0.9, "BBB": 0.9},
+        intent_builder=_make_intent_builder([], []),
+        gate_evaluate=_make_gate([], {}),
+        recorder=record,
+        current_cash=600.0,
+    )
+    assert seen[0] == ("AAA", "BUY", 600.0)
+    assert seen[1] == ("AAA", "TRIM", 520.0)
+    assert seen[2] == ("BBB", "BUY", 520.0)
+
+
+def test_gate_blocked_record_does_not_decrement_cash(gate_mod):
+    seen: list[float | None] = []
+
+    def record(plan, holdings, total_eq, scanner_source="daily-analysis", current_cash=None, **_):
+        seen.append(current_cash)
+        if plan[0]["symbol"] == "AAA":
+            return [{"symbol": "AAA", "blocked": True, "reason": "allocation blocked"}]
+        return [{"symbol": plan[0]["symbol"], "blocked": False}]
+
+    gate_mod.gate_and_execute(
+        [_buy("AAA"), _buy("BBB")],
+        HOLDINGS,
+        TOTAL_EQ,
+        gate_payload={"holdings": HOLDINGS},
+        confidence_by_sym={"AAA": 0.9, "BBB": 0.9},
+        intent_builder=_make_intent_builder([], []),
+        gate_evaluate=_make_gate([], {}),
+        recorder=record,
+        current_cash=600.0,
+    )
+    assert seen == [600.0, 600.0]
+
+
+def test_deployable_cash_prefers_deployable_over_cash(gate_mod):
+    assert gate_mod._deployable_cash({"deployable": 123.0, "cash": 999.0}) == 123.0
+
+
+def test_deployable_cash_falls_back_to_portfolio_cash_then_cash(gate_mod):
+    assert gate_mod._deployable_cash({"portfolio_cash": 50.0, "cash": 9.0}) == 50.0
+    assert gate_mod._deployable_cash({"cash": 7.0}) == 7.0
+    assert gate_mod._deployable_cash({}) == 0.0
+
+
+def test_deployable_cash_bool_nan_inf_are_unknown_not_one_dollar(gate_mod):
+    assert gate_mod._deployable_cash({"deployable": True}) == 0.0
+    assert gate_mod._deployable_cash({"deployable": False}) == 0.0
+    assert gate_mod._deployable_cash({"deployable": float("nan")}) == 0.0
+    assert gate_mod._deployable_cash({"deployable": float("inf")}) == 0.0
+
+
+def test_deployable_cash_overflow_is_unknown(gate_mod):
+    """Standalone (not a parametrize id): float(10**10000) is OverflowError."""
+    huge = 10**10000
+    assert gate_mod._deployable_cash({"deployable": huge}) == 0.0
+
+
+def test_order_notional_bool_and_overflow_are_zero(gate_mod):
+    huge = 10**10000
+    assert gate_mod._order_notional_usd({"shares": True, "current_price": 80.0}) == 0.0
+    assert gate_mod._order_notional_usd({"shares": huge, "current_price": 80.0}) == 0.0
+    assert gate_mod._order_notional_usd({"shares": 1.0, "current_price": 80.0}) == 80.0
 
 
 def test_order_target_pct_zero_equity_is_zero(gate_mod):

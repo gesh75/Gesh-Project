@@ -140,6 +140,44 @@ def _order_target_pct(order: dict, holdings: list[dict], total_eq: float) -> flo
 CASH_BUFFER_USD = 500.0  # Rule 8: never deploy the last $500
 
 
+def _finite_money(value: object) -> float | None:
+    """A finite dollar/share figure. Bool / NaN / inf / overflow stay unknown.
+
+    JSON ``true`` must not become $1 of deployable cash or 1 share of notional.
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _deployable_cash(equity_sum: Mapping[str, object] | None) -> float:
+    """Settled unleveraged cash. Prefer ``deployable``, never buying_power."""
+    if not isinstance(equity_sum, Mapping):
+        return 0.0
+    raw = equity_sum.get("deployable")
+    if raw is None:
+        raw = equity_sum.get("portfolio_cash")
+    if raw is None:
+        raw = equity_sum.get("cash")
+    parsed = _finite_money(raw)
+    return 0.0 if parsed is None else parsed
+
+
+def _order_notional_usd(order: Mapping[str, object] | None) -> float:
+    """BUY/ADD notional for the session cash floor. Never raises."""
+    if not isinstance(order, Mapping):
+        return 0.0
+    shares = _finite_money(order.get("shares"))
+    price = _finite_money(order.get("current_price"))
+    if shares is None or price is None:
+        return 0.0
+    return shares * price
+
+
 def build_action_plan(
     holdings: list[dict],
     kelly: Mapping[str, object] | None,
@@ -243,6 +281,7 @@ def gate_and_execute(
     raw_score_by_sym: Mapping[str, float] | None = None,
     min_entry_score: float = 0.50,
     consensus_by_sym: Mapping[str, dict] | None = None,
+    current_cash: float | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Causal audit chain per order: intent → risk decision → record if APPROVED.
 
@@ -261,9 +300,15 @@ def gate_and_execute(
     swallowed onto the gate result. Only an explicitly conclusive REJECTED
     verdict vetoes: UNAUTHORIZED/UNAVAILABLE/ERROR mean "not checked" and must
     never be read as either approval or refusal.
+
+    ``current_cash`` is the session remaining-cash figure passed into the
+    recorder (``run_paper_session``). Each accepted BUY/ADD subtracts notional
+    so a later one-order record call still sees the $500 floor. TRIM/SELL
+    proceeds are not added back.
     """
     gate_results: list[dict] = []
     created: list[dict] = []
+    remaining_cash = current_cash
     for a in executable:
         side = 'BUY' if a['action'] == 'BUY' else 'SELL'  # TRIM → SELL for the gate contract
         intent = intent_builder(
@@ -365,8 +410,13 @@ def gate_and_execute(
                 print(f"     ↳ broker preflight failed (non-fatal): {e}")
 
         try:
-            recs = recorder([{**a, 'intent_uuid': intent.intent_uuid}],
-                            holdings, total_eq, scanner_source=scanner_source)
+            recs = recorder(
+                [{**a, 'intent_uuid': intent.intent_uuid}],
+                holdings,
+                total_eq,
+                scanner_source=scanner_source,
+                current_cash=remaining_cash,
+            )
             recs = recs or []
             created.extend({**r, 'intent_uuid': intent.intent_uuid} for r in recs)
             blocked = next((r for r in recs if r.get("blocked")), None)
@@ -385,6 +435,8 @@ def gate_and_execute(
                     f"     ⛔ {a['symbol']} allocation blocked at record — "
                     f"{gate_results[-1]['reason']}"
                 )
+            elif remaining_cash is not None and a.get("action") in ("BUY", "ADD"):
+                remaining_cash = remaining_cash - _order_notional_usd(a)
         except Exception as e:
             gate_results[-1] = {**gate_results[-1], 'record_error': str(e)}
             print(f"{_t()} [gate] paper record failed for {a['symbol']} (non-fatal): {e}")
@@ -419,7 +471,7 @@ def main(results_path: str | Path | None = None) -> int:
     kelly      = eng.get('kelly', {})
     regime_raw = eng.get('regime', {})
     total_eq   = float(equity_sum.get('total') or equity_sum.get('portfolio_equity') or 0)
-    cash       = float(equity_sum.get('cash') or 0)
+    cash       = _deployable_cash(equity_sum)
 
     regimes_list = regime_raw.get('regimes', []) if isinstance(regime_raw, dict) else []
     rsi_by_sym = available_rsi_by_symbol(regimes_list)
@@ -528,6 +580,7 @@ def main(results_path: str | Path | None = None) -> int:
             consensus_by_sym=consensus,
             reviewer=_reviewer,
             review_blocks=_review_blocks,
+            current_cash=cash,
         )
         paper_block['created'] = paper_created
         print(f"{_t()} [gate] paper session: {len(paper_created)} record(s) (approved intents only)")
