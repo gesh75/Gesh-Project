@@ -144,9 +144,11 @@ def _sharpe(pnls: list[float], launch_date: str, today: str) -> float:
     mean_r = sum(pnls) / n
     var = sum((p - mean_r) ** 2 for p in pnls) / (n - 1)
     std = math.sqrt(var) if var > 0 else 0.0
-    if std == 0:
-        # [CLAUDE 2026-07-18] audit D-05: zero variance -> 0.0 (insufficient sample),
-        # matching trading/metrics.py and proof_page.py.
+    if std <= 1e-12:
+        # [CLAUDE 2026-07-18] audit D-05: zero / near-zero variance -> 0.0
+        # (insufficient sample), matching trading/metrics.py and proof_page.py.
+        # Exact ``std == 0`` missed identical 0.1 returns: float mean drift
+        # left a 1e-17 std and a 1e16 Sharpe that would pass the 0.50 bar.
         return 0.0
     d0 = datetime.fromisoformat(launch_date).date()
     d1 = datetime.fromisoformat(today).date()

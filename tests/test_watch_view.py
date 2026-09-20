@@ -6,6 +6,7 @@ the price fetcher is injected so no test ever hits yfinance or the production DB
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 
 import pytest
@@ -140,10 +141,13 @@ def test_metrics_at_risk_is_exclusive_of_one_percent():
 def test_sharpe_short_or_zero_variance_is_zero_not_inf():
     assert watch_view._sharpe([], "2026-01-01", "2026-06-01") == 0.0
     assert watch_view._sharpe([0.1], "2026-01-01", "2026-06-01") == 0.0
+    # Identical 0.1 returns are the load-bearing case: float mean drift used
+    # to leave a 1e-17 std and a 1e16 Sharpe that would pass the 0.50 bar.
     assert watch_view._sharpe([0.1, 0.1, 0.1], "2026-01-01", "2026-06-01") == 0.0
+    assert watch_view._sharpe([0.0, 0.0, 0.0], "2026-01-01", "2026-06-01") == 0.0
     mixed = watch_view._sharpe([0.1, -0.05, 0.02], "2026-01-01", "2026-06-01")
     assert mixed != 0.0
-    assert mixed == pytest.approx(mixed)
+    assert math.isfinite(mixed)
 
 
 def test_max_drawdown_empty_and_winners_are_zero():
