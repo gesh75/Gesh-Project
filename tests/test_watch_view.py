@@ -120,6 +120,21 @@ def test_metrics_bool_money_is_not_one_dollar_or_one_share():
     assert m["profit_locked"] is False
 
 
+def test_metrics_overflow_mark_does_not_invent_pnl():
+    """Standalone (not a parametrize id): float(10**10000) is OverflowError."""
+    pos = {"action": "BUY", "qty": 10, "entry_price": 100, "stop_loss": 95, "take_profit": 112}
+    m = watch_view.compute_position_metrics(pos, 10**10000)
+    assert m["current_price"] is None
+    assert m["unrealized_pnl_usd"] is None
+
+
+def test_fmt_closed_pnl_pct_unknown_is_na():
+    assert watch_view._fmt_closed_pnl_pct(None) == "n/a"
+    assert watch_view._fmt_closed_pnl_pct(True) == "n/a"
+    assert watch_view._fmt_closed_pnl_pct(0.12) == "+12.0%"
+    assert watch_view._fmt_closed_pnl_pct(-0.05) == "-5.0%"
+
+
 def test_metrics_sell_profit_locked_when_stop_at_or_below_entry():
     pos = {"action": "SELL", "qty": 4, "entry_price": 100, "stop_loss": 98, "take_profit": 80}
     m = watch_view.compute_position_metrics(pos, 90)
@@ -271,7 +286,8 @@ def test_bool_pnl_pct_is_not_a_one_hundred_percent_return(tmp_path):
             exit_at="2026-06-05T00:00:00+00:00", pnl_usd=0, pnl_pct=True, outcome="WIN",
             hold_days=4)
     d = watch_view.load_watch_data(db, today="2026-06-06", price_fetcher=_NO_PRICES)
-    # True must not enter the Sharpe series as 1.0 (100%). One skipped row → n<2 → 0.
+    # SQLite REAL stores True as 1, so this row cannot prove the in-memory bool
+    # skip (that is locked by _finite_number / _fmt_closed_pnl_pct). n=1 → 0.
     assert d["autonomy"]["sharpe"]["value"] == 0.0
 
 

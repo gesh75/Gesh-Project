@@ -82,9 +82,17 @@ def _finite_number(value: Any) -> float | None:
         return None
     try:
         num = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return num if math.isfinite(num) else None
+
+
+def _fmt_closed_pnl_pct(value: Any) -> str:
+    """Activity-feed return. Unknown/bool/NaN is n/a, not an invented +0.0%."""
+    parsed = _finite_number(value)
+    if parsed is None:
+        return "n/a"
+    return f"{parsed * 100:+.1f}%"
 
 
 def compute_position_metrics(pos: dict[str, Any], price: float | None) -> dict[str, Any]:
@@ -317,7 +325,7 @@ def load_watch_data(
                      "symbol": r.get("symbol"), "action": r.get("action"), "reason": None,
                      "summary": (
                          f"EXIT {r.get('symbol')} {r.get('outcome')} "
-                         f"{(_finite_number(r.get('pnl_pct')) or 0.0)*100:+.1f}%"
+                         f"{_fmt_closed_pnl_pct(r.get('pnl_pct'))}"
                      )})
     feed.sort(key=lambda e: e.get("event_time") or "", reverse=True)
     feed = feed[:activity_limit]
