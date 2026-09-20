@@ -455,6 +455,26 @@ def test_deployable_cash_falls_back_to_portfolio_cash_then_cash(gate_mod):
     assert gate_mod._deployable_cash({}) == 0.0
 
 
+def test_deployable_cash_bool_nan_inf_are_unknown_not_one_dollar(gate_mod):
+    assert gate_mod._deployable_cash({"deployable": True}) == 0.0
+    assert gate_mod._deployable_cash({"deployable": False}) == 0.0
+    assert gate_mod._deployable_cash({"deployable": float("nan")}) == 0.0
+    assert gate_mod._deployable_cash({"deployable": float("inf")}) == 0.0
+
+
+def test_deployable_cash_overflow_is_unknown(gate_mod):
+    """Standalone (not a parametrize id): float(10**10000) is OverflowError."""
+    huge = 10**10000
+    assert gate_mod._deployable_cash({"deployable": huge}) == 0.0
+
+
+def test_order_notional_bool_and_overflow_are_zero(gate_mod):
+    huge = 10**10000
+    assert gate_mod._order_notional_usd({"shares": True, "current_price": 80.0}) == 0.0
+    assert gate_mod._order_notional_usd({"shares": huge, "current_price": 80.0}) == 0.0
+    assert gate_mod._order_notional_usd({"shares": 1.0, "current_price": 80.0}) == 80.0
+
+
 def test_order_target_pct_zero_equity_is_zero(gate_mod):
     pct = gate_mod._order_target_pct(
         {"symbol": "NVDA", "action": "BUY", "shares": 5, "current_price": 100.0},

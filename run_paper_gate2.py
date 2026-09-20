@@ -140,6 +140,20 @@ def _order_target_pct(order: dict, holdings: list[dict], total_eq: float) -> flo
 CASH_BUFFER_USD = 500.0  # Rule 8: never deploy the last $500
 
 
+def _finite_money(value: object) -> float | None:
+    """A finite dollar/share figure. Bool / NaN / inf / overflow stay unknown.
+
+    JSON ``true`` must not become $1 of deployable cash or 1 share of notional.
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
 def _deployable_cash(equity_sum: Mapping[str, object] | None) -> float:
     """Settled unleveraged cash. Prefer ``deployable``, never buying_power."""
     if not isinstance(equity_sum, Mapping):
@@ -149,10 +163,19 @@ def _deployable_cash(equity_sum: Mapping[str, object] | None) -> float:
         raw = equity_sum.get("portfolio_cash")
     if raw is None:
         raw = equity_sum.get("cash")
-    try:
-        return float(raw or 0)
-    except (TypeError, ValueError):
+    parsed = _finite_money(raw)
+    return 0.0 if parsed is None else parsed
+
+
+def _order_notional_usd(order: Mapping[str, object] | None) -> float:
+    """BUY/ADD notional for the session cash floor. Never raises."""
+    if not isinstance(order, Mapping):
         return 0.0
+    shares = _finite_money(order.get("shares"))
+    price = _finite_money(order.get("current_price"))
+    if shares is None or price is None:
+        return 0.0
+    return shares * price
 
 
 def build_action_plan(
@@ -413,9 +436,7 @@ def gate_and_execute(
                     f"{gate_results[-1]['reason']}"
                 )
             elif remaining_cash is not None and a.get("action") in ("BUY", "ADD"):
-                remaining_cash = remaining_cash - (
-                    float(a.get("shares") or 0) * float(a.get("current_price") or 0)
-                )
+                remaining_cash = remaining_cash - _order_notional_usd(a)
         except Exception as e:
             gate_results[-1] = {**gate_results[-1], 'record_error': str(e)}
             print(f"{_t()} [gate] paper record failed for {a['symbol']} (non-fatal): {e}")
