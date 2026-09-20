@@ -1751,15 +1751,20 @@ def set_position(email: str, symbol: str, shares: float, avg_cost: float | None 
     user_id = resolve_user_id(email)
     sym = (symbol or "").strip().upper()
     try:
+        # JSON/Python bools are ints: True must not become 1 share or $1 cost,
+        # and False must not overwrite a stored basis with $0.
+        if isinstance(shares, bool) or isinstance(avg_cost, bool):
+            return False
         sh = float(shares)
         ac = None if avg_cost in (None, "") else float(avg_cost)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
     if (
         not user_id
         or not sym
+        or not math.isfinite(sh)
         or not (0 < sh < 1e9)
-        or (ac is not None and not (0 <= ac < 1e9))
+        or (ac is not None and (not math.isfinite(ac) or not (0 <= ac < 1e9)))
     ):
         return False
     now = datetime.now(timezone.utc).isoformat()
