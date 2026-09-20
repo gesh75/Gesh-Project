@@ -16,10 +16,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from dotenv import load_dotenv
 
 # Bootstrap this checkout's config before modules capture environment values at
 # import time. Existing process/launchd variables remain authoritative.
@@ -337,6 +337,15 @@ def _parse_pos_float(tok: str | None) -> float | None:
     return v if v > 0 else None
 
 
+def _parse_nonneg_float(tok: str | None) -> float | None:
+    """A non-negative float from a token (0 allowed to reset cost basis), tolerating $ and commas; else None."""
+    try:
+        v = float(str(tok).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return v if v >= 0 else None
+
+
 def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
     """Parse a pasted block of positions — one per line — for bulk book import.
 
@@ -372,7 +381,7 @@ def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
             {
                 "symbol": sym,
                 "shares": _parse_pos_float(parts[1]) if len(parts) > 1 else None,
-                "avg_cost": _parse_pos_float(parts[2]) if len(parts) > 2 else None,
+                "avg_cost": _parse_nonneg_float(parts[2]) if len(parts) > 2 else None,
             }
         )
     return items, invalid
@@ -5031,9 +5040,20 @@ async def mybook_set(request: Request):
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
     shares_input = (body or {}).get("shares")
-    ok = auth_users.set_position(email, sym, shares_input, (body or {}).get("avg_cost"))
-    if not ok and len(auth_users.get_positions(email)) < auth_users._MAX_POSITIONS:
-        raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
+    raw_cost = (body or {}).get("avg_cost")
+    cost_val = None
+    if isinstance(raw_cost, bool):
+        cost_val = raw_cost  # preserve bool so auth_users rejects it
+    elif raw_cost not in (None, ""):
+        try:
+            cost_val = float(raw_cost)
+        except (TypeError, ValueError):
+            cost_val = "invalid"  # invalid float triggers clean validation rejection
+    ok = auth_users.set_position(email, sym, shares_input, cost_val)
+    if not ok:
+        held_syms = {p["symbol"] for p in auth_users.get_positions(email)}
+        if sym in held_syms or len(held_syms) < auth_users._MAX_POSITIONS:
+            raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
     # If the user supplied a real positive share count via the form, exit privacy/equal-weight mode.
     # (Only bulk symbols-only sets the flag on; single adds with sizes should turn it off.)
     try:
@@ -5741,25 +5761,33 @@ async def mybook_bulk(request: Request):
     syms = (body or {}).get("symbols")
     if not text and isinstance(syms, list):
         text = "\n".join(str(s) for s in syms)
+    items, invalid = _parse_bulk_book(text)
     replace = bool((body or {}).get("replace"))
     if replace:
         auth_users.clear_positions(email)
     existing = auth_users.get_positions(email)
     existing_syms = {p["symbol"] for p in existing}
     sized_book = bool(existing) and not auth_users.get_equal_weight(email)
-    items, invalid = _parse_bulk_book(text)
     any_sized = any(it["shares"] is not None for it in items)
-    imported, skipped_cap = [], []
+    imported, skipped_cap, skipped_existing, placeholder_imported = [], [], [], []
     for it in items:
-        if it["shares"] is None and it["symbol"] in existing_syms:
+        sym = it["symbol"]
+        if it["shares"] is None and sym in existing_syms:
             # Placeholder line — do not clobber a real size / cost basis.
+            skipped_existing.append(sym)
             continue
         shares = it["shares"] if it["shares"] is not None else 1.0  # placeholder for symbols-only
-        ok = auth_users.set_position(email, it["symbol"], shares, it["avg_cost"])
-        (imported if ok else skipped_cap).append(it["symbol"])
+        if it["shares"] is None and sized_book and not replace:
+            placeholder_imported.append(sym)
+        ok = auth_users.set_position(email, sym, shares, it["avg_cost"])
+        (imported if ok else skipped_cap).append(sym)
         if ok:
-            existing_syms.add(it["symbol"])
-    if imported:
+            existing_syms.add(sym)
+
+    req_ew = (body or {}).get("equal_weight")
+    if req_ew is not None:
+        auth_users.set_equal_weight(email, bool(req_ew))
+    elif imported:
         # Symbols-only paste onto an empty/EW book → equal-weight. A ticker-only
         # merge must not flip a sized book into privacy mode. Any explicit size
         # turns equal-weight off.
@@ -5771,11 +5799,28 @@ async def mybook_bulk(request: Request):
         "status": "ok",
         "imported": imported,
         "skipped_cap": skipped_cap,
+        "skipped_existing": skipped_existing,
+        "placeholder_imported": placeholder_imported,
         "invalid": invalid,
         "equal_weight": auth_users.get_equal_weight(email),
         "replaced": replace,
         "data": mybook_get(request)["data"],
     }
+
+
+@app.post("/api/mybook/privacy")
+async def mybook_privacy(request: Request):
+    """Toggle equal-weight (privacy) mode on or off without altering stored positions or basis."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ew = bool((body or {}).get("equal_weight", True))
+    auth_users.set_equal_weight(email, ew)
+    return {"status": "ok", "equal_weight": ew, "data": mybook_get(request)["data"]}
 
 
 def _analysis_stale_for(email: str, saved: dict | None) -> bool:

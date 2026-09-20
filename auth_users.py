@@ -1769,21 +1769,15 @@ def set_position(email: str, symbol: str, shares: float, avg_cost: float | None 
         return False
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        existing = con.execute(
-            "SELECT avg_cost FROM customer_positions WHERE user_id=? AND symbol=?",
-            (user_id, sym),
-        ).fetchone()
-        if existing:
-            # Omit cost on an update (the form leaves Average cost blank when
-            # only shares change) must keep the stored basis. Passing None used
-            # to UPDATE avg_cost=NULL and wipe unrealized P&L.
-            if ac is None:
-                ac = existing["avg_cost"]
-            con.execute(
-                "UPDATE customer_positions SET shares=?, avg_cost=?, updated_at=? "
-                "WHERE user_id=? AND symbol=?",
-                (sh, ac, now, user_id, sym),
-            )
+        # Atomic single-statement update: preserves stored avg_cost if ac is None,
+        # eliminating lost-update concurrency races between share and cost writes.
+        cur = con.execute(
+            "UPDATE customer_positions "
+            "SET shares = ?, avg_cost = COALESCE(?, avg_cost), updated_at = ? "
+            "WHERE user_id = ? AND symbol = ?",
+            (sh, ac, now, user_id, sym),
+        )
+        if cur.rowcount:
             return True
         # Single-statement cap check (same concurrency shape as add_watch).
         cur = con.execute(
