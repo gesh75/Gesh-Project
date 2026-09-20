@@ -218,6 +218,53 @@ def test_paper_cash_floor_blocked_when_auto_trade_off(trade_db, tmp_path, monkey
     assert tl.get_trade_history(is_paper=True) == []
 
 
+def test_paper_session_buys_share_one_cash_buffer(trade_db, tmp_path, monkeypatch):
+    """Each BUY must see remaining cash, not the session's starting cash.
+
+    $600 cash − $80 first BUY leaves $520. A second $80 BUY would leave $440,
+    below the $500 floor. Independently checking both against $600 would fill
+    both and overspend the buffer.
+    """
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, min_cash_buffer=500.0)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=1.0, price=80.0),
+            _plan(symbol="BBB", shares=1.0, price=80.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=600.0,
+    )
+    assert len(out) == 2
+    assert out[0].get("blocked") is not True
+    assert out[0]["trade_id"]
+    assert out[1]["blocked"] is True
+    assert "minimum buffer" in out[1]["reason"]
+    assert "trade_id" not in out[1]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["AAA"]
+
+
+def test_paper_session_does_not_spend_trim_proceeds(trade_db, tmp_path, monkeypatch):
+    """Paper TRIM/SELL cash is unsettled — later BUYs cannot spend it."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, min_cash_buffer=500.0)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=1.0, price=80.0),
+            _plan(symbol="AAA", action="SELL", shares=1.0, price=80.0),
+            _plan(symbol="BBB", shares=1.0, price=80.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=600.0,
+    )
+    assert out[0].get("blocked") is not True
+    assert out[1].get("closed") is True
+    assert out[2]["blocked"] is True
+    assert "minimum buffer" in out[2]["reason"]
+    assert tl.get_trade_history(open_only=True, is_paper=True) == []
+
+
 def test_buy_stop_and_target_use_default_percents(trade_db, allow_all):
     out = pt.run_paper_session([_plan(price=100.0)], holdings=[], total_portfolio=1)
     row = out[0]
@@ -260,6 +307,78 @@ def test_second_buy_sees_incremented_open_position_count(trade_db, monkeypatch):
     # Paper book starts empty; first BUY increments before the second.
     # Live holdings (SPY) must not seed the paper cap.
     assert seen == [0, 1]
+
+
+def test_full_trim_releases_session_position_cap(trade_db, tmp_path, monkeypatch):
+    """A full TRIM must free the slot so a later BUY in the same plan can fill."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=1)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=2.0, price=10.0),
+            _plan(symbol="AAA", action="TRIM", shares=2.0, price=11.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0].get("blocked") is not True
+    assert out[1].get("closed") is True
+    assert out[2].get("blocked") is not True
+    assert out[2]["trade_id"]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["BBB"]
+
+
+def test_partial_trim_keeps_session_position_cap(trade_db, tmp_path, monkeypatch):
+    """A partial TRIM leaves the name open — the cap slot stays occupied."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=1)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=2.0, price=10.0),
+            _plan(symbol="AAA", action="TRIM", shares=1.0, price=11.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0].get("blocked") is not True
+    assert out[1].get("closed") is True
+    assert out[2]["blocked"] is True
+    assert "max open positions" in out[2]["reason"]
+    assert "trade_id" not in out[2]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["AAA"]
+
+
+def test_trim_with_no_open_long_does_not_decrement_position_cap(
+    trade_db, tmp_path, monkeypatch,
+):
+    """A no-op TRIM must not free a slot the book never held."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=1)
+    seeded = pt.run_paper_session(
+        [_plan(symbol="AAA", shares=1.0, price=10.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert seeded[0].get("blocked") is not True
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="ZZZ", action="TRIM", shares=1.0, price=10.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0]["blocked"] is True
+    assert "No open paper long" in out[0]["reason"]
+    assert out[1]["blocked"] is True
+    assert "max open positions" in out[1]["reason"]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["AAA"]
 
 
 # ─── Auto-close ───────────────────────────────────────────────────────────────
