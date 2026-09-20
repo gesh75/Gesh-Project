@@ -72,6 +72,21 @@ def _default_price_fetcher(symbols: list[str]) -> dict[str, float]:
 
 # ── pure metrics ─────────────────────────────────────────────────────────────
 
+def _finite_number(value: Any) -> float | None:
+    """Parse a finite number. Bool / NaN / inf / unparseable stay unknown.
+
+    ``True`` must not become $1, 1 share, or a 100% return (JSON ``true`` and
+    Python bool are subclasses of int).
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if math.isfinite(num) else None
+
+
 def compute_position_metrics(pos: dict[str, Any], price: float | None) -> dict[str, Any]:
     """Pure: derive unrealized P&L + distance-to-stop/target for one open position.
 
@@ -79,41 +94,42 @@ def compute_position_metrics(pos: dict[str, Any], price: float | None) -> dict[s
     field is None when `price` is None so the UI honestly renders '—'.
     """
     action = (pos.get("action") or "BUY").upper()
-    qty = float(pos.get("qty") or 0)
-    entry = float(pos.get("entry_price") or 0)
-    stop = pos.get("stop_loss")
-    target = pos.get("take_profit")
+    qty = _finite_number(pos.get("qty")) or 0.0
+    entry = _finite_number(pos.get("entry_price")) or 0.0
+    stop = _finite_number(pos.get("stop_loss"))
+    target = _finite_number(pos.get("take_profit"))
+    mark = _finite_number(price)
     is_buy = action == "BUY"
 
     profit_locked = False
     if stop is not None and entry:
-        profit_locked = (float(stop) >= entry) if is_buy else (float(stop) <= entry)
+        profit_locked = (stop >= entry) if is_buy else (stop <= entry)
 
     out: dict[str, Any] = {
         "current_price": None, "unrealized_pnl_usd": None, "unrealized_pnl_pct": None,
         "distance_to_stop_pct": None, "distance_to_stop_usd": None,
         "distance_to_target_pct": None, "at_risk": False, "profit_locked": profit_locked,
     }
-    if price is None or price <= 0 or entry <= 0:
+    if mark is None or mark <= 0 or entry <= 0:
         return out
 
-    out["current_price"] = price
+    out["current_price"] = mark
     if is_buy:
-        out["unrealized_pnl_usd"] = (price - entry) * qty
-        out["unrealized_pnl_pct"] = (price - entry) / entry
+        out["unrealized_pnl_usd"] = (mark - entry) * qty
+        out["unrealized_pnl_pct"] = (mark - entry) / entry
         if stop is not None:
-            out["distance_to_stop_pct"] = (price - float(stop)) / price * 100
-            out["distance_to_stop_usd"] = (price - float(stop)) * qty
+            out["distance_to_stop_pct"] = (mark - stop) / mark * 100
+            out["distance_to_stop_usd"] = (mark - stop) * qty
         if target is not None:
-            out["distance_to_target_pct"] = (float(target) - price) / price * 100
+            out["distance_to_target_pct"] = (target - mark) / mark * 100
     else:  # SELL / short
-        out["unrealized_pnl_usd"] = (entry - price) * qty
-        out["unrealized_pnl_pct"] = (entry - price) / entry
+        out["unrealized_pnl_usd"] = (entry - mark) * qty
+        out["unrealized_pnl_pct"] = (entry - mark) / entry
         if stop is not None:
-            out["distance_to_stop_pct"] = (float(stop) - price) / price * 100
-            out["distance_to_stop_usd"] = (float(stop) - price) * qty
+            out["distance_to_stop_pct"] = (stop - mark) / mark * 100
+            out["distance_to_stop_usd"] = (stop - mark) * qty
         if target is not None:
-            out["distance_to_target_pct"] = (price - float(target)) / price * 100
+            out["distance_to_target_pct"] = (mark - target) / mark * 100
 
     dsp = out["distance_to_stop_pct"]
     out["at_risk"] = dsp is not None and dsp < _AT_RISK_PCT and not profit_locked
@@ -260,20 +276,29 @@ def load_watch_data(
 
     # Panel 2 — recent closes (window) + lifetime stats for autonomy.
     recent_closes = [r for r in reversed(all_closed) if (r.get("exit_at") or "") >= cutoff]
-    pnls = [float(r.get("pnl_pct") or 0) for r in all_closed]
+    pnls: list[float] = []
+    for r in all_closed:
+        raw = r.get("pnl_pct")
+        parsed = _finite_number(raw)
+        if parsed is not None:
+            pnls.append(parsed)
+        elif raw in (None, ""):
+            pnls.append(0.0)
+        # bool / NaN / inf / garbage: skip — True is not a 100% return
     closed_n = len(all_closed)
     wins = sum(1 for r in all_closed if r.get("outcome") == "WIN")
     win_rate = round(wins / closed_n, 4) if closed_n else 0.0
     sharpe = _sharpe(pnls, LAUNCH_DATE, today)
     max_dd = _max_drawdown(pnls)
-    realized_7d = round(sum(float(r.get("pnl_usd") or 0) for r in recent_closes), 2)
+    realized_7d = round(sum(_finite_number(r.get("pnl_usd")) or 0.0 for r in recent_closes), 2)
     closed_today = sum(1 for r in all_closed if (r.get("exit_at") or "")[:10] == today)
     streak = _streak([r.get("outcome") for r in reversed(all_closed)])
 
     # Panel 3a — merged activity feed (fills + gate decisions + exits), newest first.
     feed: list[dict] = []
     for f in fills:
-        q = float(f.get("fill_qty") or 0); px = float(f.get("fill_price") or 0)
+        q = _finite_number(f.get("fill_qty")) or 0.0
+        px = _finite_number(f.get("fill_price")) or 0.0
         feed.append({"event_time": f.get("placed_at"), "type": "FILL",
                      "symbol": f.get("symbol"), "action": f.get("action"), "reason": None,
                      "summary": f"FILLED {f.get('action')} {f.get('symbol')} {q:g} @ ${px:.2f}"})
@@ -288,7 +313,10 @@ def load_watch_data(
     for r in recent_closes:
         feed.append({"event_time": r.get("exit_at"), "type": "EXIT",
                      "symbol": r.get("symbol"), "action": r.get("action"), "reason": None,
-                     "summary": f"EXIT {r.get('symbol')} {r.get('outcome')} {float(r.get('pnl_pct') or 0)*100:+.1f}%"})
+                     "summary": (
+                         f"EXIT {r.get('symbol')} {r.get('outcome')} "
+                         f"{(_finite_number(r.get('pnl_pct')) or 0.0)*100:+.1f}%"
+                     )})
     feed.sort(key=lambda e: e.get("event_time") or "", reverse=True)
     feed = feed[:activity_limit]
 
