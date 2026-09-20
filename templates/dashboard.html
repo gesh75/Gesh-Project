@@ -2803,6 +2803,12 @@ function parseQty(text){
   const n=Number(t);
   return (Number.isFinite(n)&&n>0&&n<1e9)?n:null;
 }
+function parseCost(text){
+  const t=String(text==null?'':text).trim();
+  if(!t||!/^\d*\.?\d+$/.test(t)) return null;   // 0 allowed to clear/reset basis
+  const n=Number(t);
+  return (Number.isFinite(n)&&n>=0&&n<1e9)?n:null;
+}
 // Deliberate decimal rendering: a 0.00000001 position rendered as the raw
 // JS string "1e-8" in the SHARES column (audit F-04). Scientific notation is
 // not part of this UI's contract in either direction.
@@ -2826,11 +2832,11 @@ async function mybookAdd(){
   const sym=(document.getElementById('mybook-sym').value||'').trim().toUpperCase();
   const shares=parseQty(document.getElementById('mybook-shares').value);
   const costRaw=(document.getElementById('mybook-cost').value||'').trim();
-  const cost=costRaw?parseQty(costRaw):null;
+  const cost=costRaw?parseCost(costRaw):null;
   mybookFormError('');
   if(!sym){ mybookFormError('Enter a ticker symbol.'); return; }
   if(shares===null){ mybookFormError('Shares must be a positive number (e.g. 12 or 2.5).'); return; }
-  if(costRaw&&cost===null){ mybookFormError('Average cost must be a positive number.'); return; }
+  if(costRaw&&cost===null){ mybookFormError('Average cost must be 0 or a positive number.'); return; }
   if(btn) btn.disabled=true;
   try{
     const r=await fetch('/api/mybook',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -3348,13 +3354,20 @@ async function mybookBulkImport(){
     if(!j){ if(window.toast) toast('Import failed','error'); return; }
     if(window.toast){
       const n=(j.imported||[]).length, cap=(j.skipped_cap||[]).length, bad=(j.invalid||[]).length;
+      const exist=(j.skipped_existing||[]).length;
+      const placeholder=(j.placeholder_imported||[]).length;
       let msg = (j.replaced ? 'Replaced book with ' : 'Imported ') + n + ' position' + (n===1?'':'s');
       if(j.equal_weight) msg+=' · equal-weight (sizes private)';
+      if(exist) msg+=' · '+exist+' already held (kept)';
+      if(placeholder) msg+=' · '+placeholder+' at 1 share (edit counts)';
       if(cap) msg+=' · '+cap+' over the 100 cap';
       if(bad) msg+=' · '+bad+' line'+(bad===1?'':'s')+' skipped';
-      toast(msg, n?'success':'error');
+      const isSuccess = n > 0 || exist > 0;
+      toast(msg, isSuccess ? 'success' : 'error');
     }
-    if(j.imported&&j.imported.length){ t.value=''; if(replaceEl) replaceEl.checked=false; document.getElementById('mybook-bulk-panel').style.display='none'; }
+    if((j.imported&&j.imported.length) || (j.skipped_existing&&j.skipped_existing.length)){
+      t.value=''; if(replaceEl) replaceEl.checked=false; document.getElementById('mybook-bulk-panel').style.display='none';
+    }
     loadMyBook();
   }catch(e){ if(window.toast) toast('Import failed','error'); }
 }
