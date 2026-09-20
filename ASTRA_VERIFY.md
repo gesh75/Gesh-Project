@@ -1,4 +1,34 @@
-# Astra P1 verify (read-only)
+# Astra P1 verify
+
+**Repo:** `gesh75/Gesh-Project`.
+**Original read-only pass:** 2026-09-10 against `main` `31690cb` (evidence quotes below).
+**Rescan:** 2026-09-20 against `origin/main` `ae55db2` after Astra R1–R8 (#290–#300) plus the leftover paper-session holes in this PR.
+
+## 2026-09-20 rescan
+
+Pinned core is now `1d16aac7ecb5bf7a1bc687c8f78652f28a24bfe0` (Astra R7), not the 2026-09-10 `56f14d4e3a8f`.
+
+| # | Original verdict | 2026-09-20 | Landed |
+|---|---|---|---|
+| 1 | CONFIRMED — paper skipped remaining allocation checks | **FIXED** (R1 #290) + leftover session cash / full-TRIM cap **fixed here** | `require_live_permission=False`; remaining cash after BUY/ADD; full TRIM/SELL frees the in-session slot |
+| 2 | CONFIRMED — `build_action_plan` independent cash caps | **FIXED** (R2 #291) | remaining deployable decremented; TRIM proceeds not spent |
+| 3 | CONFIRMED — `trade_log` vs `state` DB paths | **FIXED** (R3 #292) | shared `gesh_core.db_path`; two books stay two tables |
+| 4 | CONFIRMED — UNIQUE then paper fill | **FIXED** (R4 #296) | `ok=False` / `DUPLICATE`; no second stop/alert |
+| 5 | CONFIRMED — snapshot `as_of`; future stamps pass | **FIXED** (R5 #297) | per-symbol quote; future age beyond 60s fail-closed |
+| 6 | LIKELY — numeric `float()` | **FIXED** (R6 #298 pin) | gesh-core numeric safety |
+| 7 | REJECTED (as written) | **FIXED** adjacent (R7 #300) | collection isolation; no operational DB writes |
+| 8 | LIKELY — first-observation drawdown | **FIXED** (R8 #299 pin) | starting equity 1.0 |
+
+Leftovers **this PR** (R1 recorder, not the planner):
+
+1. Two session BUYs each saw the **starting** `current_cash`, so `/api/paper/run` could overspend the $500 buffer.
+2. A full TRIM/SELL left `open_positions` occupied, so a later BUY in the same plan stayed capped.
+
+Still open elsewhere (do not duplicate here): draft **#301** covers UNIQUE replay after REJECTED/ERROR/SKIPPED, casefolded Kelly/RSI/`quote_as_of` keys, and AI-time remanifest identity. Paper-mode `CASH_FLOOR` still uses `cfg.paper_cash_usd` (rule #32), not live cash — that is deliberate.
+
+---
+
+## Original 2026-09-10 verify (read-only)
 
 **Repo:** `gesh75/Gesh-Project` at `main` `31690cb` (`chore: gap scan + improvement plan (#278)`).
 **Method:** source read on this tree + last pre-shim bodies from git history. No merges, no trades, no brokerage/config edits, no production-code changes.
@@ -289,6 +319,8 @@ Sibling **#277** is still OPEN with the same title — out of scope here (do not
 **UNKNOWN.** Private repo; PAT `401`. This product tree has no cite of a gesh-core gap-scan #65. Do not confuse with **Gesh-Project #65** (2026-07-15, `decision_quality.py` observability) — different repo and year.
 
 ## Recommended repair order
+
+**2026-09-20:** items 1–8 below landed as #290–#300. This PR closes the R1 recorder leftovers (session cash + full-TRIM cap). Remaining adjacent work is draft #301.
 
 Do these as **separate** PRs. Do not loosen risk gates to make tests pass. Numeric/kelly bodies belong in gesh-core first (rule #46), then bump the 40-char pin here.
 
