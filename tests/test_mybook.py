@@ -60,6 +60,21 @@ def test_set_get_remove_roundtrip(au):
     assert [p["symbol"] for p in au.get_positions("a@x.com")] == ["AAPL"]
 
 
+def test_set_position_omitted_cost_preserves_existing_basis(au):
+    """Share-only upsert must not NULL out a stored average cost."""
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    assert au.set_position("a@x.com", "AAPL", 12) is True
+    row = au.get_positions("a@x.com")[0]
+    assert row["shares"] == 12.0
+    assert row["avg_cost"] == 150.0
+
+
+def test_set_position_explicit_cost_still_updates(au):
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=150.0) is True
+    assert au.set_position("a@x.com", "AAPL", 10, avg_cost=160.0) is True
+    assert au.get_positions("a@x.com")[0]["avg_cost"] == 160.0
+
+
 def test_positions_per_user_isolated(au):
     au.set_position("a@x.com", "NVDA", 1)
     au.set_position("b@x.com", "TSLA", 2)
@@ -169,6 +184,23 @@ def test_book_crud_and_valuation(client, monkeypatch):
     c.delete("/api/mybook/NVDA")
     d = c.get("/api/mybook").json()["data"]
     assert [p["symbol"] for p in d["positions"]] == ["AAPL"]
+
+
+def test_book_share_update_without_cost_keeps_basis(client, monkeypatch):
+    """The add form is also the share editor; blank Average cost must not wipe basis."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post(
+        "/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150}
+    ).status_code == 200
+    r = c.post("/api/mybook", json={"symbol": "AAPL", "shares": 12, "avg_cost": None})
+    assert r.status_code == 200
+    stored = [p for p in server.auth_users.get_positions("cust@x.com") if p["symbol"] == "AAPL"]
+    assert stored and stored[0]["shares"] == 12.0
+    assert stored[0]["avg_cost"] == 150.0
+    aapl = [p for p in r.json()["data"]["positions"] if p["symbol"] == "AAPL"][0]
+    assert aapl["average_buy_price"] == 150.0
 
 
 def test_book_unpriced_symbol_reported_not_dropped_silently(client, monkeypatch):

@@ -139,6 +139,28 @@ def test_bulk_equal_weight_makes_weights_equal_regardless_of_price(client, monke
     assert d["equal_weight"] is True
 
 
+def test_bulk_ticker_only_does_not_clobber_sized_book(client, monkeypatch):
+    """Replace is off by default. A ticker-only paste must not wipe sizes or flip EW."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    seed = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800})
+    assert seed.status_code == 200
+    body = c.post("/api/mybook/bulk", json={"text": "NVDA\nAAA"}).json()
+    assert "NVDA" not in body["imported"]
+    assert "AAA" in body["imported"]
+    assert body["equal_weight"] is False
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 50.0
+    assert stored["NVDA"]["avg_cost"] == 800.0
+    assert stored["AAA"]["shares"] == 1.0
+    d = c.get("/api/mybook").json()["data"]
+    assert d["equal_weight"] is False
+    nvda = [p for p in d["positions"] if p["symbol"] == "NVDA"][0]
+    assert nvda["quantity"] == 50.0
+    assert nvda["average_buy_price"] == 800.0
+
+
 def test_bulk_with_sizes_disables_equal_weight(client, monkeypatch):
     server, c = client
     _as(server, monkeypatch, "cust@x.com")
