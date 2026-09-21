@@ -60,8 +60,20 @@ def equity_summary_from_rh(
     Gold ``account['buying_power']`` is leveraged margin and must never become
     the snapshot ``buying_power`` / ``cash`` / ``deployable`` figure. Pending
     instant deposits are surfaced separately and are not sized against.
+
+    Settled cash lives on ``margin_balances.portfolio_cash`` in the robin_stocks
+    account profile (same contract as ``data_fetcher.get_total_equity``). A
+    top-level ``portfolio_cash`` is accepted when present; ``withdrawable_amount``
+    is last-resort only (Gold reads $0 while a deposit clears).
     """
+    margin = account.get("margin_balances")
+    if not isinstance(margin, dict):
+        margin = {}
     settled_cash = float(account.get("portfolio_cash") or 0)
+    if settled_cash <= 0:
+        settled_cash = float(margin.get("portfolio_cash") or 0)
+    if settled_cash <= 0:
+        settled_cash = float(margin.get("unallocated_margin_cash") or 0)
     if settled_cash <= 0:
         settled_cash = float(profile.get("withdrawable_amount") or 0)
     pending_deposits = float(account.get("uncleared_deposits") or 0)
@@ -158,9 +170,11 @@ def fetch():
     account = r.profiles.load_account_profile()
     # ── Deployable cash — THREE distinct fields, verified against the RH MCP ──
     # Confusing these three can cause deployable-cash values to churn:
-    #   • portfolio_cash         = settled, UNLEVERAGED cash. Matches the RH MCP's
-    #                              buying_power.buying_power (the broker's authoritative
-    #                              spendable). THIS is the figure to size against.
+    #   • portfolio_cash         = settled, UNLEVERAGED cash. On the robin_stocks
+    #                              account profile this is margin_balances.portfolio_cash
+    #                              (top-level portfolio_cash is optional). Matches the
+    #                              RH MCP's buying_power.buying_power. THIS is the
+    #                              figure to size against.
     #   • uncleared_deposits     = pending instant-deposit credit (e.g. $Y). The broker
     #                              only *sometimes* extends it as buying power; it is
     #                              revocable and NOT settled — never size against it as
