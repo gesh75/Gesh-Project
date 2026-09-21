@@ -3590,9 +3590,11 @@ function buildMybookHistoryList(d){
 // Replay one stored run. The detail route mirrors /api/mybook/analyze's success
 // shape, so the SAME renderer paints it — and it also refreshes the Risk /
 // Signals / Radar panes, which read _mybookLastResult.
+// Stay on Home: #mybook-results lives inside #tab-home. Switching to Research
+// (the leftover Analyze-tab path) hid the replay and left a blank ticker desk.
 async function mybookHistoryOpen(id){
   const box=document.getElementById('mybook-results'); if(!box) return;
-  switchTab('analyze');
+  switchTab('home');
   box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Opening your saved analysis…</div></div>';
   box.scrollIntoView({behavior:'smooth',block:'start'});
   try{
