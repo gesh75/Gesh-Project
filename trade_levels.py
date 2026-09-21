@@ -78,7 +78,7 @@ def compute(symbol: str, close=None, high=None, low=None, current_price=None) ->
                 cp = float(current_price)
                 if np.isfinite(cp) and cp > 0:
                     price = cp
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         if not np.isfinite([price, h, low_bar, last_close]).all():
             return {"available": False, "reason": "non-finite price data"}

@@ -23,7 +23,7 @@ def _ohlcv(n=80):
 def test_bool_and_non_finite_current_price_fall_back_to_last_close():
     c, h, low = _ohlcv()
     good = tl.compute("TEST", close=c, high=h, low=low)["setup"]["entry"]
-    for bad in (True, False, float("nan"), float("inf"), 0, -5, None, "x"):
+    for bad in (True, False, float("nan"), float("inf"), 0, -5, None, "x", 10**10000):
         out = tl.compute("TEST", close=c, high=h, low=low, current_price=bad)
         assert out["setup"]["entry"] == good
         assert out["price"] == good

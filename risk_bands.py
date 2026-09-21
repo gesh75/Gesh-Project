@@ -47,7 +47,7 @@ def _f(x: object, default: float | None = None) -> float | None:
         return default
     try:
         v = float(x)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return v if math.isfinite(v) else default
 
@@ -143,7 +143,7 @@ def _num(value: object) -> float | None:
         return None
     try:
         v = float(s)
-    except ValueError:
+    except (TypeError, ValueError, OverflowError):
         return None
     return v if math.isfinite(v) else None
 

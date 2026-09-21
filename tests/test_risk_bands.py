@@ -127,6 +127,14 @@ def test_trailing_nan_or_inf_cannot_arm_a_stop():
         assert r["stop_price"] == 95.0
 
 
+def test_trailing_overflow_entry_does_not_crash():
+    """float(10**10000) is OverflowError — must not 500 the exit-band path."""
+    r = trailing_stop(entry=10**10000, peak=110.0, volatility_tier="MEDIUM")
+    assert r["active"] is False
+    assert r["reason"] == "invalid_entry_or_peak"
+    assert r["trail_pct"] is None
+
+
 # --- exit_analytics --------------------------------------------------------
 def _row(**kw):
     base = {
