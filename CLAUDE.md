@@ -417,7 +417,9 @@ When engines conflict, apply in order:
 5. ORDER_RATE — orders today ≥ MAX_ORDERS_PER_DAY → reject
 6. CASH_FLOOR — post-trade cash < MIN_CASH_BUFFER_USD → reject
 7. DAILY_LOSS — portfolio P&L ≤ -MAX_DAILY_LOSS_PCT → reject
-8. DATA_FRESH — last quote > MAX_PRICE_AGE_SECONDS old → reject
+8. DATA_FRESH — age the **selected symbol's** quote, not the snapshot `as_of`.
+   Missing / unparseable per-symbol stamp fails closed. PAPER uses
+   `max_price_age_seconds_paper`. See `docs/PAPER_SESSION.md`.
 
 Every decision (approve or reject) is persisted to `risk_decisions` before returning.
 
@@ -701,7 +703,7 @@ pickle after a Yahoo 401 — `unauthenticated_rh_fallback()` (PR #258).
 | Analyze any ticker | `GET /api/{regime,fundamentals,analyst,news}/{symbol}` | Mechanical cards, no LLM. 5-min TTL cache + heavy rate bucket (trailing-slash prefixes — exact `/api/regime` stays normal). RH primary / yfinance fallback (VPN) |
 | AI research card | `POST /api/analyze-ticker` | One Claude call/symbol/15min (cache + per-symbol single-flight). `require_customer_or_owner` — fail-closed 503 when wall OFF without `GESH_API_KEY`. Price-grounded; 404-before-spend on unknown tickers. **Mask-exempt** (public per-share prose) |
 | Watchlist | `GET/POST /api/watchlist`, `DELETE /api/watchlist/{sym}` | Per-user, 50 cap, `watchlist` table in gesh_auth.db |
-| My Portfolio (book) | `GET/POST /api/mybook`, `DELETE /api/mybook/{sym}`, `POST /api/mybook/import-watchlist` | Customer's OWN positions (30 cap), valued live via cached closes. **Mask-exempt** — their own dollars |
+| My Portfolio (book) | `GET/POST /api/mybook`, `DELETE /api/mybook/{sym}`, `POST /api/mybook/{bulk,import-watchlist,clear,privacy}` | Customer's OWN positions (**100** cap), valued live via cached closes. Share-only upserts keep cost. **Mask-exempt** — their own dollars |
 | Book analysis | `POST /api/mybook/analyze` | Owner engine suite on their book: regime-injected deep analysis → **verdict-aware Kelly** (same ai_verdicts map as /api/kelly) + Monte Carlo. Cached per (user, book fingerprint) 15 min, single-flight per user, Kelly/MC best-effort. Persisted to `customer_analyses` (newest 5) |
 | Report | `GET /mybook/report` | Print-friendly (→PDF) book + last analysis; server-rendered, ALL strings escaped; links `/track-record`. Session-gated, never spends LLM |
 | Metering | `usage_events` table | `ticker_card[_cached]`, `book_analysis[_cached]`, `book_report` — `log_usage` NEVER raises |
@@ -803,6 +805,11 @@ realized P&L (`state.paper_realized_pnl_usd_today`); LIVE mode unchanged. Keep b
 in sync (same hazard class as trading rule #37). Guard tests: `test_risk_gate_paper_mode.py`
 — never call `evaluate()` from tests without sandboxing `trading.state.DB_PATH`.
 First production approval: 2026-06-11 (3/3 BUYs, all 9 gates).
+
+**Paper session (Astra R1–R8, 2026-09):** batch BUYs share one remaining-cash
+budget; paper honors allocation caps without `auto_trade`; DATA_FRESH ages the
+selected symbol quote; UNIQUE `client_order_id` replay is `DUPLICATE` not a new
+fill; `trade_log` shares `db_path` and fails closed. Runbook: `docs/PAPER_SESSION.md`.
 
 **Two paper books (deliberate):** trade_log's `paper_trades` (this repo's DB) = the daily
 chain + manual sims; the trading repo's tracker (`paper_positions`/`paper_outcomes`) = the

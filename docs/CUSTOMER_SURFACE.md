@@ -31,8 +31,11 @@ book table and the catch-up hero. Research is ticker-only deep read. Proof is
 | `/api/dcf/cached` | GET | customer-or-owner² | no | Owner daily-chain DCF (reporting-only) — **not** the customer's book |
 | `/api/me` | GET | session¹ | no | `{role: owner\|customer}` for nav. Wall OFF → `owner`. No PII. Lives in `routers.health` |
 | `/api/watchlist` | GET/POST/DELETE `{sym}` | session | no | 50-symbol cap |
-| `/api/mybook` | GET/POST/DELETE `{sym}` | session | no | The customer's own positions (30 cap), valued live |
+| `/api/mybook` | GET/POST/DELETE `{sym}` | session | no | The customer's own positions (**100** cap), valued live |
 | `/api/mybook/import-watchlist` | POST | session | no | Missing watchlist symbols added at 1 share (placeholder) |
+| `/api/mybook/bulk` | POST | session | no | Paste a whole book. Body capped at 65,536 bytes / 200 lines. See [Bulk import](#bulk-import) |
+| `/api/mybook/clear` | POST | session | no | Wipe every position and exit equal-weight |
+| `/api/mybook/privacy` | POST | session | no | Toggle equal-weight without changing stored size/cost |
 | `/api/mybook/summary` | GET | session | no | Home hero: value, day move, advisory tickets. Cached/DB only — **never** starts Analyze |
 | `/api/mybook/analyze` | POST | customer-or-owner² | **yes** | Deep analysis → verdict-aware Kelly + Monte Carlo + radar. **202 + poll**, never 429-for-busy |
 | `/api/mybook/history` | GET | session | no | Index of this user's last 5 persisted analyses (`customer_analyses`) |
@@ -90,6 +93,63 @@ never take the product down.
 | `usage_events` | (email, event, detail, at) metering rows |
 
 All tables auto-create via the idempotent DDL on every connection — no migration step.
+
+The per-user book cap is `_MAX_POSITIONS = 100` in `auth_users.py` (raised from 30
+on 2026-07-10 so a real book can arrive via bulk import). Updating an existing
+symbol never counts against the cap; only a **new** symbol can return `full`.
+
+## Book writes (PRs #307 / #308)
+
+`POST /api/mybook` and `auth_users.set_position` share one upsert contract.
+A share-only save must not wipe cost or size.
+
+| Input | Stored result |
+|---|---|
+| `{symbol, shares}` on an existing row | Shares update. `avg_cost` stays (`COALESCE`) |
+| `{symbol, shares, avg_cost: 12.5}` | Shares + cost both written |
+| `{symbol, shares, avg_cost: 0}` | Cost reset to `0` (explicit; allowed) |
+| JSON/`True`/`False` for shares or cost | **400** — bools are ints in Python; `True` must not become 1 share or $1 |
+| Non-finite / overflow (`1e309`, `NaN`) | **400** — rejected before `float()` can become `inf` |
+| New symbol when 100 already held | `status: "full"` — existing rows untouched |
+
+`set_position` updates in one `UPDATE … SET shares=?, avg_cost=COALESCE(?, avg_cost)`
+statement so a concurrent share write cannot clobber a later cost write.
+
+The form parser (`parseQty` / `parseCost` in `dashboard.html`) also rejects
+signs, exponents, and blank→0. Server-side validation is the boundary; the
+client parse is a second fence, not the only one.
+
+Pins: `tests/test_mybook.py`, `tests/test_mybook_bulk.py`.
+
+## Bulk import
+
+`POST /api/mybook/bulk` is the "I have 85 names" path. Body
+`{"text": "<lines>", "replace": true?}` or `{"symbols": [...]}`.
+
+```
+AAPL
+NVDA 12
+MSFT 40 420.5
+```
+
+| Line | Meaning |
+|---|---|
+| `SYMBOL` | Placeholder (1 share). On a **sized** book this does **not** overwrite the existing row (`skipped_existing`) |
+| `SYMBOL shares` | Real size; exits equal-weight |
+| `SYMBOL shares avg_cost` | Size + basis. Cost `0` is a reset |
+
+Constraints (code, not the handler comment):
+
+- Body ≤ `_BULK_BODY_MAX_BYTES` (65,536) — 413 if exceeded
+- ≤ `_BULK_MAX_LINES` (200) — 413 if exceeded
+- First occurrence of a symbol wins; header rows land in `invalid`
+- `replace: true` calls `clear_positions` first (also exits equal-weight)
+- Symbols-only paste onto an empty / already-equal-weight book → equal-weight on
+- A ticker-only **merge** onto a sized book must not flip privacy mode
+- Any sized line turns equal-weight off
+
+`POST /api/mybook/import-watchlist` still only **adds** missing names at 1 share.
+It never touches an existing row.
 
 ## Book analysis — the 202 + poll contract
 
@@ -171,6 +231,8 @@ LLM-free on load.
 | Next-action CTA | `next_action.target` | `book` / `research` / `desk`. `homeAction()` must not call the whole-book job |
 | Public market strip | `/api/long-term-macro/cached` then live | VIX / Fear & Greed backdrop. Empty on failure — no fabricated 50 |
 | Book table | `#mybook-list` lives **on Home** | Add/remove positions here |
+| TODAY column | `p.day_change_pct` from server valuation | Session change vs prior close — **not** lifetime vs cost (PR #280) |
+| Past Reads | `#mybook-history-body` + `#mybook-results` on Home | Replay stays on Home. Switching to Research hid the result (PR #287) |
 
 Stale analysis (`_analysis_stale_for`): fingerprint mismatch → yellow
 "older than the book you hold now" and **no** tickets. That helper is the
@@ -179,6 +241,23 @@ history meta, and `/mybook/report`.
 
 Whole-book Analyze stays on Research (`POST /api/mybook/analyze`, 202+poll).
 Home copy says the only deep read is one name at a time.
+
+### TODAY vs lifetime (PR #280)
+
+The Home book used to paint TODAY from `(price − avg_cost) / avg_cost` and
+average those returns — a lifetime figure shown as a daily move (audit Q-02:
+"+$271,629 (5920.4%)" on a real book). TODAY is now `day_change_pct` from
+`portfolio_valuation` (prior session close). Missing prior close → `—`, never
+`$0` or a fabricated flat day. Unrealized P&L is a separate chip and only
+renders when cost basis exists.
+
+### Past Reads stay on Home (PR #287)
+
+`GET /api/mybook/history` is an index of this user's last 5 persisted runs
+(no LLM). `mybookHistoryOpen` calls `switchTab('home')` because
+`#mybook-results` lives inside `#tab-home`. The leftover Analyze-tab path
+switched to Research and left a blank ticker desk. Open is a replay
+(`cached: true`); it never starts Analyze.
 
 ## Scanner + intelligence panes
 
@@ -271,6 +350,11 @@ Restores the watchlist/book to their prior state. Exit ≠ 0 ⇒ something is ac
 | Analyze spinner then "rate limit" / tester left the page | 202 + poll is working; navigating away kills the JS loop. Result is held — click Analyze again for the 200 handoff |
 | Home CTA or a ticket starts a whole-book Analyze | Regression — `homeAction` / ticket click must open Research or focus the book field. Pins: `tests/test_advisory_home.py` |
 | Home shows `$0` on an equal-weight or unpriced book | Summary must emit `total_equity=null` / omit day-change, never invent zero. Pins: `test_mybook_summary_*` |
+| Home TODAY looks like a multi-thousand-percent day | Regression — TODAY must be session `day_change_pct`, not lifetime vs cost. Pins: `tests/test_mybook.py` |
+| Share-only edit wiped average cost | Regression — `avg_cost=None` must `COALESCE`. Pins: `tests/test_mybook.py`, `tests/test_mybook_bulk.py` |
+| Bulk paste of tickers-only overwrote real sizes | Placeholder lines skip existing rows (`skipped_existing`). Use `replace: true` only for a clean slate |
+| Bulk import 413 | Body > 65,536 bytes or > 200 lines |
+| Past Reads opens a blank Research tab | `mybookHistoryOpen` must `switchTab('home')` — `#mybook-results` is on Home |
 | Customer ECG / consensus shows a huge drawdown on a name they barely hold | A path still has `allow_ecg=True` against `equity_snapshots`. Use `/api/mybook/ecg` and `/api/mybook/consensus`. `GET /api/ecg` is UNKNOWN for customers; `/api/consensus/{sym}`, explainability, book radar, signal alerts, and cached consensus are already fenced |
 | Radar slider amount ≠ allocations | `deployable_cash` was clamped at `$1,000,000` (`WHAT_IF_MAX`) or names rounded under 1 share. Check `leftover` and `stale` |
 | Intelligence news all empty | Cache has no `article_count>0` rows for those symbols — honest empty, not a 0-score mood |
