@@ -7,6 +7,9 @@ intent never fills, HOLD writes qty 0, and live mode stays unwired.
 
 Loaded by rewriting relative imports onto an in-process stub so this suite
 does not need gesh-core (``trading/__init__.py`` aliases ``trading.state``).
+That rewrite must cover both ``from .state import …`` and
+``from . import state as _trading_state`` (UNIQUE-replay lookup). A leftover
+``from .`` in the exec'd source is an ImportError at fixture setup.
 When gesh-core *is* installed the real RiskConfig / GateVerdict / state DB
 are still not used — the stub is the only I/O surface, so CI and this VM
 exercise the same place() branches.
@@ -26,13 +29,31 @@ _STUB_NAME = "gesh_exec_place_stubs"
 _SRC = Path(__file__).resolve().parents[1] / "trading" / "execution.py"
 
 
-def _install_stubs() -> ModuleType:
+def _install_stubs(db_path: Path) -> ModuleType:
     stub = ModuleType(_STUB_NAME)
     stub._orders: list[dict] = []
     stub._seen_coids: set[str] = set()
     stub._paper_book: dict = {}
     stub._paper_book_exc: Exception | None = None
     stub.alert_calls: list[tuple] = []
+    stub.DB_PATH = str(db_path)
+    with sqlite3.connect(stub.DB_PATH) as con:
+        con.execute(
+            """
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_order_id TEXT UNIQUE,
+                mode TEXT,
+                qty REAL,
+                target_price REAL,
+                fill_price REAL,
+                fill_qty REAL,
+                status TEXT,
+                symbol TEXT,
+                action TEXT
+            )
+            """
+        )
 
     def alert_order_fill(*a, **k):
         stub.alert_calls.append(("fill", a, k))
@@ -68,8 +89,29 @@ def _install_stubs() -> ModuleType:
         if coid in stub._seen_coids:
             raise sqlite3.IntegrityError("UNIQUE constraint failed: orders.client_order_id")
         stub._seen_coids.add(coid)
+        with sqlite3.connect(stub.DB_PATH) as con:
+            cur = con.execute(
+                """
+                INSERT INTO orders (
+                    client_order_id, mode, qty, target_price, fill_price,
+                    fill_qty, status, symbol, action
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    coid,
+                    kwargs.get("mode"),
+                    kwargs.get("qty"),
+                    kwargs.get("target_price"),
+                    kwargs.get("fill_price"),
+                    kwargs.get("fill_qty"),
+                    kwargs.get("status"),
+                    kwargs.get("symbol"),
+                    kwargs.get("action"),
+                ),
+            )
+            row_id = cur.lastrowid
         stub._orders.append(kwargs)
-        return len(stub._orders)
+        return row_id
 
     def paper_open_positions():
         if stub._paper_book_exc is not None:
@@ -99,16 +141,22 @@ def _install_stubs() -> ModuleType:
     return stub
 
 
-def _load_execution(stub: ModuleType):
-    sys.modules[_STUB_NAME] = stub
-    rewritten = (
+def _rewritten_source() -> str:
+    """Map package-relative imports onto the in-process stub module."""
+    return (
         _SRC.read_text()
+        .replace("from . import state as _trading_state", f"import {_STUB_NAME} as _trading_state")
         .replace("from .alerts import", f"from {_STUB_NAME} import")
         .replace("from .config import", f"from {_STUB_NAME} import")
         .replace("from .contract import", f"from {_STUB_NAME} import")
         .replace("from .risk_gate import", f"from {_STUB_NAME} import")
         .replace("from .state import", f"from {_STUB_NAME} import")
     )
+
+
+def _load_execution(stub: ModuleType):
+    sys.modules[_STUB_NAME] = stub
+    rewritten = _rewritten_source()
     spec = importlib.util.spec_from_loader("gesh_execution_place", loader=None)
     assert spec is not None
     mod = importlib.util.module_from_spec(spec)
@@ -119,8 +167,8 @@ def _load_execution(stub: ModuleType):
 
 
 @pytest.fixture
-def exe():
-    stub = _install_stubs()
+def exe(tmp_path):
+    stub = _install_stubs(tmp_path / "exec_place.db")
     mod = _load_execution(stub)
     return mod, stub
 
@@ -293,16 +341,27 @@ def test_paper_book_read_failure_does_not_block_sizing(exe):
     assert result.qty == pytest.approx(10.0)  # $1000 / $100, as if no current pos
 
 
-def test_duplicate_client_order_id_is_swallowed(exe):
+def test_duplicate_client_order_id_returns_duplicate_not_new_fill(exe):
     execution, stub = exe
     intent = _intent("BUY", target=0.02, generated_at="2026-09-05T10:00:00")
     first = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
     assert first.status == "SIMULATED"
-    # Same minute-bucket seed → UNIQUE on client_order_id
+    assert first.ok is True
+    assert first.order_row_id is not None
+    # Same minute-bucket seed → UNIQUE on client_order_id; reuse the row.
     second = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
-    assert second.status == "SIMULATED"
-    assert second.order_row_id is None  # _safe_log swallowed the IntegrityError
+    assert second.status == "DUPLICATE"
+    assert second.ok is False
+    assert second.order_row_id == first.order_row_id
     assert len(stub._orders) == 1
+    assert sum(1 for kind, *_ in stub.alert_calls if kind == "fill") == 1
+
+
+def test_place_loader_rewrites_all_relative_imports():
+    """A leftover ``from .`` in the exec'd source is the CI ImportError."""
+    rewritten = _rewritten_source()
+    assert "from ." not in rewritten
+    assert f"import {_STUB_NAME} as _trading_state" in rewritten
 
 
 def test_client_order_id_is_stable_across_uuid(exe):
