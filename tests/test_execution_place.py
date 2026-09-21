@@ -7,6 +7,8 @@ intent never fills, HOLD writes qty 0, and live mode stays unwired.
 
 Loaded by rewriting relative imports onto an in-process stub so this suite
 does not need gesh-core (``trading/__init__.py`` aliases ``trading.state``).
+Both ``from .state import …`` and ``from . import state as _trading_state``
+must be rewritten — the latter is used by ``_order_by_client_id``.
 When gesh-core *is* installed the real RiskConfig / GateVerdict / state DB
 are still not used — the stub is the only I/O surface, so CI and this VM
 exercise the same place() branches.
@@ -99,16 +101,27 @@ def _install_stubs() -> ModuleType:
     return stub
 
 
-def _load_execution(stub: ModuleType):
-    sys.modules[_STUB_NAME] = stub
-    rewritten = (
+def _rewrite_execution_source() -> str:
+    # ``from . import state as _trading_state`` is a different form than
+    # ``from .state import …`` — both must be rewritten or exec() raises
+    # ImportError (no parent package) and the whole fixture errors.
+    return (
         _SRC.read_text()
+        .replace(
+            "from . import state as _trading_state",
+            f"import {_STUB_NAME} as _trading_state",
+        )
         .replace("from .alerts import", f"from {_STUB_NAME} import")
         .replace("from .config import", f"from {_STUB_NAME} import")
         .replace("from .contract import", f"from {_STUB_NAME} import")
         .replace("from .risk_gate import", f"from {_STUB_NAME} import")
         .replace("from .state import", f"from {_STUB_NAME} import")
     )
+
+
+def _load_execution(stub: ModuleType):
+    sys.modules[_STUB_NAME] = stub
+    rewritten = _rewrite_execution_source()
     spec = importlib.util.spec_from_loader("gesh_execution_place", loader=None)
     assert spec is not None
     mod = importlib.util.module_from_spec(spec)
@@ -119,10 +132,24 @@ def _load_execution(stub: ModuleType):
 
 
 @pytest.fixture
-def exe():
+def exe(tmp_path):
     stub = _install_stubs()
-    mod = _load_execution(stub)
-    return mod, stub
+    db = tmp_path / "orders.db"
+    with sqlite3.connect(db) as con:
+        con.execute(
+            "CREATE TABLE orders ("
+            "id INTEGER PRIMARY KEY, "
+            "client_order_id TEXT UNIQUE, "
+            "mode TEXT, qty REAL, target_price REAL, "
+            "fill_price REAL, fill_qty REAL)"
+        )
+    stub.DB_PATH = str(db)
+    try:
+        mod = _load_execution(stub)
+        yield mod, stub
+    finally:
+        sys.modules.pop(_STUB_NAME, None)
+        sys.modules.pop("gesh_execution_place", None)
 
 
 def _intent(action="BUY", symbol="HOOD", target=0.10, generated_at="2026-09-05T10:00:00"):
@@ -293,15 +320,25 @@ def test_paper_book_read_failure_does_not_block_sizing(exe):
     assert result.qty == pytest.approx(10.0)  # $1000 / $100, as if no current pos
 
 
+def test_execution_source_rewrite_drops_package_relative_imports():
+    """#296 added ``from . import state as _trading_state``; the loader must
+    rewrite that form or every place() test errors at setup."""
+    text = _rewrite_execution_source()
+    assert "from ." not in text
+    assert f"import {_STUB_NAME} as _trading_state" in text
+
+
 def test_duplicate_client_order_id_is_swallowed(exe):
     execution, stub = exe
     intent = _intent("BUY", target=0.02, generated_at="2026-09-05T10:00:00")
     first = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
     assert first.status == "SIMULATED"
-    # Same minute-bucket seed → UNIQUE on client_order_id
+    # Same minute-bucket seed → UNIQUE on client_order_id. _safe_log swallows
+    # the IntegrityError and place() returns DUPLICATE, not a second fill.
     second = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
-    assert second.status == "SIMULATED"
-    assert second.order_row_id is None  # _safe_log swallowed the IntegrityError
+    assert second.status == "DUPLICATE"
+    assert second.ok is False
+    assert second.order_row_id is None
     assert len(stub._orders) == 1
 
 
