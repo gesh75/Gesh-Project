@@ -187,3 +187,14 @@ def test_home_market_uses_cached_public_macro():
     assert "/api/long-term-macro" in body
     assert "/api/regime" not in body
     assert "Robinhood" not in body
+
+
+def test_load_mybook_today_column_uses_day_change_not_lifetime():
+    """PR #269 labeled the book column TODAY but bound it to percent_change
+    (lifetime vs cost). A name bought at $50 and trading $100 printed +100%
+    as today's move. The cell must read day_change_pct (vs prior close)."""
+    body = _fn(TEMPLATE.read_text(), "loadMyBook")
+    assert "'TODAY'" in body
+    row = body[body.index("pos.map(p=>") :]
+    assert "p.day_change_pct" in row
+    assert "p.percent_change" not in row
