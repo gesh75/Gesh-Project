@@ -50,6 +50,45 @@ def extract_live_quote(
     }
 
 
+def equity_summary_from_rh(
+    account: dict[str, Any],
+    profile: dict[str, Any],
+    positions_equity: float,
+) -> dict[str, float]:
+    """Canonical deployable-cash math for the robin_stocks snapshot path.
+
+    Gold ``account['buying_power']`` is leveraged margin and must never become
+    the snapshot ``buying_power`` / ``cash`` / ``deployable`` figure. Pending
+    instant deposits are surfaced separately and are not sized against.
+    """
+    settled_cash = float(account.get("portfolio_cash") or 0)
+    if settled_cash <= 0:
+        settled_cash = float(profile.get("withdrawable_amount") or 0)
+    pending_deposits = float(account.get("uncleared_deposits") or 0)
+    bp_leveraged = float(account.get("buying_power") or 0)
+    withdrawable = float(profile.get("withdrawable_amount") or 0)
+    account_equity = float(profile.get("equity") or 0)
+    prev_close_equity = float(profile.get("adjusted_equity_previous_close") or 0)
+    deployable = min(settled_cash, bp_leveraged) if bp_leveraged > 0 else settled_cash
+    cash = deployable
+    portfolio_total = positions_equity + cash
+    return {
+        "portfolio_equity": round(positions_equity, 2),
+        "cash": round(cash, 2),
+        "deployable": round(deployable, 2),
+        "settled_cash": round(settled_cash, 2),
+        "pending_deposits": round(pending_deposits, 2),
+        "buying_power": round(deployable, 2),
+        "buying_power_leveraged": round(bp_leveraged, 2),
+        "margin_buying_power": round(bp_leveraged, 2),
+        "withdrawable_amount": round(withdrawable, 2),
+        "uncleared_deposits": round(pending_deposits, 2),
+        "total": round(portfolio_total, 2),
+        "account_equity": round(account_equity, 2),
+        "adjusted_equity_previous_close": round(prev_close_equity, 2),
+    }
+
+
 def _restore_session() -> bool:
     """Restore the stored Robinhood token from pickle without re-authenticating.
     Mirrors auth.py _restore_pickle_session() — never triggers MFA/device-approval."""
@@ -133,23 +172,6 @@ def fetch():
     #                              Kept as a reference field only.
     # Do NOT use withdrawable_amount (reads $0 while a deposit clears) and NEVER
     # account['cash'] (negative margin-accounting figure on Gold accounts — CLAUDE.md rule).
-    settled_cash       = float(account.get('portfolio_cash') or 0)
-    if settled_cash <= 0:
-        settled_cash   = float(profile.get('withdrawable_amount') or 0)
-    pending_deposits   = float(account.get('uncleared_deposits') or 0)
-    bp_leveraged       = float(account.get('buying_power') or 0)   # incl. Gold margin — reference ONLY
-    withdrawable       = float(profile.get('withdrawable_amount') or 0)
-    account_equity     = float(profile.get('equity') or 0)         # app headline total
-    prev_close_equity  = float(profile.get('adjusted_equity_previous_close') or 0)  # for day-change
-
-    # Deployable = settled cash, hard-capped so a leveraged buying_power can NEVER inflate
-    # it past actual cash. The cap only bites in the impossible margin<settled case; its
-    # real job is to make "size against account['buying_power']" structurally unreachable.
-    deployable = min(settled_cash, bp_leveraged) if bp_leveraged > 0 else settled_cash
-    cash       = deployable   # back-compat alias consumed by radar / gates / report
-    margin_buying_power = bp_leveraged  # legacy snapshot key (kept; reference only)
-    uncleared_deposits  = pending_deposits  # legacy snapshot key alias
-
     # Holdings
     positions = r.account.get_open_stock_positions()
     holdings  = []
@@ -182,28 +204,16 @@ def fetch():
         except Exception as e:
             print(f'  WARNING: skipping position — {e}', flush=True)
 
-    portfolio_total = total_equity + cash
+    equity_summary = equity_summary_from_rh(account, profile, total_equity)
+    portfolio_total = equity_summary["total"]
+    cash = equity_summary["cash"]
 
     snapshot = {
         'fetched_at':    datetime.now(timezone.utc).isoformat(),
         'source':        'robinhood_live',
         'quote_provenance': quote_provenance,
         'holdings':      holdings,
-        'equity_summary': {
-            'portfolio_equity':    round(total_equity, 2),       # positions market value
-            'cash':                round(cash, 2),               # = deployable (back-compat alias)
-            'deployable':          round(deployable, 2),         # canonical sizing figure (settled, unleveraged)
-            'settled_cash':        round(settled_cash, 2),       # settled cash = broker unleveraged BP
-            'pending_deposits':    round(pending_deposits, 2),   # instant-deposit credit — revocable, not settled
-            'buying_power':        round(deployable, 2),         # = deployable (NEVER account['buying_power'])
-            'buying_power_leveraged': round(bp_leveraged, 2),    # Gold margin — reference ONLY, never size on this
-            'margin_buying_power': round(margin_buying_power, 2),  # legacy key (= buying_power_leveraged)
-            'withdrawable_amount': round(withdrawable, 2),       # reference only (reads $0 while deposits clear)
-            'uncleared_deposits':  round(uncleared_deposits, 2),  # legacy key (= pending_deposits)
-            'total':               round(portfolio_total, 2),
-            'account_equity':      round(account_equity, 2),     # app headline total
-            'adjusted_equity_previous_close': round(prev_close_equity, 2),  # day-change baseline
-        },
+        'equity_summary': equity_summary,
     }
 
     OUTPUT.write_text(json.dumps(snapshot, indent=2))
