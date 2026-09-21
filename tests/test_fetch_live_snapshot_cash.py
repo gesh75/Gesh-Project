@@ -155,3 +155,45 @@ def test_empty_nested_cash_does_not_fall_back_to_gold_buying_power():
     assert summary["deployable"] == 0.0
     assert summary["cash"] == 0.0
     assert summary["buying_power"] == 0.0
+
+
+def test_bool_top_level_portfolio_cash_does_not_block_nested():
+    """True is an int subclass: float(True)=1.0 would skip the Gold nested cash."""
+    account = {
+        "portfolio_cash": True,
+        "buying_power": "17000.00",
+        "margin_balances": {"portfolio_cash": "535.44"},
+    }
+    summary = equity_summary_from_rh(account, _profile(), 0.0)
+    assert summary["deployable"] == 535.44
+    assert summary["buying_power"] != 1.0
+    assert summary["settled_cash"] == 535.44
+
+
+def test_bool_buying_power_does_not_cap_settled_at_one_dollar():
+    """True Gold BP must not min() settled cash down to $1."""
+    account = {
+        "buying_power": True,
+        "margin_balances": {"portfolio_cash": "535.44"},
+    }
+    summary = equity_summary_from_rh(account, _profile(), 0.0)
+    assert summary["deployable"] == 535.44
+    assert summary["buying_power_leveraged"] == 0.0
+
+
+def test_nan_inf_overflow_cash_falls_through_to_nested():
+    for junk in (float("nan"), float("inf"), float("-inf"), 10**10000):
+        account = {
+            "portfolio_cash": junk,
+            "buying_power": "17000.00",
+            "margin_balances": {"portfolio_cash": "535.44"},
+        }
+        summary = equity_summary_from_rh(account, _profile(), 0.0)
+        assert summary["deployable"] == 535.44
+
+
+def test_non_dict_margin_balances_does_not_crash():
+    account = {"buying_power": "17000.00", "margin_balances": "x"}
+    summary = equity_summary_from_rh(account, _profile(withdrawable_amount="0"), 0.0)
+    assert summary["deployable"] == 0.0
+    assert summary["buying_power"] == 0.0

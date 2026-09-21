@@ -7,6 +7,7 @@ Run with: /path/to/venv/bin/python fetch_live_snapshot.py   (PR105-RUN-01: the
 venv's generic interpreter; this repo declares Python 3.12 in .python-version)
 """
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -50,6 +51,35 @@ def extract_live_quote(
     }
 
 
+def _finite_money(value: object) -> float | None:
+    """A finite dollar figure. Bool / NaN / inf / overflow stay unknown.
+
+    JSON ``true`` must not become $1 of settled cash and skip the nested Gold
+    ``margin_balances.portfolio_cash`` fallback. ``float(10**10000)`` must not
+    take down the tier-3 snapshot.
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _first_positive_money(*candidates: object) -> float:
+    for raw in candidates:
+        parsed = _finite_money(raw)
+        if parsed is not None and parsed > 0:
+            return parsed
+    return 0.0
+
+
+def _money_or_zero(value: object) -> float:
+    parsed = _finite_money(value)
+    return 0.0 if parsed is None else parsed
+
+
 def equity_summary_from_rh(
     account: dict[str, Any],
     profile: dict[str, Any],
@@ -69,23 +99,23 @@ def equity_summary_from_rh(
     margin = account.get("margin_balances")
     if not isinstance(margin, dict):
         margin = {}
-    settled_cash = float(account.get("portfolio_cash") or 0)
-    if settled_cash <= 0:
-        settled_cash = float(margin.get("portfolio_cash") or 0)
-    if settled_cash <= 0:
-        settled_cash = float(margin.get("unallocated_margin_cash") or 0)
-    if settled_cash <= 0:
-        settled_cash = float(profile.get("withdrawable_amount") or 0)
-    pending_deposits = float(account.get("uncleared_deposits") or 0)
-    bp_leveraged = float(account.get("buying_power") or 0)
-    withdrawable = float(profile.get("withdrawable_amount") or 0)
-    account_equity = float(profile.get("equity") or 0)
-    prev_close_equity = float(profile.get("adjusted_equity_previous_close") or 0)
+    settled_cash = _first_positive_money(
+        account.get("portfolio_cash"),
+        margin.get("portfolio_cash"),
+        margin.get("unallocated_margin_cash"),
+        profile.get("withdrawable_amount"),
+    )
+    pending_deposits = _money_or_zero(account.get("uncleared_deposits"))
+    bp_leveraged = _money_or_zero(account.get("buying_power"))
+    withdrawable = _money_or_zero(profile.get("withdrawable_amount"))
+    account_equity = _money_or_zero(profile.get("equity"))
+    prev_close_equity = _money_or_zero(profile.get("adjusted_equity_previous_close"))
+    positions = _money_or_zero(positions_equity)
     deployable = min(settled_cash, bp_leveraged) if bp_leveraged > 0 else settled_cash
     cash = deployable
-    portfolio_total = positions_equity + cash
+    portfolio_total = positions + cash
     return {
-        "portfolio_equity": round(positions_equity, 2),
+        "portfolio_equity": round(positions, 2),
         "cash": round(cash, 2),
         "deployable": round(deployable, 2),
         "settled_cash": round(settled_cash, 2),
