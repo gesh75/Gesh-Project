@@ -67,7 +67,12 @@ _DEFAULT_CFG = {"min_cash_buffer": 500.0, "max_open_positions": 5,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _is_num(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v))
+    # bool is an int subclass: True is not a 1.0 factor observation.
+    return (
+        isinstance(v, (int, float))
+        and not isinstance(v, bool)
+        and math.isfinite(float(v))
+    )
 
 
 def winsorized_z(values: list[float | None], limit: float = 3.0) -> list[float]:

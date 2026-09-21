@@ -334,7 +334,8 @@ def _parse_pos_float(tok: str | None) -> float | None:
         v = float(str(tok).replace("$", "").replace(",", "").strip())
     except (TypeError, ValueError):
         return None
-    return v if v > 0 else None
+    # inf / nan parse as floats ("inf" > 0) and must not become share counts.
+    return v if math.isfinite(v) and v > 0 else None
 
 
 def _parse_nonneg_float(tok: str | None) -> float | None:
@@ -343,7 +344,8 @@ def _parse_nonneg_float(tok: str | None) -> float | None:
         v = float(str(tok).replace("$", "").replace(",", "").strip())
     except (TypeError, ValueError):
         return None
-    return v if v >= 0 else None
+    # inf / nan parse as floats ("inf" >= 0) and must not become a cost basis.
+    return v if math.isfinite(v) and v >= 0 else None
 
 
 def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:

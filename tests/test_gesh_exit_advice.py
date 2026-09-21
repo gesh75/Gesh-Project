@@ -1,5 +1,6 @@
 """Tests for gesh_exit_advice.py — advisory exit-band table from the engine."""
-from gesh_exit_advice import exit_advice
+
+from gesh_exit_advice import _holdings_from_engine, exit_advice
 
 KELLY = {
     "NVDA": {"volatility_tier": "MEDIUM"},
@@ -13,8 +14,8 @@ def test_per_holding_bands_match_tier():
     assert table["NVDA"]["take_profit_pct"] == 8.0
     assert table["MU"]["take_profit_pct"] == 12.0
     assert table["KO"]["take_profit_pct"] == 4.8
-    assert table["MU"]["trailing_pct"] == 6.0   # 4 * 1.5
-    assert table["KO"]["trailing_pct"] == 2.4   # 4 * 0.6
+    assert table["MU"]["trailing_pct"] == 6.0  # 4 * 1.5
+    assert table["KO"]["trailing_pct"] == 2.4  # 4 * 0.6
 
 
 def test_untracked_holding_falls_back_to_medium():
@@ -44,3 +45,22 @@ def test_symbols_uppercased():
     table = exit_advice(["nvda"], KELLY)
     assert table[0]["symbol"] == "NVDA"
     assert table[0]["tracked_by_kelly"] is True
+
+
+def test_holdings_from_engine_skips_blank_and_non_rows():
+    """CLI/engine reader must not invent a symbol from a dict-shaped holdings blob."""
+    assert _holdings_from_engine({"holdings": []}) == []
+    assert _holdings_from_engine({}) == []
+    assert _holdings_from_engine({"holdings": None}) == []
+    engine = {
+        "holdings": [
+            {"symbol": "nvda"},
+            {"ticker": "mu"},
+            {"symbol": ""},
+            {"symbol": None},
+            "NVDA",
+        ]
+    }
+    assert _holdings_from_engine(engine) == ["NVDA", "MU"]
+    # A dict-shaped holdings blob is not a book — iterating it must not invent tickers.
+    assert _holdings_from_engine({"holdings": {"NVDA": {"equity": 1}}}) == []
