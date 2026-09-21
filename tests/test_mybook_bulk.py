@@ -429,6 +429,60 @@ def test_bulk_replace_with_oversized_lines_does_not_wipe_positions(client, monke
     assert stored["NVDA"]["shares"] == 50.0
 
 
+def test_bulk_replace_with_only_invalid_lines_does_not_wipe_positions(client, monkeypatch):
+    """Replace + header/junk paste must not DELETE the sized book.
+
+    #308 moved parse before clear to survive the 413 line-cap path, but a
+    parse that yields zero items (Symbol,Shares,Cost / ???) still called
+    clear_positions. The dashboard then toasts 'Imported 0' and reloads
+    an empty book — share counts and cost basis are gone.
+    """
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800.0})
+    c.post("/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150.0})
+
+    resp = c.post(
+        "/api/mybook/bulk",
+        json={"text": "Symbol,Shares,Cost\n???\nnot-a-ticker", "replace": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["imported"] == []
+    assert body["replaced"] is False
+    assert body["invalid"]
+
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 50.0
+    assert stored["NVDA"]["avg_cost"] == 800.0
+    assert stored["AAPL"]["shares"] == 10.0
+    assert stored["AAPL"]["avg_cost"] == 150.0
+
+
+def test_bulk_replace_with_valid_items_still_replaces(client, monkeypatch):
+    """A real replace paste must still clear the old book, then import."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800.0})
+    c.post("/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150.0})
+
+    body = c.post(
+        "/api/mybook/bulk",
+        json={"text": "TSLA 5 200", "replace": True},
+    ).json()
+    assert body["replaced"] is True
+    assert body["imported"] == ["TSLA"]
+
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert set(stored) == {"TSLA"}
+    assert stored["TSLA"]["shares"] == 5.0
+    assert stored["TSLA"]["avg_cost"] == 200.0
+
+
 def test_explicit_zero_cost_stored_and_accepted(client, monkeypatch):
     """Gap 6: An explicit 0.0 cost basis is stored as 0.0, not None."""
     server, c = client

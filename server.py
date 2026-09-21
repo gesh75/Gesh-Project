@@ -5743,7 +5743,9 @@ async def mybook_bulk(request: Request):
     """Bulk-import a whole book from one pasted block — the answer to "I have 85
     positions, not one at a time". Body: {"text": "<lines>", "replace": true?} or {"symbols": [...]}.
 
-    - If "replace": true, clears the existing book first (perfect after a bad symbols-only bulk).
+    - If "replace": true AND at least one parseable position is present, clears
+      the existing book first (perfect after a bad symbols-only bulk). A
+      header-only / garbage paste must not wipe shares and cost basis.
     - Privacy path: paste TICKERS ONLY (no share counts) onto an empty / already
       equal-weight book → sets equal-weight mode (sizes private, 1/N weighting).
     - Paste with counts (e.g. "AAPL 120") → honors real shares and turns equal-weight off.
@@ -5763,8 +5765,13 @@ async def mybook_bulk(request: Request):
         text = "\n".join(str(s) for s in syms)
     items, invalid = _parse_bulk_book(text)
     replace = bool((body or {}).get("replace"))
-    if replace:
+    # Parse already ran. Only wipe when there is something to import — a
+    # header-only or junk paste used to DELETE FROM customer_positions and
+    # leave the customer with an empty book (toast: "Imported 0 positions").
+    did_replace = False
+    if replace and items:
         auth_users.clear_positions(email)
+        did_replace = True
     existing = auth_users.get_positions(email)
     existing_syms = {p["symbol"] for p in existing}
     sized_book = bool(existing) and not auth_users.get_equal_weight(email)
@@ -5803,7 +5810,7 @@ async def mybook_bulk(request: Request):
         "placeholder_imported": placeholder_imported,
         "invalid": invalid,
         "equal_weight": auth_users.get_equal_weight(email),
-        "replaced": replace,
+        "replaced": did_replace,
         "data": mybook_get(request)["data"],
     }
 
