@@ -8,7 +8,7 @@ GESH Financial is a single-node Python platform that turns a **live Robinhood po
 
 On top of the owner engine sits a **per-user customer surface** (Home / Research / Proof): an advisory Home desk (`GET /api/mybook/summary` — value, catch-up chips, consensus-vs-Kelly tickets, no silent LLM spend), any-ticker research cards (company-name→ticker search, 12-node consensus, momentum RSI/MACD/Volume, support/resistance trade setup, EPS beat/miss earnings, regime, cycle, fundamentals, analyst, news), a price-grounded **AI research card** (one Claude call/symbol/15 min), a per-user **watchlist + portfolio book**, and a full engine run on the customer's own book — all money-masked so a customer never sees the owner's real account dollars. Customer HTTP also runs inside `unauthenticated_rh_fallback()` so a Yahoo 401 cannot restore the owner's `robin_stocks` pickle (PR #258). Owner ECG must never vote on customer consensus, radar, explainability, signal alerts, or cached chain rows — see [`CUSTOMER_SURFACE.md`](CUSTOMER_SURFACE.md).
 
-The daily chain's snapshot and the tax / paper-gate steps also speak the **Robinhood agent MCP** (OHLCV, tax lots, broker order review). That path is VPN-safe and read-only — see [`RH_MCP.md`](RH_MCP.md).
+The daily chain's snapshot and the tax / paper-gate steps also speak the **Robinhood agent MCP** (OHLCV, tax lots, broker order review). That path is VPN-safe and read-only — see [`RH_MCP.md`](RH_MCP.md). Daily-chain paper remaining-cash, DATA_FRESH quote selection, and duplicate-order replay: [`PAPER_SESSION.md`](PAPER_SESSION.md).
 
 ---
 
