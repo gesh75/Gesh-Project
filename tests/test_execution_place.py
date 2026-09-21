@@ -98,8 +98,7 @@ def _install_stubs() -> ModuleType:
     stub.record_stop = record_stop
     stub.deactivate_stops = deactivate_stops
     stub.active_stops = active_stops
-    # Call-time DB_PATH for _order_by_client_id; :memory: is a new empty DB
-    # per connect, so a UNIQUE replay has no sqlite row to reuse.
+    # Overridden by the exe fixture with a real temp ledger (orders table).
     stub.DB_PATH = ":memory:"
     return stub
 
@@ -130,8 +129,13 @@ def _load_execution(stub: ModuleType):
 
 
 @pytest.fixture
-def exe():
+def exe(tmp_path):
     stub = _install_stubs()
+    stub.DB_PATH = str(tmp_path / "orders.db")
+    with sqlite3.connect(stub.DB_PATH) as con:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, client_order_id TEXT)"
+        )
     mod = _load_execution(stub)
     return mod, stub
 
