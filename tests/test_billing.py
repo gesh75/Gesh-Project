@@ -777,6 +777,79 @@ def test_foreign_updated_cancelled_does_not_open_rebind_gate():
     assert u["is_active"] == 1
 
 
+def test_foreign_pause_does_not_mark_paying_customer():
+    """PR #274 foreign_mark covers every _MARK_ONLY_STATUS event, not just cancel."""
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_legit",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    res = _post(
+        "subscription_paused",
+        status="paused",
+        sub_id="sub_attacker",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
+    u = au.get_user("buyer@example.com")
+    assert u["billing_status"] == "active"
+    assert u["billing_sub_id"] == "sub_legit"
+    assert u["is_active"] == 1
+
+
+def test_foreign_payment_failed_does_not_mark_paying_customer():
+    """LS payment_failed is an invoice: data.id is the invoice, sub id is in
+    attributes.subscription_id. A foreign invoice must not paint the victim past_due.
+    """
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_legit",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    payload = {
+        "meta": {"event_name": "subscription_payment_failed"},
+        "data": {
+            "id": "inv_attacker",
+            "type": "subscription-invoices",
+            "attributes": {
+                "user_email": "buyer@example.com",
+                "status": "past_due",
+                "subscription_id": "sub_attacker",
+                "updated_at": "2026-02-01T00:00:00.000000Z",
+            },
+        },
+    }
+    res = _post_raw(payload)
+    assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
+    u = au.get_user("buyer@example.com")
+    assert u["billing_status"] == "active"
+    assert u["billing_sub_id"] == "sub_legit"
+    assert u["is_active"] == 1
+
+
+def test_foreign_updated_past_due_does_not_mark_paying_customer():
+    """subscription_updated(status=past_due) is the same mark hole as cancel."""
+    _post(
+        "subscription_created",
+        variant_name="Trader plan",
+        sub_id="sub_legit",
+        updated_at="2026-01-01T00:00:00.000000Z",
+    )
+    res = _post(
+        "subscription_updated",
+        status="past_due",
+        sub_id="sub_attacker",
+        updated_at="2026-02-01T00:00:00.000000Z",
+    )
+    assert res["action"] == "ignored" and res["reason"] == "stale_subscription"
+    u = au.get_user("buyer@example.com")
+    assert u["billing_status"] == "active"
+    assert u["billing_sub_id"] == "sub_legit"
+    assert u["is_active"] == 1
+
+
 def test_churned_user_may_rebind_on_resubscribe():
     """After a real expiry the next subscription_created has a NEW sub_id.
 
