@@ -446,7 +446,7 @@ def test_bulk_replace_with_only_invalid_lines_does_not_wipe_positions(client, mo
 
     resp = c.post(
         "/api/mybook/bulk",
-        json={"text": "Symbol,Shares,Cost\n???\nnot-a-ticker", "replace": True},
+        json={"text": "Symbol,Shares,Cost\n???\n@@@", "replace": True},
     )
     assert resp.status_code == 200
     body = resp.json()
