@@ -7,6 +7,8 @@ intent never fills, HOLD writes qty 0, and live mode stays unwired.
 
 Loaded by rewriting relative imports onto an in-process stub so this suite
 does not need gesh-core (``trading/__init__.py`` aliases ``trading.state``).
+Both ``from .state import …`` and ``from . import state as _trading_state``
+must be rewritten — the latter is how ``_order_by_client_id`` reads ``DB_PATH``.
 When gesh-core *is* installed the real RiskConfig / GateVerdict / state DB
 are still not used — the stub is the only I/O surface, so CI and this VM
 exercise the same place() branches.
@@ -26,13 +28,29 @@ _STUB_NAME = "gesh_exec_place_stubs"
 _SRC = Path(__file__).resolve().parents[1] / "trading" / "execution.py"
 
 
-def _install_stubs() -> ModuleType:
+def _install_stubs(tmp_path: Path) -> ModuleType:
     stub = ModuleType(_STUB_NAME)
     stub._orders: list[dict] = []
     stub._seen_coids: set[str] = set()
     stub._paper_book: dict = {}
     stub._paper_book_exc: Exception | None = None
     stub.alert_calls: list[tuple] = []
+    # place() looks up UNIQUE replays via `_trading_state.DB_PATH` (from
+    # `from . import state as _trading_state`). The rewriter binds that alias
+    # to this stub, so the stub must expose a real ledger file.
+    stub.DB_PATH = str(tmp_path / "orders.db")
+    with sqlite3.connect(stub.DB_PATH) as con:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS orders ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "client_order_id TEXT UNIQUE,"
+            "mode TEXT,"
+            "qty REAL,"
+            "target_price REAL,"
+            "fill_price REAL,"
+            "fill_qty REAL"
+            ")"
+        )
 
     def alert_order_fill(*a, **k):
         stub.alert_calls.append(("fill", a, k))
@@ -69,7 +87,20 @@ def _install_stubs() -> ModuleType:
             raise sqlite3.IntegrityError("UNIQUE constraint failed: orders.client_order_id")
         stub._seen_coids.add(coid)
         stub._orders.append(kwargs)
-        return len(stub._orders)
+        with sqlite3.connect(stub.DB_PATH) as con:
+            cur = con.execute(
+                "INSERT INTO orders (client_order_id, mode, qty, target_price, fill_price, fill_qty) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    coid,
+                    kwargs.get("mode"),
+                    kwargs.get("qty"),
+                    kwargs.get("target_price"),
+                    kwargs.get("fill_price"),
+                    kwargs.get("fill_qty"),
+                ),
+            )
+            return cur.lastrowid
 
     def paper_open_positions():
         if stub._paper_book_exc is not None:
@@ -108,6 +139,9 @@ def _load_execution(stub: ModuleType):
         .replace("from .contract import", f"from {_STUB_NAME} import")
         .replace("from .risk_gate import", f"from {_STUB_NAME} import")
         .replace("from .state import", f"from {_STUB_NAME} import")
+        # Package-form import used by `_order_by_client_id` (UNIQUE replay).
+        # `from .state import` above does not match this line.
+        .replace("from . import state as _trading_state", f"import {_STUB_NAME} as _trading_state")
     )
     spec = importlib.util.spec_from_loader("gesh_execution_place", loader=None)
     assert spec is not None
@@ -119,10 +153,19 @@ def _load_execution(stub: ModuleType):
 
 
 @pytest.fixture
-def exe():
-    stub = _install_stubs()
+def exe(tmp_path):
+    stub = _install_stubs(tmp_path)
     mod = _load_execution(stub)
     return mod, stub
+
+
+def test_loader_rewrites_package_state_alias(tmp_path):
+    """Regression: `from . import state as` is not `from .state import`."""
+    src = _SRC.read_text()
+    assert "from . import state as _trading_state" in src
+    mod = _load_execution(_install_stubs(tmp_path))
+    assert callable(mod.place)
+    assert hasattr(mod, "_order_by_client_id")
 
 
 def _intent(action="BUY", symbol="HOOD", target=0.10, generated_at="2026-09-05T10:00:00"):
@@ -298,11 +341,15 @@ def test_duplicate_client_order_id_is_swallowed(exe):
     intent = _intent("BUY", target=0.02, generated_at="2026-09-05T10:00:00")
     first = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
     assert first.status == "SIMULATED"
-    # Same minute-bucket seed → UNIQUE on client_order_id
+    # Same minute-bucket seed → UNIQUE on client_order_id. place() must
+    # surface DUPLICATE (not a second SIMULATED fill) after _safe_log
+    # swallows the IntegrityError.
     second = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
-    assert second.status == "SIMULATED"
-    assert second.order_row_id is None  # _safe_log swallowed the IntegrityError
+    assert second.status == "DUPLICATE"
+    assert second.ok is False
+    assert second.order_row_id == first.order_row_id
     assert len(stub._orders) == 1
+    assert sum(1 for kind, *_ in stub.alert_calls if kind == "fill") == 1
 
 
 def test_client_order_id_is_stable_across_uuid(exe):
