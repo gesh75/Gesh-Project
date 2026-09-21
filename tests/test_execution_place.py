@@ -7,9 +7,11 @@ intent never fills, HOLD writes qty 0, and live mode stays unwired.
 
 Loaded by rewriting relative imports onto an in-process stub so this suite
 does not need gesh-core (``trading/__init__.py`` aliases ``trading.state``).
-When gesh-core *is* installed the real RiskConfig / GateVerdict / state DB
-are still not used — the stub is the only I/O surface, so CI and this VM
-exercise the same place() branches.
+Both ``from .state import …`` and ``from . import state as _trading_state``
+must be remapped — the latter reads ``DB_PATH`` at call time so ledger
+sandboxing still works. When gesh-core *is* installed the real RiskConfig /
+GateVerdict / state DB are still not used — the stub is the only I/O
+surface, so CI and this VM exercise the same place() branches.
 """
 
 from __future__ import annotations
@@ -96,19 +98,28 @@ def _install_stubs() -> ModuleType:
     stub.record_stop = record_stop
     stub.deactivate_stops = deactivate_stops
     stub.active_stops = active_stops
+    # Call-time DB_PATH for _order_by_client_id; :memory: is a new empty DB
+    # per connect, so a UNIQUE replay has no sqlite row to reuse.
+    stub.DB_PATH = ":memory:"
     return stub
 
 
-def _load_execution(stub: ModuleType):
-    sys.modules[_STUB_NAME] = stub
-    rewritten = (
+def _rewrite_execution_src() -> str:
+    """Alias every trading.* relative import onto the in-process stub."""
+    return (
         _SRC.read_text()
         .replace("from .alerts import", f"from {_STUB_NAME} import")
         .replace("from .config import", f"from {_STUB_NAME} import")
         .replace("from .contract import", f"from {_STUB_NAME} import")
         .replace("from .risk_gate import", f"from {_STUB_NAME} import")
         .replace("from .state import", f"from {_STUB_NAME} import")
+        .replace("from . import state as _trading_state", f"import {_STUB_NAME} as _trading_state")
     )
+
+
+def _load_execution(stub: ModuleType):
+    sys.modules[_STUB_NAME] = stub
+    rewritten = _rewrite_execution_src()
     spec = importlib.util.spec_from_loader("gesh_execution_place", loader=None)
     assert spec is not None
     mod = importlib.util.module_from_spec(spec)
@@ -154,6 +165,17 @@ def _snap(equity=10_000.0, symbol="HOOD", price=100.0, qty=0.0, held_equity=0.0)
         "holdings": holdings,
         "watchlist": [],
     }
+
+
+def test_rewriter_aliases_state_module_import():
+    """``from . import state as _trading_state`` must not survive as a relative import."""
+    rewritten = _rewrite_execution_src()
+    assert "from . import state" not in rewritten
+    assert f"import {_STUB_NAME} as _trading_state" in rewritten
+    stub = _install_stubs()
+    mod = _load_execution(stub)
+    assert mod._trading_state is stub
+    assert stub.DB_PATH == ":memory:"
 
 
 def test_zero_size_buy_is_skipped_not_simulated(exe):
@@ -294,15 +316,18 @@ def test_paper_book_read_failure_does_not_block_sizing(exe):
 
 
 def test_duplicate_client_order_id_is_swallowed(exe):
+    """UNIQUE replay is DUPLICATE, not a second SIMULATED fill (Astra R4)."""
     execution, stub = exe
     intent = _intent("BUY", target=0.02, generated_at="2026-09-05T10:00:00")
     first = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
     assert first.status == "SIMULATED"
     # Same minute-bucket seed → UNIQUE on client_order_id
     second = execution.place(intent, stub.GateVerdict(True), _snap(), stub.RiskConfig())
-    assert second.status == "SIMULATED"
-    assert second.order_row_id is None  # _safe_log swallowed the IntegrityError
+    assert second.status == "DUPLICATE"
+    assert second.ok is False
+    assert second.order_row_id is None  # stub ledger has no sqlite row to reuse
     assert len(stub._orders) == 1
+    assert sum(1 for kind, *_ in stub.alert_calls if kind == "fill") == 1
 
 
 def test_client_order_id_is_stable_across_uuid(exe):
