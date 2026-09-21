@@ -1239,6 +1239,7 @@ function buildRadarChart(cid,scores){
 // Recompute from the two grounded numbers so every surface agrees. null if unknown.
 function daFvPct(fv){
   if(!fv||fv.estimate==null||fv.current==null||!fv.current) return null;
+  if(typeof fv.estimate==='boolean'||typeof fv.current==='boolean') return null;
   return (fv.estimate-fv.current)/Math.abs(fv.current)*100;
 }
 // {pct, label, str} from the canonical gap — status label derived from the SAME
@@ -1251,7 +1252,7 @@ function daFairValue(fv){
 }
 
 function buildFV(fv){
-  if(!fv||!fv.estimate) return '<span style="font-size:13px;color:var(--muted)">No estimate</span>';
+  if(!fv||!fv.estimate||typeof fv.estimate==='boolean'||typeof fv.current==='boolean') return '<span style="font-size:13px;color:var(--muted)">No estimate</span>';
   const c=fv.current||0,e=fv.estimate||0,mx=Math.max(c,e)*1.08||1;
   const cw=Math.min(100,(c/mx)*100).toFixed(1),ew=Math.min(100,(e/mx)*100).toFixed(1);
   const p=daFvPct(fv), pv=p!=null?p:0;
