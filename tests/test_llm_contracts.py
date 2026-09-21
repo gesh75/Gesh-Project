@@ -15,6 +15,8 @@ from llm_contracts import (
     LLMContractError,
     extract_tool_input,
     strict_tool,
+    unavailable_news_result,
+    unavailable_result,
     validate_debate_case,
     validate_debate_decision,
     validate_fundamental_opportunity,
@@ -250,6 +252,31 @@ def test_validate_fundamental_opportunity_score_range():
     assert validate_fundamental_opportunity(opp)["fundamental_score"] == 88
     with pytest.raises(LLMContractError, match="fundamental_score"):
         validate_fundamental_opportunity({"symbol": "CAT", "fundamental_score": -1})
+
+
+def test_unavailable_result_never_fabricates_neutral_or_zero():
+    """Honesty envelope: missing evidence is UNAVAILABLE, never NEUTRAL/0."""
+    out = unavailable_result(
+        subject="AAPL", reason="no_articles", source_count=0, source_type="news"
+    )
+    assert out["availability"] == "UNAVAILABLE"
+    assert out["unavailable_reason"] == "no_articles"
+    assert out["overall_sentiment"] is None
+    assert out["sentiment_score"] is None
+    assert out["article_count"] == 0
+    assert out["input_provenance"] == {"source_type": "news", "source_count": 0}
+
+
+def test_unavailable_news_result_keeps_public_articles_and_null_score():
+    arts = [{"title": "Headline", "owner_equity": 999}]
+    out = unavailable_news_result(symbol="nvda", reason="gemini_error", articles=arts)
+    assert out["symbol"] == "nvda"
+    assert out["availability"] == "UNAVAILABLE"
+    assert out["sentiment_score"] is None
+    assert out["overall_sentiment"] is None
+    assert out["article_count"] == 1
+    assert out["articles"] == arts
+    assert out["articles"] is not arts  # copy — caller list is not aliased
 
 
 def test_schema_constants_list_every_property_as_required():
