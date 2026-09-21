@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def _load_banner_fns() -> dict[str, object]:
     src = (REPO_ROOT / "gen_report2.py").read_text()
     tree = ast.parse(src)
-    wanted = {"_provider_banner", "_signal_gate_banner"}
+    wanted = {"_provider_banner", "_signal_gate_banner", "_executive_decision_card"}
     ns: dict[str, object] = {"_esc": _esc}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in wanted:
@@ -263,3 +263,32 @@ def test_clean_report_omits_both_disclosure_banners(tmp_path):
     html = _render(tmp_path, _minimal_engine())
     assert "MODEL FAILOVER" not in html
     assert "SIGNAL vs GATE" not in html
+
+
+def test_executive_decision_card_renders_approved_trade_and_blocked(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "MSTR", "action": "BUY", "shares": 1, "current_price": 165.88, "signal_reason": "Kelly ADD"},
+                {"symbol": "MU", "action": "TRIM", "shares": 1.0, "current_price": 1034.91, "signal_reason": "Kelly TRIM"},
+            ],
+            "gate_results": [
+                {"symbol": "MSTR", "action": "BUY", "shares": 1, "approved": True},
+                {"symbol": "MU", "action": "TRIM", "shares": 1.0, "approved": False, "reason": "No open paper long"},
+            ],
+        },
+        [{"symbol": "MSTR"}, {"symbol": "MU"}, {"symbol": "NVDA"}],
+        720.0,
+        37000.0,
+    )
+    assert "TODAY&#x27;S ACTIONABLE VERDICT" in card or "TODAY'S ACTIONABLE VERDICT" in card
+    assert "MSTR" in card and "APPROVED FOR EXECUTION" in card
+    assert "MU" in card and "No open paper long" in card
+    assert "positions in Passive Hold" in card
+
+
+def test_executive_decision_card_all_balanced_when_empty_plan(banners):
+    card = banners["_executive_decision_card"]({}, [{"symbol": "NVDA"}], 700.0, 35000.0)
+    assert "All positions balanced" in card
+    assert "No executable trade orders today" in card
+

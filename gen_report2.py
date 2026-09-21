@@ -655,6 +655,136 @@ provider_banner_html = (
 )
 
 
+def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total: float) -> str:
+    """Render a prominent, high-clarity Executive Trade Decision Card."""
+    if not isinstance(eng, dict):
+        return ""
+    plan = eng.get("action_plan") or []
+    gates = eng.get("gate_results") or []
+    gate_by = {(g.get("symbol"), g.get("action")): g for g in gates}
+
+    approved_trades = []
+    blocked_trades = []
+
+    for a in plan:
+        sym = str(a.get("symbol", ""))
+        act = str(a.get("action", ""))
+        sh = a.get("shares", 0)
+        px = float(a.get("current_price", 0.0) or 0.0)
+        sig = str(a.get("signal_reason", ""))
+        g = gate_by.get((sym, act))
+        notional = float(sh or 0) * px
+
+        if g and g.get("approved"):
+            approved_trades.append({
+                "symbol": sym,
+                "action": act,
+                "shares": sh,
+                "price": px,
+                "notional": notional,
+                "reason": sig,
+                "target_pct": g.get("target_position_pct")
+            })
+        else:
+            block_reason = (g.get("reason") if g else None) or "Not approved by risk gate"
+            blocked_trades.append({
+                "symbol": sym,
+                "action": act,
+                "shares": sh,
+                "price": px,
+                "notional": notional,
+                "reason": sig,
+                "block_reason": block_reason
+            })
+
+    total_positions = len(holdings) if holdings else 0
+    active_syms = {t["symbol"] for t in approved_trades + blocked_trades}
+    hold_count = max(0, total_positions - len(active_syms))
+
+    cash_required = sum(t["notional"] for t in approved_trades if t["action"] in ("BUY", "ADD"))
+    remaining_cash = float(cash or 0.0) - cash_required
+    buffer_ok = remaining_cash >= 500.0
+    buffer_badge = "✓ Safe (&gt; $500 buffer)" if buffer_ok else "⚠️ Below $500 buffer"
+    buffer_col = "#00e87a" if buffer_ok else "#ff3c5a"
+
+    if approved_trades:
+        app_items = []
+        for t in approved_trades:
+            app_items.append(
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'background:#0d241c;border:1px solid #00e87a66;padding:12px 16px;border-radius:6px;margin-bottom:8px">'
+                f'  <div>'
+                f'    <span style="background:#00e87a;color:#07120c;font-weight:800;font-size:12px;'
+                f'padding:3px 8px;border-radius:4px;margin-right:8px">{_esc(t["action"])}</span>'
+                f'    <b style="font-size:16px;color:#fff;margin-right:8px">{_esc(t["symbol"])}</b>'
+                f'    <span style="font-size:14px;color:#00e87a;font-weight:700">{t["shares"]} sh @ ${t["price"]:,.2f}</span>'
+                f'    <span style="font-size:12px;color:#888;margin-left:8px">(${t["notional"]:,.2f} notional)</span>'
+                f'    <div style="font-size:12px;color:#a3e635;margin-top:4px">{_esc(t["reason"])} · Cleared all 10 Risk Gates</div>'
+                f'  </div>'
+                f'  <div style="text-align:right">'
+                f'    <span style="color:#00e87a;font-weight:700;font-size:12px;border:1px solid #00e87a;'
+                f'padding:3px 8px;border-radius:4px;background:#00e87a15">APPROVED FOR EXECUTION</span>'
+                f'  </div>'
+                f'</div>'
+            )
+        app_html = "".join(app_items)
+    else:
+        app_html = (
+            '<div style="background:#111b15;border:1px solid #1a3324;padding:12px 16px;border-radius:6px;color:#a0aec0;font-size:13px">'
+            '✓ <b>All positions balanced</b> — No executable trade orders today. Maintain current holdings.'
+            '</div>'
+        )
+
+    if blocked_trades:
+        blk_items = "".join(
+            f'<li style="margin-bottom:4px"><b>{_esc(t["symbol"])}</b> ({_esc(t["action"])} {t["shares"]} sh): <span style="color:#ff7c9a">{_esc(t["block_reason"])}</span></li>'
+            for t in blocked_trades
+        )
+        blk_html = (
+            f'<div style="margin-top:12px;background:#241217;border:1px solid #ff3c5a44;padding:10px 14px;border-radius:6px;font-size:12px;color:#e2e8f0">'
+            f'  <span style="color:#ff3c5a;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:1px;display:block;margin-bottom:4px">⛔ Model Signals Blocked By Risk Gates ({len(blocked_trades)}):</span>'
+            f'  <ul style="padding-left:18px;margin:0">{blk_items}</ul>'
+            f'</div>'
+        )
+    else:
+        blk_html = ""
+
+    return f"""
+  <!-- Executive Decision Card -->
+  <div class="table-card" style="background:#0c131c;border:2px solid #00e87a;border-radius:10px;padding:20px;margin-bottom:20px;box-shadow:0 8px 30px rgba(0,232,122,0.14)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;border-bottom:1px solid #1e2c3d;padding-bottom:10px">
+      <div>
+        <span style="font-size:11px;font-weight:800;letter-spacing:2px;color:#00d4ff;text-transform:uppercase">OPERATIONAL DIRECTIVE</span>
+        <h2 style="font-size:18px;font-weight:800;color:#fff;margin:2px 0 0">⚡ TODAY'S ACTIONABLE VERDICT</h2>
+      </div>
+      <div style="text-align:right">
+        <span style="font-size:11px;color:#8a8474;display:block">Deployable Cash</span>
+        <b style="font-size:16px;color:{buffer_col}">${cash:,.2f}</b>
+      </div>
+    </div>
+
+    <div>
+      <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;font-weight:700">1. Executable Trades Today ({len(approved_trades)})</div>
+      {app_html}
+    </div>
+
+    {blk_html}
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding-top:10px;border-top:1px solid #1a2840;font-size:12px;color:#888">
+      <div>
+        <span style="color:#f0b429">●</span> <b>{hold_count} positions in Passive Hold</b> (Kelly ±30% drift band — do not trade)
+      </div>
+      <div>
+        Cash buffer after approved buys: <b style="color:{buffer_col}">${remaining_cash:,.2f}</b> ({buffer_badge})
+      </div>
+    </div>
+  </div>
+"""
+
+
+executive_decision_card_html = _executive_decision_card(eng, holdings, cash, total)
+
+
 # ─── Diversification radar section (advisory-only, new non-held names) ────────
 # Every string cell is HTML-escaped (company/sector come from yfinance, thesis/swap
 # rationale may originate downstream) — never trust free text in an f-string table.
@@ -1126,6 +1256,7 @@ html = f"""<!DOCTYPE html>
 
   {provider_banner_html}
   {signal_gate_banner_html}
+  {executive_decision_card_html}
 
   {share_plan_section_html}
 
