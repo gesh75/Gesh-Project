@@ -15,7 +15,15 @@ from alpha_reporting import (
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(None, "n/a"), (0.0, "+0.0%"), (1.25, "+1.2%"), (-1.25, "-1.2%")],
+    [
+        (None, "n/a"),
+        (0.0, "+0.0%"),
+        (1.25, "+1.2%"),
+        (-1.25, "-1.2%"),
+        (True, "n/a"),
+        (False, "n/a"),
+        (float("nan"), "n/a"),
+    ],
 )
 def test_format_alpha_percent_value_formats_without_inventing_data(value, expected):
     assert format_alpha_percent(value) == expected
@@ -23,7 +31,15 @@ def test_format_alpha_percent_value_formats_without_inventing_data(value, expect
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [(None, "#888"), (0.0, "#00e87a"), (1.0, "#00e87a"), (-1.0, "#ff3c5a")],
+    [
+        (None, "#888"),
+        (0.0, "#00e87a"),
+        (1.0, "#00e87a"),
+        (-1.0, "#ff3c5a"),
+        (True, "#888"),
+        (False, "#888"),
+        (float("nan"), "#888"),
+    ],
 )
 def test_alpha_value_color_value_uses_neutral_for_unavailable(value, expected):
     assert alpha_value_color(value) == expected
@@ -57,10 +73,24 @@ def test_format_optional_usd_never_invents_zero_for_missing():
         (float("nan"), None),
         (4.62, 4.62),
         (0.0, 0.0),
+        (True, None),
+        (False, None),
     ],
 )
 def test_optional_float_rejects_non_finite_and_keeps_real_zero(value, expected):
     assert optional_float(value) == expected
+
+
+def test_optional_float_bool_cannot_invent_var_or_cvar():
+    """JSON true is Python True. float(True) is 1.0 — that must never render
+    as VaR 1% OK or a derived 0.1% CVaR on a $1000 book."""
+    assert var_95_status(True) == ("#888", "n/a")
+    assert cvar_95_pct({"cvar_95_pct": True, "cvar_95": True, "current_equity": 1000}) is None
+    assert format_optional_percent(True) == "N/A"
+    assert format_optional_usd(True) == "N/A"
+    # gen_report2 / run_engines2 pass raw JSON keys into these helpers.
+    assert format_alpha_percent(True) == "n/a"
+    assert alpha_value_color(True) == "#888"
 
 
 def test_var_95_status_missing_is_never_green_ok():
