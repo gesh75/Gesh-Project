@@ -6,6 +6,7 @@ the price fetcher is injected so no test ever hits yfinance or the production DB
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 
 import pytest
@@ -95,6 +96,96 @@ def test_metrics_sell_short_pnl():
     assert m["unrealized_pnl_usd"] == pytest.approx((100 - 90) * 10)   # short gains as price falls
 
 
+def test_metrics_zero_or_missing_mark_does_not_invent_pnl():
+    pos = {"action": "BUY", "qty": 10, "entry_price": 100, "stop_loss": 95, "take_profit": 112}
+    for mark in (0, 0.0, -5.0, None):
+        m = watch_view.compute_position_metrics(pos, mark)
+        assert m["unrealized_pnl_usd"] is None
+        assert m["current_price"] is None
+        assert m["at_risk"] is False
+
+
+def test_metrics_zero_entry_does_not_divide():
+    pos = {"action": "BUY", "qty": 10, "entry_price": 0, "stop_loss": 95, "take_profit": 112}
+    m = watch_view.compute_position_metrics(pos, 110.0)
+    assert m["unrealized_pnl_usd"] is None
+    assert m["unrealized_pnl_pct"] is None
+
+
+def test_metrics_bool_money_is_not_one_dollar_or_one_share():
+    pos = {"action": "BUY", "qty": True, "entry_price": True, "stop_loss": True, "take_profit": True}
+    m = watch_view.compute_position_metrics(pos, True)
+    assert m["current_price"] is None
+    assert m["unrealized_pnl_usd"] is None
+    assert m["profit_locked"] is False
+
+
+def test_metrics_overflow_mark_does_not_invent_pnl():
+    """Standalone (not a parametrize id): float(10**10000) is OverflowError."""
+    pos = {"action": "BUY", "qty": 10, "entry_price": 100, "stop_loss": 95, "take_profit": 112}
+    m = watch_view.compute_position_metrics(pos, 10**10000)
+    assert m["current_price"] is None
+    assert m["unrealized_pnl_usd"] is None
+
+
+def test_fmt_closed_pnl_pct_unknown_is_na():
+    assert watch_view._fmt_closed_pnl_pct(None) == "n/a"
+    assert watch_view._fmt_closed_pnl_pct(True) == "n/a"
+    assert watch_view._fmt_closed_pnl_pct(0.12) == "+12.0%"
+    assert watch_view._fmt_closed_pnl_pct(-0.05) == "-5.0%"
+
+
+def test_metrics_sell_profit_locked_when_stop_at_or_below_entry():
+    pos = {"action": "SELL", "qty": 4, "entry_price": 100, "stop_loss": 98, "take_profit": 80}
+    m = watch_view.compute_position_metrics(pos, 90)
+    assert m["profit_locked"] is True
+    assert m["at_risk"] is False
+
+
+def test_metrics_at_risk_is_exclusive_of_one_percent():
+    # BUY mark 100, stop 99 → (100-99)/100*100 = 1.0 exactly → not at risk
+    pos = {"action": "BUY", "qty": 5, "entry_price": 100, "stop_loss": 99.0, "take_profit": 120}
+    m = watch_view.compute_position_metrics(pos, 100.0)
+    assert m["distance_to_stop_pct"] == pytest.approx(1.0)
+    assert m["at_risk"] is False
+
+
+# ── Sharpe / drawdown / streak (first execution; D-05 zero-variance) ─────────
+
+
+def test_sharpe_short_or_zero_variance_is_zero_not_inf():
+    assert watch_view._sharpe([], "2026-01-01", "2026-06-01") == 0.0
+    assert watch_view._sharpe([0.1], "2026-01-01", "2026-06-01") == 0.0
+    # Identical 0.1 returns are the load-bearing case: float mean drift used
+    # to leave a 1e-17 std and a 1e16 Sharpe that would pass the 0.50 bar.
+    assert watch_view._sharpe([0.1, 0.1, 0.1], "2026-01-01", "2026-06-01") == 0.0
+    assert watch_view._sharpe([0.0, 0.0, 0.0], "2026-01-01", "2026-06-01") == 0.0
+    mixed = watch_view._sharpe([0.1, -0.05, 0.02], "2026-01-01", "2026-06-01")
+    assert mixed != 0.0
+    assert math.isfinite(mixed)
+
+
+def test_max_drawdown_empty_and_winners_are_zero():
+    assert watch_view._max_drawdown([]) == 0.0
+    assert watch_view._max_drawdown([0.1, 0.05, 0.02]) == 0.0
+    # +10% then −20% from the new peak: 1.1 → 0.88, drawdown 0.2
+    assert watch_view._max_drawdown([0.10, -0.20]) == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    "outcomes, expected",
+    [
+        ([], "—"),
+        (["BREAKEVEN", "WIN"], "—"),
+        (["WIN", "WIN", "LOSS"], "2W"),
+        (["LOSS", "LOSS", "LOSS", "WIN"], "3L"),
+        (["WIN"], "1W"),
+    ],
+)
+def test_streak_newest_first_and_non_verdict_is_dash(outcomes, expected):
+    assert watch_view._streak(outcomes) == expected
+
+
 # ── load_watch_data ──────────────────────────────────────────────────────────
 
 def test_load_empty_db(tmp_path):
@@ -174,6 +265,30 @@ def test_activity_feed_merges_and_orders(tmp_path):
     assert feed[0]["type"] == "FILL" and feed[0]["symbol"] == "AAPL"      # newest first
     rej = [e for e in feed if e["type"] == "GATE_REJECTED"][0]
     assert "max loss" in rej["reason"]
+
+
+def test_breached_stop_is_surfaced_not_zeroed_into_at_risk(tmp_path):
+    db = _empty_db(tmp_path)
+    _insert(db, "paper_positions", order_id=1, intent_id=1, symbol="NVDA", action="BUY", qty=2.0,
+            entry_price=100.0, entry_at="2026-06-05T14:00:00+00:00", source="manual",
+            stop_loss=95.0, take_profit=120.0, status="OPEN")
+    d = watch_view.load_watch_data(db, price_fetcher=lambda s: {"NVDA": 90.0})
+    # mark 90 is $5/share through the $95 stop → $10 already breached, $0 still protected
+    assert d["summary"]["total_breached_usd"] == pytest.approx(10.0)
+    assert d["summary"]["total_at_risk_usd"] == pytest.approx(0.0)
+    assert d["open_positions"][0]["distance_to_stop_usd"] == pytest.approx(-10.0)
+
+
+def test_bool_pnl_pct_is_not_a_one_hundred_percent_return(tmp_path):
+    db = _empty_db(tmp_path)
+    _insert(db, "paper_outcomes", position_id=1, symbol="X", source="m", action="BUY", qty=1,
+            entry_price=100, exit_price=100, entry_at="2026-06-01T00:00:00+00:00",
+            exit_at="2026-06-05T00:00:00+00:00", pnl_usd=0, pnl_pct=True, outcome="WIN",
+            hold_days=4)
+    d = watch_view.load_watch_data(db, today="2026-06-06", price_fetcher=_NO_PRICES)
+    # SQLite REAL stores True as 1, so this row cannot prove the in-memory bool
+    # skip (that is locked by _finite_number / _fmt_closed_pnl_pct). n=1 → 0.
+    assert d["autonomy"]["sharpe"]["value"] == 0.0
 
 
 def test_mode_is_always_paper_and_live_orders_excluded(tmp_path):

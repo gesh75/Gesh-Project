@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from typing import Any
 
@@ -30,6 +31,29 @@ _SONNET = llm_gateway.resolve_model(os.getenv("CLAUDE_MODEL"), default="sonnet")
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
+
+
+def _fmt_score(value: Any) -> str:
+    """Format a consensus score for the debate prompt.
+
+    Missing / bool / NaN / inf must read as n/a — True is not 1.00 and a missing
+    node vote is not a measured 0.00. A None raw_score used to raise TypeError
+    on ``:.2f`` and abort the whole debate.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "n/a"
+    if not math.isfinite(value):
+        return "n/a"
+    return f"{value:.2f}"
+
+
+def _fmt_nodes(value: Any) -> str:
+    """Format active-node count. Bool/NaN/missing is n/a, not True/11 or 0/11."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "n/a"
+    if not math.isfinite(value):
+        return "n/a"
+    return str(int(value)) if float(value).is_integer() else str(value)
 
 
 def _tool_call(
@@ -59,9 +83,9 @@ def _context_prompt(symbol: str, consensus: dict[str, Any], fundamentals: dict[s
     """Build the shared market context injected into every debate call."""
     return (
         f"Symbol: {symbol}\n"
-        f"Consensus score: {consensus.get('raw_score', 0):.2f} "
-        f"({consensus.get('verdict', 'N/A')})\n"
-        f"Active nodes: {consensus.get('active_nodes', 0)}/11\n"
+        f"Consensus score: {_fmt_score(consensus.get('raw_score'))} "
+        f"({consensus.get('verdict') or 'N/A'})\n"
+        f"Active nodes: {_fmt_nodes(consensus.get('active_nodes'))}/11\n"
         f"Node results: {json.dumps(consensus.get('details', {}), indent=2)}\n\n"
         f"Fundamentals (OpenBB/yfinance):\n"
         f"  Revenue growth:  {fundamentals.get('rev_growth')}\n"
