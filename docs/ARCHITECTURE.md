@@ -6,7 +6,7 @@
 
 GESH Financial is a single-node Python platform that turns a **live Robinhood portfolio** into AI-driven trading intelligence. A FastAPI server (port `9000`) ingests holdings via `robin_stocks`, runs a stack of quantitative engines (ADX/Bollinger/RSI **regime** with a live FRED macro layer, **Monte Carlo**, **Kelly** sizing, **FFT cycles**, EWMA/GARCH volatility) and a **12-node consensus** voting engine, then routes structured prompts through `llm_gateway` to Claude (Sonnet/Haiku) — with a loud Grok/Gemini failover when Anthropic is down — plus Gemini and a local Ollama model for second opinions. Every signal is funneled through a typed **`TradeIntent`** contract and an **8-gate risk gate** before a paper-mode execution layer simulates orders — with the whole `signal → gate → execute` chain audited to SQLite and scheduled by an APScheduler autopilot. The Chart.js dashboard is the customer-facing product; the trading engine runs silently to accumulate paper win-rate proof. Operator contract: [`LLM_OPERATIONS.md`](LLM_OPERATIONS.md).
 
-On top of the owner engine sits a **per-user customer surface** (the *Analyze* tab): any-ticker research cards (company-name→ticker search, 12-node consensus, momentum RSI/MACD/Volume, support/resistance trade setup, EPS beat/miss earnings, regime, cycle, fundamentals, analyst, news), a price-grounded **AI research card** (one Claude call/symbol/15 min), a per-user **watchlist + portfolio book**, and a full engine run on the customer's own book — all money-masked so a customer never sees the owner's real account dollars. Customer HTTP also runs inside `unauthenticated_rh_fallback()` so a Yahoo 401 cannot restore the owner's `robin_stocks` pickle (PR #258). See [`CUSTOMER_SURFACE.md`](CUSTOMER_SURFACE.md).
+On top of the owner engine sits a **per-user customer surface** (Home / Research / Proof): an advisory Home desk (`GET /api/mybook/summary` — value, catch-up chips, consensus-vs-Kelly tickets, no silent LLM spend), any-ticker research cards (company-name→ticker search, 12-node consensus, momentum RSI/MACD/Volume, support/resistance trade setup, EPS beat/miss earnings, regime, cycle, fundamentals, analyst, news), a price-grounded **AI research card** (one Claude call/symbol/15 min), a per-user **watchlist + portfolio book**, and a full engine run on the customer's own book — all money-masked so a customer never sees the owner's real account dollars. Customer HTTP also runs inside `unauthenticated_rh_fallback()` so a Yahoo 401 cannot restore the owner's `robin_stocks` pickle (PR #258). Owner ECG must never vote on customer consensus, radar, explainability, signal alerts, or cached chain rows — see [`CUSTOMER_SURFACE.md`](CUSTOMER_SURFACE.md).
 
 The daily chain's snapshot and the tax / paper-gate steps also speak the **Robinhood agent MCP** (OHLCV, tax lots, broker order review). That path is VPN-safe and read-only — see [`RH_MCP.md`](RH_MCP.md).
 
@@ -84,8 +84,8 @@ Inside the single `server.py` process, work is layered: **ingestion** feeds **qu
 ```mermaid
 flowchart TB
     subgraph EDGE["Edge"]
-        api["server.py - 60+ api routes, auth, caches"]:::core
-        dash["dashboard.html - Chart.js, 8 tabs"]:::core
+        api["server.py + routers.health - api routes, auth, caches"]:::core
+        dash["dashboard.html - Chart.js, customer Home / Research / Proof"]:::core
         invest["/invest - diversification radar panel"]:::core
         cli["main.py CLI"]:::core
     end
@@ -353,15 +353,17 @@ erDiagram
 
 | Layer | Technologies |
 |---|---|
-| **API / Server** | FastAPI · uvicorn · threading · hmac (X-API-Key) |
-| **Ingestion** | robin_stocks · Robinhood agent MCP (`rh_mcp_data`) · pyotp · pandas · atomic JSON cache |
+| **API / Server** | FastAPI · uvicorn · threading · hmac (X-API-Key) · `routers.health` (`/healthz`, `/api/me`, `/favicon.ico`, `/api/security/health`) |
+| **Ingestion** | robin_stocks (reuse-only pickle; no credential POST on boot) · Robinhood agent MCP (`rh_mcp_data`) · pyotp · pandas · atomic JSON cache |
 | **Quant Engines** | numpy · pandas · yfinance · FRED CSV API |
-| **AI Routing** | Anthropic Claude (Sonnet/Haiku) · forced tool-use · prompt caching |
+| **AI Routing** | Anthropic Claude (Sonnet/Haiku) · forced tool-use · prompt caching · loud Grok/Gemini failover |
 | **Alt Intelligence** | Google Gemini 2.5 · Ollama llama3.2 · Finnhub · Polymarket · SEC EDGAR · VADER |
 | **Execution** | dataclasses · APScheduler · zoneinfo · SHA1 idempotency · Telegram Bot API |
 | **Persistence** | sqlite3 — `gesh_financial.db` · `gesh.db` |
-| **Presentation** | Chart.js dashboard (8 tabs) · `.claude/skills/*` playbooks · ANSI CLI |
+| **Presentation** | Chart.js dashboard (owner tabs + customer Home / Research / Proof) · `.claude/skills/*` playbooks · ANSI CLI |
 | **Runtime** | Python 3.12+ · macOS launchd auto-start |
+
+`GET /healthz` is public and secret-free (`status`, `auth`, `uptime_seconds`, optional `GESH_BUILD_SHA`). Do not add DB paths, account identifiers, or portfolio figures there. Session role is `GET /api/me`. Both live in `routers/health.py` (PR #276) — keep new probes there, not back in `server.py`.
 
 ---
 

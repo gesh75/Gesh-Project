@@ -220,10 +220,21 @@ Fallback providers have **no forced-tool grammar**. `llm_failover` therefore:
 1. Flatten the Anthropic system + user messages + first tool schema into a
    "RAW JSON only" prompt (`build_prompt` — requires a tool schema).
 2. Recover JSON by brace-matching that respects strings and escapes
-   (`extract_json_object`). An empty or prose-only reply raises.
-3. `coerce_to_schema` fills any omitted **required** key with a *typed blank*
-   (`""`, `0`, `[]`) rather than raising mid-chain. A blank renders as blank —
-   it never invents a live price.
+   (`extract_json_object`). An empty or prose-only reply raises. When
+   `required_any` is set (the schema's required keys), a complete object that
+   shares **none** of those keys is skipped so a CLI envelope or `{ok: true}`
+   cannot beat a later analysis object in the same text.
+3. **Reject before coerce (PR #240).** `extracted_payload_matches_schema`
+   must see at least one schema key. A Grok `--output-format json` envelope
+   with no `text` / `result` answer raises `FailoverUnavailable`
+   (`grok CLI envelope had no text answer`) — it is **not** fed to
+   `coerce_to_schema`. That used to mint `portfolio_score=0` + empty holdings
+   and persist as a successful analysis.
+4. `coerce_to_schema` still fills omitted **required** keys on a
+   schema-shaped payload with a *typed blank* (`""`, `0`, `[]`) rather than
+   raising mid-chain. A blank renders as blank — it never invents a live
+   price. A schema-shaped but incomplete analysis can still show `0` on a
+   missing numeric; that is a partial card, not an empty envelope.
 
 `FailoverMessage.usage` reports **zero** Anthropic tokens so the `llm_calls`
 ledger is not inflated with invented spend.
@@ -248,8 +259,9 @@ Engine numbers (regime, Kelly, Monte Carlo, gates) are computed, not generated
 | Chatty prefix / `max turns reached` on Grok | a new global agent rule is being inherited | confirm `--tools` / `--rules` still pin a completion; raise `GESH_GROK_MAX_TURNS` only as headroom, not as a substitute |
 | `unknown model id` then a second hop | `GESH_GROK_MODEL` is retired | `grok models` and update the pin |
 | `direct MCP fetch failed` in `/tmp/gesh_fullchain.log` | **not** this failover — that is snapshot step 1/5 tier 2 | keep `fetch_snapshot_direct.py` (tier 1) healthy; see `CLAUDE.md` |
-| `portfolio_score=0` + empty holdings after a failover | Grok returned an envelope with no `text` (or a non-schema object like `{ok: true}`); `coerce_to_schema` then filled required keys with zeros | treat as a **failed** analysis, not a 0-score book. Check `ai_failover_count` and the `MODEL FAILOVER` banner before trusting scores |
-| Quota charged on a blank failover card | customer book analysis reserves the slot *before* the LLM call | expected; the reservation is not refunded just because the payload was coerced blanks |
+| `FailoverUnavailable: grok CLI envelope had no text answer` | CLI printed a status envelope (`session_id`, `ok`, …) with empty `text` | next provider in `GESH_LLM_FAILOVER` runs; if all fail, the **original** Anthropic error is re-raised. Do not treat a later 0-score card as this bug — #240 rejects the envelope |
+| `portfolio_score=0` + empty holdings after a failover | schema-shaped but incomplete JSON (coerce still fills omitted numerics with `0`) **or** a pre-#240 persisted run | check `ai_failover_count` and the `MODEL FAILOVER` banner. A true empty envelope no longer becomes a successful analysis |
+| Quota charged on a blank failover card | customer book analysis reserves the slot *before* the LLM call | expected; the reservation is not refunded just because the hop failed or coerced blanks |
 
 ### Isolated test
 

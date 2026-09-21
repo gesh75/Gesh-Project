@@ -1,12 +1,16 @@
 # Customer Surface Runbook
 
 The self-serve customer product on :9000 (PRs #18–#24, 2026-07-08; book panes
-and cash sliders through PR #235, 2026-08-10): any-ticker research, a per-user
-watchlist and portfolio book, mechanical book engines (consensus / ECG /
-scanner / intelligence), the full engine suite on the customer's own book, a
-printable report, and metering/quotas underneath. Everything here is per-user
-isolated and derived from public market data plus the customer's own inputs —
-**zero owner data**.
+and cash sliders through PR #235, 2026-08-10; advisory Home desk PRs #269/#270,
+2026-09-02): any-ticker research, a per-user watchlist and portfolio book,
+mechanical book engines (consensus / ECG / scanner / intelligence), the full
+engine suite on the customer's own book, a printable report, and
+metering/quotas underneath. Everything here is per-user isolated and derived
+from public market data plus the customer's own inputs — **zero owner data**.
+
+Customer nav is **Home / Research / Proof** (`body.customer`). Home hosts the
+book table and the catch-up hero. Research is ticker-only deep read. Proof is
+`/track-record`. The Home CTA never starts a whole-book `mybookAnalyze()` job.
 
 ## Route map
 
@@ -25,9 +29,11 @@ isolated and derived from public market data plus the customer's own inputs —
 | `/api/consensus/{sym}` | GET | session¹ | no | Stateless 11-node consensus on any ticker. **`allow_ecg=False`** — the owner's `equity_snapshots` must never vote here |
 | `/api/signals/history/{sym}` | GET | customer-or-owner² | no | 30-day consensus sparkline. Customers: watchlist/book symbols only |
 | `/api/dcf/cached` | GET | customer-or-owner² | no | Owner daily-chain DCF (reporting-only) — **not** the customer's book |
+| `/api/me` | GET | session¹ | no | `{role: owner\|customer}` for nav. Wall OFF → `owner`. No PII. Lives in `routers.health` |
 | `/api/watchlist` | GET/POST/DELETE `{sym}` | session | no | 50-symbol cap |
 | `/api/mybook` | GET/POST/DELETE `{sym}` | session | no | The customer's own positions (30 cap), valued live |
 | `/api/mybook/import-watchlist` | POST | session | no | Missing watchlist symbols added at 1 share (placeholder) |
+| `/api/mybook/summary` | GET | session | no | Home hero: value, day move, advisory tickets. Cached/DB only — **never** starts Analyze |
 | `/api/mybook/analyze` | POST | customer-or-owner² | **yes** | Deep analysis → verdict-aware Kelly + Monte Carlo + radar. **202 + poll**, never 429-for-busy |
 | `/api/mybook/history` | GET | session | no | Index of this user's last 5 persisted analyses (`customer_analyses`) |
 | `/api/mybook/history/{id}` | GET | session | no | Replay one past run — `cached: true`, zero new LLM. Other users' ids → 404 (no existence oracle) |
@@ -108,10 +114,19 @@ is ready (no new AI usage) instead of the stale-book warning.
 
 ## Isolation — owner tables the customer must never read
 
+`equity_snapshots` is keyed by **symbol with no user column**. Any path that
+calls `run_consensus_holding(..., allow_ecg=True)` (the default) votes the
+**owner's** drawdown on a shared ticker. PRs #245 / #254 / #256 / #264 closed
+the remaining leaks; keep them closed.
+
 | Owner table / route | Customer substitute | Why |
 |---|---|---|
-| `equity_snapshots` / `GET /api/ecg` | `GET /api/mybook/ecg` | owner curve is keyed by symbol with no user column |
+| `equity_snapshots` / `GET /api/ecg` | `GET /api/mybook/ecg` | owner curve. Customer `GET /api/ecg` returns `portfolio_gate=UNKNOWN` + `ecg_enabled=false` — it does **not** invent HEALTHY from empty history |
 | `run_consensus_holding(allow_ecg=True)` | `/api/consensus/{sym}` forces `allow_ecg=False`; `/api/mybook/consensus` uses `run_consensus_for_customer` | ECG would vote the owner's drawdown on any shared ticker |
+| `GET /api/explainability/{sym}` | same route, `allow_ecg=False` | `explain_consensus` used to embed `ECG=SUSPENDED DD=…` in `plain_english` |
+| Customer-book radar (`_run_book_radar`) | `_customer_radar_consensus` injects `allow_ecg=False` | new-name picks would otherwise vote the owner's curve and persist into `customer_analyses`. Owner `/invest` keeps the default path |
+| `GET /api/consensus/cached` | same route; `redact_owner_ecg()` for non-owner | cached chain rows were computed `allow_ecg=True`. Dollar masker does not catch drawdown %. Owner / wall-OFF keep the raw node |
+| `run_signal_alerts._consensus_for` | `allow_ecg=False` | writes the shared `signal_history` that feeds flip emails, `/api/signals/history/{sym}`, and Home tickets |
 | `GET /api/history` (`analysis_runs`) | `GET /api/mybook/history` | owner deep-analysis ledger |
 | `get_latest_fundamental_scan` (~95-name owner run) | `/api/mybook/intelligence` batch-fetches only the customer's symbols | owner universe must not leak |
 
@@ -121,8 +136,12 @@ never quietly counted a node the customer did not receive.
 
 `GET /api/{consensus,kelly,monte-carlo,screener,deep-analysis,dcf}/cached`
 serve `engine_results.json` from the **owner daily chain**, not the caller's
-book. Customer panes must use `/api/mybook/*`. Do not wire a customer UI to
-the cached chain routes.
+book. Customer panes must use `/api/mybook/*` for *their* book. Cached
+consensus is the published owner-research surface — ECG is stripped, the
+other nodes stay.
+
+Pins: `tests/test_ecg_owner_curve_leak.py`,
+`tests/test_cached_consensus_ecg_leak.py`.
 
 ## Cash sliders (advisory, no LLM)
 
@@ -138,6 +157,28 @@ Both endpoints need a persisted analysis first (404 otherwise). Body:
 `deployable_cash` is what was actually sized; `cash` is echoed as asked —
 a silent clamp would look like a bug. `stale: true` when the book fingerprint
 no longer matches. Leftover is vs the amount asked, not the clamp.
+
+## Advisory Home desk (PRs #269 / #270)
+
+Customer default tab is **Home**. The pane is educational, dated, and
+LLM-free on load.
+
+| Piece | Source | Constraint |
+|---|---|---|
+| Hero value / day move / largest name | `GET /api/mybook/summary` | Instant. Equal-weight books show **name count**, never invented `$0`. Unpriced names omit day-change and concentration |
+| Catch-up chips | same payload (`desk-catchup`) | Mechanical: position count, today's $ move when `day_change_available`, largest weight |
+| Advisory tickets | `advisory_copy.book_actions` | Up to 3, conflict first. Built only when a **current** (not stale) analysis exists. Click opens Research for that symbol — never `mybookAnalyze()` |
+| Next-action CTA | `next_action.target` | `book` / `research` / `desk`. `homeAction()` must not call the whole-book job |
+| Public market strip | `/api/long-term-macro/cached` then live | VIX / Fear & Greed backdrop. Empty on failure — no fabricated 50 |
+| Book table | `#mybook-list` lives **on Home** | Add/remove positions here |
+
+Stale analysis (`_analysis_stale_for`): fingerprint mismatch → yellow
+"older than the book you hold now" and **no** tickets. That helper is the
+single source of truth for `/api/mybook/summary`, deploy-cash, radar-cash,
+history meta, and `/mybook/report`.
+
+Whole-book Analyze stays on Research (`POST /api/mybook/analyze`, 202+poll).
+Home copy says the only deep read is one name at a time.
 
 ## Scanner + intelligence panes
 
@@ -193,12 +234,11 @@ When the flag is False, `rh_fallback` does **not** call `_ensure_rh_session()` a
 still use the **public** (unauthenticated) RH historicals endpoint; other
 intervals return no RH bars. Yahoo remains primary.
 
-**Still on main — do not treat as closed.** `market_data.rh_analyst` /
-`rh_fundamentals` (`GET /api/analyst/{symbol}`, `GET /api/fundamentals/{symbol}`)
-call `robin_stocks` directly and do not read `_ALLOW_AUTHENTICATED_RH`. They
-cannot *restore* a pickle (that is `_ensure_rh_session`), but if an owner
-session is already live in this process they can still spend it. Coverage for
-that leftover is draft #261, not this contract.
+`market_data.rh_analyst` / `rh_fundamentals` now honor the same flag via
+`_customer_rh_session_blocked()` (tests in `tests/test_rh_customer_session.py`).
+On a customer wrap they return `None` and the card falls back to yfinance
+(may 404 behind the VPN). Fail-closed: if the flag cannot be read, treat the
+call as blocked rather than spending the owner session.
 
 Pins: `tests/test_price_source_fallback.py` (customer GET sees False, owner GET
 sees True, mybook worker re-wraps, consensus pool inherits the flag, customer
@@ -227,8 +267,10 @@ Restores the watchlist/book to their prior state. Exit ≠ 0 ⇒ something is ac
 | Analyst card 404 for an index/ETF | Correct — no analyst ratings exist; not a bug |
 | Report says "No analysis yet" | The user never ran a live analyze (or the persisted rows were pruned) — run Analyze My Portfolio once |
 | Customer consensus/chart after Yahoo 401 tries MFA / touches the owner pickle | Fence missed that path — HTTP should be inside `_customer_view_middleware`; the 202 mybook worker must wrap itself; consensus pool must `copy_context()` |
-| Fundamentals/analyst cards still hit RH while Yahoo is dark | Those two cards call `robin_stocks` directly (`market_data.rh_*`) and are **outside** the #258 ContextVar. An already-live owner session in this process can still be spent. |
+| Fundamentals/analyst cards 404 while the owner session is live | Customer wrap blocks `rh_*`; yfinance is the fallback and is often VPN-blocked. Not a pickle restore |
 | Analyze spinner then "rate limit" / tester left the page | 202 + poll is working; navigating away kills the JS loop. Result is held — click Analyze again for the 200 handoff |
-| Customer ECG / consensus shows a huge drawdown on a name they barely hold | You hit `GET /api/ecg` or the owner `POST /api/consensus` — those read the owner curve. Use `/api/mybook/ecg` and `/api/mybook/consensus`. Per-symbol `/api/consensus/{sym}` already forces `allow_ecg=False` |
+| Home CTA or a ticket starts a whole-book Analyze | Regression — `homeAction` / ticket click must open Research or focus the book field. Pins: `tests/test_advisory_home.py` |
+| Home shows `$0` on an equal-weight or unpriced book | Summary must emit `total_equity=null` / omit day-change, never invent zero. Pins: `test_mybook_summary_*` |
+| Customer ECG / consensus shows a huge drawdown on a name they barely hold | A path still has `allow_ecg=True` against `equity_snapshots`. Use `/api/mybook/ecg` and `/api/mybook/consensus`. `GET /api/ecg` is UNKNOWN for customers; `/api/consensus/{sym}`, explainability, book radar, signal alerts, and cached consensus are already fenced |
 | Radar slider amount ≠ allocations | `deployable_cash` was clamped at `$1,000,000` (`WHAT_IF_MAX`) or names rounded under 1 share. Check `leftover` and `stale` |
 | Intelligence news all empty | Cache has no `article_count>0` rows for those symbols — honest empty, not a 0-score mood |
