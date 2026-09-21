@@ -20,11 +20,10 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: 1d16aac (Astra R7 — import-time db_path is
-# path-only; CREATE/DROP probe is ensure_db_writable). Declared as a LITERAL
+# The pinned gesh-core commit: a6d287b (Precision Overlay). Declared as a LITERAL
 # on purpose — bumping the dependency then requires editing this line, so the
 # change is reviewable.
-GESH_CORE_SHA = "1d16aac7ecb5bf7a1bc687c8f78652f28a24bfe0"
+GESH_CORE_SHA = "a6d287bbb146add4d21523c9c9bffdfb6b3cfc8a"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 SECURE_RUNTIME_PINS = {
     "cryptography": "50.0.1",
