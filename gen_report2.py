@@ -656,95 +656,157 @@ provider_banner_html = (
 
 
 def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total: float) -> str:
-    """Render a prominent, high-clarity Executive Trade Decision Card."""
+    """Render a prominent, high-clarity Executive Trade Decision Card.
+
+    Honesty contract (must match share-plan / signal-gate banner):
+    - HOLD/AVOID rows are pre-gate, not rejected orders.
+    - A missing gate_results row is NOT EVALUATED, never a fabricated veto.
+    - An all-blocked day is not "balanced."
+    - Approval is a paper-gate verdict, not live execution.
+    """
+    del total  # kept for call-site compatibility; not used in the card
+
+    def _finite(value, default=0.0):
+        if value is None or value == "" or isinstance(value, bool):
+            return default
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default
+        if parsed != parsed or parsed in (float("inf"), float("-inf")):
+            return default
+        return parsed
+
     if not isinstance(eng, dict):
         return ""
     plan = eng.get("action_plan") or []
     gates = eng.get("gate_results") or []
-    gate_by = {(g.get("symbol"), g.get("action")): g for g in gates}
+    if not isinstance(plan, (list, tuple)):
+        plan = []
+    if not isinstance(gates, (list, tuple)):
+        gates = []
+    gate_by = {(g.get("symbol"), g.get("action")): g for g in gates if isinstance(g, dict)}
 
     approved_trades = []
     blocked_trades = []
+    unevaluated_trades = []
+    executable = {"BUY", "ADD", "TRIM"}
 
     for a in plan:
-        sym = str(a.get("symbol", ""))
-        act = str(a.get("action", ""))
-        sh = a.get("shares", 0)
-        px = float(a.get("current_price", 0.0) or 0.0)
-        sig = str(a.get("signal_reason", ""))
-        g = gate_by.get((sym, act))
-        notional = float(sh or 0) * px
-
-        if g and g.get("approved"):
-            approved_trades.append({
-                "symbol": sym,
-                "action": act,
-                "shares": sh,
-                "price": px,
-                "notional": notional,
-                "reason": sig,
-                "target_pct": g.get("target_position_pct")
-            })
+        if not isinstance(a, dict):
+            continue
+        act = str(a.get("action") or "").upper()
+        if act not in executable:
+            continue
+        sym = str(a.get("symbol") or "")
+        sh = _finite(a.get("shares"), 0.0)
+        px = _finite(a.get("current_price"), 0.0)
+        sig = str(a.get("signal_reason") or "")
+        g = gate_by.get((a.get("symbol"), a.get("action")))
+        if g is None:
+            g = gate_by.get((sym, act))
+        notional = sh * px
+        row = {
+            "symbol": sym,
+            "action": act,
+            "shares": sh,
+            "price": px,
+            "notional": notional,
+            "reason": sig,
+        }
+        if g is None:
+            row["block_reason"] = "NOT EVALUATED — gate failed"
+            unevaluated_trades.append(row)
+        elif g.get("approved"):
+            row["target_pct"] = g.get("target_position_pct")
+            approved_trades.append(row)
         else:
-            block_reason = (g.get("reason") if g else None) or "Not approved by risk gate"
-            blocked_trades.append({
-                "symbol": sym,
-                "action": act,
-                "shares": sh,
-                "price": px,
-                "notional": notional,
-                "reason": sig,
-                "block_reason": block_reason
-            })
+            row["block_reason"] = str(g.get("reason") or "rejected")
+            blocked_trades.append(row)
 
-    total_positions = len(holdings) if holdings else 0
-    active_syms = {t["symbol"] for t in approved_trades + blocked_trades}
-    hold_count = max(0, total_positions - len(active_syms))
+    held_syms = {
+        str(h.get("symbol") or "")
+        for h in (holdings or [])
+        if isinstance(h, dict) and h.get("symbol")
+    }
+    active_syms = {t["symbol"] for t in approved_trades + blocked_trades + unevaluated_trades}
+    hold_count = len(held_syms - active_syms)
 
+    cash_f = _finite(cash, 0.0)
     cash_required = sum(t["notional"] for t in approved_trades if t["action"] in ("BUY", "ADD"))
-    remaining_cash = float(cash or 0.0) - cash_required
+    remaining_cash = cash_f - cash_required
     buffer_ok = remaining_cash >= 500.0
     buffer_badge = "✓ Safe (&gt; $500 buffer)" if buffer_ok else "⚠️ Below $500 buffer"
     buffer_col = "#00e87a" if buffer_ok else "#ff3c5a"
 
+    def _fmt_shares(sh):
+        if sh == int(sh):
+            return str(int(sh))
+        return f"{sh:g}"
+
     if approved_trades:
         app_items = []
         for t in approved_trades:
+            sh_txt = _fmt_shares(t["shares"])
             app_items.append(
                 f'<div style="display:flex;justify-content:space-between;align-items:center;'
                 f'background:#0d241c;border:1px solid #00e87a66;padding:12px 16px;border-radius:6px;margin-bottom:8px">'
-                f'  <div>'
+                f"  <div>"
                 f'    <span style="background:#00e87a;color:#07120c;font-weight:800;font-size:12px;'
                 f'padding:3px 8px;border-radius:4px;margin-right:8px">{_esc(t["action"])}</span>'
                 f'    <b style="font-size:16px;color:#fff;margin-right:8px">{_esc(t["symbol"])}</b>'
-                f'    <span style="font-size:14px;color:#00e87a;font-weight:700">{t["shares"]} sh @ ${t["price"]:,.2f}</span>'
+                f'    <span style="font-size:14px;color:#00e87a;font-weight:700">'
+                f"{_esc(sh_txt)} sh @ ${t['price']:,.2f}</span>"
                 f'    <span style="font-size:12px;color:#888;margin-left:8px">(${t["notional"]:,.2f} notional)</span>'
-                f'    <div style="font-size:12px;color:#a3e635;margin-top:4px">{_esc(t["reason"])} · Cleared all 10 Risk Gates</div>'
-                f'  </div>'
+                f'    <div style="font-size:12px;color:#a3e635;margin-top:4px">'
+                f"{_esc(t['reason'])} · Cleared the 8-gate risk check · paper record only</div>"
+                f"  </div>"
                 f'  <div style="text-align:right">'
                 f'    <span style="color:#00e87a;font-weight:700;font-size:12px;border:1px solid #00e87a;'
-                f'padding:3px 8px;border-radius:4px;background:#00e87a15">APPROVED FOR EXECUTION</span>'
-                f'  </div>'
-                f'</div>'
+                f'padding:3px 8px;border-radius:4px;background:#00e87a15">APPROVED — paper</span>'
+                f"  </div>"
+                f"</div>"
             )
         app_html = "".join(app_items)
+    elif blocked_trades or unevaluated_trades:
+        app_html = (
+            '<div style="background:#111b15;border:1px solid #1a3324;padding:12px 16px;'
+            'border-radius:6px;color:#a0aec0;font-size:13px">'
+            "<b>No approved orders today</b> — model signals were blocked or not evaluated. "
+            "This is not a balanced book.</div>"
+        )
     else:
         app_html = (
-            '<div style="background:#111b15;border:1px solid #1a3324;padding:12px 16px;border-radius:6px;color:#a0aec0;font-size:13px">'
-            '✓ <b>All positions balanced</b> — No executable trade orders today. Maintain current holdings.'
-            '</div>'
+            '<div style="background:#111b15;border:1px solid #1a3324;padding:12px 16px;'
+            'border-radius:6px;color:#a0aec0;font-size:13px">'
+            "✓ <b>All positions balanced</b> — No executable trade orders today. "
+            "Maintain current holdings.</div>"
         )
 
-    if blocked_trades:
+    pending = blocked_trades + unevaluated_trades
+    if pending:
         blk_items = "".join(
-            f'<li style="margin-bottom:4px"><b>{_esc(t["symbol"])}</b> ({_esc(t["action"])} {t["shares"]} sh): <span style="color:#ff7c9a">{_esc(t["block_reason"])}</span></li>'
-            for t in blocked_trades
+            f'<li style="margin-bottom:4px"><b>{_esc(t["symbol"])}</b> '
+            f"({_esc(t['action'])} {_esc(_fmt_shares(t['shares']))} sh): "
+            f'<span style="color:#ff7c9a">{_esc(t["block_reason"])}</span></li>'
+            for t in pending
         )
+        if blocked_trades and unevaluated_trades:
+            title = (
+                f"⛔ Not approved ({len(blocked_trades)} rejected, "
+                f"{len(unevaluated_trades)} not evaluated):"
+            )
+        elif unevaluated_trades:
+            title = f"⛔ Executable Signals NOT EVALUATED ({len(unevaluated_trades)}):"
+        else:
+            title = f"⛔ Model Signals Blocked By Risk Gates ({len(blocked_trades)}):"
         blk_html = (
-            f'<div style="margin-top:12px;background:#241217;border:1px solid #ff3c5a44;padding:10px 14px;border-radius:6px;font-size:12px;color:#e2e8f0">'
-            f'  <span style="color:#ff3c5a;font-weight:700;text-transform:uppercase;font-size:10px;letter-spacing:1px;display:block;margin-bottom:4px">⛔ Model Signals Blocked By Risk Gates ({len(blocked_trades)}):</span>'
+            f'<div style="margin-top:12px;background:#241217;border:1px solid #ff3c5a44;'
+            f'padding:10px 14px;border-radius:6px;font-size:12px;color:#e2e8f0">'
+            f'  <span style="color:#ff3c5a;font-weight:700;text-transform:uppercase;'
+            f'font-size:10px;letter-spacing:1px;display:block;margin-bottom:4px">{title}</span>'
             f'  <ul style="padding-left:18px;margin:0">{blk_items}</ul>'
-            f'</div>'
+            f"</div>"
         )
     else:
         blk_html = ""
@@ -759,7 +821,7 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
       </div>
       <div style="text-align:right">
         <span style="font-size:11px;color:#8a8474;display:block">Deployable Cash</span>
-        <b style="font-size:16px;color:{buffer_col}">${cash:,.2f}</b>
+        <b style="font-size:16px;color:{buffer_col}">${cash_f:,.2f}</b>
       </div>
     </div>
 
@@ -782,7 +844,10 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
 """
 
 
-executive_decision_card_html = _executive_decision_card(eng, holdings, cash, total)
+_card_cash = _eqs_hdr.get("deployable")
+if _card_cash is None:
+    _card_cash = cash
+executive_decision_card_html = _executive_decision_card(eng, holdings, _card_cash, total)
 
 
 # ─── Diversification radar section (advisory-only, new non-held names) ────────
