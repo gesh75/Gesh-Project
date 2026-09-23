@@ -8,6 +8,7 @@ so this file stays runnable when the private core pin cannot install.
 from __future__ import annotations
 
 import ast
+import math
 import re
 from pathlib import Path
 
@@ -41,6 +42,7 @@ def _load():
                     constants.append(seg)
     ns: dict = {
         "re": re,
+        "math": math,
         "HTTPException": type("HTTPException", (Exception,), {"status_code": 400}),
     }
     exec("\n\n".join(constants + chunks), ns)  # noqa: S102 — extracted helpers only
@@ -71,6 +73,17 @@ def test_valid_sized_line_still_parses():
     items, invalid = _parse_bulk_book("TSLA 5 200")
     assert invalid == []
     assert items == [{"symbol": "TSLA", "shares": 5.0, "avg_cost": 200.0}]
+
+
+def test_non_finite_tokens_do_not_become_share_or_cost():
+    """The source-extract loader must see ``math``. ``inf`` used to NameError
+    inside ``_parse_pos_float`` and, before the finite guard, become a share count.
+    A bad token drops that field; the symbol row itself stays."""
+    items, invalid = _parse_bulk_book("TSLA inf 200\nNVDA 5 nan")
+    assert invalid == []
+    by_symbol = {item["symbol"]: item for item in items}
+    assert by_symbol["TSLA"] == {"symbol": "TSLA", "shares": None, "avg_cost": 200.0}
+    assert by_symbol["NVDA"] == {"symbol": "NVDA", "shares": 5.0, "avg_cost": None}
 
 
 def test_mybook_bulk_clear_requires_parseable_items():
