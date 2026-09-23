@@ -12,8 +12,45 @@ A sized dollar gap is not a risk-gated order when Kelly's own action is HOLD
 from __future__ import annotations
 
 import math
+import re
 from html import escape as _esc
 from typing import Any
+
+# risk_gate writes "target_position_pct 0.2500 exceeds cap 0.1800".
+_POSITION_CAP_FIGURE = re.compile(
+    r"exceeds cap\s+([0-9]+(?:\.[0-9]+)?)(\s*%)?",
+    re.IGNORECASE,
+)
+_POSITION_CAP_NAME = re.compile(r"position[_\s-]?cap", re.IGNORECASE)
+
+
+def position_cap_note(reason: str) -> str:
+    """Parenthetical for a position-cap rejection. Never invent a percent.
+
+    A fraction ``0.1800`` renders as 18%. A reason that only names the gate
+    stays ``(position cap)`` — the old banner printed ``2%`` for any reason
+    containing the letters "cap", including "Daily order cap reached".
+    """
+    text = str(reason or "")
+    match = _POSITION_CAP_FIGURE.search(text)
+    if match:
+        value = float(match.group(1))
+        if match.group(2):
+            pct = value
+        elif value <= 1.0:
+            pct = value * 100.0
+        else:
+            pct = value
+        if not math.isfinite(pct) or pct < 0:
+            return " (position cap)"
+        if abs(pct - round(pct)) < 1e-6:
+            shown = f"{int(round(pct))}%"
+        else:
+            shown = f"{pct:.1f}%"
+        return f" (size &gt; {shown} position cap)"
+    if _POSITION_CAP_NAME.search(text):
+        return " (position cap)"
+    return ""
 
 
 def _finite_float(value: Any) -> float | None:
@@ -485,7 +522,7 @@ def signal_gate_banner_html(eng: dict) -> str:
 
     closed_syms = [str(c.get("symbol")) for c in closed if isinstance(c, dict) and c.get("symbol")]
     close_bit = f" Paper closed: {len(closed)} ({_esc(', '.join(closed_syms))})." if closed else ""
-    cap = " (size &gt; 2% position cap)" if "cap" in reason.lower() else ""
+    cap = position_cap_note(reason)
     if unevaluated:
         return (
             '<div class="override-banner">⚠️ SIGNAL vs GATE — '

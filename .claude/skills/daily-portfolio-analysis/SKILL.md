@@ -79,7 +79,9 @@ Concise markdown briefing, tables over prose:
    cleared. If ≥2 BUY/ADD rows are
    rejected by the gate, open the briefing with ONE plain sentence naming it —
    e.g. "⚠ Signals lean ADD on 5 names, but the risk gate blocked all 5
-   (size > 2% position cap) — net actionable trades today: 0." Say "All N
+   (size > 18% position cap) — net actionable trades today: 0." Quote the
+   percent from the gate reason (`exceeds cap 0.1800` is 18%). Never write
+   a fixed 2% cap. Say "All N
    executable actions cleared the gate" only when all N executable rows have a
    matching APPROVED result and there is no gate error. Never present the action
    plan without this reconciliation up top.
@@ -91,7 +93,7 @@ Concise markdown briefing, tables over prose:
    Action follows Kelly’s 0.6× / 1.3× band. HOLD + “drift” is leftover `delta_usd`,
    not an order. **REQUIRED BACKGROUND:** gesh-daily-report.
    An executable row's **Gate** column MUST read APPROVED or REJECTED with the
-   gate's own reason (e.g. "REJECTED — size 24% > 2% cap") only when it has a
+   gate's own reason (e.g. "REJECTED — target_position_pct 0.2500 exceeds cap 0.1800") only when it has a
    matching result **and** matching share count. Missing results MUST read
    "NOT EVALUATED — gate failed" (or the `paper_session.error`). HOLD rows
    MUST read "not gated — pre-gate HOLD" / "not gated — Kelly HOLD band"; they
