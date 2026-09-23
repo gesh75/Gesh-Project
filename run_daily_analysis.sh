@@ -170,6 +170,13 @@ fetch_snapshot_once() {
         return 0  # LLM-free direct MCP path — no claude CLI / subscription needed
     fi
     echo "direct MCP fetch failed — falling back to claude -p MCP path"
+    # A later tier can still succeed, so the all-retries-failed alert below never
+    # fires. Tier 1 dying is silent-by-design and quietly spends the Claude
+    # courier on every later attempt. Alert once per process, before that spend.
+    if [ "${DIRECT_MCP_ALERT_SENT:-0}" -ne 1 ]; then
+        DIRECT_MCP_ALERT_SENT=1
+        tg_alert "step 1/5: direct MCP fetch failed — falling back to the Claude snapshot path (LLM spend). Fix tier 1 (GESH_RH_ACCOUNT / OAuth) so the free path stays live."
+    fi
     if GESH_PY="$PY" /bin/bash "$GP/fetch_snapshot_mcp.sh"; then
         return 0  # source is asserted from the gate below, not assumed from this exit code
     fi
