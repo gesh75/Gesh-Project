@@ -12,14 +12,15 @@ The critical design constraint: the object returned here must quack like an
 Satisfying that shape means NOTHING downstream changes when a fallback runs.
 
 Providers are tried in the order named by ``GESH_LLM_FAILOVER`` (default
-``xai,grok,gemini``):
+``gemini,xai,grok``):
 
+  gemini  — google-genai via GEMINI_API_KEY (see gemini_agent.py). First
+            hop so a dead Grok CLI / missing XAI key does not stall step 3.
   xai     — SpaceXAI HTTP Chat Completions (``https://api.x.ai/v1/chat/completions``)
-            with ``XAI_API_KEY``. Model ``grok-4.6``. This is the production path
-            for pay.geshfinance.com — no CLI, no launchd PATH hole.
+            with ``XAI_API_KEY``. Model ``grok-4.6``. Production path when
+            Gemini is unset or fails.
   grok    — the Grok CLI in headless mode. Uses ~/.grok/auth.json (grok.com
             login, no extra API bill) when XAI_API_KEY is unset.
-  gemini  — google-genai via GEMINI_API_KEY (see gemini_agent.py).
 
 Failover is deliberately LOUD: ``FAILOVER_COUNT`` / ``LAST_FAILOVER`` are module
 state and every hop logs a warning. A silent provider swap would let a degraded
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 FAILOVER_COUNT: int = 0
 LAST_FAILOVER: dict[str, Any] | None = None
 
-_DEFAULT_ORDER: Final[str] = "xai,grok,gemini"
+_DEFAULT_ORDER: Final[str] = "gemini,xai,grok"
 _GROK_MODEL: Final[str] = os.getenv("GESH_GROK_MODEL", "grok-4.6")
 _GROK_TIMEOUT_S: Final[float] = 900.0  # default; grok_timeout_s() reads env at call time
 _GROK_MAX_TURNS: Final[str] = os.getenv("GESH_GROK_MAX_TURNS", "4")
@@ -631,6 +632,7 @@ def call_gemini(
     # scoring, nowhere near deep_analyze_portfolio (max_tokens=24000). A Gemini
     # failover with the default truncates the JSON and the report fills blanks.
     out_tokens = int(max_tokens) if max_tokens and int(max_tokens) > 0 else 8192
+    out_tokens = max(out_tokens, 4096)
 
     last_exc: BaseException | None = None
     for model in models:

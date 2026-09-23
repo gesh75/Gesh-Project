@@ -335,6 +335,9 @@ def test_call_gemini_forwards_deep_analysis_token_budget(monkeypatch):
     out = llm_failover.call_gemini("analyze", max_tokens=24000)
     assert json.loads(out)["portfolio_score"] == 71
     assert seen["max_tokens"] == 24000
+    # A sub-floor ticker budget (legacy 2000) must not truncate JSON.
+    out = llm_failover.call_gemini("analyze", max_tokens=2000)
+    assert seen["max_tokens"] == 4096
     assert seen["mime"] == "application/json"
     assert seen["timeout_s"] == 180.0
 
@@ -500,9 +503,9 @@ def test_budget_exhaustion_reraises_original_when_all_fallbacks_fail(
         )
 
 
-def test_provider_order_defaults_to_xai_then_grok_then_gemini(monkeypatch):
+def test_provider_order_defaults_to_gemini_then_xai_then_grok(monkeypatch):
     monkeypatch.delenv("GESH_LLM_FAILOVER", raising=False)
-    assert llm_failover.provider_order() == ["xai", "grok", "gemini"]
+    assert llm_failover.provider_order() == ["gemini", "xai", "grok"]
 
 
 def test_xai_available_requires_key(monkeypatch):

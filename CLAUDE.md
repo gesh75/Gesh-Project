@@ -1032,7 +1032,7 @@ sentiment, SEC) work untouched. That duck type is the whole design.
 
 | Env | Default | Meaning |
 |---|---|---|
-| `GESH_LLM_FAILOVER` | `grok,gemini` | provider order; **empty string disables failover** |
+| `GESH_LLM_FAILOVER` | `gemini,xai,grok` | provider order; **empty string disables failover** |
 | `GESH_GROK_MODEL` | `grok-4.6` | id from `grok models` |
 | `GESH_GROK_TIMEOUT_S` | `900` | deep analysis runs ~420-460s on Grok vs ~240s on Claude |
 | `GESH_GROK_MAX_TURNS` | `4` | headroom so an inherited global rule cannot exhaust the budget |
