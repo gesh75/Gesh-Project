@@ -213,6 +213,54 @@ def test_scalar_zero_buying_power_is_kept(tmp_path):
     assert snap["equity_summary"]["buying_power"] != pytest.approx(99999.0)
 
 
+def test_overflow_buying_power_falls_back_to_cash(tmp_path):
+    """float(10**10000) is OverflowError, not a measured dollar figure."""
+    snap = _build(tmp_path, _raw(buying_power=10**10000, cash="800.00"))
+    assert snap["equity_summary"]["deployable"] == pytest.approx(800.0)
+
+
+def test_bool_quantity_is_not_a_one_share_lot(tmp_path):
+    """JSON true must not become quantity=1 via float(True)."""
+    raw = _raw(
+        positions=[
+            {"symbol": "FAKE", "quantity": True, "average_buy_price": "10"},
+            {"symbol": "NVDA", "quantity": "10", "average_buy_price": "100.00"},
+        ],
+        quotes=[
+            {"quote": {"symbol": "FAKE", "last_trade_price": "5"}},
+            {"quote": {"symbol": "NVDA", "last_trade_price": "200.00", "previous_close": "190.00"}},
+        ],
+    )
+    snap = _build(tmp_path, raw)
+    assert [h["symbol"] for h in snap["holdings"]] == ["NVDA"]
+
+
+def test_bool_last_trade_price_is_unpriced_not_one_dollar(tmp_path):
+    """Refuse a $1 mark from JSON true — fallback tiers exist."""
+    raw = _raw(
+        quotes=[{"quote": {"symbol": "NVDA", "last_trade_price": True}}],
+    )
+    with pytest.raises(SystemExit):
+        _build(tmp_path, raw)
+
+
+def test_bool_total_value_does_not_become_one_dollar_book(tmp_path):
+    """Headline total True must not pin account_equity at $1."""
+    snap = _build(tmp_path, _raw(total_value=True))
+    es = snap["equity_summary"]
+    assert es["total"] == pytest.approx(3500.0)
+    assert es["account_equity"] == pytest.approx(3500.0)
+    assert es["total"] != pytest.approx(1.0)
+
+
+def test_bool_pending_deposits_are_unknown_not_one_dollar(tmp_path):
+    snap = _build(tmp_path, _raw(pending=True))
+    es = snap["equity_summary"]
+    assert es["pending_deposits"] == pytest.approx(0.0)
+    assert es["uncleared_deposits"] == pytest.approx(0.0)
+    assert es["deployable"] == pytest.approx(1500.0)
+
+
 def test_pending_deposits_are_not_treated_as_deployable(tmp_path):
     snap = _build(tmp_path)
     es = snap["equity_summary"]

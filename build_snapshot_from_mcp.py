@@ -31,13 +31,6 @@ BASE_DIR = Path(__file__).parent
 OUTPUT = BASE_DIR / "live_portfolio_snapshot.json"
 
 
-def _f(x, default=0.0):
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return default
-
-
 def _finite_money(value: object) -> float | None:
     """A finite dollar figure. Bool / NaN / inf / overflow stay unknown.
 
@@ -52,6 +45,16 @@ def _finite_money(value: object) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
     return num if math.isfinite(num) else None
+
+
+def _f(x, default=0.0):
+    """Finite number or ``default``. Bool / NaN / inf / overflow are unknown.
+
+    Used for quantity, average cost, pending deposits, and headline total —
+    never for a last mark (see ``_positive_price``).
+    """
+    num = _finite_money(x)
+    return default if num is None else num
 
 
 def _settled_cash(portfolio: dict[str, Any]) -> float:
@@ -81,13 +84,8 @@ def _positive_price(x) -> float | None:
     and then fold that $0 into portfolio_equity — understating the book and
     skewing every Kelly / Monte Carlo weight. Unknown is not zero.
     """
-    if x is None or x == "":
-        return None
-    try:
-        value = float(x)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(value) or value <= 0:
+    value = _finite_money(x)
+    if value is None or value <= 0:
         return None
     return value
 
