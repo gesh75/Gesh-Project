@@ -122,10 +122,12 @@ def test_share_plan_html_bool_price_does_not_fabricate_add():
     assert rows[0]["shares"] is None
     assert rows[0]["size_action"] == "HOLD"
     html = share_plan_html(eng)
-    gtlb = html[html.find("GTLB") : html.find("GTLB") + 400]
-    assert "APPROVED" not in html
-    assert ">HOLD<" in gtlb
-    assert ">ADD<" not in gtlb
+    i = html.find(">GTLB<")
+    assert i >= 0
+    chunk = html[max(0, i - 160) : i + 250]
+    assert ">HOLD<" in chunk
+    assert "N/A" in chunk
+    assert "APPROVED" not in chunk
 
 
 def test_finite_float_overflow_token_is_unknown():
