@@ -39,14 +39,19 @@ def _optional_pct(value) -> str:
 
 
 def _finite_float(value):
-    """None if the value is missing or not a real number. 0.0 is kept (measured)."""
-    if value is None:
+    """None if the value is missing or not a real number. 0.0 is kept (measured).
+
+    bool is a numeric subclass: True must not become $1 / 1% / 1 share.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
         return None
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
-    if v != v:  # NaN
+    if v != v or v in (float("inf"), float("-inf")):
         return None
     return v
 
@@ -671,7 +676,7 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
             return default
         try:
             parsed = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
         if parsed != parsed or parsed in (float("inf"), float("-inf")):
             return default
@@ -692,6 +697,11 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
     unevaluated_trades = []
     executable = {"BUY", "ADD", "TRIM"}
 
+    def _fmt_shares(sh):
+        if sh == int(sh):
+            return str(int(sh))
+        return f"{sh:g}"
+
     for a in plan:
         if not isinstance(a, dict):
             continue
@@ -700,7 +710,11 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
             continue
         sym = str(a.get("symbol") or "")
         sh = _finite(a.get("shares"), 0.0)
+        if sh <= 0:
+            continue
         px = _finite(a.get("current_price"), 0.0)
+        if px <= 0:
+            continue
         sig = str(a.get("signal_reason") or "")
         g = gate_by.get((a.get("symbol"), a.get("action")))
         if g is None:
@@ -718,6 +732,13 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
             row["block_reason"] = "NOT EVALUATED — gate failed"
             unevaluated_trades.append(row)
         elif g.get("approved"):
+            if "shares" in g:
+                gate_sh = _finite(g.get("shares"), default=None)
+                if gate_sh is None or abs(gate_sh - sh) >= 1e-9:
+                    gated_txt = "?" if gate_sh is None else _fmt_shares(gate_sh)
+                    row["block_reason"] = f"gated {gated_txt} sh, not this size"
+                    blocked_trades.append(row)
+                    continue
             row["target_pct"] = g.get("target_position_pct")
             approved_trades.append(row)
         else:
@@ -738,11 +759,6 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
     buffer_ok = remaining_cash >= 500.0
     buffer_badge = "✓ Safe (&gt; $500 buffer)" if buffer_ok else "⚠️ Below $500 buffer"
     buffer_col = "#00e87a" if buffer_ok else "#ff3c5a"
-
-    def _fmt_shares(sh):
-        if sh == int(sh):
-            return str(int(sh))
-        return f"{sh:g}"
 
     if approved_trades:
         app_items = []
@@ -860,33 +876,60 @@ def _radar_section(radar: dict) -> str:
     weights = radar.get("existing_sector_weights") or {}
     cands = radar.get("candidates") or []
     swaps = radar.get("swap_suggestions") or []
+    if not isinstance(weights, dict):
+        weights = {}
+    if not isinstance(cands, (list, tuple)):
+        cands = []
+    if not isinstance(swaps, (list, tuple)):
+        swaps = []
     mode_col = {"BUY": "#00e87a", "SWAP_ONLY": "#f0b429", "NO_ACTION": "#888"}.get(mode, "#888")
-    sw = sorted(weights.items(), key=lambda x: -x[1])[:4]
+    scored_weights = []
+    for k, v in weights.items():
+        pct = _finite_float(v)
+        if pct is None:
+            continue
+        scored_weights.append((k, pct))
+    sw = sorted(scored_weights, key=lambda x: -x[1])[:4]
     sw_txt = " · ".join(f"{_esc(str(k))} {v * 100:.0f}%" for k, v in sw) if sw else "—"
+    cash = _finite_float(radar.get("deployable_cash", 0))
+    slots = _finite_float(radar.get("open_slots", 0))
+    cash_txt = "n/a" if cash is None else f"${cash:,.0f}"
+    if slots is None:
+        slots_txt = "n/a"
+    elif slots == int(slots):
+        slots_txt = str(int(slots))
+    else:
+        slots_txt = f"{slots:g}"
     head = (
         f'<div class="section-title">💎 Diversification Radar '
         f'<span style="font-size:11px;color:{mode_col};border:1px solid {mode_col};'
         f'border-radius:8px;padding:1px 7px;vertical-align:middle">{_esc(mode)}</span></div>'
         f'<div style="color:#888;font-size:12px;margin:-6px 0 10px">New, non-held opportunities · '
-        f"deployable ${radar.get('deployable_cash', 0):,.0f} · {radar.get('open_slots', 0)} open slot(s) · "
+        f"deployable {cash_txt} · {slots_txt} open slot(s) · "
         f"book: {sw_txt}</div>"
     )
     body = ""
     if cands:
         rows = ""
         for c in cands:
-            up = c.get("analyst_upside")
-            up_txt = f"{up:+.0f}%" if isinstance(up, (int, float)) else "—"
-            corr = c.get("max_corr_to_holdings")
-            corr_txt = f"{corr:.2f}" if isinstance(corr, (int, float)) else "—"
+            if not isinstance(c, dict):
+                continue
+            up = _finite_float(c.get("analyst_upside"))
+            up_txt = f"{up:+.0f}%" if up is not None else "—"
+            corr = _finite_float(c.get("max_corr_to_holdings"))
+            corr_txt = f"{corr:.2f}" if corr is not None else "—"
             if c.get("actionable") is False:
                 suggest = '<span style="color:#f0b429">preview · fund via swap</span>'
             else:
-                suggest = f"{c.get('recommended_shares', 0)} ≈${c.get('recommended_usd', 0):,.0f}"
+                rec_sh = _finite_float(c.get("recommended_shares", 0))
+                rec_usd = _finite_float(c.get("recommended_usd", 0))
+                sh_txt = "—" if rec_sh is None else f"{rec_sh:g}"
+                usd_txt = "n/a" if rec_usd is None else f"${rec_usd:,.0f}"
+                suggest = f"{sh_txt} ≈{usd_txt}"
             rows += (
                 f'<tr><td><b style="color:#00d4ff">{_esc(str(c.get("symbol", "")))}</b></td>'
                 f"<td>{_esc(str(c.get('sector', '')))}</td>"
-                f'<td style="text-align:right">{c.get("composite_score", "—")}</td>'
+                f'<td style="text-align:right">{_esc(str(c.get("composite_score", "—")))}</td>'
                 f"<td>{_esc(str(c.get('consensus_verdict', '—')))}</td>"
                 f'<td style="text-align:right;color:#00e87a">{up_txt}</td>'
                 f'<td style="text-align:right">{corr_txt}</td>'
@@ -902,6 +945,8 @@ def _radar_section(radar: dict) -> str:
     if swaps and mode != "BUY":
         srows = ""
         for s in swaps:
+            if not isinstance(s, dict):
+                continue
             srows += (
                 f'<tr><td style="color:#ff3c5a"><b>{_esc(str(s.get("trim_symbol", "")))}</b></td>'
                 f'<td style="color:#00e87a"><b>{_esc(str(s.get("fund_new_symbol", "")))}</b></td>'
