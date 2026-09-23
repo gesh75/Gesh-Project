@@ -133,3 +133,4 @@ def test_share_plan_html_bool_price_does_not_fabricate_add():
 def test_finite_float_overflow_token_is_unknown():
     assert _finite_float("1e999") is None
     assert _finite_float("nan") is None
+    assert _finite_float(10**10000) is None

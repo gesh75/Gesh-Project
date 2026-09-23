@@ -49,7 +49,7 @@ def _finite_float(value):
         return None
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if v != v or v in (float("inf"), float("-inf")):
         return None
@@ -676,7 +676,7 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
             return default
         try:
             parsed = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return default
         if parsed != parsed or parsed in (float("inf"), float("-inf")):
             return default
@@ -713,6 +713,8 @@ def _executive_decision_card(eng: dict, holdings: list[dict], cash: float, total
         if sh <= 0:
             continue
         px = _finite(a.get("current_price"), 0.0)
+        if px <= 0:
+            continue
         sig = str(a.get("signal_reason") or "")
         g = gate_by.get((a.get("symbol"), a.get("action")))
         if g is None:

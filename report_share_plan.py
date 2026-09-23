@@ -24,7 +24,7 @@ def _finite_float(value: Any) -> float | None:
         return None
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(v):
         return None

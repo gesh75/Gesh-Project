@@ -492,6 +492,46 @@ def test_executive_decision_card_share_mismatch_is_not_approved(banners):
     assert "13" in card
 
 
+def test_executive_decision_card_bool_or_zero_price_is_not_approved(banners):
+    """A bool / $0 / inf mark must not paint APPROVED @ $0.00."""
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "MSTR", "action": "BUY", "shares": 2, "current_price": True},
+                {"symbol": "MU", "action": "TRIM", "shares": 3, "current_price": 0},
+                {"symbol": "HOOD", "action": "ADD", "shares": 1, "current_price": float("inf")},
+            ],
+            "gate_results": [
+                {"symbol": "MSTR", "action": "BUY", "approved": True},
+                {"symbol": "MU", "action": "TRIM", "approved": True},
+                {"symbol": "HOOD", "action": "ADD", "approved": True},
+            ],
+        },
+        [{"symbol": "MSTR"}, {"symbol": "MU"}, {"symbol": "HOOD"}],
+        900.0,
+        12000.0,
+    )
+    assert "APPROVED — paper" not in card
+    assert "$0.00" not in card
+    assert "All positions balanced" in card
+
+
+def test_executive_decision_card_overflow_shares_do_not_crash(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "IONQ", "action": "BUY", "shares": 10**10000, "current_price": 40.0},
+            ],
+            "gate_results": [{"symbol": "IONQ", "action": "BUY", "approved": True}],
+        },
+        [{"symbol": "IONQ"}],
+        900.0,
+        12000.0,
+    )
+    assert "APPROVED — paper" not in card
+    assert "All positions balanced" in card
+
+
 def test_executive_decision_card_zero_and_bool_shares_are_not_executable(banners):
     card = banners["_executive_decision_card"](
         {
