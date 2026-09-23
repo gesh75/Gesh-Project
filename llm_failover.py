@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 FAILOVER_COUNT: int = 0
 LAST_FAILOVER: dict[str, Any] | None = None
 
-_DEFAULT_ORDER: Final[str] = "xai,grok,gemini"
+_DEFAULT_ORDER: Final[str] = "gemini,xai,grok"
 _GROK_MODEL: Final[str] = os.getenv("GESH_GROK_MODEL", "grok-4.6")
 _GROK_TIMEOUT_S: Final[float] = 900.0  # default; grok_timeout_s() reads env at call time
 _GROK_MAX_TURNS: Final[str] = os.getenv("GESH_GROK_MAX_TURNS", "4")
@@ -631,6 +631,7 @@ def call_gemini(
     # scoring, nowhere near deep_analyze_portfolio (max_tokens=24000). A Gemini
     # failover with the default truncates the JSON and the report fills blanks.
     out_tokens = int(max_tokens) if max_tokens and int(max_tokens) > 0 else 8192
+    out_tokens = max(out_tokens, 4096)
 
     last_exc: BaseException | None = None
     for model in models:

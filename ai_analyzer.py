@@ -585,7 +585,7 @@ def deep_analyze_ticker(
     message = llm_gateway.get_gateway().create(
         operation="deep_analyze_ticker",
         model=MODEL,
-        max_tokens=2000,
+        max_tokens=4096,
         system=[
             {"type": "text", "text": TICKER_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ],

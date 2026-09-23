@@ -118,6 +118,12 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure unit tests run against mocked Anthropic by default unless explicitly tested."""
+    monkeypatch.delenv("GESH_LLM_SKIP_ANTHROPIC", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_auth_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point auth_users at a per-test throwaway DB. Product endpoints now write
     usage_events on every hit (metering), so a test that doesn't stub the auth DB

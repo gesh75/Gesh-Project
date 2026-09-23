@@ -500,9 +500,9 @@ def test_budget_exhaustion_reraises_original_when_all_fallbacks_fail(
         )
 
 
-def test_provider_order_defaults_to_xai_then_grok_then_gemini(monkeypatch):
+def test_provider_order_defaults_to_gemini_then_xai_then_grok(monkeypatch):
     monkeypatch.delenv("GESH_LLM_FAILOVER", raising=False)
-    assert llm_failover.provider_order() == ["xai", "grok", "gemini"]
+    assert llm_failover.provider_order() == ["gemini", "xai", "grok"]
 
 
 def test_xai_available_requires_key(monkeypatch):
