@@ -1676,8 +1676,29 @@ async def auth_login(request: Request):
 
 
 @app.post("/auth/logout")
-def auth_logout():
-    resp = JSONResponse(content={"ok": True})
+def auth_logout(request: Request):
+    """Drop the cookie and blacklist the signed session until it expires.
+
+    Deleting the cookie alone leaves the 7-day token reusable by anyone who
+    copied it. A revoke that cannot be recorded is a 503: the cookie is still
+    cleared, and the client can retry so the token does not stay live.
+    """
+    token = request.cookies.get(auth_users.COOKIE_NAME)
+    try:
+        outcome = auth_users.revoke_session(token)
+    except Exception:
+        logging.getLogger(__name__).warning("auth logout could not revoke the session")
+        outcome = "failed"
+    if outcome == "failed":
+        resp = JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "detail": "Sign-out could not revoke the session. Try again.",
+            },
+        )
+    else:
+        resp = JSONResponse(content={"ok": True})
     resp.delete_cookie(auth_users.COOKIE_NAME)
     return resp
 
