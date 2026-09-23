@@ -31,11 +31,48 @@ BASE_DIR = Path(__file__).parent
 OUTPUT = BASE_DIR / "live_portfolio_snapshot.json"
 
 
-def _f(x, default=0.0):
+def _finite_money(value: object) -> float | None:
+    """A finite dollar figure. Bool / NaN / inf / overflow stay unknown.
+
+    A measured ``0`` is kept. ``or``-chaining money fields would treat $0
+    settled buying power as missing and size against ``portfolio.cash``,
+    which this builder's own tests mark as the wrong (non-settled) figure.
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
     try:
-        return float(x)
-    except (TypeError, ValueError):
-        return default
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _f(x, default=0.0):
+    """Finite number or ``default``. Bool / NaN / inf / overflow are unknown.
+
+    Used for quantity, average cost, pending deposits, and headline total —
+    never for a last mark (see ``_positive_price``).
+    """
+    num = _finite_money(x)
+    return default if num is None else num
+
+
+def _settled_cash(portfolio: dict[str, Any]) -> float:
+    """Settled unleveraged cash from the MCP portfolio object.
+
+    Prefer ``buying_power.buying_power`` (including a measured $0). Fall
+    back to ``cash`` only when that field is absent or unusable — never
+    when it is legitimately zero. A scalar ``buying_power`` is accepted
+    so a flat MCP shape cannot AttributeError the daily snapshot.
+    """
+    raw_bp = portfolio.get("buying_power")
+    if isinstance(raw_bp, dict):
+        settled = _finite_money(raw_bp.get("buying_power"))
+    else:
+        settled = _finite_money(raw_bp)
+    if settled is None:
+        settled = _finite_money(portfolio.get("cash"))
+    return 0.0 if settled is None else settled
 
 
 def _positive_price(x) -> float | None:
@@ -47,13 +84,8 @@ def _positive_price(x) -> float | None:
     and then fold that $0 into portfolio_equity — understating the book and
     skewing every Kelly / Monte Carlo weight. Unknown is not zero.
     """
-    if x is None or x == "":
-        return None
-    try:
-        value = float(x)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(value) or value <= 0:
+    value = _finite_money(x)
+    if value is None or value <= 0:
         return None
     return value
 
@@ -103,12 +135,15 @@ def build(
             quotes[sym] = q
             quote_meta[sym] = quote_provenance(item, session)
 
-    # ── Cash / buying power (mirror fetch_live_snapshot.py exactly) ──
-    bp = pf.get("buying_power") or {}
-    settled_cash = _f(bp.get("buying_power") or pf.get("cash"))
+    # ── Cash / buying power ──
+    # MCP buying_power.buying_power is settled + unleveraged. A measured $0
+    # (fully invested) must stay $0 — ``or pf.cash`` used to invent dry powder.
+    if not isinstance(pf, dict):
+        pf = {}
+    settled_cash = _settled_cash(pf)
     pending_deposits = _f(pf.get("pending_deposits"))
     total_value = _f(pf.get("total_value"))
-    deployable = settled_cash  # MCP buying_power is already settled+unleveraged
+    deployable = settled_cash
 
     holdings = []
     unpriced: list[str] = []
