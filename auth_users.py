@@ -1112,8 +1112,11 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
     under ``BEGIN IMMEDIATE``, creates the one verified pre-v2 backup, and fails closed
     before copying if any child row lacks a real owner.
     """
-    _ensure_revoked_sessions(con)
+    # Only an already-v2 database may gain this table here. Creating it first
+    # makes an empty database look pre-existing, so the migration writes a
+    # pre-v2 backup and then rejects that backup for a schema mismatch.
     if _schema_v2_ready(con):
+        _ensure_revoked_sessions(con)
         return
 
     con.execute("BEGIN IMMEDIATE")
@@ -1121,6 +1124,7 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
         # Another process may have completed migration while this connection waited
         # for the writer lock. Re-check before backing up or changing any schema.
         if _schema_v2_ready(con):
+            _ensure_revoked_sessions(con)
             con.commit()
             return
 

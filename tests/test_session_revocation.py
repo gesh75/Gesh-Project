@@ -111,6 +111,20 @@ def test_revoke_prunes_expired_rows_and_authenticate_does_not():
     assert len(jtis) == 1
 
 
+def test_brand_new_database_creates_revoked_sessions_without_a_pre_v2_backup(
+    tmp_path: Path,
+) -> None:
+    au.init_auth_db()
+    backup = tmp_path / "auth.pre-v2.bak"
+    assert not backup.exists()
+    assert not Path(str(backup) + ".manifest.json").exists()
+    with au._conn() as con:
+        name = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='revoked_sessions'"
+        ).fetchone()
+    assert name is not None
+
+
 def test_existing_v2_db_gains_revoked_sessions_without_a_full_migration():
     au.create_user("a@b.com", "pw")
     with au._conn() as con:
