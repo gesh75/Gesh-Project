@@ -44,6 +44,7 @@ Also do **not** run AI calls, brokerage actions, billing actions, or production 
 ## 5. Architecture quick map
 
 - `server.py` — FastAPI app and customer-facing routes
+- `routers/health.py` — public `/healthz`, `/api/me`, favicon, `/api/security/health` (PR #276)
 - `data_fetcher.py` — live portfolio, holdings, quotes, snapshot loading
 - `rh_mcp_data.py` / `rh_order_review.py` / `tax_lots_enrich.py` — read-only Robinhood MCP (OHLCV, broker preflight, purchase-side wash). See `docs/RH_MCP.md`
 - `ai_analyzer.py` — Claude prompt orchestration and structured outputs

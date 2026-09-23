@@ -238,7 +238,12 @@ def prior_close(sym: str) -> float | None:
             cols = list(getattr(close_obj, "columns", []))
             if sym in cols:
                 close_obj = close_obj[sym]
-            elif len(cols) == 1:
+            elif len(cols) == 1 and (
+                not isinstance(cols[0], str) or cols[0].upper() in (sym.upper(), "CLOSE")
+            ):
+                # Same unlabeled/neutral single-column rule as _latest_close_meta.
+                # A frame labeled with a DIFFERENT ticker must not price this symbol
+                # (the NVDA-as-TSLA contamination class).
                 close_obj = close_obj[cols[0]]
             else:
                 return None

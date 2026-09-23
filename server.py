@@ -16,9 +16,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+# Bootstrap this checkout's config before modules capture environment values at
+# import time. Existing process/launchd variables remain authoritative.
+load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
 
 import llm_gateway
 import price_source  # locked yf.download adapter (thread-safety)
@@ -332,6 +337,15 @@ def _parse_pos_float(tok: str | None) -> float | None:
     return v if v > 0 else None
 
 
+def _parse_nonneg_float(tok: str | None) -> float | None:
+    """A non-negative float from a token (0 allowed to reset cost basis), tolerating $ and commas; else None."""
+    try:
+        v = float(str(tok).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+    return v if v >= 0 else None
+
+
 def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
     """Parse a pasted block of positions — one per line — for bulk book import.
 
@@ -367,7 +381,7 @@ def _parse_bulk_book(text: str) -> tuple[list[dict], list[str]]:
             {
                 "symbol": sym,
                 "shares": _parse_pos_float(parts[1]) if len(parts) > 1 else None,
-                "avg_cost": _parse_pos_float(parts[2]) if len(parts) > 2 else None,
+                "avg_cost": _parse_nonneg_float(parts[2]) if len(parts) > 2 else None,
             }
         )
     return items, invalid
@@ -5032,9 +5046,20 @@ async def mybook_set(request: Request):
         body = {}
     sym = _safe_symbol((body or {}).get("symbol", ""))
     shares_input = (body or {}).get("shares")
-    ok = auth_users.set_position(email, sym, shares_input, (body or {}).get("avg_cost"))
-    if not ok and len(auth_users.get_positions(email)) < auth_users._MAX_POSITIONS:
-        raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
+    raw_cost = (body or {}).get("avg_cost")
+    cost_val = None
+    if isinstance(raw_cost, bool):
+        cost_val = raw_cost  # preserve bool so auth_users rejects it
+    elif raw_cost not in (None, ""):
+        try:
+            cost_val = float(raw_cost)
+        except (TypeError, ValueError):
+            cost_val = "invalid"  # invalid float triggers clean validation rejection
+    ok = auth_users.set_position(email, sym, shares_input, cost_val)
+    if not ok:
+        held_syms = {p["symbol"] for p in auth_users.get_positions(email)}
+        if sym in held_syms or len(held_syms) < auth_users._MAX_POSITIONS:
+            raise HTTPException(status_code=400, detail="Invalid shares or avg_cost")
     # If the user supplied a real positive share count via the form, exit privacy/equal-weight mode.
     # (Only bulk symbols-only sets the flag on; single adds with sizes should turn it off.)
     try:
@@ -5724,10 +5749,14 @@ async def mybook_bulk(request: Request):
     """Bulk-import a whole book from one pasted block — the answer to "I have 85
     positions, not one at a time". Body: {"text": "<lines>", "replace": true?} or {"symbols": [...]}.
 
-    - If "replace": true, clears the existing book first (perfect after a bad symbols-only bulk).
-    - Privacy path: paste TICKERS ONLY (no share counts) → sets equal-weight mode (sizes private, 1/N weighting).
+    - If "replace": true AND at least one parseable position is present, clears
+      the existing book first (perfect after a bad symbols-only bulk). A
+      header-only / garbage paste must not wipe shares and cost basis.
+    - Privacy path: paste TICKERS ONLY (no share counts) onto an empty / already
+      equal-weight book → sets equal-weight mode (sizes private, 1/N weighting).
     - Paste with counts (e.g. "AAPL 120") → honors real shares and turns equal-weight off.
-    - Existing positions are upserted unless replace=true; the per-user cap (100) still applies (overflow → skipped_cap).
+    - Ticker-only lines never overwrite an existing row (same as import-watchlist).
+      Sized lines still upsert. The per-user cap (100) still applies (overflow → skipped_cap).
     """
     email = _session_email(request)
     if not email:
@@ -5740,28 +5769,71 @@ async def mybook_bulk(request: Request):
     syms = (body or {}).get("symbols")
     if not text and isinstance(syms, list):
         text = "\n".join(str(s) for s in syms)
-    replace = bool((body or {}).get("replace"))
-    if replace:
-        auth_users.clear_positions(email)
     items, invalid = _parse_bulk_book(text)
+    replace = bool((body or {}).get("replace"))
+    # Parse already ran. Only wipe when there is something to import — a
+    # header-only or junk paste used to DELETE FROM customer_positions and
+    # leave the customer with an empty book (toast: "Imported 0 positions").
+    did_replace = False
+    if replace and items:
+        auth_users.clear_positions(email)
+        did_replace = True
+    existing = auth_users.get_positions(email)
+    existing_syms = {p["symbol"] for p in existing}
+    sized_book = bool(existing) and not auth_users.get_equal_weight(email)
     any_sized = any(it["shares"] is not None for it in items)
-    imported, skipped_cap = [], []
+    imported, skipped_cap, skipped_existing, placeholder_imported = [], [], [], []
     for it in items:
+        sym = it["symbol"]
+        if it["shares"] is None and sym in existing_syms:
+            # Placeholder line — do not clobber a real size / cost basis.
+            skipped_existing.append(sym)
+            continue
         shares = it["shares"] if it["shares"] is not None else 1.0  # placeholder for symbols-only
-        ok = auth_users.set_position(email, it["symbol"], shares, it["avg_cost"])
-        (imported if ok else skipped_cap).append(it["symbol"])
-    if imported:
-        # Symbols-only paste → equal-weight (sizes private); any explicit size → real weights.
-        auth_users.set_equal_weight(email, not any_sized)
+        if it["shares"] is None and sized_book and not replace:
+            placeholder_imported.append(sym)
+        ok = auth_users.set_position(email, sym, shares, it["avg_cost"])
+        (imported if ok else skipped_cap).append(sym)
+        if ok:
+            existing_syms.add(sym)
+
+    req_ew = (body or {}).get("equal_weight")
+    if req_ew is not None:
+        auth_users.set_equal_weight(email, bool(req_ew))
+    elif imported:
+        # Symbols-only paste onto an empty/EW book → equal-weight. A ticker-only
+        # merge must not flip a sized book into privacy mode. Any explicit size
+        # turns equal-weight off.
+        if any_sized:
+            auth_users.set_equal_weight(email, False)
+        elif not sized_book:
+            auth_users.set_equal_weight(email, True)
     return {
         "status": "ok",
         "imported": imported,
         "skipped_cap": skipped_cap,
+        "skipped_existing": skipped_existing,
+        "placeholder_imported": placeholder_imported,
         "invalid": invalid,
         "equal_weight": auth_users.get_equal_weight(email),
-        "replaced": replace,
+        "replaced": did_replace,
         "data": mybook_get(request)["data"],
     }
+
+
+@app.post("/api/mybook/privacy")
+async def mybook_privacy(request: Request):
+    """Toggle equal-weight (privacy) mode on or off without altering stored positions or basis."""
+    email = _session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    ew = bool((body or {}).get("equal_weight", True))
+    auth_users.set_equal_weight(email, ew)
+    return {"status": "ok", "equal_weight": ew, "data": mybook_get(request)["data"]}
 
 
 def _analysis_stale_for(email: str, saved: dict | None) -> bool:
@@ -7513,7 +7585,7 @@ async def sector_hot_batch(request: Request):
 # ─── Trade Log ────────────────────────────────────────────────────────────────
 
 
-@app.get("/api/trades")
+@app.get("/api/trades", dependencies=[Depends(require_api_key)])
 def get_trades(
     symbol: str = None,
     limit: int = Query(50, ge=1, le=500),
@@ -7528,7 +7600,7 @@ def get_trades(
         raise _server_error(e)
 
 
-@app.get("/api/trades/stats")
+@app.get("/api/trades/stats", dependencies=[Depends(require_api_key)])
 def trade_stats(days: int = 30, paper: bool = False):
     """Win rate, P&L stats, scanner performance for last N days."""
     try:
@@ -7595,12 +7667,21 @@ async def paper_run_endpoint(request: Request):
     try:
         body = await request.json()
         payload = _resolved_payload()
-        total = payload["equity_summary"].get("portfolio_equity", 0)
+        eq = payload["equity_summary"]
+        total = eq.get("portfolio_equity", 0)
+        cash = eq.get("deployable")
+        if cash is None:
+            cash = eq.get("portfolio_cash", eq.get("cash"))
+        try:
+            cash_f = float(cash) if cash is not None else None
+        except (TypeError, ValueError):
+            cash_f = None
         results = run_paper_session(
             action_plan=body.get("action_plan", []),
             holdings=payload["holdings"],
             total_portfolio=total,
             scanner_source=body.get("scanner_source", "api"),
+            current_cash=cash_f,
         )
         return {"status": "ok", "data": results, "total_portfolio": total}
     except Exception as e:
@@ -7617,7 +7698,7 @@ def paper_check_closes():
         raise _server_error(e)
 
 
-@app.get("/api/paper/summary")
+@app.get("/api/paper/summary", dependencies=[Depends(require_api_key)])
 def paper_summary_endpoint(days: int = 7):
     """Paper vs live performance summary for last N days."""
     try:

@@ -47,8 +47,7 @@ def _holding(symbol="NVDA", price=100.0, equity=1000.0, quantity=10.0, **extra):
     return row
 
 
-def _plan(gate_mod, holdings, kelly, *, total_eq=10_000.0, cash=2_000.0,
-          rsi=None, open_syms=None):
+def _plan(gate_mod, holdings, kelly, *, total_eq=10_000.0, cash=2_000.0, rsi=None, open_syms=None):
     return gate_mod.build_action_plan(
         holdings,
         kelly,
@@ -127,6 +126,25 @@ def test_action_plan_rsi_69_does_not_override(gate_mod):
         rsi={"NVDA": 69.0},
         cash=5_000.0,
     )
+    assert _row(plan, "NVDA")["action"] == "BUY"
+
+
+def test_action_plan_missing_rsi_is_not_defaulted_to_zero(gate_mod):
+    missing = object()
+
+    class UnknownRSI(dict):
+        def get(self, key, default=missing):
+            assert default is missing, "missing RSI must stay absent, not become numeric zero"
+            return super().get(key)
+
+    plan = _plan(
+        gate_mod,
+        [_holding()],
+        {"NVDA": {"action": "ADD", "optimal_pct": 25}},
+        rsi=UnknownRSI(),
+        cash=5_000.0,
+    )
+
     assert _row(plan, "NVDA")["action"] == "BUY"
 
 
@@ -263,3 +281,70 @@ def test_action_plan_trim_zero_quantity_emits_nothing(gate_mod):
         {"NVDA": {"action": "TRIM", "optimal_pct": 0}},
     )
     assert plan == []
+
+
+# ── Astra R2: one cumulative cash budget ─────────────────────────────────────
+def _buy_spend(plan) -> float:
+    return sum(r["shares"] * r["current_price"] for r in plan if r["action"] == "BUY")
+
+
+def test_action_plan_batch_buys_share_one_cash_budget(gate_mod):
+    """$1,500 cash − $500 buffer = $1,000 deployable for the whole batch.
+
+    Two ADD names each want $2,000. Independently capping each at $1,000
+    would spend $2,000. Remaining cash must be decremented after each BUY.
+    Holdings order is the allocation order (first name wins leftover).
+    """
+    holdings = [
+        _holding("AAA", equity=0.0, price=100.0, quantity=0),
+        _holding("BBB", equity=0.0, price=100.0, quantity=0),
+    ]
+    kelly = {
+        "AAA": {"action": "ADD", "optimal_pct": 2},
+        "BBB": {"action": "ADD", "optimal_pct": 2},
+    }
+    plan = _plan(gate_mod, holdings, kelly, total_eq=100_000.0, cash=1_500.0)
+    assert _buy_spend(plan) <= 1_000.0
+    aaa = next(r for r in plan if r["symbol"] == "AAA" and r["action"] == "BUY")
+    assert aaa["shares"] == 10
+    assert not any(r["symbol"] == "BBB" and r["action"] == "BUY" for r in plan)
+
+
+def test_action_plan_single_buy_still_capped_at_buffer(gate_mod):
+    holdings = [_holding("AAA", equity=0.0, price=100.0, quantity=0)]
+    kelly = {"AAA": {"action": "ADD", "optimal_pct": 2}}
+    plan = _plan(gate_mod, holdings, kelly, total_eq=100_000.0, cash=1_500.0)
+    assert _buy_spend(plan) <= 1_000.0
+    assert _row(plan, "AAA")["shares"] == 10
+
+
+def test_action_plan_zero_deployable_emits_no_buy(gate_mod):
+    holdings = [
+        _holding("AAA", equity=0.0, price=100.0, quantity=0),
+        _holding("BBB", equity=0.0, price=100.0, quantity=0),
+    ]
+    kelly = {
+        "AAA": {"action": "ADD", "optimal_pct": 10},
+        "BBB": {"action": "ADD", "optimal_pct": 10},
+    }
+    plan = _plan(gate_mod, holdings, kelly, total_eq=100_000.0, cash=500.0)
+    assert _buy_spend(plan) == 0.0
+    assert not any(r["action"] == "BUY" for r in plan)
+
+
+def test_action_plan_trim_proceeds_are_not_spent_on_later_buy(gate_mod):
+    """Proposed SELL/TRIM cash is unsettled — later BUYs cannot spend it."""
+    holdings = [
+        _holding("AAA", equity=5_000.0, price=100.0, quantity=50),
+        _holding("BBB", equity=0.0, price=100.0, quantity=0),
+    ]
+    kelly = {
+        "AAA": {"action": "TRIM", "optimal_pct": 0},
+        "BBB": {"action": "ADD", "optimal_pct": 5},
+    }
+    plan = _plan(gate_mod, holdings, kelly, total_eq=100_000.0, cash=1_500.0)
+    assert _row(plan, "AAA")["action"] == "TRIM"
+    assert _buy_spend(plan) <= 1_000.0
+    bbb = next(r for r in plan if r["symbol"] == "BBB")
+    assert bbb["action"] == "BUY"
+    assert bbb["shares"] == 10

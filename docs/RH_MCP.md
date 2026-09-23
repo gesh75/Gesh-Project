@@ -221,19 +221,33 @@ it off unless you have measured conclusive `OK`/`REJECTED` coverage.
 
 ---
 
-## 6. Snapshot builder pitfall (still on main)
+## 6. Snapshot builder — unknown is not zero (PR #248)
 
-`build_snapshot_from_mcp.py::_f()` defaults unparseable values to `0.0`, and
-last-trade price goes through `_f()`. A missing / blank quote therefore writes
-`price: 0.0`, `equity: 0.0`, `percent_change: -100` and folds that mark into
-`portfolio_equity`. Kelly, Monte Carlo, and ECG then size against an
-understated book.
+`build_snapshot_from_mcp.py::_f()` still defaults unparseable **cash / qty /
+average-cost** values to `0.0`. Last-trade price does **not** go through `_f()`.
 
-`rh_mcp_data._f()` already returns `None` for empty — do not "align" the
-snapshot builder the other way. A partial `get_equity_quotes` response should
-fail the build **before** writing `live_portfolio_snapshot.json` so chain
-fallback tiers can run. Until that lands, treat any new `price <= 0` row as
-poison, not a real print.
+`_positive_price()` returns `None` for missing, blank, non-numeric, non-finite,
+or `<= 0` marks. A holding without a usable quote is collected in `unpriced`
+and **skipped** — it is never written as `price: 0.0` / `equity: 0.0` /
+`percent_change: -100`.
+
+If `unpriced` is non-empty after the loop, the builder prints
+
+`[build_snapshot] ERROR: unpriced holdings … — refusing to write a $0 mark`
+
+and **`sys.exit(1)` before writing** `live_portfolio_snapshot.json`. The daily
+chain's three snapshot tiers then run. Do not "align" this with
+`rh_mcp_data._f()` (that helper already returns `None` for empty). Do not
+default last-trade through `_f(..., default=0.0)` — that is the poison this
+guard exists to prevent.
+
+Cash / buying-power still uses `_f()`. MCP `buying_power.buying_power` is
+settled and unleveraged; `buying_power_leveraged` is pinned equal to
+`deployable` (the MCP exposes no Gold-margin figure).
+
+Startup `:9000` login is reuse-only (`auth.login(allow_credentials=False)`).
+A missing pickle does **not** POST `.env` credentials (PR #268); the process
+serves the MCP snapshot instead.
 
 ---
 
@@ -247,6 +261,8 @@ poison, not a real print.
 | Reviewer never runs | `GESH_BROKER_REVIEW=0`, or 9-gate rejected (review is post-approve only) |
 | `SystemExit` / every engine dies at import | `GESH_RH_ACCOUNT` unset — must be in the process env (launchd does not read `.env` unless the script exports it) |
 | `direct MCP fetch failed` in `/tmp/gesh_fullchain.log` | Tier 1 is broken; the chain silently paid the `claude -p` courier. See CLAUDE.md snapshot fallback |
+| `[build_snapshot] ERROR: unpriced holdings` then a later good snapshot | Partial MCP quotes — refuse is correct. Check which symbol lacked `last_trade_price`; do not patch the builder to write `$0` |
+| A holding in the snapshot has `price: 0.0` | Stale builder (pre-#248) or a different writer (`fetch_live_snapshot.py`). Current MCP builder cannot emit that row |
 | Tests reuse a symbol and see stale bars/lots | Call `rh_mcp_data.clear_caches()` / `rh_order_review.reset()` |
 
 ---
@@ -257,7 +273,9 @@ poison, not a real print.
 ./venv/bin/python -m pytest \
   tests/test_rh_mcp_integration.py \
   tests/test_tax_lots_enrich.py \
-  tests/test_gen_report2_tax.py -q
+  tests/test_gen_report2_tax.py \
+  tests/test_build_snapshot_unpriced.py \
+  tests/test_mcp_snapshot_not_pickle.py -q
 ```
 
 Offline only — mocks sit at `_get_session` / `loader`. Do not hit the live

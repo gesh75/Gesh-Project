@@ -34,7 +34,7 @@ beautifulsoup4==4.14.3
 lxml==6.1.0
 praw==7.8.1
 vaderSentiment==3.3.2
-nltk==3.10.0
+nltk==3.10.3
 
 # Macro data
 fredapi==0.5.2
@@ -49,6 +49,8 @@ APScheduler==3.11.2
 # Utilities
 httpx==0.28.1
 tenacity==9.1.4
+# Explicit security floor for transitive crypto consumers.
+cryptography==50.0.1
 
 # Shared core package (Phase 3 de-duplication), pinned to the peeled COMMIT SHA.
 #
@@ -76,7 +78,7 @@ tenacity==9.1.4
 # coercing to False. Missing still selects the conservative default.
 # NOTE: d4e9f46 is 2 commits PAST the v0.6.1 tag (f11c460) and still declares
 # __version__ "0.6.1" — the commit SHA is the only unambiguous identifier.
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@56f14d4e3a8fd527a9637cc7fb1ce2042c11aee0
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@a6d287bbb146add4d21523c9c9bffdfb6b3cfc8a
 # Local dev override — when actively working ON gesh-core, install editable
 # instead so changes are picked up live:  pip install -e ../gesh-core
 # PR105-RUN-02: pinned to match requirements.lock — an unpinned direct dep lets a

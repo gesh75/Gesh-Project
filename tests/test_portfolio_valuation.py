@@ -12,7 +12,13 @@ from decimal import Decimal
 
 import pytest
 
-from portfolio_valuation import MONEY_TOLERANCE, Position, to_decimal, value_positions
+from portfolio_valuation import (
+    MONEY_TOLERANCE,
+    Position,
+    day_change_from_aggregates,
+    to_decimal,
+    value_positions,
+)
 
 
 def P(sym, qty, *, cost=None, price=None, prior=None):
@@ -204,3 +210,94 @@ def test_large_book_stays_within_tolerance():
 def test_bad_quantity_rejected_at_construction():
     with pytest.raises(ValueError):
         Position.build("A", "not-a-number")
+
+
+# ─── aggregate day change (owner snapshot path) ──────────────────────────────
+# value_positions needs per-holding priors. The owner snapshot only has one
+# adjusted_equity_previous_close. day_change_from_aggregates is the same
+# arithmetic for that shape — untested until now, and the only place the
+# cash-in-the-denominator rule lives.
+
+
+def test_aggregate_day_change_cash_is_in_the_denominator():
+    """Docstring example: +$8,000 on $88,000 positions + $20,000 cash is 8%,
+    not the 10% you get if cash is left out of the prior-close total."""
+    dc = day_change_from_aggregates(
+        positions_value=88_000,
+        prior_close_positions_value=80_000,
+        cash=20_000,
+    )
+    assert dc.available is True
+    assert dc.amount == Decimal("8000.00")
+    assert dc.percent == Decimal("8.0000")
+    assert dc.prior_close_equity == Decimal("100000.00")
+    assert dc.positions_percent == Decimal("10.0000")  # positions-only, named separately
+    assert dc.reason is None
+
+
+def test_aggregate_day_change_missing_prior_is_unavailable_not_zero():
+    dc = day_change_from_aggregates(
+        positions_value=10_000,
+        prior_close_positions_value=None,
+        cash=500,
+    )
+    assert dc.available is False
+    assert dc.amount is None
+    assert dc.percent is None
+    assert dc.positions_percent is None
+    assert dc.reason == "missing_prior_close"
+
+
+def test_aggregate_day_change_bool_is_missing_not_one():
+    """to_decimal rejects bool so True cannot invent a $1 book."""
+    dc = day_change_from_aggregates(
+        positions_value=True,
+        prior_close_positions_value=100,
+        cash=0,
+    )
+    assert dc.available is False
+    assert dc.amount is None
+    assert dc.reason == "missing_prior_close"
+
+
+def test_aggregate_day_change_zero_prior_total_keeps_amount_hides_percent():
+    dc = day_change_from_aggregates(
+        positions_value=50,
+        prior_close_positions_value=0,
+        cash=0,
+    )
+    assert dc.available is False
+    assert dc.amount == Decimal("50.00")
+    assert dc.percent is None
+    assert dc.prior_close_equity == Decimal("0.00")
+    assert dc.reason == "prior_close_equity_not_positive"
+
+
+def test_aggregate_day_change_prior_cash_defaults_to_cash():
+    same = day_change_from_aggregates(
+        positions_value=110,
+        prior_close_positions_value=100,
+        cash=25,
+    )
+    explicit = day_change_from_aggregates(
+        positions_value=110,
+        prior_close_positions_value=100,
+        cash=25,
+        prior_close_cash=25,
+    )
+    assert same.amount == explicit.amount == Decimal("10.00")
+    assert same.percent == explicit.percent == Decimal("8.0000")
+
+
+def test_aggregate_day_change_known_prior_cash_move():
+    """A deposit mid-day is not a market gain — pass the real prior cash."""
+    dc = day_change_from_aggregates(
+        positions_value=88_000,
+        prior_close_positions_value=80_000,
+        cash=20_000,
+        prior_close_cash=10_000,
+    )
+    # (88k+20k) − (80k+10k) = 18k on a 90k prior book
+    assert dc.amount == Decimal("18000.00")
+    assert dc.percent == Decimal("20.0000")
+    assert dc.prior_close_equity == Decimal("90000.00")

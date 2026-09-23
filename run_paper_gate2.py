@@ -35,9 +35,12 @@ import time
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 
 from gesh_core.trading.autopilot_core import entry_floor_blocks
+from run_manifest import available_rsi_by_symbol
+
 try:
     from gesh_core.trading.autopilot_core import precision_overlay_blocks
 except ImportError:  # pinned SHA without the overlay — fail OPEN, keep the paper chain alive
@@ -137,6 +140,44 @@ def _order_target_pct(order: dict, holdings: list[dict], total_eq: float) -> flo
 CASH_BUFFER_USD = 500.0  # Rule 8: never deploy the last $500
 
 
+def _finite_money(value: object) -> float | None:
+    """A finite dollar/share figure. Bool / NaN / inf / overflow stay unknown.
+
+    JSON ``true`` must not become $1 of deployable cash or 1 share of notional.
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _deployable_cash(equity_sum: Mapping[str, object] | None) -> float:
+    """Settled unleveraged cash. Prefer ``deployable``, never buying_power."""
+    if not isinstance(equity_sum, Mapping):
+        return 0.0
+    raw = equity_sum.get("deployable")
+    if raw is None:
+        raw = equity_sum.get("portfolio_cash")
+    if raw is None:
+        raw = equity_sum.get("cash")
+    parsed = _finite_money(raw)
+    return 0.0 if parsed is None else parsed
+
+
+def _order_notional_usd(order: Mapping[str, object] | None) -> float:
+    """BUY/ADD notional for the session cash floor. Never raises."""
+    if not isinstance(order, Mapping):
+        return 0.0
+    shares = _finite_money(order.get("shares"))
+    price = _finite_money(order.get("current_price"))
+    if shares is None or price is None:
+        return 0.0
+    return shares * price
+
+
 def build_action_plan(
     holdings: list[dict],
     kelly: Mapping[str, object] | None,
@@ -153,10 +194,17 @@ def build_action_plan(
     An already-open daily-analysis paper position skips re-entry.
     TRIM share counts are ceil'd then clamped to the held quantity so a
     whole-share floor cannot drop a TRIM on a fractional position.
+
+    Cash budget (Astra R2): accepted BUY notional is subtracted from remaining
+    deployable (cash − $500). Holdings list order is the allocation order.
+    Proposed TRIM/SELL proceeds are not added back.
     """
     rsi_by_sym = {} if rsi_by_sym is None else rsi_by_sym
     open_paper_symbols = set() if open_paper_symbols is None else open_paper_symbols
     cash_blocked = cash < CASH_BUFFER_USD
+    remaining = Decimal(str(cash)) - Decimal(str(CASH_BUFFER_USD))
+    if remaining < 0:
+        remaining = Decimal("0")
     action_plan: list[dict] = []
 
     for h in holdings:
@@ -180,15 +228,26 @@ def build_action_plan(
                                     'current_price': price,
                                     'signal_reason': 'Rule 8: cash < $500 — ADD blocked'})
                 continue
-            if rsi_by_sym.get(sym, 0) >= 70:
+            rsi = rsi_by_sym.get(sym)
+            if rsi is not None and rsi >= 70:
                 action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
                                     'current_price': price,
                                     'signal_reason': f'Rule 5: RSI={rsi_by_sym[sym]:.0f}>=70 — ADD overridden'})
                 continue
-            usd    = max(0.0, opt / 100 * total_eq - equity)
-            usd    = min(usd, max(0.0, cash - CASH_BUFFER_USD))   # keep the $500 buffer
-            shares = math.floor(usd / price)
+            usd = (
+                Decimal(str(opt)) / Decimal(100) * Decimal(str(total_eq))
+                - Decimal(str(equity))
+            )
+            if usd < 0:
+                usd = Decimal("0")
+            usd = min(usd, remaining)
+            price_d = Decimal(str(price))
+            shares = (
+                int((usd / price_d).to_integral_value(rounding=ROUND_FLOOR))
+                if price_d > 0 else 0
+            )
             if shares > 0:
+                remaining -= Decimal(shares) * price_d
                 action_plan.append({'symbol': sym, 'action': 'BUY', 'shares': shares,
                                     'current_price': price,
                                     'signal_reason': f'Kelly {k_act}: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%'})
@@ -222,6 +281,7 @@ def gate_and_execute(
     raw_score_by_sym: Mapping[str, float] | None = None,
     min_entry_score: float = 0.50,
     consensus_by_sym: Mapping[str, dict] | None = None,
+    current_cash: float | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Causal audit chain per order: intent → risk decision → record if APPROVED.
 
@@ -240,9 +300,15 @@ def gate_and_execute(
     swallowed onto the gate result. Only an explicitly conclusive REJECTED
     verdict vetoes: UNAUTHORIZED/UNAVAILABLE/ERROR mean "not checked" and must
     never be read as either approval or refusal.
+
+    ``current_cash`` is the session remaining-cash figure passed into the
+    recorder (``run_paper_session``). Each accepted BUY/ADD subtracts notional
+    so a later one-order record call still sees the $500 floor. TRIM/SELL
+    proceeds are not added back.
     """
     gate_results: list[dict] = []
     created: list[dict] = []
+    remaining_cash = current_cash
     for a in executable:
         side = 'BUY' if a['action'] == 'BUY' else 'SELL'  # TRIM → SELL for the gate contract
         intent = intent_builder(
@@ -252,7 +318,17 @@ def gate_and_execute(
             rationale=a.get('signal_reason'),
         )
         symbol_payload = dict(gate_payload)
-        symbol_payload['as_of'] = (quote_as_of_by_symbol or {}).get(a['symbol'])
+        quote_ts = (quote_as_of_by_symbol or {}).get(a['symbol'])
+        symbol_payload['as_of'] = quote_ts
+        if quote_ts:
+            # Stamp per-symbol provenance so DATA_FRESH cannot fall back to the
+            # transport as_of when holdings carry no quote timestamp (Astra R5).
+            provenance = dict(symbol_payload.get('quote_provenance') or {})
+            prior = dict(provenance.get(a['symbol']) or {})
+            prior['quote_as_of'] = quote_ts
+            prior.setdefault('timestamp_basis', 'quote_as_of')
+            provenance[a['symbol']] = prior
+            symbol_payload['quote_provenance'] = provenance
         if raw_score_by_sym is not None and side == 'BUY':
             try:
                 raw_score = float(raw_score_by_sym.get(a['symbol']))
@@ -334,9 +410,33 @@ def gate_and_execute(
                 print(f"     ↳ broker preflight failed (non-fatal): {e}")
 
         try:
-            recs = recorder([{**a, 'intent_uuid': intent.intent_uuid}],
-                            holdings, total_eq, scanner_source=scanner_source)
-            created.extend({**r, 'intent_uuid': intent.intent_uuid} for r in recs or [])
+            recs = recorder(
+                [{**a, 'intent_uuid': intent.intent_uuid}],
+                holdings,
+                total_eq,
+                scanner_source=scanner_source,
+                current_cash=remaining_cash,
+            )
+            recs = recs or []
+            created.extend({**r, 'intent_uuid': intent.intent_uuid} for r in recs)
+            blocked = next((r for r in recs if r.get("blocked")), None)
+            if blocked:
+                # Recorder is part of the causal chain: APPROVED must mean filled.
+                gate_results[-1] = {
+                    **gate_results[-1],
+                    "approved": False,
+                    "reason": blocked.get("reason") or "allocation blocked at record",
+                    "gates": {
+                        **(gate_results[-1].get("gates") or {}),
+                        "ALLOCATION": False,
+                    },
+                }
+                print(
+                    f"     ⛔ {a['symbol']} allocation blocked at record — "
+                    f"{gate_results[-1]['reason']}"
+                )
+            elif remaining_cash is not None and a.get("action") in ("BUY", "ADD"):
+                remaining_cash = remaining_cash - _order_notional_usd(a)
         except Exception as e:
             gate_results[-1] = {**gate_results[-1], 'record_error': str(e)}
             print(f"{_t()} [gate] paper record failed for {a['symbol']} (non-fatal): {e}")
@@ -371,11 +471,10 @@ def main(results_path: str | Path | None = None) -> int:
     kelly      = eng.get('kelly', {})
     regime_raw = eng.get('regime', {})
     total_eq   = float(equity_sum.get('total') or equity_sum.get('portfolio_equity') or 0)
-    cash       = float(equity_sum.get('cash') or 0)
+    cash       = _deployable_cash(equity_sum)
 
     regimes_list = regime_raw.get('regimes', []) if isinstance(regime_raw, dict) else []
-    rsi_by_sym = {rd.get('symbol'): float(rd.get('rsi') or 0)
-                  for rd in regimes_list if isinstance(rd, dict)}
+    rsi_by_sym = available_rsi_by_symbol(regimes_list)
 
     print(f"{_t()} [gate] holdings={len(holdings)}  total=${total_eq:,.2f}  cash=${cash:.2f}")
 
@@ -481,6 +580,7 @@ def main(results_path: str | Path | None = None) -> int:
             consensus_by_sym=consensus,
             reviewer=_reviewer,
             review_blocks=_review_blocks,
+            current_cash=cash,
         )
         paper_block['created'] = paper_created
         print(f"{_t()} [gate] paper session: {len(paper_created)} record(s) (approved intents only)")

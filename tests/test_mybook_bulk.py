@@ -141,6 +141,59 @@ def test_bulk_equal_weight_makes_weights_equal_regardless_of_price(client, monke
     assert d["total_equity"] is None
 
 
+def test_bulk_ticker_only_does_not_clobber_sized_book(client, monkeypatch):
+    """Replace is off by default. A ticker-only paste must not wipe sizes or flip EW."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    seed = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800})
+    assert seed.status_code == 200
+    body = c.post("/api/mybook/bulk", json={"text": "NVDA\nAAA"}).json()
+    assert "NVDA" not in body["imported"]
+    assert "AAA" in body["imported"]
+    assert body["equal_weight"] is False
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 50.0
+    assert stored["NVDA"]["avg_cost"] == 800.0
+    assert stored["AAA"]["shares"] == 1.0
+    d = c.get("/api/mybook").json()["data"]
+    assert d["equal_weight"] is False
+    nvda = [p for p in d["positions"] if p["symbol"] == "NVDA"][0]
+    assert nvda["quantity"] == 50.0
+    assert nvda["average_buy_price"] == 800.0
+
+
+def test_bulk_ticker_only_on_equal_weight_book_stays_equal_weight(client, monkeypatch):
+    """Empty/EW ticker-only import is unchanged: new names join, EW stays on."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    first = c.post("/api/mybook/bulk", json={"text": "AAA\nBBB"}).json()
+    assert first["equal_weight"] is True
+    body = c.post("/api/mybook/bulk", json={"text": "AAA\nCCC"}).json()
+    assert "AAA" not in body["imported"]
+    assert "CCC" in body["imported"]
+    assert body["equal_weight"] is True
+    stored = {p["symbol"]: p["shares"] for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["AAA"] == 1.0
+    assert stored["CCC"] == 1.0
+
+
+def test_bulk_sized_line_still_upserts_existing(client, monkeypatch):
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+    assert c.post(
+        "/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800}
+    ).status_code == 200
+    body = c.post("/api/mybook/bulk", json={"text": "NVDA 60 900"}).json()
+    assert "NVDA" in body["imported"]
+    assert body["equal_weight"] is False
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 60.0
+    assert stored["NVDA"]["avg_cost"] == 900.0
+
+
 def test_bulk_with_sizes_disables_equal_weight(client, monkeypatch):
     server, c = client
     _as(server, monkeypatch, "cust@x.com")
@@ -336,3 +389,144 @@ def test_upstream_classifier_handles_exception_without_cause():
     assert server._upstream_unavailable_error(RuntimeError("truncated")) is None
     he = server._server_error(RuntimeError("truncated"))
     assert he.status_code == 500  # clean 500
+
+
+# ─── PR #307 Opus Audit Gap Regression Tests ─────────────────────────────────
+
+
+def test_bulk_skipped_existing_reported_and_does_not_wipe(client, monkeypatch):
+    """Gap 2: Skipped tickers on already-held positions must return in skipped_existing."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800.0})
+    c.post("/api/mybook", json={"symbol": "BBB", "shares": 10, "avg_cost": 40.0})
+
+    resp = c.post("/api/mybook/bulk", json={"text": "NVDA\nBBB"}).json()
+    assert resp["imported"] == []
+    assert resp["skipped_existing"] == ["NVDA", "BBB"]
+
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 50.0
+    assert stored["NVDA"]["avg_cost"] == 800.0
+    assert stored["BBB"]["shares"] == 10.0
+    assert stored["BBB"]["avg_cost"] == 40.0
+
+
+def test_bulk_replace_with_oversized_lines_does_not_wipe_positions(client, monkeypatch):
+    """Gap 5: If text exceeds _BULK_MAX_LINES with replace=True, book must not be wiped."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800.0})
+    text = "\n".join(f"SYM{i}" for i in range(server._BULK_MAX_LINES + 1))
+
+    resp = c.post("/api/mybook/bulk", json={"text": text, "replace": True})
+    assert resp.status_code == 413
+
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert "NVDA" in stored
+    assert stored["NVDA"]["shares"] == 50.0
+
+
+def test_bulk_replace_with_only_invalid_lines_does_not_wipe_positions(client, monkeypatch):
+    """Replace + header/junk paste must not DELETE the sized book.
+
+    #308 moved parse before clear to survive the 413 line-cap path, but a
+    parse that yields zero items (Symbol,Shares,Cost / ???) still called
+    clear_positions. The dashboard then toasts 'Imported 0' and reloads
+    an empty book — share counts and cost basis are gone.
+    """
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800.0})
+    c.post("/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150.0})
+
+    resp = c.post(
+        "/api/mybook/bulk",
+        json={"text": "Symbol,Shares,Cost\n???\n@@@", "replace": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["imported"] == []
+    assert body["replaced"] is False
+    assert body["invalid"]
+
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 50.0
+    assert stored["NVDA"]["avg_cost"] == 800.0
+    assert stored["AAPL"]["shares"] == 10.0
+    assert stored["AAPL"]["avg_cost"] == 150.0
+
+
+def test_bulk_replace_with_valid_items_still_replaces(client, monkeypatch):
+    """A real replace paste must still clear the old book, then import."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800.0})
+    c.post("/api/mybook", json={"symbol": "AAPL", "shares": 10, "avg_cost": 150.0})
+
+    body = c.post(
+        "/api/mybook/bulk",
+        json={"text": "TSLA 5 200", "replace": True},
+    ).json()
+    assert body["replaced"] is True
+    assert body["imported"] == ["TSLA"]
+
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert set(stored) == {"TSLA"}
+    assert stored["TSLA"]["shares"] == 5.0
+    assert stored["TSLA"]["avg_cost"] == 200.0
+
+
+def test_explicit_zero_cost_stored_and_accepted(client, monkeypatch):
+    """Gap 6: An explicit 0.0 cost basis is stored as 0.0, not None."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    # Via bulk import
+    resp = c.post("/api/mybook/bulk", json={"text": "NVDA 10 0.0"}).json()
+    assert "NVDA" in resp["imported"]
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["avg_cost"] == 0.0
+
+    # Via single add
+    resp2 = c.post("/api/mybook", json={"symbol": "NVDA", "shares": 15, "avg_cost": 0.0}).json()
+    assert resp2["status"] == "ok"
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 15.0
+    assert stored["NVDA"]["avg_cost"] == 0.0
+
+
+def test_sized_book_privacy_toggle(client, monkeypatch):
+    """Gap 3: Sized book can toggle equal-weight mode via /api/mybook/privacy."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
+
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 50, "avg_cost": 800.0})
+    assert server.auth_users.get_equal_weight("cust@x.com") is False
+
+    # Flip to privacy mode
+    p_resp = c.post("/api/mybook/privacy", json={"equal_weight": True}).json()
+    assert p_resp["status"] == "ok"
+    assert p_resp["equal_weight"] is True
+    assert server.auth_users.get_equal_weight("cust@x.com") is True
+
+    # Stored shares and basis remain intact
+    stored = {p["symbol"]: p for p in server.auth_users.get_positions("cust@x.com")}
+    assert stored["NVDA"]["shares"] == 50.0
+    assert stored["NVDA"]["avg_cost"] == 800.0
+
+    # Flip back to sized mode
+    p_resp2 = c.post("/api/mybook/privacy", json={"equal_weight": False}).json()
+    assert p_resp2["status"] == "ok"
+    assert p_resp2["equal_weight"] is False
+    assert server.auth_users.get_equal_weight("cust@x.com") is False

@@ -30,6 +30,7 @@ from .state import (
     log_intent,
     paper_realized_pnl_usd_today,
 )
+from gesh_core.trading.state import LedgerUnavailable
 
 # Shared seam-free risk-gate primitives — single source of truth in gesh-core
 # (Phase 3.5). GateVerdict (the verdict type execution.py also imports),
@@ -47,9 +48,7 @@ from gesh_core.trading.risk_gate_core import (  # noqa: F401
 # ─── Verdict shape ────────────────────────────────────────────────────────────
 
 
-
 # ─── Helper checks ────────────────────────────────────────────────────────────
-
 
 
 # Market-regime AVOID gate (synced with gesh-project-trading, rule #40):
@@ -62,6 +61,7 @@ def _spy_above_ma(ma_days: int = 200) -> bool | None:
     """True if SPY ≥ trailing ma_days SMA, False if below, None if data unknown
     (→ fail-open). Cached 6h so the gate never hammers Yahoo per intent."""
     import time as _t
+
     hit = _SPY_TREND_CACHE.get("v")
     if hit is not None and (_t.time() - hit[0]) <= _SPY_TREND_TTL_S:
         return hit[1]
@@ -72,8 +72,8 @@ def _spy_above_ma(ma_days: int = 200) -> bool | None:
         # keeps it sighted.
         import numpy as _np
         import price_source as _ps
-        raw = _ps.yf_download("SPY", period="2y", interval="1d",
-                              auto_adjust=True, progress=False)
+
+        raw = _ps.yf_download("SPY", period="2y", interval="1d", auto_adjust=True, progress=False)
         closes = raw["Close"].squeeze().dropna().values.astype(float)
         if len(closes) >= max(50, ma_days // 4):
             val = bool(closes[-1] >= float(_np.mean(closes[-ma_days:])))
@@ -103,20 +103,35 @@ def _within_market_hours(cfg: RiskConfig) -> bool:
     except Exception:
         tz = ZoneInfo("America/New_York")
     now = datetime.now(tz)
-    if now.weekday() >= 5:           # Sat/Sun
+    if now.weekday() >= 5:  # Sat/Sun
         return False
     try:
         open_h, open_m = (int(p) for p in cfg.market_open_hhmm.split(":"))
         close_h, close_m = (int(p) for p in cfg.market_close_hhmm.split(":"))
     except (ValueError, AttributeError):
-        return False   # malformed time config → fail closed (treat as outside hours)
+        return False  # malformed time config → fail closed (treat as outside hours)
     return dtime(open_h, open_m) <= now.time() <= dtime(close_h, close_m)
 
 
-def _quote_age_seconds(portfolio: dict[str, Any]) -> float | None:
-    """Best-effort: derive quote freshness from payload['as_of'] or holdings timestamp."""
-    raw = portfolio.get("as_of") or portfolio.get("equity_summary", {}).get("as_of")
-    if not raw:
+# Permitted future-quote clock skew. Code constant, not an env/deployment
+# knob — changing it needs reviewer agreement (Astra R5).
+MAX_QUOTE_FUTURE_SKEW_SECONDS = 60
+
+_QUOTE_TS_FIELDS = (
+    "quote_as_of",
+    "updated_at",
+    "venue_last_trade_time",
+    "last_trade_time",
+)
+
+
+def _norm_symbol(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _parse_quote_ts(raw: Any) -> datetime | None:
+    """Parse an ISO quote timestamp. Naive values are UTC (same as snapshot age)."""
+    if raw is None or raw == "":
         return None
     try:
         ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
@@ -133,11 +148,136 @@ def _quote_age_seconds(portfolio: dict[str, Any]) -> float | None:
             # the identical naive→UTC treatment there or autopilot will still
             # false-reject on fresh snapshots (deep-audit P0, PR #186).
             ts = ts.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - ts).total_seconds()
+        return ts
     except Exception:
         return None
 
 
+def _row_for_symbol(rows: Any, symbol: str) -> dict[str, Any] | None:
+    if not isinstance(rows, list):
+        return None
+    want = _norm_symbol(symbol)
+    for row in rows:
+        if isinstance(row, dict) and _norm_symbol(row.get("symbol")) == want:
+            return row
+    return None
+
+
+def _mapping_record(mapping: Any, symbol: str) -> Any:
+    if not isinstance(mapping, dict):
+        return None
+    if symbol in mapping:
+        return mapping[symbol]
+    want = _norm_symbol(symbol)
+    if want in mapping:
+        return mapping[want]
+    for key, value in mapping.items():
+        if _norm_symbol(key) == want:
+            return value
+    return None
+
+
+def _ts_from_record(rec: dict[str, Any]) -> tuple[datetime | None, str | None]:
+    """Return (parsed_ts, status) for a per-symbol quote record.
+
+    status is None when no timestamp field is present, 'ok' when parsed,
+    'malformed' when a field is present but unparseable.
+    """
+    for field in _QUOTE_TS_FIELDS:
+        raw = rec.get(field)
+        if raw in (None, ""):
+            continue
+        ts = _parse_quote_ts(raw)
+        return (ts, "ok") if ts is not None else (None, "malformed")
+    return None, None
+
+
+def _lookup_symbol_quote(portfolio: dict[str, Any], symbol: str) -> tuple[datetime | None, str]:
+    """Resolve the selected quote timestamp for ``symbol``.
+
+    status: 'ok' | 'missing' | 'malformed' | 'no_row'
+
+    A per-symbol row (provenance / holding / watchlist / quotes map) is never
+    replaced by the container snapshot as_of — that was the laundering path.
+    Container as_of is used only when no per-symbol row exists (daily-chain
+    substitution onto payload.as_of, and unit snapshots with only as_of).
+    """
+    rec = _mapping_record(portfolio.get("quote_provenance"), symbol)
+    if isinstance(rec, dict):
+        raw = rec.get("quote_as_of")
+        if raw in (None, ""):
+            return None, "missing"
+        ts = _parse_quote_ts(raw)
+        return (ts, "ok") if ts is not None else (None, "malformed")
+
+    row_without_ts = False
+    holding = _row_for_symbol(portfolio.get("holdings"), symbol)
+    if holding is not None:
+        ts, status = _ts_from_record(holding)
+        if status is not None:
+            return ts, status
+        row_without_ts = True
+
+    watch = _row_for_symbol(portfolio.get("watchlist"), symbol)
+    if watch is not None:
+        ts, status = _ts_from_record(watch)
+        if status is not None:
+            return ts, status
+        row_without_ts = True
+
+    quotes = _mapping_record(portfolio.get("quotes"), symbol)
+    if isinstance(quotes, dict):
+        ts, status = _ts_from_record(quotes)
+        if status is not None:
+            return ts, status
+        row_without_ts = True
+
+    qmap = portfolio.get("quote_as_of")
+    if isinstance(qmap, dict):
+        want = _norm_symbol(symbol)
+        key_hit = False
+        raw: Any = None
+        if symbol in qmap:
+            key_hit, raw = True, qmap[symbol]
+        else:
+            for key, value in qmap.items():
+                if _norm_symbol(key) == want:
+                    key_hit, raw = True, value
+                    break
+        if key_hit:
+            if raw in (None, ""):
+                return None, "missing"
+            ts = _parse_quote_ts(raw)
+            return (ts, "ok") if ts is not None else (None, "malformed")
+
+    if row_without_ts:
+        return None, "missing"
+    return None, "no_row"
+
+
+def _quote_age_seconds(portfolio: dict[str, Any], symbol: str | None = None) -> float | None:
+    """Age of the selected quote vs now, in seconds (negative = future).
+
+    When ``symbol`` is omitted, ages the container ``as_of`` (legacy helper
+    tests). When provided, ages that symbol's quote and never lets a fresh
+    snapshot stamp stand in for a stale/missing per-symbol quote.
+    """
+    ts: datetime | None = None
+    if symbol:
+        ts, status = _lookup_symbol_quote(portfolio, symbol)
+        if status == "no_row":
+            ts = _parse_quote_ts(
+                portfolio.get("as_of") or (portfolio.get("equity_summary") or {}).get("as_of")
+            )
+        elif status != "ok":
+            return None
+    else:
+        ts = _parse_quote_ts(
+            portfolio.get("as_of") or (portfolio.get("equity_summary") or {}).get("as_of")
+        )
+    if ts is None:
+        return None
+    return (datetime.now(timezone.utc) - ts).total_seconds()
 
 
 def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
@@ -159,7 +299,10 @@ def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
         base = cfg.paper_cash_usd or 0.0
         if base <= 0:
             return 0.0
-        return paper_realized_pnl_usd_today() / base
+        try:
+            return paper_realized_pnl_usd_today() / base
+        except LedgerUnavailable:
+            return None
     eq_summary = portfolio.get("equity_summary", {})
     prev = float(eq_summary.get("adjusted_equity_previous_close", 0) or 0)
     curr = float(eq_summary.get("portfolio_equity", 0) or 0)
@@ -169,6 +312,7 @@ def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
 
 
 # ─── Main entry ───────────────────────────────────────────────────────────────
+
 
 def evaluate(
     intent: TradeIntent,
@@ -190,8 +334,9 @@ def evaluate(
     # HOLD shortcuts: log, no checks, approve trivially.
     if intent.action == "HOLD":
         gates["HOLD_SHORTCUT"] = True
-        decision_id = log_decision(intent_id, "APPROVED", "HOLD requires no execution",
-                                   gates, asdict(cfg))
+        decision_id = log_decision(
+            intent_id, "APPROVED", "HOLD requires no execution", gates, asdict(cfg)
+        )
         return GateVerdict(True, None, gates, intent_id, decision_id)
 
     # Validation first — malformed intent should never even hit a gate.
@@ -252,9 +397,7 @@ def evaluate(
         used = count_orders_today()
         gates["ORDER_RATE"] = used < cfg.max_orders_per_day
         if not gates["ORDER_RATE"]:
-            rejection_reason = (
-                f"Daily order cap reached ({used}/{cfg.max_orders_per_day})"
-            )
+            rejection_reason = f"Daily order cap reached ({used}/{cfg.max_orders_per_day})"
     else:
         gates["ORDER_RATE"] = False
 
@@ -272,31 +415,41 @@ def evaluate(
     # 7. Daily loss
     if rejection_reason is None:
         pnl = _daily_pnl_pct(portfolio_snapshot, cfg)
-        gates["DAILY_LOSS"] = pnl >= -cfg.max_daily_loss_pct
-        if not gates["DAILY_LOSS"]:
-            rejection_reason = (
-                f"Daily P&L {pnl:+.2%} exceeds max loss {-cfg.max_daily_loss_pct:+.2%}"
-            )
+        if pnl is None:
+            gates["DAILY_LOSS"] = False
+            rejection_reason = "Paper ledger unavailable — cannot prove daily loss"
+        else:
+            gates["DAILY_LOSS"] = pnl >= -cfg.max_daily_loss_pct
+            if not gates["DAILY_LOSS"]:
+                rejection_reason = (
+                    f"Daily P&L {pnl:+.2%} exceeds max loss {-cfg.max_daily_loss_pct:+.2%}"
+                )
     else:
         gates["DAILY_LOSS"] = False
 
-    # 8. Data freshness (only enforce if we actually have a timestamp)
+    # 8. Data freshness — age the selected symbol's quote, not the snapshot.
     if rejection_reason is None:
-        age = _quote_age_seconds(portfolio_snapshot)
+        age = _quote_age_seconds(portfolio_snapshot, symbol=intent.symbol)
         # Mode-aware: LIVE keeps the tight 300s; PAPER tolerates the daily chain's
         # own multi-minute pipeline (still rejects a genuinely stale prior-day
         # snapshot). Missing timestamp still fails closed in both modes.
-        max_age = (cfg.max_price_age_seconds_paper if cfg.paper_mode
-                   else cfg.max_price_age_seconds)
+        max_age = cfg.max_price_age_seconds_paper if cfg.paper_mode else cfg.max_price_age_seconds
         if age is None:
-            gates["DATA_FRESH"] = False      # fail closed: no timestamp → cannot prove freshness
-            rejection_reason = "Quote age unknown — snapshot missing 'as_of' timestamp"
+            gates["DATA_FRESH"] = False  # fail closed: no timestamp → cannot prove freshness
+            rejection_reason = (
+                f"Quote age unknown — no parseable quote timestamp for {intent.symbol}"
+            )
+        elif age < -MAX_QUOTE_FUTURE_SKEW_SECONDS:
+            gates["DATA_FRESH"] = False
+            rejection_reason = (
+                f"Quote timestamp is {abs(age):.0f}s in the future "
+                f"(max skew {MAX_QUOTE_FUTURE_SKEW_SECONDS}s)"
+            )
         else:
-            gates["DATA_FRESH"] = age <= max_age
+            effective_age = 0.0 if age < 0 else age
+            gates["DATA_FRESH"] = effective_age <= max_age
             if not gates["DATA_FRESH"]:
-                rejection_reason = (
-                    f"Quote age {age:.0f}s exceeds max {max_age}s"
-                )
+                rejection_reason = f"Quote age {effective_age:.0f}s exceeds max {max_age}s"
     else:
         gates["DATA_FRESH"] = False
 

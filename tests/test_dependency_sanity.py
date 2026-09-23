@@ -20,11 +20,21 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: 56f14d4 (v0.8.2 + PR #35 DCF tests + PR #46
-# CI fd-limit). Declared as a LITERAL on purpose — bumping the dependency then
-# requires editing this line, so the change is reviewable in the application repo.
-GESH_CORE_SHA = "56f14d4e3a8fd527a9637cc7fb1ce2042c11aee0"
+# The pinned gesh-core commit: a6d287b (Precision Overlay). Declared as a LITERAL
+# on purpose — bumping the dependency then requires editing this line, so the
+# change is reviewable.
+GESH_CORE_SHA = "a6d287bbb146add4d21523c9c9bffdfb6b3cfc8a"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
+SECURE_RUNTIME_PINS = {
+    "cryptography": "50.0.1",
+    "nltk": "3.10.3",
+}
+UNPATCHED_NLTK_PATH_APIS = {
+    "AveragedPerceptron",
+    "PerceptronTagger",
+    "TransitionParser",
+    "save_maxent_params",
+}
 
 
 def _pins(text: str) -> dict[str, str]:
@@ -80,6 +90,44 @@ def test_lock_exists_and_matches_the_core_pins():
     for pkg in ("uvicorn", "fastapi", "yfinance", "numpy", "pandas"):
         assert lock.get(pkg) == core.get(pkg), f"{pkg} drift: lock {lock.get(pkg)} vs req {core.get(pkg)}"
     assert "openbb" not in lock, "openbb must not be in the core lock"
+
+
+def test_security_sensitive_runtime_pins_are_current_and_locked():
+    """Known-vulnerable versions must not return through source/lock drift."""
+    core = _pins(REQ.read_text())
+    lock = _pins(LOCK.read_text())
+
+    for package, expected in SECURE_RUNTIME_PINS.items():
+        assert core.get(package) == expected, (
+            f"{package} source pin is {core.get(package)!r}; expected secure version {expected}"
+        )
+        assert lock.get(package) == expected, (
+            f"{package} lock pin is {lock.get(package)!r}; expected secure version {expected}"
+        )
+
+    assert lock.get("defusedxml") == "0.7.1", (
+        "nltk 3.10.3 requires defusedxml; the fully-resolved lock must pin it"
+    )
+
+
+def test_unpatched_nltk_path_apis_are_not_used_by_product_code():
+    """Keep the scoped PYSEC-2026-3740 exception inapplicable to GESH."""
+    source_paths = list(ROOT.glob("*.py"))
+    for package_dir in ("routers", "scripts", "security", "trading", "vendor"):
+        source_paths.extend((ROOT / package_dir).rglob("*.py"))
+
+    findings: dict[str, list[str]] = {}
+
+    for path in source_paths:
+        relative = path.relative_to(ROOT)
+        used = sorted(api for api in UNPATCHED_NLTK_PATH_APIS if api in path.read_text())
+        if used:
+            findings[str(relative)] = used
+
+    assert not findings, (
+        "PYSEC-2026-3740 affects these NLTK model-path APIs; remove the CI exception "
+        f"or isolate the calls before using them: {findings}"
+    )
 
 
 def test_lock_pins_gesh_core_to_an_immutable_commit():

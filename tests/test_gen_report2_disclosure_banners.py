@@ -30,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def _load_banner_fns() -> dict[str, object]:
     src = (REPO_ROOT / "gen_report2.py").read_text()
     tree = ast.parse(src)
-    wanted = {"_provider_banner", "_signal_gate_banner"}
+    wanted = {"_provider_banner", "_signal_gate_banner", "_executive_decision_card"}
     ns: dict[str, object] = {"_esc": _esc}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in wanted:
@@ -263,3 +263,159 @@ def test_clean_report_omits_both_disclosure_banners(tmp_path):
     html = _render(tmp_path, _minimal_engine())
     assert "MODEL FAILOVER" not in html
     assert "SIGNAL vs GATE" not in html
+
+
+def test_executive_decision_card_renders_approved_trade_and_blocked(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {
+                    "symbol": "MSTR",
+                    "action": "BUY",
+                    "shares": 1,
+                    "current_price": 165.88,
+                    "signal_reason": "Kelly ADD",
+                },
+                {
+                    "symbol": "MU",
+                    "action": "TRIM",
+                    "shares": 1.0,
+                    "current_price": 1034.91,
+                    "signal_reason": "Kelly TRIM",
+                },
+            ],
+            "gate_results": [
+                {"symbol": "MSTR", "action": "BUY", "shares": 1, "approved": True},
+                {
+                    "symbol": "MU",
+                    "action": "TRIM",
+                    "shares": 1.0,
+                    "approved": False,
+                    "reason": "No open paper long",
+                },
+            ],
+        },
+        [{"symbol": "MSTR"}, {"symbol": "MU"}, {"symbol": "NVDA"}],
+        720.0,
+        37000.0,
+    )
+    assert "TODAY&#x27;S ACTIONABLE VERDICT" in card or "TODAY'S ACTIONABLE VERDICT" in card
+    assert "MSTR" in card and "APPROVED — paper" in card
+    assert "APPROVED FOR EXECUTION" not in card
+    assert "Cleared all 10 Risk Gates" not in card
+    assert "8-gate risk check" in card
+    assert "MU" in card and "No open paper long" in card
+    assert "1 positions in Passive Hold" in card
+
+
+def test_executive_decision_card_all_balanced_when_empty_plan(banners):
+    card = banners["_executive_decision_card"]({}, [{"symbol": "NVDA"}], 700.0, 35000.0)
+    assert "All positions balanced" in card
+    assert "No executable trade orders today" in card
+
+
+def test_executive_decision_card_all_blocked_is_not_balanced(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "HOOD", "action": "BUY", "shares": 2, "current_price": 50.0},
+            ],
+            "gate_results": [
+                {"symbol": "HOOD", "action": "BUY", "approved": False, "reason": "CASH_FLOOR"},
+            ],
+        },
+        [{"symbol": "HOOD"}, {"symbol": "NVDA"}],
+        400.0,
+        10000.0,
+    )
+    assert "All positions balanced" not in card
+    assert "No approved orders today" in card
+    assert "CASH_FLOOR" in card
+    assert "1 positions in Passive Hold" in card
+
+
+def test_executive_decision_card_missing_gate_is_not_evaluated(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "IONQ", "action": "ADD", "shares": 3, "current_price": 40.0},
+            ],
+            "gate_results": [],
+        },
+        [{"symbol": "IONQ"}],
+        800.0,
+        9000.0,
+    )
+    assert "NOT EVALUATED — gate failed" in card
+    assert "Not approved by risk gate" not in card
+    assert "All positions balanced" not in card
+    assert "NOT EVALUATED" in card
+
+
+def test_executive_decision_card_hold_rows_are_not_blocked(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {
+                    "symbol": "NVDA",
+                    "action": "HOLD",
+                    "shares": 0,
+                    "signal_reason": "RSI=72≥70 (Rule 5)",
+                },
+                {"symbol": "KO", "action": "HOLD", "shares": 0, "signal_reason": "already open"},
+            ],
+            "gate_results": [],
+        },
+        [{"symbol": "NVDA"}, {"symbol": "KO"}],
+        900.0,
+        12000.0,
+    )
+    assert "All positions balanced" in card
+    assert "Blocked By Risk Gates" not in card
+    assert "NOT EVALUATED" not in card
+    assert "2 positions in Passive Hold" in card
+
+
+def test_executive_decision_card_escapes_hostile_symbol_and_reason(banners):
+    evil = "<script>alert(1)</script>"
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {
+                    "symbol": evil,
+                    "action": "BUY",
+                    "shares": 1,
+                    "current_price": 10.0,
+                    "signal_reason": "<img src=x onerror=alert(1)>",
+                },
+            ],
+            "gate_results": [
+                {"symbol": evil, "action": "BUY", "approved": True},
+            ],
+        },
+        [],
+        1000.0,
+        1000.0,
+    )
+    assert "<script>" not in card
+    assert "<img" not in card
+    assert "&lt;script&gt;" in card
+    assert "&lt;img src=x onerror=alert(1)&gt;" in card
+
+
+def test_report_card_uses_deployable_not_cash(tmp_path):
+    html = _render(
+        tmp_path,
+        _minimal_engine(
+            equity_summary={
+                "total": 20000,
+                "cash": 10000,
+                "deployable": 720.0,
+                "portfolio_equity": 19000,
+            },
+            action_plan=[],
+        ),
+    )
+    assert "TODAY'S ACTIONABLE VERDICT" in html or "TODAY&#x27;S ACTIONABLE VERDICT" in html
+    assert "$720.00" in html
+    assert "$10,000.00" not in html

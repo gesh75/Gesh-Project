@@ -38,6 +38,8 @@ def test_report_does_not_default_missing_cvar_or_garch_to_zero():
     assert "format_optional_usd" in src
     assert "cvar_95_pct(monte)" in src
     assert "var_95_status" in src
+    assert "_calibration_banner" in src
+    assert "calibration_degraded_symbols" in src
 
 
 def test_lot_coverage_caveat_never_reads_as_all_clear():

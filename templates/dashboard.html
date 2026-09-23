@@ -857,7 +857,7 @@ const $=id=>document.getElementById(id);
 // automatically — the server's require_api_key accepts an owner session. So
 // protected calls just need credentials:'same-origin'; no header, no prompt.
 const authHeaders=extra=>Object.assign({},extra||{});
-const daEsc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');  // HTML-escape untrusted (AI/news/SEC) text
+const daEsc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');  // HTML-escape untrusted text. &#39; is for HTML text/attrs; event-handler JS still decodes it — _SYMBOL_RE is the onclick fence.
 // One-time cleanup of any key a previous build persisted.
 try{localStorage.removeItem('gesh_api_key');}catch(e){}
 const fmt=n=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(n);
@@ -1239,6 +1239,7 @@ function buildRadarChart(cid,scores){
 // Recompute from the two grounded numbers so every surface agrees. null if unknown.
 function daFvPct(fv){
   if(!fv||fv.estimate==null||fv.current==null||!fv.current) return null;
+  if(typeof fv.estimate==='boolean'||typeof fv.current==='boolean') return null;
   return (fv.estimate-fv.current)/Math.abs(fv.current)*100;
 }
 // {pct, label, str} from the canonical gap — status label derived from the SAME
@@ -1251,7 +1252,7 @@ function daFairValue(fv){
 }
 
 function buildFV(fv){
-  if(!fv||!fv.estimate) return '<span style="font-size:13px;color:var(--muted)">No estimate</span>';
+  if(!fv||!fv.estimate||typeof fv.estimate==='boolean'||typeof fv.current==='boolean') return '<span style="font-size:13px;color:var(--muted)">No estimate</span>';
   const c=fv.current||0,e=fv.estimate||0,mx=Math.max(c,e)*1.08||1;
   const cw=Math.min(100,(c/mx)*100).toFixed(1),ew=Math.min(100,(e/mx)*100).toFixed(1);
   const p=daFvPct(fv), pv=p!=null?p:0;
@@ -2790,7 +2791,7 @@ async function loadMyBook(){
         <td style="padding:10px 10px;text-align:right;font-variant-numeric:tabular-nums">$${daFmt(p.current_price,2)}</td>
         <td style="padding:10px 10px;text-align:right;font-weight:700;font-variant-numeric:tabular-nums">${eqw?'—':'$'+daFmt(p.equity,2)}</td>
         <td style="padding:10px 10px;text-align:right;color:var(--muted2)">${daFmt(p.portfolio_percentage,1)}%</td>
-        <td style="padding:10px 10px;text-align:right;font-variant-numeric:tabular-nums">${(p.percent_change==null)?'<span style="color:var(--muted)">—</span>':'<span class="'+cls(p.percent_change)+'">'+(p.percent_change>=0?'+':'')+Number(p.percent_change).toFixed(2)+'%</span>'}</td>
+        <td style="padding:10px 10px;text-align:right;font-variant-numeric:tabular-nums">${(p.day_change_pct==null)?'<span style="color:var(--muted)" title="Today needs the previous session close.">—</span>':'<span class="'+cls(p.day_change_pct)+'">'+(p.day_change_pct>=0?'+':'')+Number(p.day_change_pct).toFixed(2)+'%</span>'}</td>
         <td style="padding:10px 10px;text-align:left;max-width:280px">${buildPlainActionCell(signals[p.symbol], kellyDeltas[p.symbol])}</td>
         <td style="padding:10px 10px;text-align:right"><span onclick="mybookRemove('${daEsc(p.symbol)}')" style="cursor:pointer;color:var(--muted)" title="Remove">✕</span></td>
       </tr>`).join('')}</tbody></table></div>
@@ -2808,6 +2809,12 @@ function parseQty(text){
   if(!t||!/^\d*\.?\d+$/.test(t)) return null;   // no sign, no exponent, no spaces
   const n=Number(t);
   return (Number.isFinite(n)&&n>0&&n<1e9)?n:null;
+}
+function parseCost(text){
+  const t=String(text==null?'':text).trim();
+  if(!t||!/^\d*\.?\d+$/.test(t)) return null;   // 0 allowed to clear/reset basis
+  const n=Number(t);
+  return (Number.isFinite(n)&&n>=0&&n<1e9)?n:null;
 }
 // Deliberate decimal rendering: a 0.00000001 position rendered as the raw
 // JS string "1e-8" in the SHARES column (audit F-04). Scientific notation is
@@ -2832,11 +2839,11 @@ async function mybookAdd(){
   const sym=(document.getElementById('mybook-sym').value||'').trim().toUpperCase();
   const shares=parseQty(document.getElementById('mybook-shares').value);
   const costRaw=(document.getElementById('mybook-cost').value||'').trim();
-  const cost=costRaw?parseQty(costRaw):null;
+  const cost=costRaw?parseCost(costRaw):null;
   mybookFormError('');
   if(!sym){ mybookFormError('Enter a ticker symbol.'); return; }
   if(shares===null){ mybookFormError('Shares must be a positive number (e.g. 12 or 2.5).'); return; }
-  if(costRaw&&cost===null){ mybookFormError('Average cost must be a positive number.'); return; }
+  if(costRaw&&cost===null){ mybookFormError('Average cost must be 0 or a positive number.'); return; }
   if(btn) btn.disabled=true;
   try{
     const r=await fetch('/api/mybook',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -3354,13 +3361,20 @@ async function mybookBulkImport(){
     if(!j){ if(window.toast) toast('Import failed','error'); return; }
     if(window.toast){
       const n=(j.imported||[]).length, cap=(j.skipped_cap||[]).length, bad=(j.invalid||[]).length;
+      const exist=(j.skipped_existing||[]).length;
+      const placeholder=(j.placeholder_imported||[]).length;
       let msg = (j.replaced ? 'Replaced book with ' : 'Imported ') + n + ' position' + (n===1?'':'s');
       if(j.equal_weight) msg+=' · equal-weight (sizes private)';
+      if(exist) msg+=' · '+exist+' already held (kept)';
+      if(placeholder) msg+=' · '+placeholder+' at 1 share (edit counts)';
       if(cap) msg+=' · '+cap+' over the 100 cap';
       if(bad) msg+=' · '+bad+' line'+(bad===1?'':'s')+' skipped';
-      toast(msg, n?'success':'error');
+      const isSuccess = n > 0 || exist > 0;
+      toast(msg, isSuccess ? 'success' : 'error');
     }
-    if(j.imported&&j.imported.length){ t.value=''; if(replaceEl) replaceEl.checked=false; document.getElementById('mybook-bulk-panel').style.display='none'; }
+    if((j.imported&&j.imported.length) || (j.skipped_existing&&j.skipped_existing.length)){
+      t.value=''; if(replaceEl) replaceEl.checked=false; document.getElementById('mybook-bulk-panel').style.display='none';
+    }
     loadMyBook();
   }catch(e){ if(window.toast) toast('Import failed','error'); }
 }
@@ -3583,9 +3597,11 @@ function buildMybookHistoryList(d){
 // Replay one stored run. The detail route mirrors /api/mybook/analyze's success
 // shape, so the SAME renderer paints it — and it also refreshes the Risk /
 // Signals / Radar panes, which read _mybookLastResult.
+// Stay on Home: #mybook-results lives inside #tab-home. Switching to Research
+// (the leftover Analyze-tab path) hid the replay and left a blank ticker desk.
 async function mybookHistoryOpen(id){
   const box=document.getElementById('mybook-results'); if(!box) return;
-  switchTab('analyze');
+  switchTab('home');
   box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Opening your saved analysis…</div></div>';
   box.scrollIntoView({behavior:'smooth',block:'start'});
   try{

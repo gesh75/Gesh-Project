@@ -148,3 +148,18 @@ def test_dashboard_does_not_recompute_day_change_from_percent_change():
     html = Path("templates/dashboard.html").read_text()
     assert "percent_change||0)/100" not in html.replace(" ", "")
     assert "day_change_available" in html  # the UI reads the canonical flag
+
+
+def test_dashboard_today_column_reads_day_change_pct_not_lifetime():
+    """The Home book table's TODAY cell must not bind percent_change
+    (lifetime vs cost). That is the Q-02 mix-up with a new label."""
+    html = Path("templates/dashboard.html").read_text()
+    start = html.index("async function loadMyBook")
+    rest = html[start:]
+    nxt = rest.find("\nasync function ")
+    nxt2 = rest.find("\nfunction ", 1)
+    cuts = [i for i in (nxt, nxt2) if i > 0]
+    body = rest if not cuts else rest[: min(cuts)]
+    row = body[body.index("pos.map(p=>") :]
+    assert "p.day_change_pct" in row
+    assert "p.percent_change" not in row

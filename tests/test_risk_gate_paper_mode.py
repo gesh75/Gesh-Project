@@ -86,3 +86,14 @@ def test_paper_daily_loss_zero_base_fails_safe(monkeypatch):
                         lambda: pytest.fail("must not query the book with zero base"))
     cfg = RiskConfig(paper_mode=True, paper_cash_usd=0.0)
     assert risk_gate._daily_pnl_pct(PORTFOLIO, cfg) == 0.0
+
+
+def test_paper_daily_loss_unavailable_ledger_is_not_flat(monkeypatch):
+    """Astra R3: a missing paper book must not look like a 0% healthy day."""
+    from gesh_core.trading.state import LedgerUnavailable
+
+    def _boom():
+        raise LedgerUnavailable("neither paper book is readable")
+
+    monkeypatch.setattr(risk_gate, "paper_realized_pnl_usd_today", _boom)
+    assert risk_gate._daily_pnl_pct(PORTFOLIO, _cfg(paper=True)) is None

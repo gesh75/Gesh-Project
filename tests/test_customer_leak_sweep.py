@@ -128,18 +128,6 @@ def client(monkeypatch, tmp_path):
                                          "regime_ran_at": "2026-07-04T13:00:00+00:00"}, raising=False)
     monkeypatch.setattr(server, "get_all_market_data", lambda syms: {s: {"price": 100.0} for s in syms}, raising=False)
     monkeypatch.setattr(server, "batch_fft_cycles", lambda syms: {s: {"signal": "NEUTRAL"} for s in syms}, raising=False)
-    # Owner trade rows carry raw realized-$ P&L (latent today: owner is paper-only,
-    # but /api/trades + /api/trades/stats are customer-reachable and unmasked keys
-    # would leak the instant a real trade is logged — 8th-pass, Fable audit).
-    monkeypatch.setattr(server, "get_trade_history",
-                        lambda *a, **k: [{"symbol": "NVDA", "realized_pnl": OWNER["trade_pnl"],
-                                          "pnl_pct": -4.2, "outcome": "LOSS"}], raising=False)
-    monkeypatch.setattr(server, "trade_summary_for_report",
-                        lambda *a, **k: {"win_rate_pct": 50.0, "total_realized_pnl": OWNER["trade_pnl"],
-                                         "best_trade": {"symbol": "NVDA", "realized_pnl": OWNER["trade_pnl"],
-                                                        "pnl_pct": 12.0},
-                                         "worst_trade": None}, raising=False)
-    monkeypatch.setattr(server, "get_paper_summary", lambda *a, **k: {"trades": 0}, raising=False)
     monkeypatch.setattr(server, "detect_consolidation", lambda *a, **k: {"found": False}, raising=False)
     monkeypatch.setattr(server, "is_sector_hot", lambda *a, **k: {"hot": False}, raising=False)
     monkeypatch.setattr(server, "get_analysis_history",
@@ -243,9 +231,6 @@ COVERED: dict[str, str] = {
     "/api/gemini/status": "/api/gemini/status",
     "/api/scanner/consolidation/{symbol}": "/api/scanner/consolidation/NVDA",
     "/api/scanner/sector/{symbol}": "/api/scanner/sector/NVDA",
-    "/api/trades": "/api/trades",
-    "/api/trades/stats": "/api/trades/stats",
-    "/api/paper/summary": "/api/paper/summary",
     "/api/tax/harvest": "/api/tax/harvest",
     "/api/benchmarks/{period}": "/api/benchmarks/1mo",
     "/api/explainability/{symbol}": "/api/explainability/NVDA",
@@ -267,6 +252,15 @@ EXCLUDED: dict[str, str] = {
     "/api/usage/summary": "OWNER-ONLY metering view (403s customer sessions — locked by "
                           "tests/test_mybook.py); the sweep's 200-with-masking contract "
                           "cannot apply to a route customers cannot read",
+    "/api/trades": "OWNER-ONLY operator trade ledger (require_api_key); exposes symbols "
+                   "and trade lifecycle rows, not a customer research feature. Customer "
+                   "403 and owner success are locked by tests/test_owner_surface_isolation.py",
+    "/api/trades/stats": "OWNER-ONLY aggregate statistics for the operator trade ledger "
+                         "(require_api_key); not a customer feature. Customer 403 and owner "
+                         "success are locked by tests/test_owner_surface_isolation.py",
+    "/api/paper/summary": "OWNER-ONLY operator paper-vs-live performance summary "
+                          "(require_api_key); not a customer feature. Customer 403 and owner "
+                          "success are locked by tests/test_owner_surface_isolation.py",
     "/api/account/export": "the caller's OWN account data as a file download, for the "
                            "Privacy-Policy §8 access/portability right — mask-EXEMPT by "
                            "design (masking would redact a user's own data back at them). "

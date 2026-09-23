@@ -12,6 +12,7 @@ must be rewritten.
 
 from __future__ import annotations
 
+import json
 import sys
 from types import ModuleType
 
@@ -56,7 +57,6 @@ def trade_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def allow_all(monkeypatch):
-    monkeypatch.setattr(pt, "load_config", lambda: {})
     monkeypatch.setattr(pt, "validate_action", lambda *a, **k: (True, ""))
 
 
@@ -94,7 +94,6 @@ def test_zero_shares_or_price_never_logs(trade_db, allow_all):
 
 
 def test_allocation_block_is_recorded_not_filled(trade_db, monkeypatch):
-    monkeypatch.setattr(pt, "load_config", lambda: {})
     monkeypatch.setattr(pt, "validate_action", lambda *a, **k: (False, "Max $ per trade exceeded"))
     out = pt.run_paper_session([_plan()], holdings=[], total_portfolio=100_000)
     assert len(out) == 1
@@ -104,15 +103,166 @@ def test_allocation_block_is_recorded_not_filled(trade_db, monkeypatch):
     assert tl.get_trade_history(is_paper=True) == []
 
 
-def test_auto_trade_gate_is_ignored_in_paper(trade_db, monkeypatch):
-    """Paper always runs — the Auto-trade live gate must not block a sim fill."""
-    monkeypatch.setattr(pt, "load_config", lambda: {})
-    monkeypatch.setattr(pt, "validate_action", lambda *a, **k: (False, "Auto-trade is disabled"))
-    out = pt.run_paper_session([_plan()], holdings=[], total_portfolio=50_000)
+def _paper_cfg(tmp_path, monkeypatch, **overrides):
+    """Point paper_trading's real validate_action at an isolated config."""
+    cfg = {
+        "auto_trade": False,
+        "max_stock_per_trade": 5_000.0,
+        "max_options_per_trade": 2_000.0,
+        "max_open_positions": 5,
+        "min_cash_buffer": 500.0,
+        "scanner_timeframe": "daily",
+        "paper_mode": True,
+    }
+    cfg.update(overrides)
+    path = tmp_path / "gesh_config.json"
+    path.write_text(json.dumps(cfg))
+    monkeypatch.setenv("GESH_CONFIG_PATH", str(path))
+    return path
+
+
+def test_auto_trade_off_does_not_block_valid_paper_fill(trade_db, tmp_path, monkeypatch):
+    """Paper skips live permission only — an under-cap BUY still fills."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_stock_per_trade=5_000.0)
+    out = pt.run_paper_session(
+        [_plan(shares=2.0, price=100.0)],
+        holdings=[],
+        total_portfolio=50_000,
+        current_cash=100_000,
+    )
     assert len(out) == 1
-    assert out[0]["blocked"] is False
+    assert out[0].get("blocked") is not True
     assert out[0]["trade_id"]
     assert tl.get_trade_by_id(out[0]["trade_id"], is_paper=True)["outcome"] == "OPEN"
+
+
+def test_paper_over_cap_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
+    """Astra R1: $200 vs $100 cap is rejected even with auto_trade OFF."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_stock_per_trade=100.0)
+    out = pt.run_paper_session(
+        [_plan(shares=2.0, price=100.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert len(out) == 1
+    assert out[0]["blocked"] is True
+    assert "exceeds max" in out[0]["reason"]
+    assert "trade_id" not in out[0]
+    assert tl.get_trade_history(is_paper=True) == []
+
+
+def test_paper_over_cap_blocked_when_auto_trade_on(trade_db, tmp_path, monkeypatch):
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=True, max_stock_per_trade=100.0)
+    out = pt.run_paper_session(
+        [_plan(shares=2.0, price=100.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0]["blocked"] is True
+    assert "exceeds max" in out[0]["reason"]
+    assert tl.get_trade_history(is_paper=True) == []
+
+
+def test_paper_position_cap_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
+    """Cap applies to open *paper* lots, not the live holdings list."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=2)
+    seeded = pt.run_paper_session(
+        [_plan(symbol="AAA", shares=1.0, price=10.0),
+         _plan(symbol="BBB", shares=1.0, price=10.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert all(not r.get("blocked") for r in seeded)
+    out = pt.run_paper_session(
+        [_plan(symbol="CCC", shares=1.0, price=10.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0]["blocked"] is True
+    assert "max open positions" in out[0]["reason"]
+    assert "trade_id" not in out[0]
+
+
+def test_paper_buy_fills_when_live_book_exceeds_position_cap(
+    trade_db, tmp_path, monkeypatch,
+):
+    """Live names must not consume the paper session's open-position cap."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=2)
+    live = [{"symbol": f"L{i}", "equity": 1.0} for i in range(8)]
+    out = pt.run_paper_session(
+        [_plan(shares=1.0, price=10.0)],
+        holdings=live,
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert len(out) == 1
+    assert out[0].get("blocked") is not True
+    assert out[0]["trade_id"]
+    assert tl.get_trade_by_id(out[0]["trade_id"], is_paper=True)["outcome"] == "OPEN"
+
+
+def test_paper_cash_floor_blocked_when_auto_trade_off(trade_db, tmp_path, monkeypatch):
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, min_cash_buffer=500.0)
+    out = pt.run_paper_session(
+        [_plan(shares=1.0, price=100.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=550.0,
+    )
+    assert out[0]["blocked"] is True
+    assert "minimum buffer" in out[0]["reason"]
+    assert tl.get_trade_history(is_paper=True) == []
+
+
+def test_paper_session_buys_share_one_cash_buffer(trade_db, tmp_path, monkeypatch):
+    """Each BUY must see remaining cash, not the session's starting cash.
+
+    $600 cash − $80 first BUY leaves $520. A second $80 BUY would leave $440,
+    below the $500 floor. Independently checking both against $600 would fill
+    both and overspend the buffer.
+    """
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, min_cash_buffer=500.0)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=1.0, price=80.0),
+            _plan(symbol="BBB", shares=1.0, price=80.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=600.0,
+    )
+    assert len(out) == 2
+    assert out[0].get("blocked") is not True
+    assert out[0]["trade_id"]
+    assert out[1]["blocked"] is True
+    assert "minimum buffer" in out[1]["reason"]
+    assert "trade_id" not in out[1]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["AAA"]
+
+
+def test_paper_session_does_not_spend_trim_proceeds(trade_db, tmp_path, monkeypatch):
+    """Paper TRIM/SELL cash is unsettled — later BUYs cannot spend it."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, min_cash_buffer=500.0)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=1.0, price=80.0),
+            _plan(symbol="AAA", action="SELL", shares=1.0, price=80.0),
+            _plan(symbol="BBB", shares=1.0, price=80.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=600.0,
+    )
+    assert out[0].get("blocked") is not True
+    assert out[1].get("closed") is True
+    assert out[2]["blocked"] is True
+    assert "minimum buffer" in out[2]["reason"]
+    assert tl.get_trade_history(open_only=True, is_paper=True) == []
 
 
 def test_buy_stop_and_target_use_default_percents(trade_db, allow_all):
@@ -147,7 +297,6 @@ def test_second_buy_sees_incremented_open_position_count(trade_db, monkeypatch):
         seen.append(open_positions)
         return True, ""
 
-    monkeypatch.setattr(pt, "load_config", lambda: {})
     monkeypatch.setattr(pt, "validate_action", _va)
     holdings = [{"symbol": "CASH", "equity": 0}, {"symbol": "SPY", "equity": 500}]
     pt.run_paper_session(
@@ -155,8 +304,81 @@ def test_second_buy_sees_incremented_open_position_count(trade_db, monkeypatch):
         holdings=holdings,
         total_portfolio=10_000,
     )
-    # One live holding with equity>0, then first BUY increments before the second.
-    assert seen == [1, 2]
+    # Paper book starts empty; first BUY increments before the second.
+    # Live holdings (SPY) must not seed the paper cap.
+    assert seen == [0, 1]
+
+
+def test_full_trim_releases_session_position_cap(trade_db, tmp_path, monkeypatch):
+    """A full TRIM must free the slot so a later BUY in the same plan can fill."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=1)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=2.0, price=10.0),
+            _plan(symbol="AAA", action="TRIM", shares=2.0, price=11.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0].get("blocked") is not True
+    assert out[1].get("closed") is True
+    assert out[2].get("blocked") is not True
+    assert out[2]["trade_id"]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["BBB"]
+
+
+def test_partial_trim_keeps_session_position_cap(trade_db, tmp_path, monkeypatch):
+    """A partial TRIM leaves the name open — the cap slot stays occupied."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=1)
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="AAA", shares=2.0, price=10.0),
+            _plan(symbol="AAA", action="TRIM", shares=1.0, price=11.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0].get("blocked") is not True
+    assert out[1].get("closed") is True
+    assert out[2]["blocked"] is True
+    assert "max open positions" in out[2]["reason"]
+    assert "trade_id" not in out[2]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["AAA"]
+
+
+def test_trim_with_no_open_long_does_not_decrement_position_cap(
+    trade_db, tmp_path, monkeypatch,
+):
+    """A no-op TRIM must not free a slot the book never held."""
+    _paper_cfg(tmp_path, monkeypatch, auto_trade=False, max_open_positions=1)
+    seeded = pt.run_paper_session(
+        [_plan(symbol="AAA", shares=1.0, price=10.0)],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert seeded[0].get("blocked") is not True
+    out = pt.run_paper_session(
+        [
+            _plan(symbol="ZZZ", action="TRIM", shares=1.0, price=10.0),
+            _plan(symbol="BBB", shares=1.0, price=10.0),
+        ],
+        holdings=[],
+        total_portfolio=10_000,
+        current_cash=100_000,
+    )
+    assert out[0]["blocked"] is True
+    assert "No open paper long" in out[0]["reason"]
+    assert out[1]["blocked"] is True
+    assert "max open positions" in out[1]["reason"]
+    open_rows = tl.get_trade_history(open_only=True, is_paper=True)
+    assert [r["symbol"] for r in open_rows] == ["AAA"]
 
 
 # ─── Auto-close ───────────────────────────────────────────────────────────────

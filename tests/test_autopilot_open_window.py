@@ -287,3 +287,27 @@ def test_open_window_consumes_marker_before_execution(monkeypatch, snapshot):
     autopilot._CANDIDATES.clear()
     autopilot.open_window()
     assert len(placed) == 1
+
+
+def test_open_window_aborts_when_consume_cannot_persist(monkeypatch, snapshot):
+    """Fail-closed: a marker write error must not place orders after a restart."""
+    placed: list = []
+    seed_intent = TradeIntent(
+        symbol="MSTR", action="BUY", confidence=0.9,
+        source="consensus", target_position_pct=0.02,
+    )
+    autopilot._CANDIDATES["MSTR"] = (seed_intent, {"verdict": "STRONG BUY"})
+
+    def boom(*_a, **_k):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(autopilot, "set_marker", boom)
+    monkeypatch.setattr(autopilot, "_ensure_logged_in", lambda: True)
+    monkeypatch.setattr(autopilot, "_load_data_fetcher", lambda: (lambda _: snapshot))
+    monkeypatch.setattr(autopilot, "_load_consensus", lambda: (lambda *a, **k: {}))
+    monkeypatch.setattr(autopilot, "place", lambda *a, **k: placed.append(a))
+
+    autopilot.open_window()
+
+    assert placed == []
+    assert "MSTR" in autopilot._CANDIDATES  # book left intact; job aborted before exec

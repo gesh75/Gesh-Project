@@ -7,6 +7,7 @@ Run with: /path/to/venv/bin/python fetch_live_snapshot.py   (PR105-RUN-01: the
 venv's generic interpreter; this repo declares Python 3.12 in .python-version)
 """
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -47,6 +48,86 @@ def extract_live_quote(
         'provider': 'robinhood_live',
         'session': 'robin_stocks',
         'timestamp_basis': 'unavailable',
+    }
+
+
+def _finite_money(value: object) -> float | None:
+    """A finite dollar figure. Bool / NaN / inf / overflow stay unknown.
+
+    JSON ``true`` must not become $1 of settled cash and skip the nested Gold
+    ``margin_balances.portfolio_cash`` fallback. ``float(10**10000)`` must not
+    take down the tier-3 snapshot.
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _first_positive_money(*candidates: object) -> float:
+    for raw in candidates:
+        parsed = _finite_money(raw)
+        if parsed is not None and parsed > 0:
+            return parsed
+    return 0.0
+
+
+def _money_or_zero(value: object) -> float:
+    parsed = _finite_money(value)
+    return 0.0 if parsed is None else parsed
+
+
+def equity_summary_from_rh(
+    account: dict[str, Any],
+    profile: dict[str, Any],
+    positions_equity: float,
+) -> dict[str, float]:
+    """Canonical deployable-cash math for the robin_stocks snapshot path.
+
+    Gold ``account['buying_power']`` is leveraged margin and must never become
+    the snapshot ``buying_power`` / ``cash`` / ``deployable`` figure. Pending
+    instant deposits are surfaced separately and are not sized against.
+
+    Settled cash lives on ``margin_balances.portfolio_cash`` in the robin_stocks
+    account profile (same contract as ``data_fetcher.get_total_equity``). A
+    top-level ``portfolio_cash`` is accepted when present; ``withdrawable_amount``
+    is last-resort only (Gold reads $0 while a deposit clears).
+    """
+    margin = account.get("margin_balances")
+    if not isinstance(margin, dict):
+        margin = {}
+    settled_cash = _first_positive_money(
+        account.get("portfolio_cash"),
+        margin.get("portfolio_cash"),
+        margin.get("unallocated_margin_cash"),
+        profile.get("withdrawable_amount"),
+    )
+    pending_deposits = _money_or_zero(account.get("uncleared_deposits"))
+    bp_leveraged = _money_or_zero(account.get("buying_power"))
+    withdrawable = _money_or_zero(profile.get("withdrawable_amount"))
+    account_equity = _money_or_zero(profile.get("equity"))
+    prev_close_equity = _money_or_zero(profile.get("adjusted_equity_previous_close"))
+    positions = _money_or_zero(positions_equity)
+    deployable = min(settled_cash, bp_leveraged) if bp_leveraged > 0 else settled_cash
+    cash = deployable
+    portfolio_total = positions + cash
+    return {
+        "portfolio_equity": round(positions, 2),
+        "cash": round(cash, 2),
+        "deployable": round(deployable, 2),
+        "settled_cash": round(settled_cash, 2),
+        "pending_deposits": round(pending_deposits, 2),
+        "buying_power": round(deployable, 2),
+        "buying_power_leveraged": round(bp_leveraged, 2),
+        "margin_buying_power": round(bp_leveraged, 2),
+        "withdrawable_amount": round(withdrawable, 2),
+        "uncleared_deposits": round(pending_deposits, 2),
+        "total": round(portfolio_total, 2),
+        "account_equity": round(account_equity, 2),
+        "adjusted_equity_previous_close": round(prev_close_equity, 2),
     }
 
 
@@ -119,9 +200,11 @@ def fetch():
     account = r.profiles.load_account_profile()
     # ── Deployable cash — THREE distinct fields, verified against the RH MCP ──
     # Confusing these three can cause deployable-cash values to churn:
-    #   • portfolio_cash         = settled, UNLEVERAGED cash. Matches the RH MCP's
-    #                              buying_power.buying_power (the broker's authoritative
-    #                              spendable). THIS is the figure to size against.
+    #   • portfolio_cash         = settled, UNLEVERAGED cash. On the robin_stocks
+    #                              account profile this is margin_balances.portfolio_cash
+    #                              (top-level portfolio_cash is optional). Matches the
+    #                              RH MCP's buying_power.buying_power. THIS is the
+    #                              figure to size against.
     #   • uncleared_deposits     = pending instant-deposit credit (e.g. $Y). The broker
     #                              only *sometimes* extends it as buying power; it is
     #                              revocable and NOT settled — never size against it as
@@ -133,23 +216,6 @@ def fetch():
     #                              Kept as a reference field only.
     # Do NOT use withdrawable_amount (reads $0 while a deposit clears) and NEVER
     # account['cash'] (negative margin-accounting figure on Gold accounts — CLAUDE.md rule).
-    settled_cash       = float(account.get('portfolio_cash') or 0)
-    if settled_cash <= 0:
-        settled_cash   = float(profile.get('withdrawable_amount') or 0)
-    pending_deposits   = float(account.get('uncleared_deposits') or 0)
-    bp_leveraged       = float(account.get('buying_power') or 0)   # incl. Gold margin — reference ONLY
-    withdrawable       = float(profile.get('withdrawable_amount') or 0)
-    account_equity     = float(profile.get('equity') or 0)         # app headline total
-    prev_close_equity  = float(profile.get('adjusted_equity_previous_close') or 0)  # for day-change
-
-    # Deployable = settled cash, hard-capped so a leveraged buying_power can NEVER inflate
-    # it past actual cash. The cap only bites in the impossible margin<settled case; its
-    # real job is to make "size against account['buying_power']" structurally unreachable.
-    deployable = min(settled_cash, bp_leveraged) if bp_leveraged > 0 else settled_cash
-    cash       = deployable   # back-compat alias consumed by radar / gates / report
-    margin_buying_power = bp_leveraged  # legacy snapshot key (kept; reference only)
-    uncleared_deposits  = pending_deposits  # legacy snapshot key alias
-
     # Holdings
     positions = r.account.get_open_stock_positions()
     holdings  = []
@@ -182,28 +248,16 @@ def fetch():
         except Exception as e:
             print(f'  WARNING: skipping position — {e}', flush=True)
 
-    portfolio_total = total_equity + cash
+    equity_summary = equity_summary_from_rh(account, profile, total_equity)
+    portfolio_total = equity_summary["total"]
+    cash = equity_summary["cash"]
 
     snapshot = {
         'fetched_at':    datetime.now(timezone.utc).isoformat(),
         'source':        'robinhood_live',
         'quote_provenance': quote_provenance,
         'holdings':      holdings,
-        'equity_summary': {
-            'portfolio_equity':    round(total_equity, 2),       # positions market value
-            'cash':                round(cash, 2),               # = deployable (back-compat alias)
-            'deployable':          round(deployable, 2),         # canonical sizing figure (settled, unleveraged)
-            'settled_cash':        round(settled_cash, 2),       # settled cash = broker unleveraged BP
-            'pending_deposits':    round(pending_deposits, 2),   # instant-deposit credit — revocable, not settled
-            'buying_power':        round(deployable, 2),         # = deployable (NEVER account['buying_power'])
-            'buying_power_leveraged': round(bp_leveraged, 2),    # Gold margin — reference ONLY, never size on this
-            'margin_buying_power': round(margin_buying_power, 2),  # legacy key (= buying_power_leveraged)
-            'withdrawable_amount': round(withdrawable, 2),       # reference only (reads $0 while deposits clear)
-            'uncleared_deposits':  round(uncleared_deposits, 2),  # legacy key (= pending_deposits)
-            'total':               round(portfolio_total, 2),
-            'account_equity':      round(account_equity, 2),     # app headline total
-            'adjusted_equity_previous_close': round(prev_close_equity, 2),  # day-change baseline
-        },
+        'equity_summary': equity_summary,
     }
 
     OUTPUT.write_text(json.dumps(snapshot, indent=2))

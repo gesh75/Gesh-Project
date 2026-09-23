@@ -91,6 +91,50 @@ def test_config_write_stays_owner_only(client, monkeypatch):
     assert c.post("/api/config", json={"max_open_positions": 99}).status_code == 403
 
 
+_OWNER_LEDGER_ROUTES = (
+    "/api/trades",
+    "/api/trades/stats",
+    "/api/paper/summary",
+)
+
+
+@pytest.mark.parametrize("route", _OWNER_LEDGER_ROUTES)
+def test_trade_ledger_reads_are_owner_only(client, monkeypatch, route):
+    server, c = client
+    _as(server, monkeypatch, c, CUSTOMER)
+
+    response = c.get(route)
+
+    assert response.status_code == 403
+    assert "PRIVATE_LEDGER_SENTINEL" not in response.text
+
+
+@pytest.mark.parametrize("route", _OWNER_LEDGER_ROUTES)
+def test_trade_ledger_reads_still_work_for_owner(client, monkeypatch, route):
+    server, c = client
+    _as(server, monkeypatch, c, OWNER)
+    monkeypatch.setattr(
+        server,
+        "get_trade_history",
+        lambda **_kwargs: [{"symbol": "PRIVATE_LEDGER_SENTINEL"}],
+    )
+    monkeypatch.setattr(
+        server,
+        "trade_summary_for_report",
+        lambda **_kwargs: {"marker": "PRIVATE_LEDGER_SENTINEL"},
+    )
+    monkeypatch.setattr(
+        server,
+        "get_paper_summary",
+        lambda **_kwargs: {"marker": "PRIVATE_LEDGER_SENTINEL"},
+    )
+
+    response = c.get(route)
+
+    assert response.status_code == 200, response.text
+    assert "PRIVATE_LEDGER_SENTINEL" in response.text
+
+
 # ─── A-01 / F-03: the operator console must not be delivered ─────────────────
 
 # Every operator widget the audit named, by the artefact that identifies it:

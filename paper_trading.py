@@ -42,7 +42,7 @@ from trade_log import (
     get_trade_history,
     get_win_rate,
 )
-from allocation_config import load_config, validate_action
+from allocation_config import validate_action
 
 
 # ─── Risk defaults for paper trades ──────────────────────────────────────────
@@ -58,6 +58,7 @@ def run_paper_session(
     holdings: list[dict],
     total_portfolio: float,
     scanner_source: str = "daily-analysis",
+    current_cash: float | None = None,
 ) -> list[dict]:
     """
     Convert an action plan into paper trade entries.
@@ -65,19 +66,32 @@ def run_paper_session(
     BUY/ADD open longs. TRIM/SELL close matching open longs (FIFO).
     TRIM/SELL never open a short-like row.
 
+    Paper skips live-execution permission (auto_trade) but still enforces
+    size, open-position, and cash-floor caps. Accepted BUY/ADD notional is
+    subtracted from remaining cash (TRIM/SELL proceeds are not added back).
+    A full TRIM/SELL frees the in-session open-position slot.
+
     Args:
         action_plan: List of action dicts from daily analysis.
                      Each must have: symbol, action, shares, current_price,
                      signal_reason (optional)
-        holdings:    Current holdings list (for open position count)
+        holdings:    Current holdings list (context only; the position cap
+                     counts open *paper* lots, not this live book)
         total_portfolio: Total portfolio value (for context logging)
         scanner_source:  Label for this session's signal source
+        current_cash: Deployable cash for the cash-floor check. None skips
+                      that check (callers that have a cash figure must pass it).
 
     Returns:
         List of created paper trade records (with ids)
     """
-    cfg = load_config()
-    open_positions = len([h for h in holdings if float(h.get("equity", 0)) > 0])
+    open_symbols = {
+        (t.get("symbol") or "").upper()
+        for t in get_trade_history(open_only=True, is_paper=True, limit=10_000)
+        if t.get("symbol")
+    }
+    open_positions = len(open_symbols)
+    remaining_cash = current_cash
     created = []
 
     for item in action_plan:
@@ -94,18 +108,26 @@ def run_paper_session(
 
         trade_usd = shares * price
 
-        # Apply allocation caps
-        ok, reason = validate_action(
+        # Financial caps always apply. Skip only live-execution permission.
+        check = validate_action(
             action, symbol, trade_usd,
             open_positions=open_positions,
+            current_cash=remaining_cash,
             is_options=False,
+            require_live_permission=False,
         )
-
-        # In paper mode we skip the auto_trade gate (paper always runs)
-        if not ok and "Auto-trade" not in reason:
+        ok = getattr(check, "ok", None)
+        if ok is None:
+            ok, reason = check[0], check[1]
+            code = ""
+        else:
+            reason = check.reason
+            code = getattr(check, "code", "")
+        if not ok:
             created.append({
                 "symbol": symbol, "action": action,
-                "blocked": True, "reason": reason
+                "blocked": True, "reason": reason,
+                "code": code,
             })
             continue
 
@@ -127,7 +149,11 @@ def run_paper_session(
                 notes=notes,
                 is_paper=True,
             )
-            open_positions += 1
+            if symbol not in open_symbols:
+                open_symbols.add(symbol)
+                open_positions = len(open_symbols)
+            if remaining_cash is not None:
+                remaining_cash = remaining_cash - trade_usd
             created.append({
                 "trade_id":     trade_id,
                 "symbol":       symbol,
@@ -158,6 +184,15 @@ def run_paper_session(
                 "reason": "No open paper long to trim/sell",
             })
             continue
+        still_open = any(
+            (t.get("symbol") or "").upper() == symbol
+            for t in get_trade_history(
+                symbol=symbol, open_only=True, is_paper=True, limit=10_000
+            )
+        )
+        if not still_open:
+            open_symbols.discard(symbol)
+            open_positions = len(open_symbols)
         for rec in closed_rows:
             created.append({
                 "trade_id":      rec.get("id"),

@@ -86,6 +86,29 @@ def test_home_pane_hosts_the_book_table():
     assert "buildPlainActionCell" in html
 
 
+def test_history_open_stays_on_home_where_results_live():
+    """Past-read replay paints #mybook-results, which lives on Home.
+
+    After the advisory-home desk move, switchTab('analyze') hid that box
+    behind the ticker Research pane — Open looked like a blank screen.
+    """
+    html = TEMPLATE.read_text()
+    home = html[html.index('id="tab-home"') : html.index('id="tab-analyze"')]
+    analyze = html[html.index('id="tab-analyze"') :]
+    cut = analyze.find("<script")
+    analyze_pane = analyze if cut < 0 else analyze[:cut]
+    nxt = analyze_pane.find('id="tab-', 10)
+    if nxt > 0:
+        analyze_pane = analyze_pane[:nxt]
+    assert 'id="mybook-results"' in home
+    assert 'id="mybook-results"' not in analyze_pane
+    body = _fn(html, "mybookHistoryOpen")
+    assert "switchTab('home')" in body
+    assert "switchTab('analyze')" not in body
+    assert "getElementById('mybook-results')" in body
+    assert "/api/mybook/history/" in body
+
+
 def test_analyze_pane_is_research_only():
     """Ticker lookup stays on Research. The book table must not sit above it."""
     html = TEMPLATE.read_text()
@@ -217,3 +240,14 @@ def test_home_market_uses_cached_public_macro():
     assert "/api/long-term-macro" in body
     assert "/api/regime" not in body
     assert "Robinhood" not in body
+
+
+def test_load_mybook_today_column_uses_day_change_not_lifetime():
+    """PR #269 labeled the book column TODAY but bound it to percent_change
+    (lifetime vs cost). A name bought at $50 and trading $100 printed +100%
+    as today's move. The cell must read day_change_pct (vs prior close)."""
+    body = _fn(TEMPLATE.read_text(), "loadMyBook")
+    assert "'TODAY'" in body
+    row = body[body.index("pos.map(p=>") :]
+    assert "p.day_change_pct" in row
+    assert "p.percent_change" not in row

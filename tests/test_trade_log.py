@@ -15,7 +15,10 @@ rebasing those tests.
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
+from gesh_core.db_path import resolve_db_path
 
 import trade_log as tl
 
@@ -244,3 +247,25 @@ def test_close_appends_notes_rather_than_clobbering(trade_db):
     row = tl.close_trade(tid, exit_price=110.0, notes="Target hit")
     assert "entry-note" in (row["notes"] or "")
     assert "Target hit" in (row["notes"] or "")
+
+
+# ── Astra R3: same resolver as state/db; no silent /tmp fallback ─────────────
+
+
+def test_trade_log_resolver_is_shared_db_path():
+    assert tl._resolve_db is resolve_db_path
+
+
+def test_trade_log_honors_gesh_db_path(tmp_path, monkeypatch):
+    target = tmp_path / "explicit_trades.db"
+    monkeypatch.setenv("GESH_DB_PATH", str(target))
+    assert tl._resolve_db() == target
+
+
+def test_trade_log_unusable_path_does_not_fall_back_to_tmp(tmp_path, monkeypatch):
+    target = tmp_path / "corrupt.db"
+    target.write_bytes(b"not a sqlite database")
+    monkeypatch.setenv("GESH_DB_PATH", str(target))
+    assert tl._resolve_db() == target
+    with pytest.raises(sqlite3.DatabaseError):
+        tl._ensure_writable(target)
