@@ -17,25 +17,23 @@ from typing import Any
 
 
 def _finite_float(value: Any) -> float | None:
-    if value is None:
+    if value is None or value == "":
+        return None
+    # bool is a numeric subclass: True must not become 1 share / $1 / 1%.
+    if isinstance(value, bool):
         return None
     try:
         v = float(value)
     except (TypeError, ValueError):
         return None
-    if v != v:  # NaN
+    if not math.isfinite(v):
         return None
     return v
 
 
 def _fmt_shares(shares: Any) -> str:
-    if shares is None:
-        return "N/A"
-    try:
-        f = float(shares)
-    except (TypeError, ValueError):
-        return "N/A"
-    if f != f:
+    f = _finite_float(shares)
+    if f is None:
         return "N/A"
     if f == int(f):
         return str(int(f))
@@ -229,11 +227,7 @@ def _gate_status(row: dict, eng: dict) -> str:
         if not isinstance(a, dict) or a.get("symbol") != sym:
             continue
         act = a.get("action")
-        sh = a.get("shares") or 0
-        try:
-            sh_n = float(sh)
-        except (TypeError, ValueError):
-            sh_n = 0.0
+        sh_n = _finite_float(a.get("shares")) or 0.0
         if act in ("BUY", "ADD", "TRIM") and sh_n > 0:
             g = gate_by.get((sym, act))
             side_ok = _plan_side_matches(act, row["size_action"])
@@ -369,10 +363,7 @@ def gate_audit_html(eng: dict) -> str:
             continue
         act = a.get("action")
         sh = a.get("shares", 0)
-        try:
-            sh_n = float(sh or 0)
-        except (TypeError, ValueError):
-            sh_n = 0.0
+        sh_n = _finite_float(sh) or 0.0
         if act in ("BUY", "ADD", "TRIM") and sh_n > 0:
             executable += 1
         g = gate_by_sym.get((a.get("symbol"), act))

@@ -30,7 +30,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def _load_banner_fns() -> dict[str, object]:
     src = (REPO_ROOT / "gen_report2.py").read_text()
     tree = ast.parse(src)
-    wanted = {"_provider_banner", "_signal_gate_banner", "_executive_decision_card"}
+    wanted = {
+        "_provider_banner",
+        "_signal_gate_banner",
+        "_executive_decision_card",
+        "_radar_section",
+        "_finite_float",
+    }
     ns: dict[str, object] = {"_esc": _esc}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in wanted:
@@ -419,3 +425,189 @@ def test_report_card_uses_deployable_not_cash(tmp_path):
     assert "TODAY'S ACTIONABLE VERDICT" in html or "TODAY&#x27;S ACTIONABLE VERDICT" in html
     assert "$720.00" in html
     assert "$10,000.00" not in html
+
+
+def test_executive_decision_card_avoid_rows_are_not_blocked(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "NVDA", "action": "AVOID", "shares": 0, "signal_reason": "Kelly 0%"},
+            ],
+            "gate_results": [],
+        },
+        [{"symbol": "NVDA"}, {"symbol": "KO"}],
+        900.0,
+        12000.0,
+    )
+    assert "All positions balanced" in card
+    assert "Blocked By Risk Gates" not in card
+    assert "NOT EVALUATED" not in card
+    assert "2 positions in Passive Hold" in card
+
+
+def test_executive_decision_card_mixed_blocked_and_unevaluated_title(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "HOOD", "action": "BUY", "shares": 2, "current_price": 50.0},
+                {"symbol": "IONQ", "action": "ADD", "shares": 3, "current_price": 40.0},
+            ],
+            "gate_results": [
+                {"symbol": "HOOD", "action": "BUY", "approved": False, "reason": "CASH_FLOOR"},
+            ],
+        },
+        [{"symbol": "HOOD"}, {"symbol": "IONQ"}],
+        400.0,
+        10000.0,
+    )
+    assert "1 rejected" in card
+    assert "1 not evaluated" in card
+    assert "NOT EVALUATED — gate failed" in card
+    assert "CASH_FLOOR" in card
+    assert "All positions balanced" not in card
+
+
+def test_executive_decision_card_share_mismatch_is_not_approved(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {
+                    "symbol": "GTLB",
+                    "action": "BUY",
+                    "shares": 13,
+                    "current_price": 41.78,
+                    "signal_reason": "Kelly ADD",
+                },
+            ],
+            "gate_results": [
+                {"symbol": "GTLB", "action": "BUY", "shares": 1, "approved": True, "reason": "ok"},
+            ],
+        },
+        [{"symbol": "GTLB"}],
+        2000.0,
+        10000.0,
+    )
+    assert "APPROVED — paper" not in card
+    assert "gated 1 sh, not this size" in card
+    assert "13" in card
+
+
+def test_executive_decision_card_zero_and_bool_shares_are_not_executable(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {"symbol": "MSTR", "action": "BUY", "shares": True, "current_price": 165.0},
+                {"symbol": "MU", "action": "TRIM", "shares": 0, "current_price": 100.0},
+                {"symbol": "HOOD", "action": "ADD", "shares": float("inf"), "current_price": 50.0},
+            ],
+            "gate_results": [
+                {"symbol": "MSTR", "action": "BUY", "approved": True},
+                {"symbol": "MU", "action": "TRIM", "approved": True},
+                {"symbol": "HOOD", "action": "ADD", "approved": True},
+            ],
+        },
+        [{"symbol": "MSTR"}, {"symbol": "MU"}, {"symbol": "HOOD"}],
+        900.0,
+        12000.0,
+    )
+    assert "APPROVED — paper" not in card
+    assert "All positions balanced" in card
+    assert "3 positions in Passive Hold" in card
+
+
+def test_executive_decision_card_flags_cash_below_buffer(banners):
+    card = banners["_executive_decision_card"](
+        {
+            "action_plan": [
+                {
+                    "symbol": "MSTR",
+                    "action": "BUY",
+                    "shares": 2,
+                    "current_price": 400.0,
+                    "signal_reason": "Kelly ADD",
+                },
+            ],
+            "gate_results": [
+                {"symbol": "MSTR", "action": "BUY", "approved": True},
+            ],
+        },
+        [{"symbol": "MSTR"}],
+        720.0,
+        20000.0,
+    )
+    assert "APPROVED — paper" in card
+    assert "Below $500 buffer" in card
+    assert "$-80.00" in card
+
+
+def test_radar_section_escapes_score_and_rejects_bool_money(banners):
+    html = banners["_radar_section"](
+        {
+            "mode": "BUY",
+            "deployable_cash": True,
+            "open_slots": float("inf"),
+            "existing_sector_weights": {"<b>Tech</b>": True, "Health": 0.22},
+            "candidates": [
+                {
+                    "symbol": "<script>alert(1)</script>",
+                    "sector": "<img src=x>",
+                    "composite_score": "<svg onload=alert(1)>",
+                    "consensus_verdict": "BUY",
+                    "analyst_upside": True,
+                    "max_corr_to_holdings": float("nan"),
+                    "recommended_shares": True,
+                    "recommended_usd": float("inf"),
+                    "rationale": "<iframe>",
+                },
+            ],
+        }
+    )
+    assert "<script>" not in html
+    assert "<svg" not in html
+    assert "<img" not in html
+    assert "<iframe>" not in html
+    assert "&lt;script&gt;" in html
+    assert "&lt;svg onload=alert(1)&gt;" in html
+    assert "deployable n/a" in html
+    assert "n/a open slot(s)" in html
+    assert "Tech 100%" not in html
+    assert "Health 22%" in html
+    assert "+1%" not in html
+    assert "1.00" not in html
+    assert "$1" not in html
+    assert "— ≈n/a" in html
+
+
+def test_report_interpolates_radar_section(tmp_path):
+    html = _render(
+        tmp_path,
+        _minimal_engine(
+            diversification_candidates={
+                "mode": "SWAP_ONLY",
+                "deployable_cash": 9500.0,
+                "open_slots": 2,
+                "existing_sector_weights": {"Tech": 0.4},
+                "candidates": [
+                    {
+                        "symbol": "AMD",
+                        "sector": "Tech",
+                        "composite_score": 71,
+                        "consensus_verdict": "BUY",
+                        "analyst_upside": 12.0,
+                        "max_corr_to_holdings": 0.41,
+                        "actionable": False,
+                        "rationale": "fund via trim",
+                    }
+                ],
+                "swap_suggestions": [
+                    {"trim_symbol": "NVDA", "fund_new_symbol": "AMD", "rationale": "cut mega-cap"}
+                ],
+            }
+        ),
+    )
+    assert "Diversification Radar" in html
+    assert "SWAP_ONLY" in html
+    assert "$9,500" in html
+    assert "AMD" in html
+    assert "preview · fund via swap" in html
+    assert "NVDA" in html
