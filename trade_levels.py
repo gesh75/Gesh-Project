@@ -72,12 +72,13 @@ def compute(symbol: str, close=None, high=None, low=None, current_price=None) ->
         # Entry binds to the caller's authoritative live quote when supplied, else the
         # last completed daily close (back-compat: every array-based caller passes none).
         price = last_close
-        if current_price is not None:
+        # bool is an int subclass: True must not bind entry to $1.00.
+        if current_price is not None and not isinstance(current_price, bool):
             try:
                 cp = float(current_price)
                 if np.isfinite(cp) and cp > 0:
                     price = cp
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 pass
         if not np.isfinite([price, h, low_bar, last_close]).all():
             return {"available": False, "reason": "non-finite price data"}

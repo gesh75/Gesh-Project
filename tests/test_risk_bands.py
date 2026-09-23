@@ -101,6 +101,40 @@ def test_trailing_none_peak_falls_back_to_fixed():
     assert r["stop_price"] == 95.0
 
 
+def test_trailing_bool_entry_or_peak_is_not_one_dollar():
+    """True is an int subclass — must not bind entry/peak to $1 and invent a trail."""
+    for entry, peak in ((True, 110.0), (100.0, True), (True, True), (False, 110.0)):
+        r = trailing_stop(entry=entry, peak=peak, volatility_tier="MEDIUM")
+        assert r["active"] is False
+        assert r["reason"] == "invalid_entry_or_peak"
+        assert r["trail_pct"] is None
+
+
+def test_trailing_nan_or_inf_cannot_arm_a_stop():
+    """NaN comparisons are all False, so an unguarded peak would silently activate."""
+    for entry in (float("nan"), float("inf"), float("-inf")):
+        invalid_entry = trailing_stop(entry=entry, peak=110.0, volatility_tier="MEDIUM")
+        assert invalid_entry["active"] is False
+        assert invalid_entry["reason"] == "invalid_entry_or_peak"
+        assert invalid_entry["stop_price"] == 0.0
+
+    # Valid entry + missing peak rides the fixed stop — never a NaN trail price.
+    for peak in (float("nan"), float("inf"), float("-inf")):
+        r = trailing_stop(entry=100.0, peak=peak, volatility_tier="MEDIUM")
+        assert r["active"] is False
+        assert r["reason"] == "invalid_entry_or_peak"
+        assert r["trail_pct"] is None
+        assert r["stop_price"] == 95.0
+
+
+def test_trailing_overflow_entry_does_not_crash():
+    """float(10**10000) is OverflowError — must not 500 the exit-band path."""
+    r = trailing_stop(entry=10**10000, peak=110.0, volatility_tier="MEDIUM")
+    assert r["active"] is False
+    assert r["reason"] == "invalid_entry_or_peak"
+    assert r["trail_pct"] is None
+
+
 # --- exit_analytics --------------------------------------------------------
 def _row(**kw):
     base = {
@@ -144,6 +178,20 @@ def test_analytics_excludes_untracked_from_averages():
     assert a["n_untracked_closed"] == 1
     assert a["avg_mfe_pct"] == 10.0  # the 99 is excluded
     assert a["n_excursion"] == 1
+
+
+def test_analytics_inf_pnl_is_not_a_closed_trade():
+    """'inf' parses as a float and must not enter the closed-trade denominator."""
+    rows = [
+        _row(agent_pnl="inf", exit_reason="take_profit", volatility_tier="HIGH",
+             tp_pct="12", sl_pct="7.5", mfe_pct="10", mae_pct="-3"),
+        _row(agent_pnl="nan", exit_reason="stop", volatility_tier="HIGH",
+             tp_pct="12", sl_pct="7.5", mfe_pct="99", mae_pct="-99"),
+    ]
+    a = exit_analytics(rows)
+    assert a["exit_reasons"] == {}
+    assert a["n_excursion"] == 0
+    assert a["avg_mfe_pct"] is None
 
 
 def test_analytics_normalizes_reason_typos():

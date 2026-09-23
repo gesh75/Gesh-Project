@@ -75,9 +75,10 @@ def test_current_price_binds_entry_single_source_of_truth():
 def test_current_price_ignored_when_invalid():
     c, h, low = _ohlcv()
     good = tl.compute("TEST", close=c, high=h, low=low)["setup"]["entry"]
-    for bad in (0, -5, float("nan"), None, "x"):
+    for bad in (0, -5, float("nan"), None, "x", True, False, float("inf")):
         out = tl.compute("TEST", close=c, high=h, low=low, current_price=bad)
         assert out["setup"]["entry"] == good         # falls back to last close
+        assert out["price"] == good                  # True is not a $1.00 entry
 
 
 # ── GESH-2: degenerate R:R is flagged non-actionable, not shown as tradeable ────

@@ -18,6 +18,7 @@ Design contract (mirrors the agentic safety contract):
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable, Mapping
 
 # --- vol-adaptive bands ----------------------------------------------------
@@ -41,10 +42,14 @@ VALID_EXIT_REASONS = {"take_profit", "stop", "trailing_stop", "gesh_bearish", "m
 
 
 def _f(x: object, default: float | None = None) -> float | None:
-    try:
-        return float(x)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    # bool is an int subclass: True must not become $1.00 entry/peak.
+    if isinstance(x, bool):
         return default
+    try:
+        v = float(x)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return v if math.isfinite(v) else default
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -137,9 +142,10 @@ def _num(value: object) -> float | None:
     if not s:
         return None
     try:
-        return float(s)
-    except ValueError:
+        v = float(s)
+    except (TypeError, ValueError, OverflowError):
         return None
+    return v if math.isfinite(v) else None
 
 
 def _norm_reason(raw: object) -> str:
