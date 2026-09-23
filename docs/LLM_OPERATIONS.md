@@ -169,7 +169,7 @@ degraded run read as a clean Claude run.
 
 ### Triggers (and non-triggers)
 
-Tried, in `GESH_LLM_FAILOVER` order (default `grok,gemini`):
+Tried, in `GESH_LLM_FAILOVER` order (default `gemini,xai,grok`):
 
 | Trigger | Why it fails over |
 |---|---|
@@ -208,7 +208,7 @@ Grok CLI pins (load-bearing — do not "simplify"):
 
 | Env | Default | Meaning |
 |---|---|---|
-| `GESH_LLM_FAILOVER` | `grok,gemini` | provider order; empty string disables |
+| `GESH_LLM_FAILOVER` | `gemini,xai,grok` | provider order; empty string disables |
 | `GESH_GROK_MODEL` | `grok-4.6` | id from `grok models` — ids rotate |
 | `GESH_GROK_TIMEOUT_S` | `900` | deep analysis is ~420–460s on Grok vs ~240s on Claude |
 | `GESH_GROK_MAX_TURNS` | `4` | headroom so an inherited global rule cannot exhaust the budget |

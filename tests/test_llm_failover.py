@@ -335,6 +335,9 @@ def test_call_gemini_forwards_deep_analysis_token_budget(monkeypatch):
     out = llm_failover.call_gemini("analyze", max_tokens=24000)
     assert json.loads(out)["portfolio_score"] == 71
     assert seen["max_tokens"] == 24000
+    # A sub-floor ticker budget (legacy 2000) must not truncate JSON.
+    out = llm_failover.call_gemini("analyze", max_tokens=2000)
+    assert seen["max_tokens"] == 4096
     assert seen["mime"] == "application/json"
     assert seen["timeout_s"] == 180.0
 

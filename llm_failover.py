@@ -12,14 +12,15 @@ The critical design constraint: the object returned here must quack like an
 Satisfying that shape means NOTHING downstream changes when a fallback runs.
 
 Providers are tried in the order named by ``GESH_LLM_FAILOVER`` (default
-``xai,grok,gemini``):
+``gemini,xai,grok``):
 
+  gemini  — google-genai via GEMINI_API_KEY (see gemini_agent.py). First
+            hop so a dead Grok CLI / missing XAI key does not stall step 3.
   xai     — SpaceXAI HTTP Chat Completions (``https://api.x.ai/v1/chat/completions``)
-            with ``XAI_API_KEY``. Model ``grok-4.6``. This is the production path
-            for pay.geshfinance.com — no CLI, no launchd PATH hole.
+            with ``XAI_API_KEY``. Model ``grok-4.6``. Production path when
+            Gemini is unset or fails.
   grok    — the Grok CLI in headless mode. Uses ~/.grok/auth.json (grok.com
             login, no extra API bill) when XAI_API_KEY is unset.
-  gemini  — google-genai via GEMINI_API_KEY (see gemini_agent.py).
 
 Failover is deliberately LOUD: ``FAILOVER_COUNT`` / ``LAST_FAILOVER`` are module
 state and every hop logs a warning. A silent provider swap would let a degraded

@@ -132,7 +132,7 @@ INFORMATIONAL PURPOSES ONLY".
   checked`. An all-`UNAUTHORIZED` day is expected on the current OAuth scope —
   not an all-clear, and not a veto (`GESH_REVIEW_BLOCKING` defaults off).
 - Step 3/5 can fail over to Grok/Gemini/xAI when Anthropic is down
-  (`GESH_LLM_FAILOVER`, default `xai,grok,gemini`). Look for
+  (`GESH_LLM_FAILOVER`, default `gemini,xai,grok`). Look for
   `WARNING: ANTHROPIC UNAVAILABLE` in the chain log and
   `ai_provider` / `ai_failover_count` in `engine_results.json`.
   Engine numbers are unaffected; the narrative is not
