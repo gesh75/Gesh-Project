@@ -16,6 +16,7 @@ from pathlib import Path
 
 from report_share_plan import (
     gate_audit_html,
+    position_cap_note,
     share_count,
     share_plan_html,
     share_plan_rows,
@@ -24,6 +25,41 @@ from report_share_plan import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_position_cap_note_reads_the_gate_fraction():
+    assert position_cap_note("target_position_pct 0.2500 exceeds cap 0.1800") == (
+        " (size &gt; 18% position cap)"
+    )
+    assert position_cap_note("target_position_pct 0.0300 exceeds cap 0.0200") == (
+        " (size &gt; 2% position cap)"
+    )
+    assert position_cap_note("exceeds cap 2.5%") == " (size &gt; 2.5% position cap)"
+
+
+def test_position_cap_note_does_not_invent_a_percent():
+    assert position_cap_note("POSITION_CAP exceeded") == " (position cap)"
+    assert position_cap_note("Daily order cap reached (15/15)") == ""
+    assert position_cap_note("CASH_FLOOR") == ""
+    assert position_cap_note("") == ""
+
+
+def test_share_plan_banner_quotes_position_cap_from_reason():
+    eng = _engine()
+    eng["action_plan"] = [
+        {"symbol": "NVDA", "action": "BUY", "shares": 4, "signal_reason": "Kelly ADD"}
+    ]
+    eng["gate_results"] = [
+        {
+            "symbol": "NVDA",
+            "action": "BUY",
+            "approved": False,
+            "reason": "target_position_pct 0.2500 exceeds cap 0.1800",
+        }
+    ]
+    html = signal_gate_banner_html(eng)
+    assert "size &gt; 18% position cap" in html
+    assert "2%" not in html
 
 
 def test_share_count_add_uses_floor():

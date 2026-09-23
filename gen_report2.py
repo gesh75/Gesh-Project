@@ -552,7 +552,7 @@ def _signal_gate_banner(eng: dict) -> str:
                 reason = str(g.get("reason"))
     if not (blocked or cleared):
         return ""
-    cap = " (size &gt; 2% position cap)" if "cap" in reason.lower() else ""
+    cap = report_share_plan.position_cap_note(reason)
     if blocked and not cleared:
         return (
             '<div class="override-banner">⚠️ SIGNAL vs GATE — signals lean ADD on '

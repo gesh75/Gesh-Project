@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+import report_share_plan
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -31,7 +33,7 @@ def _load_banner_fns() -> dict[str, object]:
     src = (REPO_ROOT / "gen_report2.py").read_text()
     tree = ast.parse(src)
     wanted = {"_provider_banner", "_signal_gate_banner", "_executive_decision_card"}
-    ns: dict[str, object] = {"_esc": _esc}
+    ns: dict[str, object] = {"_esc": _esc, "report_share_plan": report_share_plan}
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in wanted:
             segment = ast.get_source_segment(src, node)
@@ -137,7 +139,27 @@ def test_signal_gate_banner_all_adds_blocked(banners):
     assert "position cap" not in html
 
 
-def test_signal_gate_banner_mentions_position_cap_when_that_is_the_reason(banners):
+def test_signal_gate_banner_quotes_the_gate_position_cap(banners):
+    """The chain cap is a fraction in the gate reason (0.18 → 18%), not a fixed 2%."""
+    html = banners["_signal_gate_banner"](
+        {
+            "action_plan": [{"symbol": "NVDA", "action": "ADD"}],
+            "gate_results": [
+                {
+                    "symbol": "NVDA",
+                    "action": "ADD",
+                    "approved": False,
+                    "reason": "target_position_pct 0.2500 exceeds cap 0.1800",
+                }
+            ],
+        }
+    )
+    assert "size &gt; 18% position cap" in html
+    assert "2%" not in html
+    assert "net actionable trades today: 0" in html
+
+
+def test_signal_gate_banner_unnamed_position_cap_does_not_invent_2pct(banners):
     html = banners["_signal_gate_banner"](
         {
             "action_plan": [{"symbol": "NVDA", "action": "ADD"}],
@@ -151,8 +173,26 @@ def test_signal_gate_banner_mentions_position_cap_when_that_is_the_reason(banner
             ],
         }
     )
-    assert "size &gt; 2% position cap" in html
-    assert "net actionable trades today: 0" in html
+    assert "(position cap)" in html
+    assert "2%" not in html
+
+
+def test_signal_gate_banner_order_rate_cap_is_not_a_position_cap(banners):
+    html = banners["_signal_gate_banner"](
+        {
+            "action_plan": [{"symbol": "NVDA", "action": "ADD"}],
+            "gate_results": [
+                {
+                    "symbol": "NVDA",
+                    "action": "ADD",
+                    "approved": False,
+                    "reason": "Daily order cap reached (15/15)",
+                }
+            ],
+        }
+    )
+    assert "position cap" not in html
+    assert "2%" not in html
 
 
 def test_signal_gate_banner_mixed_cleared_and_blocked(banners):
