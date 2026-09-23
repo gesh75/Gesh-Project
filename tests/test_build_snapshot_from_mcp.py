@@ -169,6 +169,50 @@ def test_missing_buying_power_dict_falls_back_to_portfolio_cash(tmp_path):
     assert snap["equity_summary"]["deployable"] == pytest.approx(800.0)
 
 
+@pytest.mark.parametrize("zero", [0, 0.0, "0", "0.00"])
+def test_zero_settled_buying_power_is_not_replaced_by_cash(tmp_path, zero):
+    """Fully invested: measured $0 must not ``or``-fall through to pf.cash.
+
+    The fixture's cash ($99999) is the documented wrong figure — the same
+    Gold-margin trap ``test_deployable_is_settled_unleveraged_buying_power_not_cash``
+    already pins when buying_power is $1500.
+    """
+    snap = _build(tmp_path, _raw(buying_power=zero))
+    es = snap["equity_summary"]
+    assert es["deployable"] == pytest.approx(0.0)
+    assert es["cash"] == pytest.approx(0.0)
+    assert es["settled_cash"] == pytest.approx(0.0)
+    assert es["buying_power"] != pytest.approx(99999.0)
+
+
+def test_bool_buying_power_does_not_become_one_dollar(tmp_path):
+    """JSON true must not become $1 of dry powder via float(True)."""
+    snap = _build(tmp_path, _raw(buying_power=True, cash="800.00"))
+    assert snap["equity_summary"]["deployable"] == pytest.approx(800.0)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), "inf", "nan"])
+def test_non_finite_buying_power_falls_back_to_cash(tmp_path, bad):
+    snap = _build(tmp_path, _raw(buying_power=bad, cash="800.00"))
+    assert snap["equity_summary"]["deployable"] == pytest.approx(800.0)
+
+
+def test_scalar_buying_power_does_not_attributeerror(tmp_path):
+    """A flat MCP number must not crash the daily snapshot on ``.get``."""
+    raw = _raw()
+    raw["portfolio"]["buying_power"] = "1500.00"
+    snap = _build(tmp_path, raw)
+    assert snap["equity_summary"]["deployable"] == pytest.approx(1500.0)
+
+
+def test_scalar_zero_buying_power_is_kept(tmp_path):
+    raw = _raw()
+    raw["portfolio"]["buying_power"] = 0
+    snap = _build(tmp_path, raw)
+    assert snap["equity_summary"]["deployable"] == pytest.approx(0.0)
+    assert snap["equity_summary"]["buying_power"] != pytest.approx(99999.0)
+
+
 def test_pending_deposits_are_not_treated_as_deployable(tmp_path):
     snap = _build(tmp_path)
     es = snap["equity_summary"]
