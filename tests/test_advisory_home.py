@@ -197,6 +197,36 @@ def test_home_hero_uses_equal_weight_flag_not_zero_total():
     assert "not available" in body.lower()
 
 
+def test_load_mybook_stats_bar_gates_total_on_equal_weight():
+    """Privacy-mode books are valued at a fixed $100k notional. The stats-bar
+    Total chip used to print that as the customer's book value; hero, footer,
+    and /mybook/report already hide it."""
+    body = _fn(TEMPLATE.read_text(), "loadMyBook")
+    stats = body[body.index("bookStats") : body.index("eqwBanner")]
+    compact = stats.replace(" ", "")
+    assert "Total:" in stats
+    assert "eqw" in stats
+    assert "equal-weight" in stats
+    # Do not rebuild the $100k notional from per-name equity slices when the
+    # server sent total_equity: null (that sum IS the illustrative notional).
+    assert "pos.reduce" not in stats
+    assert "d.total_equity||" not in compact
+    assert "total_equity==null" in compact
+    assert "Value not available" in stats
+
+
+def test_load_mybook_footer_does_not_reconstruct_equal_weight_total():
+    """The table footer Total chip had the same $100k leak class as the
+    stats bar: it must honor a null total_equity, not daFmt a reconstructed
+    sum or print 'Total: $—'."""
+    body = _fn(TEMPLATE.read_text(), "loadMyBook")
+    footer = body[body.index("eqwBanner") :]
+    compact = footer.replace(" ", "")
+    assert "equal-weight" in footer
+    assert "total_equity==null" in compact
+    assert "Value not available" in footer
+
+
 def test_customer_boot_loads_public_macro_not_owner_regime():
     body = _fn(TEMPLATE.read_text(), "bootDesk")
     customer = body.split("loadPortfolioWithECG")[0]

@@ -23,6 +23,7 @@ OWNER = "georgy75@gmail.com"
 @pytest.fixture
 def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import auth_users as _au
+
     monkeypatch.setattr(_au, "AUTH_DB_PATH", tmp_path / "auth.db")
     _au.init_auth_db()
     for email in (CUSTOMER, OWNER):
@@ -34,6 +35,7 @@ def au(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def book(au, monkeypatch):
     """Client with steerable current AND prior closes."""
     import server
+
     monkeypatch.setattr(server.auth_users, "AUTH_DB_PATH", au.AUTH_DB_PATH)
     monkeypatch.setattr(server.auth_users, "auth_enabled", lambda: True)
     monkeypatch.setattr(server.auth_users, "authenticate_session", lambda tok: CUSTOMER)
@@ -43,9 +45,12 @@ def book(au, monkeypatch):
     prices = {"NVDA": 110.0, "AAPL": 190.0}
     priors = {"NVDA": 100.0, "AAPL": 200.0}
     monkeypatch.setattr(server, "_latest_close", lambda s: prices.get(s), raising=True)
-    monkeypatch.setattr(server, "_latest_close_meta",
-                        lambda s: (prices.get(s), {"source": "yahoo", "substituted": False}),
-                        raising=True)
+    monkeypatch.setattr(
+        server,
+        "_latest_close_meta",
+        lambda s: (prices.get(s), {"source": "yahoo", "substituted": False}),
+        raising=True,
+    )
     monkeypatch.setattr(server, "_prior_close", lambda s: priors.get(s), raising=True)
     c = TestClient(server.app, raise_server_exceptions=False)
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
@@ -100,13 +105,13 @@ def test_missing_prior_close_reports_unavailable_not_zero(book, monkeypatch):
     monkeypatch.setattr(server, "_prior_close", lambda s: None, raising=True)
     v = _val(c)
     assert v["day_change_available"] is False
-    assert v["day_change_amount"] is None            # NOT 0.0
+    assert v["day_change_amount"] is None  # NOT 0.0
     assert any("day_change" in u for u in v["unavailable"])
 
 
 def test_missing_cost_basis_reports_unavailable_not_zero(book):
     _server, c, _p, _pr = book
-    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 2})   # no avg_cost
+    c.post("/api/mybook", json={"symbol": "NVDA", "shares": 2})  # no avg_cost
     v = _val(c)
     assert v["cost_basis_available"] is False
     assert v["unrealized_pnl"] is None
@@ -125,6 +130,9 @@ def test_equal_weight_book_reports_no_day_change(book):
     d = c.get("/api/mybook").json()["data"]
     assert d["equal_weight"] is True
     assert d["valuation"]["day_change_available"] is False
+    # Same contract as /api/mybook/summary: do not ship the $100k notional
+    # as if it were the customer's real book value.
+    assert d["total_equity"] is None
 
 
 def test_positions_carry_their_own_prior_close_and_day_pct(book):
@@ -132,14 +140,14 @@ def test_positions_carry_their_own_prior_close_and_day_pct(book):
     c.post("/api/mybook", json={"symbol": "AAPL", "shares": 4})
     pos = c.get("/api/mybook").json()["data"]["positions"][0]
     assert pos["prior_close"] == pytest.approx(200.0)
-    assert pos["day_change_pct"] == pytest.approx(-5.0)      # 190 vs 200
+    assert pos["day_change_pct"] == pytest.approx(-5.0)  # 190 vs 200
 
 
 def test_dashboard_does_not_recompute_day_change_from_percent_change():
     """Guard the specific formula that caused the defect from coming back."""
     html = Path("templates/dashboard.html").read_text()
     assert "percent_change||0)/100" not in html.replace(" ", "")
-    assert "day_change_available" in html      # the UI reads the canonical flag
+    assert "day_change_available" in html  # the UI reads the canonical flag
 
 
 def test_dashboard_today_column_reads_day_change_pct_not_lifetime():
@@ -148,7 +156,7 @@ def test_dashboard_today_column_reads_day_change_pct_not_lifetime():
     html = Path("templates/dashboard.html").read_text()
     start = html.index("async function loadMyBook")
     rest = html[start:]
-    nxt = rest.find("\nasync function ") 
+    nxt = rest.find("\nasync function ")
     nxt2 = rest.find("\nfunction ", 1)
     cuts = [i for i in (nxt, nxt2) if i > 0]
     body = rest if not cuts else rest[: min(cuts)]

@@ -5009,7 +5009,13 @@ def mybook_get(request: Request):
             "status": "ok",
             "data": {
                 "positions": payload["holdings"],
-                "total_equity": payload["equity_summary"]["portfolio_equity"],
+                # Equal-weight dollars are a fixed illustrative notional
+                # (_EQUAL_WEIGHT_NOTIONAL). /api/mybook/summary already returns
+                # null here; the book GET must match so a client cannot treat
+                # $100,000 as the customer's real total.
+                "total_equity": (
+                    None if ew else payload["equity_summary"]["portfolio_equity"]
+                ),
                 # Canonical valuation block — the ONLY source the UI may use for
                 # day change / P&L. It previously recomputed "Day change" in the
                 # browser from lifetime-vs-cost returns and rendered
