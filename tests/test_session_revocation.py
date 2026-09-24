@@ -70,6 +70,28 @@ def test_magic_and_garbage_tokens_are_absent_and_not_stored():
     assert count == 0
 
 
+def test_whitespace_only_jti_cannot_be_blacklisted_and_fails_closed():
+    """A padded blank jti must not be stored as a real blacklist key."""
+    au.create_user("a@b.com", "pw")
+    user_id = au.resolve_user_id("a@b.com")
+    token = _sign(
+        {
+            "sub": user_id,
+            "exp": int(time.time()) + 900,
+            "typ": "session",
+            "ver": 2,
+            "jti": "   ",
+        }
+    )
+
+    assert au.verify_token(token) == user_id
+    assert au.revoke_session(token) == "failed"
+    assert au.authenticate_session(token) is None
+    with au._conn() as con:
+        count = con.execute("SELECT COUNT(*) AS n FROM revoked_sessions").fetchone()["n"]
+    assert count == 0
+
+
 def test_session_without_jti_cannot_be_blacklisted_and_fails_closed():
     au.create_user("a@b.com", "pw")
     user_id = au.resolve_user_id("a@b.com")

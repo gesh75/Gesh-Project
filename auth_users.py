@@ -45,24 +45,37 @@ from pathlib import Path
 from typing import Any, Iterator
 
 AUTH_DB_PATH = Path(os.getenv("GESH_AUTH_DB", str(Path(__file__).parent / "gesh_auth.db")))
-TOKEN_TTL_SECONDS = int(os.getenv("GESH_AUTH_TTL", "604800"))   # 7 days
+TOKEN_TTL_SECONDS = int(os.getenv("GESH_AUTH_TTL", "604800"))  # 7 days
 COOKIE_NAME = "gesh_session"
 _PBKDF2_ROUNDS = 200_000
 
 # Paths reachable without a session (login flow, public legal pages, health).
 PUBLIC_PREFIXES = (
-    "/login", "/auth/login", "/auth/logout", "/auth/magic", "/auth/request-link", "/static/",
+    "/login",
+    "/auth/login",
+    "/auth/logout",
+    "/auth/magic",
+    "/auth/request-link",
+    "/static/",
     # /privacy is public by necessity: a policy behind a login wall is not a
     # published policy — people must be able to read it BEFORE creating an account.
-    "/terms", "/disclaimer", "/privacy", "/healthz", "/favicon.ico",
+    "/terms",
+    "/disclaimer",
+    "/privacy",
+    "/healthz",
+    "/favicon.ico",
     # Congress-Watch: public informational page + its public-data API (STOCK Act
     # disclosures — no owner/customer data, no execution). The shareable acquisition magnet.
-    "/congress-watch", "/api/congress",
+    "/congress-watch",
+    "/api/congress",
     # Payment surface: pricing page + provider webhook + post-checkout landing must be
     # reachable WITHOUT a session (the webhook is signature-gated, not cookie-gated).
-    "/pricing", "/api/billing/webhook", "/billing/success",
+    "/pricing",
+    "/api/billing/webhook",
+    "/billing/success",
     # Email opt-out links (link-in-email, HMAC-token-gated — not cookie-gated).
-    "/alerts/unsubscribe", "/digest/unsubscribe",
+    "/alerts/unsubscribe",
+    "/digest/unsubscribe",
     # Signal-accuracy proof page — the #1 sales asset. Never paywalled
     # (CLAUDE.md). Prefix match is path-bounded so /track-record-evil stays gated.
     "/track-record",
@@ -70,6 +83,7 @@ PUBLIC_PREFIXES = (
 
 
 # ── config flags ────────────────────────────────────────────────────────────────
+
 
 def auth_enabled() -> bool:
     """The login wall is OFF unless GESH_AUTH_ENABLED is explicitly truthy."""
@@ -107,6 +121,7 @@ def _secret() -> bytes:
 
 # ── password hashing (PBKDF2-HMAC-SHA256, stdlib) ───────────────────────────────
 
+
 def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ROUNDS)
@@ -129,6 +144,7 @@ def verify_password(password: str, stored: str) -> bool:
 # ── session token (HMAC-signed, JWT-style, stdlib) ──────────────────────────────
 
 _TOKEN_SCHEMA_VERSION = 2
+
 
 def _b64u(b: bytes) -> str:
     return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
@@ -158,23 +174,23 @@ def issue_token(email: str, ttl: int | None = None, typ: str = "session") -> str
     if user_id is None:
         raise ValueError("token subject must be a current active user")
     exp = int(time.time()) + (TOKEN_TTL_SECONDS if ttl is None else ttl)
-    payload = _b64u(json.dumps(
-        {
-            "sub": user_id,
-            "exp": exp,
-            "typ": typ,
-            "ver": _TOKEN_SCHEMA_VERSION,
-            "jti": secrets.token_urlsafe(8),
-        },
-        separators=(",", ":"),
-    ).encode())
+    payload = _b64u(
+        json.dumps(
+            {
+                "sub": user_id,
+                "exp": exp,
+                "typ": typ,
+                "ver": _TOKEN_SCHEMA_VERSION,
+                "jti": secrets.token_urlsafe(8),
+            },
+            separators=(",", ":"),
+        ).encode()
+    )
     sig = _b64u(hmac.new(_secret(), payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
 
 
-def _verified_claims(
-    token: str | None, expected_typ: str | None = "session"
-) -> dict | None:
+def _verified_claims(token: str | None, expected_typ: str | None = "session") -> dict | None:
     """Return the signed claims for a valid schema-v2 token; else None.
 
     Pure crypto, same rules as ``verify_token``. A missing ``jti`` still returns
@@ -193,7 +209,7 @@ def _verified_claims(
         if int(data.get("exp", 0)) < int(time.time()):
             return None
         if expected_typ is not None and data.get("typ") != expected_typ:
-            return None        # wrong purpose (e.g. a magic token presented as a session)
+            return None  # wrong purpose (e.g. a magic token presented as a session)
         subject = data.get("sub")
         if not _is_canonical_user_id(subject):
             return None
@@ -361,11 +377,21 @@ _CHILD_DATA_COLUMNS = {
     "usage_events": ("event", "detail", "at"),
     "customer_book_prefs": ("equal_weight", "updated_at"),
     "mybook_jobs": (
-        "job_id", "fingerprint", "status", "result_json", "error_code", "delivered_at",
-        "created_at", "updated_at",
+        "job_id",
+        "fingerprint",
+        "status",
+        "result_json",
+        "error_code",
+        "delivered_at",
+        "created_at",
+        "updated_at",
     ),
     "usage_reservations": (
-        "job_id", "event", "state", "reserved_at", "completed_at",
+        "job_id",
+        "event",
+        "state",
+        "reserved_at",
+        "completed_at",
     ),
     "customer_equity_snapshots": ("symbol", "snapshot_at", "equity", "current_price"),
 }
@@ -375,22 +401,22 @@ _CHILD_DATA_COLUMNS = {
 # (CREATE TABLE IF NOT EXISTS never alters an existing table). tier/billing_* are NULL for
 # pre-payment alpha users; the login wall still gates only on is_active.
 _BILLING_COLUMNS = {
-    "tier":                "TEXT",   # 'observer' | 'trader' | 'desk'
-    "billing_customer_id": "TEXT",   # provider customer id (Lemon Squeezy)
-    "billing_sub_id":      "TEXT",   # provider subscription id
-    "billing_status":      "TEXT",   # 'active' | 'past_due' | 'cancelled'
-    "welcome_emailed_at":  "TEXT",   # set when the magic-link onboarding email is delivered;
-                                     # NULL = still owed a link (drives reliable retry, H5)
-    "billing_event_at":    "TEXT",   # subscription updated_at of the last applied billing
-                                     # event — drives monotonic ordering (drops stale events)
+    "tier": "TEXT",  # 'observer' | 'trader' | 'desk'
+    "billing_customer_id": "TEXT",  # provider customer id (Lemon Squeezy)
+    "billing_sub_id": "TEXT",  # provider subscription id
+    "billing_status": "TEXT",  # 'active' | 'past_due' | 'cancelled'
+    "welcome_emailed_at": "TEXT",  # set when the magic-link onboarding email is delivered;
+    # NULL = still owed a link (drives reliable retry, H5)
+    "billing_event_at": "TEXT",  # subscription updated_at of the last applied billing
+    # event — drives monotonic ordering (drops stale events)
 }
 
 # Email preference columns (retention features, 2026-07-16). Same idempotent-ALTER
 # migration pattern as _BILLING_COLUMNS — existing gesh_auth.db files pick these up
 # on next connect without a manual migration step.
 _PREF_COLUMNS = {
-    "alerts_opt_out": "INTEGER NOT NULL DEFAULT 0",   # signal-change alert emails
-    "digest_opt_out": "INTEGER NOT NULL DEFAULT 0",   # weekly digest emails
+    "alerts_opt_out": "INTEGER NOT NULL DEFAULT 0",  # signal-change alert emails
+    "digest_opt_out": "INTEGER NOT NULL DEFAULT 0",  # weekly digest emails
 }
 
 
@@ -415,7 +441,8 @@ def _migrate(con: sqlite3.Connection) -> None:
         )
     except sqlite3.IntegrityError as e:
         logging.getLogger(__name__).warning(
-            "auth_users: could not build unique billing_sub_id index (dupes exist): %s", e)
+            "auth_users: could not build unique billing_sub_id index (dupes exist): %s", e
+        )
 
 
 def _prune_used_magic_tokens(con: sqlite3.Connection) -> None:
@@ -469,9 +496,7 @@ def _configured_owner_email() -> str:
     return _norm(os.getenv("GESH_OWNER_EMAIL", "georgy75@gmail.com"))
 
 
-def _claim_owner_marker(
-    con: sqlite3.Connection, email: str, user_id: str
-) -> None:
+def _claim_owner_marker(con: sqlite3.Connection, email: str, user_id: str) -> None:
     """Persist the first configured owner's UUID; never transfer it by email reuse."""
     if email != _configured_owner_email():
         return
@@ -534,9 +559,7 @@ def _require_regular_file(path: Path, label: str) -> os.stat_result:
     except FileNotFoundError as exc:
         raise sqlite3.DatabaseError(f"{label} is missing: {path}") from exc
     if stat.S_ISLNK(state.st_mode):
-        raise sqlite3.DatabaseError(
-            f"{label} must be a regular file, not a symbolic link: {path}"
-        )
+        raise sqlite3.DatabaseError(f"{label} must be a regular file, not a symbolic link: {path}")
     if not stat.S_ISREG(state.st_mode):
         raise sqlite3.DatabaseError(f"{label} must be a regular file: {path}")
     return state
@@ -597,8 +620,7 @@ def _schema_tables(con: sqlite3.Connection) -> set[str]:
     return {
         str(row[0])
         for row in con.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name NOT LIKE 'sqlite_%'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchall()
     }
 
@@ -637,10 +659,7 @@ def _logical_database_fingerprint(con: sqlite3.Connection) -> str:
     tables: list[dict[str, object]] = []
     for table in sorted(_schema_tables(con)):
         quoted = _quote_identifier(table)
-        columns = [
-            str(row[1])
-            for row in con.execute(f"PRAGMA table_info({quoted})").fetchall()
-        ]
+        columns = [str(row[1]) for row in con.execute(f"PRAGMA table_info({quoted})").fetchall()]
         rows = [
             [_fingerprint_value(value) for value in tuple(row)]
             for row in con.execute(f"SELECT * FROM {quoted}").fetchall()
@@ -782,9 +801,7 @@ def _adopt_exact_unmanifested_backup(
         )
 
     nonce = uuid.uuid4().hex
-    temporary_manifest = manifest_path.with_name(
-        f".{manifest_path.name}.{nonce}.tmp"
-    )
+    temporary_manifest = manifest_path.with_name(f".{manifest_path.name}.{nonce}.tmp")
     try:
         manifest = _build_backup_manifest(
             source_identity=source_identity,
@@ -802,9 +819,7 @@ def _adopt_exact_unmanifested_backup(
         os.replace(temporary_manifest, manifest_path)
         _fsync_file(manifest_path)
         _fsync_directory(manifest_path.parent)
-        _validate_existing_pre_v2_backup(
-            con, source_path, destination, manifest_path
-        )
+        _validate_existing_pre_v2_backup(con, source_path, destination, manifest_path)
     except Exception:
         temporary_manifest.unlink(missing_ok=True)
         raise
@@ -860,9 +875,7 @@ def _ensure_pre_v2_backup(con: sqlite3.Connection) -> None:
     if _path_entry_exists(destination):
         _require_regular_file(destination, "pre-v2 backup")
         if _path_entry_exists(manifest_path):
-            _validate_existing_pre_v2_backup(
-                con, source_path, destination, manifest_path
-            )
+            _validate_existing_pre_v2_backup(con, source_path, destination, manifest_path)
         else:
             _adopt_exact_unmanifested_backup(
                 con,
@@ -929,9 +942,7 @@ def _ensure_pre_v2_backup(con: sqlite3.Connection) -> None:
         _fsync_directory(manifest_path.parent)
         _ensure_backup_private(destination)
         _ensure_backup_private(manifest_path)
-        _validate_existing_pre_v2_backup(
-            con, source_path, destination, manifest_path
-        )
+        _validate_existing_pre_v2_backup(con, source_path, destination, manifest_path)
     except Exception:
         temporary.unlink(missing_ok=True)
         temporary_manifest.unlink(missing_ok=True)
@@ -984,14 +995,10 @@ def _schema_v2_ready(con: sqlite3.Connection) -> bool:
         row["name"]
         for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
-    if not {"users", "used_magic_tokens", "auth_metadata", *_CHILD_TABLE_DDL}.issubset(
-        tables
-    ):
+    if not {"users", "used_magic_tokens", "auth_metadata", *_CHILD_TABLE_DDL}.issubset(tables):
         return False
 
-    user_columns = {
-        row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()
-    }
+    user_columns = {row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()}
     if not {"user_id", *_BILLING_COLUMNS}.issubset(user_columns):
         return False
     if con.execute(
@@ -1045,15 +1052,8 @@ def _schema_v2_ready(con: sqlite3.Connection) -> bool:
         raise sqlite3.DatabaseError("schema-v2 users lack a valid unique user_id index")
 
     for table in _CHILD_TABLE_DDL:
-        columns = {
-            row["name"]
-            for row in con.execute(f"PRAGMA table_info({table})").fetchall()
-        }
-        if (
-            "user_id" not in columns
-            or "email" in columns
-            or not _has_user_id_cascade(con, table)
-        ):
+        columns = {row["name"] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+        if "user_id" not in columns or "email" in columns or not _has_user_id_cascade(con, table):
             return False
 
     violations = con.execute("PRAGMA foreign_key_check").fetchall()
@@ -1063,14 +1063,8 @@ def _schema_v2_ready(con: sqlite3.Connection) -> bool:
     return True
 
 
-def _assert_no_orphaned_child_rows(
-    con: sqlite3.Connection, table: str, source_owner: str
-) -> None:
-    join = (
-        "owner.email = old.email"
-        if source_owner == "email"
-        else "owner.user_id = old.user_id"
-    )
+def _assert_no_orphaned_child_rows(con: sqlite3.Connection, table: str, source_owner: str) -> None:
+    join = "owner.email = old.email" if source_owner == "email" else "owner.user_id = old.user_id"
     count = con.execute(
         f"SELECT COUNT(*) FROM {table} AS old LEFT JOIN users AS owner ON {join} "
         "WHERE owner.user_id IS NULL"
@@ -1081,9 +1075,7 @@ def _assert_no_orphaned_child_rows(
         )
 
 
-def _rebuild_child_table(
-    con: sqlite3.Connection, table: str, source_owner: str
-) -> None:
+def _rebuild_child_table(con: sqlite3.Connection, table: str, source_owner: str) -> None:
     _assert_no_orphaned_child_rows(con, table, source_owner)
     temporary = f"_{table}_user_id_v2"
     con.execute(f"DROP TABLE IF EXISTS {temporary}")
@@ -1136,9 +1128,7 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
         _migrate(con)
         _prune_used_magic_tokens(con)
 
-        user_columns = {
-            row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()
-        }
+        user_columns = {row["name"] for row in con.execute("PRAGMA table_info(users)").fetchall()}
         if "user_id" not in user_columns:
             con.execute("ALTER TABLE users ADD COLUMN user_id TEXT")
 
@@ -1155,17 +1145,11 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
         _ensure_owner_marker(con)
 
         for table in _CHILD_TABLE_DDL:
-            columns = {
-                row["name"] for row in con.execute(f"PRAGMA table_info({table})").fetchall()
-            }
+            columns = {row["name"] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
             if not columns:
                 _create_child_table(con, table, table)
                 continue
-            if (
-                "user_id" in columns
-                and "email" not in columns
-                and _has_user_id_cascade(con, table)
-            ):
+            if "user_id" in columns and "email" not in columns and _has_user_id_cascade(con, table):
                 continue
             if "email" in columns:
                 _rebuild_child_table(con, table, "email")
@@ -1181,9 +1165,7 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_customer_analyses_user_id "
             "ON customer_analyses (user_id, created_at)"
         )
-        con.execute(
-            "CREATE INDEX IF NOT EXISTS idx_usage_events_at ON usage_events (at)"
-        )
+        con.execute("CREATE INDEX IF NOT EXISTS idx_usage_events_at ON usage_events (at)")
         con.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_mybook_jobs_active_user "
             "ON mybook_jobs(user_id) WHERE status IN ('queued','running')"
@@ -1339,23 +1321,37 @@ def verify_credentials(email: str, password: str) -> bool:
 
 def touch_last_login(email: str) -> None:
     with _conn() as con:
-        con.execute("UPDATE users SET last_login_at=? WHERE email=?",
-                    (datetime.now(timezone.utc).isoformat(), _norm(email)))
+        con.execute(
+            "UPDATE users SET last_login_at=? WHERE email=?",
+            (datetime.now(timezone.utc).isoformat(), _norm(email)),
+        )
 
 
 def set_active(email: str, active: bool) -> None:
     with _conn() as con:
-        con.execute("UPDATE users SET is_active=? WHERE email=?", (1 if active else 0, _norm(email)))
+        con.execute(
+            "UPDATE users SET is_active=? WHERE email=?", (1 if active else 0, _norm(email))
+        )
 
 
-def set_billing(email: str, *, tier: str | None = None, customer_id: str | None = None,
-                sub_id: str | None = None, status: str | None = None,
-                event_at: str | None = None) -> None:
+def set_billing(
+    email: str,
+    *,
+    tier: str | None = None,
+    customer_id: str | None = None,
+    sub_id: str | None = None,
+    status: str | None = None,
+    event_at: str | None = None,
+) -> None:
     """Update only the billing fields that are provided (None = leave unchanged)."""
     sets, params = [], []
-    for col, val in (("tier", tier), ("billing_customer_id", customer_id),
-                     ("billing_sub_id", sub_id), ("billing_status", status),
-                     ("billing_event_at", event_at)):
+    for col, val in (
+        ("tier", tier),
+        ("billing_customer_id", customer_id),
+        ("billing_sub_id", sub_id),
+        ("billing_status", status),
+        ("billing_event_at", event_at),
+    ):
         if val is not None:
             sets.append(f"{col}=?")
             params.append(val)
@@ -1379,7 +1375,7 @@ def create_magic_link_user(email: str, tier: str | None = None) -> bool:
         if tier:
             set_billing(em, tier=tier)
         return False
-    create_user(em, secrets.token_urlsafe(24))   # unusable random pw; magic-link login
+    create_user(em, secrets.token_urlsafe(24))  # unusable random pw; magic-link login
     if tier:
         set_billing(em, tier=tier)
     return True
@@ -1486,6 +1482,7 @@ def list_owed_onboarding(limit: int = 100) -> list[dict[str, Any]]:
 
 # ── email preferences (signal alerts / weekly digest opt-out) ──────────────────
 
+
 def _ensure_user_row(con, em: str) -> None:
     """Guarantee a `users` row exists for `em` so a preference UPDATE isn't a
     silent no-op. Pre-provision alpha customers only exist via watchlist/book
@@ -1493,11 +1490,12 @@ def _ensure_user_row(con, em: str) -> None:
     password satisfies the NOT NULL constraint; they still authenticate via
     magic link / billing provisioning, never this placeholder."""
     if con.execute("SELECT 1 FROM users WHERE email=?", (em,)).fetchone():
-        return   # common case — skip the 200k-round PBKDF2 hash entirely
+        return  # common case — skip the 200k-round PBKDF2 hash entirely
     con.execute(
         "INSERT OR IGNORE INTO users (email, password_hash, is_active, created_at) "
         "VALUES (?,?,1,?)",
-        (em, hash_password(secrets.token_urlsafe(24)), datetime.now(timezone.utc).isoformat()))
+        (em, hash_password(secrets.token_urlsafe(24)), datetime.now(timezone.utc).isoformat()),
+    )
 
 
 def set_alerts_opt_out(email: str, flag: bool) -> None:
@@ -1553,11 +1551,14 @@ def customers_watching(symbol: str) -> list[str]:
             "  UNION SELECT user_id, symbol FROM customer_positions) s "
             "JOIN users u ON u.user_id = s.user_id "
             "WHERE s.symbol=? AND COALESCE(u.alerts_opt_out, 0)=0 "
-            "  AND COALESCE(u.is_active, 1)=1 ORDER BY u.email", (sym,)).fetchall()
+            "  AND COALESCE(u.is_active, 1)=1 ORDER BY u.email",
+            (sym,),
+        ).fetchall()
     return [r["email"] for r in rows]
 
 
 # ── gate decision (pure, testable) ──────────────────────────────────────────────
+
 
 def is_public_path(path: str) -> bool:
     """Prefix match on a path boundary: '/api/congress' exposes '/api/congress' and
@@ -1649,9 +1650,17 @@ def consume_magic_token(token: str | None) -> str | None:
             "INSERT OR IGNORE INTO used_magic_tokens (token_hash, used_at) VALUES (?,?)",
             (th, now),
         )
-        if cur.rowcount == 0:        # already present → token was already consumed
+        if cur.rowcount == 0:  # already present → token was already consumed
             return None
     return str(user["email"])
+
+
+def _usable_jti(value: object) -> str | None:
+    """A non-empty session id. Whitespace-only / non-str cannot be blacklisted."""
+    if not isinstance(value, str):
+        return None
+    jti = value.strip()
+    return jti or None
 
 
 def revoke_session(token: str | None) -> str:
@@ -1664,15 +1673,14 @@ def revoke_session(token: str | None) -> str:
     claims = _verified_claims(token, expected_typ="session")
     if not claims:
         return "absent"
-    jti = claims.get("jti")
-    if not isinstance(jti, str) or not jti:
+    jti = _usable_jti(claims.get("jti"))
+    if not jti:
         return "failed"
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         _prune_revoked_sessions(con)
         con.execute(
-            "INSERT OR IGNORE INTO revoked_sessions (jti, expires_at, revoked_at) "
-            "VALUES (?,?,?)",
+            "INSERT OR IGNORE INTO revoked_sessions (jti, expires_at, revoked_at) VALUES (?,?,?)",
             (jti, int(claims.get("exp", 0)), now),
         )
     return "revoked"
@@ -1697,8 +1705,8 @@ def authenticate_session(token: str | None) -> str | None:
     claims = _verified_claims(token, expected_typ="session")
     if not claims:
         return None
-    jti = claims.get("jti")
-    if not isinstance(jti, str) or not jti:
+    jti = _usable_jti(claims.get("jti"))
+    if not jti:
         return None
     with _conn() as con:
         revoked = con.execute(
@@ -1730,6 +1738,7 @@ def gate_decision(path: str, cookie_value: str | None) -> str:
 
 
 # ── CLI (provision the alpha users) ─────────────────────────────────────────────
+
 
 def _cli(argv: list[str]) -> int:
     init_auth_db()
@@ -1764,8 +1773,10 @@ def _cli(argv: list[str]) -> int:
             print(f"✗ no such user: {email}")
             return 1
         set_billing(email, tier=tier)
-        print(f"✓ {email} tier set to {tier} (LLM quotas now "
-              f"{ {'observer': '1×', 'trader': '2×', 'desk': '5×'}[tier] })")
+        print(
+            f"✓ {email} tier set to {tier} (LLM quotas now "
+            f"{ {'observer': '1×', 'trader': '2×', 'desk': '5×'}[tier] })"
+        )
         return 0
     if cmd == "list":
         users = list_users()
@@ -1773,8 +1784,10 @@ def _cli(argv: list[str]) -> int:
             print("(no users)")
         for u in users:
             state = "active" if u["is_active"] else "DISABLED"
-            print(f"  {u['email']:32} {state:9} tier={u.get('tier') or '—':8} "
-                  f"created {u['created_at'][:10]} last_login={u['last_login_at'] or '—'}")
+            print(
+                f"  {u['email']:32} {state:9} tier={u.get('tier') or '—':8} "
+                f"created {u['created_at'][:10]} last_login={u['last_login_at'] or '—'}"
+            )
         print(f"\nWall: {'ENABLED' if auth_enabled() else 'OFF (set GESH_AUTH_ENABLED=1)'}")
         return 0
     print(__doc__)
@@ -1783,7 +1796,7 @@ def _cli(argv: list[str]) -> int:
 
 # ── per-user watchlist (customer analyze-any-ticker: saved symbols) ────────────
 
-_MAX_WATCH = 50   # per-user cap — abuse guard
+_MAX_WATCH = 50  # per-user cap — abuse guard
 
 
 def add_watch(email: str, symbol: str) -> bool:
@@ -1809,9 +1822,12 @@ def add_watch(email: str, symbol: str) -> bool:
             return True
         # rowcount 0 = cap hit, or a concurrent add of the same symbol won the
         # race — the latter is still a success (the symbol IS on the list).
-        return con.execute(
-            "SELECT 1 FROM watchlist WHERE user_id=? AND symbol=?", (user_id, sym)
-        ).fetchone() is not None
+        return (
+            con.execute(
+                "SELECT 1 FROM watchlist WHERE user_id=? AND symbol=?", (user_id, sym)
+            ).fetchone()
+            is not None
+        )
 
 
 def remove_watch(email: str, symbol: str) -> None:
@@ -1840,7 +1856,7 @@ def get_watch(email: str) -> list[str]:
 # them, valued live at read time. Contains ZERO owner data. Same isolation contract
 # as the watchlist: the email interface resolves once to an immutable tenant ID.
 
-_MAX_POSITIONS = 100   # per-user cap — abuse guard (also bounds analyze-engine cost).
+_MAX_POSITIONS = 100  # per-user cap — abuse guard (also bounds analyze-engine cost).
 #                        Raised 30→100 (2026-07-10) to fit a real book via bulk import.
 
 
@@ -1894,9 +1910,12 @@ def set_position(email: str, symbol: str, shares: float, avg_cost: float | None 
         )
         if cur.rowcount:
             return True
-        return con.execute(
-            "SELECT 1 FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym)
-        ).fetchone() is not None
+        return (
+            con.execute(
+                "SELECT 1 FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym)
+            ).fetchone()
+            is not None
+        )
 
 
 def remove_position(email: str, symbol: str) -> None:
@@ -1905,9 +1924,7 @@ def remove_position(email: str, symbol: str) -> None:
     if not user_id:
         return
     with _conn() as con:
-        con.execute(
-            "DELETE FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym)
-        )
+        con.execute("DELETE FROM customer_positions WHERE user_id=? AND symbol=?", (user_id, sym))
 
 
 def clear_positions(email: str) -> None:
@@ -1937,10 +1954,10 @@ def get_positions(email: str) -> list[dict]:
     with _conn() as con:
         rows = con.execute(
             "SELECT symbol, shares, avg_cost FROM customer_positions "
-            "WHERE user_id=? ORDER BY updated_at, symbol", (user_id,)
+            "WHERE user_id=? ORDER BY updated_at, symbol",
+            (user_id,),
         ).fetchall()
-    return [{"symbol": r["symbol"], "shares": r["shares"], "avg_cost": r["avg_cost"]}
-            for r in rows]
+    return [{"symbol": r["symbol"], "shares": r["shares"], "avg_cost": r["avg_cost"]} for r in rows]
 
 
 # ── per-user equity history (the customer ECG's only data source) ────────────
@@ -1950,7 +1967,7 @@ def get_positions(email: str) -> list[dict]:
 # written from customer_positions valued at public closes and read back scoped to
 # one tenant. Nothing here ever touches the owner table.
 
-_MAX_EQUITY_SNAPSHOTS_PER_SYMBOL = 400   # ~18 trading months at one daily snapshot
+_MAX_EQUITY_SNAPSHOTS_PER_SYMBOL = 400  # ~18 trading months at one daily snapshot
 _MAX_EQUITY_HISTORY_DAYS = 3_650
 
 
@@ -1964,9 +1981,7 @@ def _finite_positive(value: object) -> float | None:
     return number if math.isfinite(number) and number > 0 else None
 
 
-def record_equity_snapshots(
-    email: str, rows: list[dict], at: str | None = None
-) -> int:
+def record_equity_snapshots(email: str, rows: list[dict], at: str | None = None) -> int:
     """Append one equity observation per row for this user. Returns rows written.
 
     `rows` are {symbol, equity, current_price}. Rows whose equity or price is not
@@ -2063,6 +2078,7 @@ def customers_with_positions() -> list[str]:
 # When a customer bulk-imports SYMBOLS ONLY (no share counts — sizes private), the
 # book is flagged equal-weight: the analysis weights every name 1/N instead of by an
 # unknown/placeholder size. A bulk import that DOES carry share counts clears it.
+
 
 def set_equal_weight(email: str, on: bool) -> None:
     user_id = resolve_user_id(email)
@@ -2227,6 +2243,7 @@ def get_book_analysis(email: str, analysis_id: int) -> dict | None:
 
 # ── usage metering (per-customer event counters — tier/billing groundwork) ─────
 
+
 def _usage_total_in_transaction(
     con: sqlite3.Connection, user_id: str, event: str, cutoff: str
 ) -> int:
@@ -2305,9 +2322,7 @@ def release_usage(job_id: str, user_id: str | None = None) -> bool:
 
 def get_usage_reservation(job_id: str) -> dict[str, Any] | None:
     with _conn() as con:
-        row = con.execute(
-            "SELECT * FROM usage_reservations WHERE job_id=?", (job_id,)
-        ).fetchone()
+        row = con.execute("SELECT * FROM usage_reservations WHERE job_id=?", (job_id,)).fetchone()
     return dict(row) if row else None
 
 
@@ -2345,15 +2360,12 @@ def get_latest_mybook_job(user_id: str) -> dict[str, Any] | None:
 
 def expire_stale_mybook_jobs(max_age_seconds: int) -> int:
     """Recover queued/running rows left behind by a process crash."""
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(seconds=max(1, max_age_seconds))
-    ).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(1, max_age_seconds))).isoformat()
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute("BEGIN IMMEDIATE")
         rows = con.execute(
-            "SELECT job_id FROM mybook_jobs "
-            "WHERE status IN ('queued','running') AND updated_at<?",
+            "SELECT job_id FROM mybook_jobs WHERE status IN ('queued','running') AND updated_at<?",
             (cutoff,),
         ).fetchall()
         job_ids = [str(row["job_id"]) for row in rows]
@@ -2481,6 +2493,7 @@ def mark_mybook_job_delivered(user_id: str, job_id: str) -> bool:
         )
     return cur.rowcount == 1
 
+
 def log_usage(email: str | None, event: str, detail: str = "") -> None:
     """Fire-and-forget usage counter. NEVER raises — metering must not be able to
     break a product endpoint."""
@@ -2544,8 +2557,10 @@ def usage_summary(days: int = 30) -> list[dict]:
             ") GROUP BY email,event ORDER BY n DESC",
             (cutoff, cutoff),
         ).fetchall()
-    return [{"email": r["email"], "event": r["event"], "count": r["n"], "last_at": r["last_at"]}
-            for r in rows]
+    return [
+        {"email": r["email"], "event": r["event"], "count": r["n"], "last_at": r["last_at"]}
+        for r in rows
+    ]
 
 
 if __name__ == "__main__":
@@ -2585,32 +2600,34 @@ def export_user_data(email: str) -> dict[str, Any]:
     with _conn() as con:
         acct = con.execute(
             "SELECT email, created_at, last_login_at, tier, billing_status, "
-            "alerts_opt_out, digest_opt_out FROM users WHERE user_id=?", (user_id,)
+            "alerts_opt_out, digest_opt_out FROM users WHERE user_id=?",
+            (user_id,),
         ).fetchone()
         positions = con.execute(
             "SELECT symbol, shares, avg_cost, updated_at FROM customer_positions "
-            "WHERE user_id=? ORDER BY rowid", (user_id,)
+            "WHERE user_id=? ORDER BY rowid",
+            (user_id,),
         ).fetchall()
         prefs = con.execute(
-            "SELECT equal_weight, updated_at FROM customer_book_prefs WHERE user_id=?",
-            (user_id,)
+            "SELECT equal_weight, updated_at FROM customer_book_prefs WHERE user_id=?", (user_id,)
         ).fetchone()
         watch = con.execute(
-            "SELECT symbol, added_at FROM watchlist WHERE user_id=? ORDER BY rowid",
-            (user_id,)
+            "SELECT symbol, added_at FROM watchlist WHERE user_id=? ORDER BY rowid", (user_id,)
         ).fetchall()
         analyses = con.execute(
             "SELECT result_json, created_at FROM customer_analyses WHERE user_id=? "
-            "ORDER BY created_at DESC", (user_id,)
+            "ORDER BY created_at DESC",
+            (user_id,),
         ).fetchall()
         usage = con.execute(
             "SELECT event, detail, at FROM usage_events WHERE user_id=? ORDER BY at DESC",
-            (user_id,)
+            (user_id,),
         ).fetchall()
         equity_history = con.execute(
             "SELECT symbol, snapshot_at, equity, current_price "
             "FROM customer_equity_snapshots WHERE user_id=? "
-            "ORDER BY snapshot_at DESC, symbol", (user_id,)
+            "ORDER BY snapshot_at DESC, symbol",
+            (user_id,),
         ).fetchall()
 
     def _parse(raw: str) -> Any:
@@ -2626,8 +2643,7 @@ def export_user_data(email: str) -> dict[str, Any]:
         "book_preferences": dict(prefs) if prefs else {},
         "watchlist": [r["symbol"] for r in watch],
         "analyses": [
-            {"created_at": r["created_at"], "result": _parse(r["result_json"])}
-            for r in analyses
+            {"created_at": r["created_at"], "result": _parse(r["result_json"])} for r in analyses
         ],
         "usage": [dict(r) for r in usage],
         "equity_history": [dict(r) for r in equity_history],
