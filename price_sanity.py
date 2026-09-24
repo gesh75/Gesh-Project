@@ -30,9 +30,16 @@ def strict_reject_enabled() -> bool:
 
 
 def _positive(x) -> float | None:
+    """A usable dollar figure. Bool / NaN / inf / overflow stay unknown.
+
+    JSON ``true`` must not become $1 via ``float(True)`` — that $1 can then
+    fail the 52-wk band and block an AI card or trade setup.
+    """
+    if isinstance(x, bool):
+        return None
     try:
         v = float(x)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return v if math.isfinite(v) and v > 0 else None
 

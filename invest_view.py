@@ -51,6 +51,25 @@ _MODE_NOTE = {
     "NO_ACTION": "No new-name candidates surfaced in the latest scan.",
 }
 
+WHAT_IF_CASH_CAP = 1_000_000.0
+
+
+def _sanitize_what_if_cash(value: object) -> float | None:
+    """A finite non-negative dollar figure for the what-if slider.
+
+    Bool / NaN / inf / overflow / negative stay unknown so JSON ``true``
+    cannot size a $1 hypothetical book, and ``1e999`` cannot emit Infinity.
+    """
+    if value is None or isinstance(value, bool) or value == "":
+        return None
+    try:
+        wic = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(wic) or wic < 0:
+        return None
+    return min(wic, WHAT_IF_CASH_CAP)
+
 
 def _empty(note: str, *, generated_at: str | None = None) -> dict[str, Any]:
     return {
@@ -132,14 +151,10 @@ def load_invest_data(results_path: str | None = None,
         "what_if_cash": None,
     }
 
-    # Harden the slider input: reject non-finite / negative, clamp huge — a hostile or
-    # buggy ?what_if_cash=inf|nan|-1|1e308 must never reach sizing or emit Infinity/NaN JSON.
-    if what_if_cash is not None:
-        try:
-            wic = float(what_if_cash)
-            what_if_cash = min(wic, 1_000_000.0) if (math.isfinite(wic) and wic >= 0) else None
-        except (TypeError, ValueError):
-            what_if_cash = None
+    # Harden the slider input: reject bool / non-finite / negative, clamp huge —
+    # a hostile or buggy ?what_if_cash=true|inf|nan|-1|1e308 must never reach
+    # sizing or emit Infinity/NaN JSON.
+    what_if_cash = _sanitize_what_if_cash(what_if_cash)
 
     # What-if cash slider — re-size server-side using the captured survivors (no network).
     state = radar.get("resize_state")

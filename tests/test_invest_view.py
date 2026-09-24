@@ -156,13 +156,32 @@ def test_render_includes_what_if_slider():
     assert 'id="wi-slider"' in html and "what_if_cash=" in html
 
 
+def test_sanitize_what_if_cash_rejects_bool_nan_inf_and_overflow():
+    """JSON true must not become a $1 hypothetical book."""
+    assert iv._sanitize_what_if_cash(True) is None
+    assert iv._sanitize_what_if_cash(False) is None
+    assert iv._sanitize_what_if_cash(float("nan")) is None
+    assert iv._sanitize_what_if_cash(float("inf")) is None
+    assert iv._sanitize_what_if_cash(float("-inf")) is None
+    assert iv._sanitize_what_if_cash(-100.0) is None
+    assert iv._sanitize_what_if_cash("") is None
+    assert iv._sanitize_what_if_cash("n/a") is None
+    assert iv._sanitize_what_if_cash(10**10000) is None
+
+
+def test_sanitize_what_if_cash_keeps_zero_and_clamps_huge():
+    assert iv._sanitize_what_if_cash(0) == 0.0
+    assert iv._sanitize_what_if_cash("9000") == 9000.0
+    assert iv._sanitize_what_if_cash(2_000_000) == iv.WHAT_IF_CASH_CAP
+
+
 def test_what_if_cash_sanitizes_bad_input(tmp_path):
-    import json as _json
     path = _write(tmp_path, {"diversification_candidates": _radar_with_resize_state()})
-    # inf / nan / negative must not produce a what-if result or invalid JSON.
-    for bad in (float("inf"), float("nan"), -100.0):
+    # inf / nan / negative / bool / overflow must not produce a what-if result
+    # or invalid JSON. True used to size a $1 hypothetical book via float(True).
+    for bad in (float("inf"), float("nan"), -100.0, True, False, 10**10000):
         d = iv.load_invest_data(path, what_if_cash=bad)
-        blob = _json.dumps(d)            # must be valid JSON (no Infinity/NaN tokens)
+        blob = json.dumps(d)            # must be valid JSON (no Infinity/NaN tokens)
         assert "Infinity" not in blob and "NaN" not in blob
         assert d["what_if_cash"] is None  # rejected → live view
     # a sane value still works

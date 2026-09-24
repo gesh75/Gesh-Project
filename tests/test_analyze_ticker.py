@@ -164,6 +164,14 @@ def test_deep_analyze_ticker_returns_card(monkeypatch):
     assert set(out["scores"]) == {"valuation", "growth", "health", "momentum", "dividend"}
 
 
+def test_deep_analyze_ticker_requests_4096_output_tokens(monkeypatch):
+    """Gemini failover floors at 4096; the primary ticker call must match so a
+    holdings-card-sized JSON payload is not truncated back to the old 2000."""
+    sink = _install_fake_client(monkeypatch, _FakeMessage([_ToolBlock(_CARD)]))
+    ai_analyzer.deep_analyze_ticker("AAPL")
+    assert sink["max_tokens"] == 4096
+
+
 def test_schema_is_money_free_no_portfolio_keys(monkeypatch):
     """The CONTRACT is structural: the tool schema exposes ONLY per-ticker fields
     — no portfolio_score / holdings_analysis / kelly / sector dollars can appear."""
