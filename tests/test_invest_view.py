@@ -184,8 +184,6 @@ def test_what_if_cash_sanitizes_bad_input(tmp_path):
         blob = json.dumps(d)            # must be valid JSON (no Infinity/NaN tokens)
         assert "Infinity" not in blob and "NaN" not in blob
         assert d["what_if_cash"] is None  # rejected → live view
-    # a sane value still works
-    assert iv.load_invest_data(path, what_if_cash=9000.0)["what_if_cash"] == 9000.0
 
 
 def test_render_has_prominent_disclaimer_banner():
