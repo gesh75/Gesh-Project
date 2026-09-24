@@ -9,6 +9,7 @@ MCP-built live_portfolio_snapshot.json into the exact shape build_data_payload()
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -163,6 +164,30 @@ def test_snapshot_keeps_measured_zero_deployable(tmp_path):
     assert eq["deployable"] == pytest.approx(0.0)
     assert eq["buying_power"] == pytest.approx(0.0)
     assert eq["cash"] == pytest.approx(500.0)
+
+
+@pytest.mark.parametrize("poison", [float("nan"), float("inf"), float("-inf")])
+def test_snapshot_poisoned_cash_is_not_invented_zero(tmp_path, poison):
+    """Present-but-unusable cash must stay non-finite, not become $0.
+
+    ``_first_present_money`` used to skip NaN/inf and default to $0, so the
+    model book claimed ``reconciles: true`` on a poisoned snapshot (CI
+    ``test_F_non_finite_account_field_never_claims_reconciliation[cash]``).
+    """
+    payload = df.load_snapshot_payload(
+        _write_snap(
+            tmp_path,
+            equity_summary={
+                "account_equity": 7000.0,
+                "total": 7000.0,
+                "portfolio_equity": 7000.0,
+                "cash": poison,
+                "adjusted_equity_previous_close": 7100.0,
+            },
+        )
+    )
+    cash = payload["equity_summary"]["cash"]
+    assert not math.isfinite(cash)
 
 
 def test_snapshot_maps_to_payload_shape(tmp_path):

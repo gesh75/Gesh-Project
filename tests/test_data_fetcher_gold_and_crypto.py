@@ -16,6 +16,7 @@ absent, then monkeypatched on ``data_fetcher.rh``.
 
 from __future__ import annotations
 
+import math
 import sys
 from types import ModuleType
 
@@ -209,6 +210,45 @@ def test_bool_portfolio_cash_is_unknown_not_one_dollar(monkeypatch):
     eq = df.get_total_equity()
     assert eq["cash"] == pytest.approx(400.0)
     assert eq["deployable"] == pytest.approx(400.0)
+
+
+def test_nan_portfolio_cash_falls_through_to_unallocated(monkeypatch):
+    """A poisoned portfolio_cash is unknown, not $0 — the next finite field wins."""
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 0},
+        load_account_profile=lambda: {
+            "margin_balances": {
+                "portfolio_cash": float("nan"),
+                "unallocated_margin_cash": 400.0,
+            },
+        },
+    )
+    eq = df.get_total_equity()
+    assert eq["cash"] == pytest.approx(400.0)
+    assert eq["deployable"] == pytest.approx(400.0)
+
+
+def test_all_unusable_cash_sources_stay_non_finite(monkeypatch):
+    """Every cash field NaN/inf must not invent $0 dry powder."""
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {
+            "equity": ACCOUNT_EQUITY,
+            "withdrawable_amount": float("inf"),
+        },
+        load_account_profile=lambda: {
+            "buying_power": GOLD_LEVERAGED_BP,
+            "margin_balances": {
+                "portfolio_cash": float("nan"),
+                "unallocated_margin_cash": float("nan"),
+            },
+        },
+    )
+    eq = df.get_total_equity()
+    assert not math.isfinite(eq["cash"])
+    assert not math.isfinite(eq["deployable"])
+    assert eq["cash"] != pytest.approx(GOLD_LEVERAGED_BP)
 
 
 def test_empty_cash_sources_do_not_fall_back_to_account_buying_power(monkeypatch):

@@ -36,6 +36,11 @@ _SNAPSHOT_PATH = Path(
 _SNAPSHOT_MAX_AGE_SECONDS = float(os.getenv("GESH_SNAPSHOT_MAX_AGE_SECONDS", str(7 * 86400)))
 
 
+def _is_missing_money(value: object) -> bool:
+    """Absent cash — not a present-but-unusable NaN/inf/overflow."""
+    return value is None or value == "" or isinstance(value, bool)
+
+
 def _finite_money(value: object) -> float | None:
     """A finite dollar figure. Bool / NaN / inf / overflow stay unknown.
 
@@ -43,7 +48,7 @@ def _finite_money(value: object) -> float | None:
     settled ``portfolio_cash`` as missing and size against
     ``unallocated_margin_cash`` or ``withdrawable_amount``.
     """
-    if isinstance(value, bool) or value is None or value == "":
+    if _is_missing_money(value):
         return None
     try:
         num = float(value)
@@ -55,14 +60,22 @@ def _finite_money(value: object) -> float | None:
 def _first_present_money(*candidates: object, default: float = 0.0) -> float:
     """First usable money field, including a measured $0.
 
-    Missing / bool / non-finite values are skipped. The first parseable
-    number wins even when it is 0.0.
+    Missing / bool values are skipped so a later finite field can win.
+    A present-but-unusable figure (NaN / inf / overflow / garbage) is
+    also skipped while a later candidate exists. If every candidate is
+    missing, return ``default`` ($0). If something was present but
+    unusable and nothing finite followed, return NaN — never invent $0
+    from a poisoned field (snapshot cash NaN must not reconcile as $0).
     """
+    saw_unusable = False
     for raw in candidates:
+        if _is_missing_money(raw):
+            continue
         parsed = _finite_money(raw)
         if parsed is not None:
             return parsed
-    return default
+        saw_unusable = True
+    return float("nan") if saw_unusable else default
 
 
 class RobinhoodOfflineError(RuntimeError):
