@@ -143,6 +143,28 @@ def test_build_data_payload_quotes_holdings_when_watchlist_empty(monkeypatch):
     assert payload["as_of"] == "2026-06-03T16:00:00+00:00"
 
 
+def test_snapshot_keeps_measured_zero_deployable(tmp_path):
+    """Fully invested: measured $0 deployable must not ``or``-fall through to cash."""
+    payload = df.load_snapshot_payload(
+        _write_snap(
+            tmp_path,
+            equity_summary={
+                "account_equity": 7000.0,
+                "total": 7000.0,
+                "portfolio_equity": 7000.0,
+                "cash": 500.0,
+                "deployable": 0.0,
+                "buying_power": 0.0,
+                "adjusted_equity_previous_close": 7100.0,
+            },
+        )
+    )
+    eq = payload["equity_summary"]
+    assert eq["deployable"] == pytest.approx(0.0)
+    assert eq["buying_power"] == pytest.approx(0.0)
+    assert eq["cash"] == pytest.approx(500.0)
+
+
 def test_snapshot_maps_to_payload_shape(tmp_path):
     payload = df.load_snapshot_payload(_write_snap(tmp_path))
     # same top-level shape as build_data_payload + offline markers

@@ -17,6 +17,7 @@ import robin_stocks.robinhood as rh
 # (gesh-project-trading/data_fetcher.py) — keep behavioral changes in sync.
 try:
     from price_source import patch_rh_session_timeout
+
     patch_rh_session_timeout()
 except Exception:  # noqa: BLE001 — hardening must never break imports
     pass
@@ -26,12 +27,42 @@ DEFAULT_WATCHLIST: list[str] = ["MSTR", "SPY", "QQQ"]
 # MCP-first snapshot the daily-analysis chain writes (build_snapshot_from_mcp.py). Read as a
 # fallback when the live robin_stocks session is down so the dashboard degrades to last-known
 # data instead of blanking out. Overridable for tests via GESH_SNAPSHOT_PATH.
-_SNAPSHOT_PATH = Path(os.getenv("GESH_SNAPSHOT_PATH",
-                                str(Path(__file__).parent / "live_portfolio_snapshot.json")))
+_SNAPSHOT_PATH = Path(
+    os.getenv("GESH_SNAPSHOT_PATH", str(Path(__file__).parent / "live_portfolio_snapshot.json"))
+)
 # Beyond this age a snapshot is too stale to pass off as the live portfolio — serving it would
 # show year-old numbers as "live" (Codex MEDIUM-3). Default 7d covers a long holiday weekend
 # between daily-chain runs; override with GESH_SNAPSHOT_MAX_AGE_SECONDS.
 _SNAPSHOT_MAX_AGE_SECONDS = float(os.getenv("GESH_SNAPSHOT_MAX_AGE_SECONDS", str(7 * 86400)))
+
+
+def _finite_money(value: object) -> float | None:
+    """A finite dollar figure. Bool / NaN / inf / overflow stay unknown.
+
+    A measured ``0`` is kept. ``or``-chaining cash fields would treat $0
+    settled ``portfolio_cash`` as missing and size against
+    ``unallocated_margin_cash`` or ``withdrawable_amount``.
+    """
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _first_present_money(*candidates: object, default: float = 0.0) -> float:
+    """First usable money field, including a measured $0.
+
+    Missing / bool / non-finite values are skipped. The first parseable
+    number wins even when it is 0.0.
+    """
+    for raw in candidates:
+        parsed = _finite_money(raw)
+        if parsed is not None:
+            return parsed
+    return default
 
 
 class RobinhoodOfflineError(RuntimeError):
@@ -94,7 +125,8 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
     if age_s > _SNAPSHOT_MAX_AGE_SECONDS:
         raise RobinhoodOfflineError(
             f"snapshot at {p} is {age_s / 86400:.1f}d old "
-            f"(> {_SNAPSHOT_MAX_AGE_SECONDS / 86400:.1f}d max).")
+            f"(> {_SNAPSHOT_MAX_AGE_SECONDS / 86400:.1f}d max)."
+        )
 
     total_equity = sum(float(h.get("equity") or 0) for h in raw_holdings) or 0.0
 
@@ -104,39 +136,47 @@ def load_snapshot_payload(path: Path | None = None) -> dict[str, Any]:
         avg = float(h.get("average_buy_price") or 0)
         equity = float(h.get("equity") or 0)
         price = float(h.get("price") or h.get("current_price") or 0)
-        holdings.append({
-            "symbol":               h.get("symbol", ""),
-            "quantity":             qty,
-            "average_buy_price":    avg,
-            "equity":               equity,
-            "percent_change":       float(h.get("percent_change") or 0),
-            "equity_change":        round(equity - avg * qty, 2),
-            "current_price":        price,
-            "type":                 h.get("type", "stock"),
-            "pe_ratio":             h.get("pe_ratio"),
-            "portfolio_percentage": round(equity / total_equity * 100, 1) if total_equity else 0.0,
-        })
+        holdings.append(
+            {
+                "symbol": h.get("symbol", ""),
+                "quantity": qty,
+                "average_buy_price": avg,
+                "equity": equity,
+                "percent_change": float(h.get("percent_change") or 0),
+                "equity_change": round(equity - avg * qty, 2),
+                "current_price": price,
+                "type": h.get("type", "stock"),
+                "pe_ratio": h.get("pe_ratio"),
+                "portfolio_percentage": round(equity / total_equity * 100, 1)
+                if total_equity
+                else 0.0,
+            }
+        )
 
     payload = {
-        "as_of":         raw_ts,
-        "offline":       True,                       # not live — served from snapshot
-        "source":        snap.get("source", "snapshot"),
+        "as_of": raw_ts,
+        "offline": True,  # not live — served from snapshot
+        "source": snap.get("source", "snapshot"),
         "snapshot_age_seconds": round(age_s),
         "equity_summary": {
-            "portfolio_equity":               headline,   # account-level (positions + cash)
+            "portfolio_equity": headline,  # account-level (positions + cash)
             # Parity with the live build_data_payload: Kelly / consensus size against
             # `total` — without these the offline (snapshot) path fed them None and
             # every position looked 0%-allocated. Account-level total = headline.
-            "total":                          headline,
-            "total_equity":                   headline,
-            "extended_hours_equity":          float(eqs.get("extended_hours_equity") or 0),
-            "adjusted_equity_previous_close": float(eqs.get("adjusted_equity_previous_close") or 0),
-            "cash":                           float(eqs.get("cash") or 0),
-            "deployable":                     float(eqs.get("deployable") or eqs.get("cash") or 0),
-            "buying_power":                   float(eqs.get("buying_power") or eqs.get("deployable") or 0),
+            "total": headline,
+            "total_equity": headline,
+            "extended_hours_equity": _first_present_money(eqs.get("extended_hours_equity")),
+            "adjusted_equity_previous_close": _first_present_money(
+                eqs.get("adjusted_equity_previous_close")
+            ),
+            "cash": _first_present_money(eqs.get("cash")),
+            "deployable": _first_present_money(eqs.get("deployable"), eqs.get("cash")),
+            "buying_power": _first_present_money(
+                eqs.get("buying_power"), eqs.get("deployable"), eqs.get("cash")
+            ),
         },
-        "holdings":  holdings,
-        "watchlist": [],                             # live quotes need RH — empty when offline
+        "holdings": holdings,
+        "watchlist": [],  # live quotes need RH — empty when offline
     }
     # Astra R5: DATA_FRESH ages the selected symbol quote. MCP snapshots already
     # carry quote_provenance; dropping it made fetched_at look like a fresh quote.
@@ -169,18 +209,20 @@ def get_portfolio_holdings() -> pd.DataFrame:
             pe = None if (pe != pe) else pe  # NaN check
         except (TypeError, ValueError):
             pe = None
-        rows.append({
-            "symbol": symbol,
-            "quantity": float(data.get("quantity", 0)),
-            "average_buy_price": float(data.get("average_buy_price", 0)),
-            "equity": float(data.get("equity", 0)),
-            "percent_change": float(data.get("percent_change", 0)),
-            "equity_change": float(data.get("equity_change", 0)),
-            "current_price": float(data.get("price", 0)),
-            "type": data.get("type", "stock"),
-            "pe_ratio": pe,
-            "portfolio_percentage": float(data.get("percentage", 0)),
-        })
+        rows.append(
+            {
+                "symbol": symbol,
+                "quantity": float(data.get("quantity", 0)),
+                "average_buy_price": float(data.get("average_buy_price", 0)),
+                "equity": float(data.get("equity", 0)),
+                "percent_change": float(data.get("percent_change", 0)),
+                "equity_change": float(data.get("equity_change", 0)),
+                "current_price": float(data.get("price", 0)),
+                "type": data.get("type", "stock"),
+                "pe_ratio": pe,
+                "portfolio_percentage": float(data.get("percentage", 0)),
+            }
+        )
 
     # ── Crypto ────────────────────────────────────────────────────────────────
     try:
@@ -193,7 +235,11 @@ def get_portfolio_holdings() -> pd.DataFrame:
             if not symbol:
                 continue
             cost_bases = pos.get("cost_bases") or []
-            avg_cost = float(cost_bases[0].get("direct_cost_basis", 0) or 0) / qty if (cost_bases and qty) else 0.0
+            avg_cost = (
+                float(cost_bases[0].get("direct_cost_basis", 0) or 0) / qty
+                if (cost_bases and qty)
+                else 0.0
+            )
             # Fetch live crypto quote
             quote = {}
             try:
@@ -239,6 +285,7 @@ def get_portfolio_holdings() -> pd.DataFrame:
 
     return df
 
+
 def get_total_equity() -> dict[str, float]:
     profile = rh.load_portfolio_profile()
     account = rh.load_account_profile()
@@ -256,20 +303,29 @@ def get_total_equity() -> dict[str, float]:
     #   profile["withdrawable_amount"] = None for Gold accounts — unreliable
     #   margin_balances["portfolio_cash"] = real uninvested cash (e.g. $535.44) — USE THIS
     #   margin_balances["unallocated_margin_cash"] = same as portfolio_cash for cash accounts
-    margin = account.get("margin_balances") or {}
-    real_cash = (
-        float(margin.get("portfolio_cash") or 0)
-        or float(margin.get("unallocated_margin_cash") or 0)
-        or float(profile.get("withdrawable_amount") or 0)
+    margin = account.get("margin_balances")
+    if not isinstance(margin, dict):
+        margin = {}
+    # Prefer settled portfolio_cash, including a measured $0 (fully invested).
+    # ``or``-chaining treated 0 / "0.0000" as missing and sized against
+    # unallocated Gold leftover or withdrawable_amount.
+    real_cash = _first_present_money(
+        margin.get("portfolio_cash"),
+        margin.get("unallocated_margin_cash"),
+        profile.get("withdrawable_amount"),
     )
 
     return {
-        "portfolio_equity":               float(profile.get("equity", 0) or 0),
-        "extended_hours_equity":          float(profile.get("extended_hours_equity", 0) or 0),
-        "adjusted_equity_previous_close": float(profile.get("adjusted_equity_previous_close", 0) or 0),
-        "cash":                           real_cash,      # real uninvested cash (not Gold margin)
-        "buying_power":                   real_cash,      # same — real deployable cash
+        "portfolio_equity": _first_present_money(profile.get("equity")),
+        "extended_hours_equity": _first_present_money(profile.get("extended_hours_equity")),
+        "adjusted_equity_previous_close": _first_present_money(
+            profile.get("adjusted_equity_previous_close")
+        ),
+        "cash": real_cash,  # real uninvested cash (not Gold margin)
+        "buying_power": real_cash,  # same — real deployable cash
+        "deployable": real_cash,  # live path parity with the snapshot
     }
+
 
 def get_watchlist_quotes(symbols: list[str] | None = None) -> pd.DataFrame:
     if symbols is None:
@@ -283,7 +339,18 @@ def get_watchlist_quotes(symbols: list[str] | None = None) -> pd.DataFrame:
         prev = float(q.get("previous_close", 0) or 0)
         chg = last - prev
         chg_p = (chg / prev * 100) if prev else 0.0
-        rows.append({"symbol": sym, "last_trade_price": last, "ask_price": float(q.get("ask_price", 0) or 0), "bid_price": float(q.get("bid_price", 0) or 0), "previous_close": prev, "change": round(chg, 4), "change_pct": round(chg_p, 2), "updated_at": q.get("updated_at")})
+        rows.append(
+            {
+                "symbol": sym,
+                "last_trade_price": last,
+                "ask_price": float(q.get("ask_price", 0) or 0),
+                "bid_price": float(q.get("bid_price", 0) or 0),
+                "previous_close": prev,
+                "change": round(chg, 4),
+                "change_pct": round(chg_p, 2),
+                "updated_at": q.get("updated_at"),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -330,8 +397,7 @@ def build_data_payload(watchlist: list[str] | None = None) -> dict[str, Any]:
         all_quote_rows = []
     requested_set = set(requested_norm)
     watchlist_rows = [
-        row for row in all_quote_rows
-        if str(row.get("symbol") or "").upper() in requested_set
+        row for row in all_quote_rows if str(row.get("symbol") or "").upper() in requested_set
     ]
     provenance: dict[str, Any] = {}
     for row in all_quote_rows:

@@ -146,6 +146,71 @@ def test_last_resort_withdrawable_still_ignores_account_buying_power(monkeypatch
     assert eq["buying_power"] != pytest.approx(GOLD_LEVERAGED_BP)
 
 
+def test_zero_portfolio_cash_is_kept_not_replaced_by_unallocated(monkeypatch):
+    """Fully invested: measured $0 portfolio_cash must not ``or``-fall through.
+
+    Robinhood returns cash as strings. ``float("0.0000" or 0)`` is 0.0, then
+    ``0.0 or unallocated`` invented Gold leftover as deployable dry powder.
+    """
+    leftover = 1_500.0
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {
+            "equity": ACCOUNT_EQUITY,
+            "withdrawable_amount": 800.0,
+        },
+        load_account_profile=lambda: {
+            "buying_power": GOLD_LEVERAGED_BP,
+            "margin_balances": {
+                "portfolio_cash": "0.0000",
+                "unallocated_margin_cash": leftover,
+            },
+        },
+    )
+    eq = df.get_total_equity()
+    assert eq["cash"] == pytest.approx(0.0)
+    assert eq["buying_power"] == pytest.approx(0.0)
+    assert eq["deployable"] == pytest.approx(0.0)
+    assert eq["cash"] != pytest.approx(leftover)
+    assert eq["buying_power"] != pytest.approx(GOLD_LEVERAGED_BP)
+
+
+def test_numeric_zero_portfolio_cash_is_kept(monkeypatch):
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {
+            "equity": ACCOUNT_EQUITY,
+            "withdrawable_amount": 200.0,
+        },
+        load_account_profile=lambda: {
+            "margin_balances": {
+                "portfolio_cash": 0.0,
+                "unallocated_margin_cash": 400.0,
+            },
+        },
+    )
+    eq = df.get_total_equity()
+    assert eq["cash"] == pytest.approx(0.0)
+    assert eq["deployable"] == pytest.approx(0.0)
+
+
+def test_bool_portfolio_cash_is_unknown_not_one_dollar(monkeypatch):
+    """JSON true must not become $1 of settled cash and skip the fallback."""
+    _rh(
+        monkeypatch,
+        load_portfolio_profile=lambda: {"equity": ACCOUNT_EQUITY, "withdrawable_amount": 0},
+        load_account_profile=lambda: {
+            "margin_balances": {
+                "portfolio_cash": True,
+                "unallocated_margin_cash": 400.0,
+            },
+        },
+    )
+    eq = df.get_total_equity()
+    assert eq["cash"] == pytest.approx(400.0)
+    assert eq["deployable"] == pytest.approx(400.0)
+
+
 def test_empty_cash_sources_do_not_fall_back_to_account_buying_power(monkeypatch):
     """If every cash field is 0, return $0 — never Gold leveraged buying_power.
 
