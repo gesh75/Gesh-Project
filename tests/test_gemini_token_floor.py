@@ -51,3 +51,21 @@ def test_call_gemini_missing_or_non_positive_budget_defaults_to_8192(gemini_sink
 def test_call_gemini_deep_analysis_budget_is_not_clamped_down(gemini_sink):
     llm_failover.call_gemini("analyze", max_tokens=24000)
     assert gemini_sink["max_tokens"] == 24000
+
+
+def test_gemini_out_tokens_rejects_bool_nan_inf_and_overflow():
+    """JSON true / inf used to crash ``int()`` or become a 1-token budget."""
+    assert llm_failover._gemini_out_tokens(True) == 8192
+    assert llm_failover._gemini_out_tokens(False) == 8192
+    assert llm_failover._gemini_out_tokens(float("nan")) == 8192
+    assert llm_failover._gemini_out_tokens(float("inf")) == 8192
+    assert llm_failover._gemini_out_tokens(float("-inf")) == 8192
+    assert llm_failover._gemini_out_tokens(10**10000) == 8192
+    assert llm_failover._gemini_out_tokens("n/a") == 8192
+
+
+def test_call_gemini_poisoned_budget_defaults_to_8192(gemini_sink):
+    llm_failover.call_gemini("analyze", max_tokens=True)
+    assert gemini_sink["max_tokens"] == 8192
+    llm_failover.call_gemini("analyze", max_tokens=float("inf"))
+    assert gemini_sink["max_tokens"] == 8192
