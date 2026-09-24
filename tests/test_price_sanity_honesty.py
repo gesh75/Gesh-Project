@@ -43,18 +43,21 @@ def test_bool_52w_low_does_not_flag_a_real_quote():
         (float("inf"), 100, 200),
         (float("-inf"), 100, 200),
         (float("nan"), 100, 200),
-        (10**10000, 100, 200),
         (50, float("inf"), 200),
         (50, 100, float("inf")),
     ],
 )
-def test_non_finite_and_overflow_fail_open(price, lo, hi):
+def test_non_finite_inputs_fail_open(price, lo, hi):
     assert ps.is_price_suspect(price, lo, hi)[0] is False
 
 
 def test_positive_helper_rejects_bool_and_overflow():
+    # Keep the overflow integer out of parametrize ids (int→str hits the
+    # 4300-digit default limit and fails collection).
+    huge = 10**10000
     assert ps._positive(True) is None
     assert ps._positive(False) is None
-    assert ps._positive(10**10000) is None
+    assert ps._positive(huge) is None
+    assert ps.is_price_suspect(huge, 100, 200)[0] is False
     assert ps._positive(73.83) == pytest.approx(73.83)
     assert ps._positive(1) == 1.0
