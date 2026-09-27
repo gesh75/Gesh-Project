@@ -172,12 +172,13 @@ def issue_token(email: str, ttl: int | None = None, typ: str = "session") -> str
     return f"{payload}.{sig}"
 
 
-def verify_token(token: str | None, expected_typ: str | None = "session") -> str | None:
-    """Return the immutable UUID subject for a valid schema-v2 token; else None.
+def _verified_claims(
+    token: str | None, expected_typ: str | None = "session"
+) -> dict | None:
+    """Return the signed claims for a valid schema-v2 token; else None.
 
-    Tokens without the exact schema version, including all legacy email-subject tokens,
-    fail closed. ``expected_typ`` enforces token purpose; pass ``None`` only to skip the
-    purpose comparison, never identity/version validation.
+    Pure crypto, same rules as ``verify_token``. A missing ``jti`` still returns
+    the claims: callers that must blacklist a session decide what to do with it.
     """
     if not token:
         return None
@@ -194,9 +195,27 @@ def verify_token(token: str | None, expected_typ: str | None = "session") -> str
         if expected_typ is not None and data.get("typ") != expected_typ:
             return None        # wrong purpose (e.g. a magic token presented as a session)
         subject = data.get("sub")
-        return subject if _is_canonical_user_id(subject) else None
+        if not _is_canonical_user_id(subject):
+            return None
+        return data
     except Exception:
         return None
+
+
+def verify_token(token: str | None, expected_typ: str | None = "session") -> str | None:
+    """Return the immutable UUID subject for a valid schema-v2 token; else None.
+
+    Tokens without the exact schema version, including all legacy email-subject tokens,
+    fail closed. ``expected_typ`` enforces token purpose; pass ``None`` only to skip the
+    purpose comparison, never identity/version validation.
+
+    This stays a pure signature/expiry check. Revocation lives in
+    ``authenticate_session``, which also requires a ``jti``.
+    """
+    claims = _verified_claims(token, expected_typ)
+    if not claims:
+        return None
+    return str(claims["sub"])
 
 
 # ── user store ──────────────────────────────────────────────────────────────────
@@ -230,6 +249,13 @@ _CORE_DDL = (
     CREATE TABLE IF NOT EXISTS auth_metadata (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS revoked_sessions (
+        jti        TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL,
+        revoked_at TEXT NOT NULL
     )
     """,
 )
@@ -396,6 +422,43 @@ def _prune_used_magic_tokens(con: sqlite3.Connection) -> None:
     """Prune dead tokens when an existing write path already owns a transaction."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     con.execute("DELETE FROM used_magic_tokens WHERE used_at < ?", (cutoff,))
+
+
+def _ensure_revoked_sessions(con: sqlite3.Connection) -> None:
+    """Create the session blacklist without forcing a schema-v2 rebuild.
+
+    ``_schema_v2_ready`` returns before ``_ensure_core_schema`` on every existing
+    v2 database. This table is not part of that ready-check, so it has to be
+    created on the fast path or logout cannot revoke anything. Once the table
+    exists the check is a read, so ``authenticate_session`` does not take a
+    write lock on every request.
+    """
+    exists = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='revoked_sessions'"
+    ).fetchone()
+    if exists:
+        return
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS revoked_sessions (
+            jti        TEXT PRIMARY KEY,
+            expires_at INTEGER NOT NULL,
+            revoked_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _prune_revoked_sessions(con: sqlite3.Connection) -> None:
+    """Drop blacklist rows whose tokens have already expired.
+
+    Called from the revoke write path only. ``authenticate_session`` must stay
+    a read so a request does not take a write lock just to garbage-collect.
+    """
+    con.execute(
+        "DELETE FROM revoked_sessions WHERE expires_at < ?",
+        (int(time.time()),),
+    )
 
 
 def _new_user_id() -> str:
@@ -1049,7 +1112,11 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
     under ``BEGIN IMMEDIATE``, creates the one verified pre-v2 backup, and fails closed
     before copying if any child row lacks a real owner.
     """
+    # Only an already-v2 database may gain this table here. Creating it first
+    # makes an empty database look pre-existing, so the migration writes a
+    # pre-v2 backup and then rejects that backup for a schema mismatch.
     if _schema_v2_ready(con):
+        _ensure_revoked_sessions(con)
         return
 
     con.execute("BEGIN IMMEDIATE")
@@ -1057,6 +1124,7 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
         # Another process may have completed migration while this connection waited
         # for the writer lock. Re-check before backing up or changing any schema.
         if _schema_v2_ready(con):
+            _ensure_revoked_sessions(con)
             con.commit()
             return
 
@@ -1586,23 +1654,68 @@ def consume_magic_token(token: str | None) -> str | None:
     return str(user["email"])
 
 
+def _usable_jti(value: object) -> str | None:
+    """A non-empty session id. Whitespace-only / non-str cannot be blacklisted."""
+    if not isinstance(value, str):
+        return None
+    jti = value.strip()
+    return jti or None
+
+
+def revoke_session(token: str | None) -> str:
+    """Blacklist one still-valid session. Returns ``revoked``, ``absent``, or ``failed``.
+
+    Missing, invalid, expired, and non-session tokens are ``absent`` and are not
+    written. A valid session with no ``jti`` cannot be blacklisted (``failed``).
+    Revoking the same still-valid token again stays ``revoked``.
+    """
+    claims = _verified_claims(token, expected_typ="session")
+    if not claims:
+        return "absent"
+    jti = _usable_jti(claims.get("jti"))
+    if not jti:
+        return "failed"
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        _prune_revoked_sessions(con)
+        con.execute(
+            "INSERT OR IGNORE INTO revoked_sessions (jti, expires_at, revoked_at) "
+            "VALUES (?,?,?)",
+            (jti, int(claims.get("exp", 0)), now),
+        )
+    return "revoked"
+
+
 def authenticate_session(token: str | None) -> str | None:
     """
     Full session check used by the gate on every request: a cryptographically
-    valid, unexpired token AND a subject that is still a CURRENT, ACTIVE user.
+    valid, unexpired token AND a subject that is still a CURRENT, ACTIVE user
+    AND a ``jti`` that has not been revoked by logout.
 
-    This makes set_active(False) (revocation — e.g. churn / non-payment) and user
-    deletion take effect on the very next request, instead of leaving a signed
-    cookie valid until it expires. (verify_token alone only proves the token was
-    issued by us and hasn't expired — it cannot know the user was since revoked.)
+    This makes set_active(False) (revocation — e.g. churn / non-payment), user
+    deletion, and logout take effect on the very next request, instead of leaving
+    a signed cookie valid until it expires. (verify_token alone only proves the
+    token was issued by us and hasn't expired.)
 
-    Only typ='session' tokens are accepted — a leaked typ='magic' URL token cannot be
-    replayed here as a session cookie (H1).
+    A session with no ``jti`` fails closed: it cannot be blacklisted. Only
+    typ='session' tokens are accepted — a leaked typ='magic' URL token cannot be
+    replayed here as a session cookie (H1). A database error propagates so the
+    request fails closed instead of treating an unread blacklist as a pass.
     """
-    user_id = verify_token(token, expected_typ="session")
-    if not user_id:
+    claims = _verified_claims(token, expected_typ="session")
+    if not claims:
         return None
-    u = get_user_by_id(user_id)
+    jti = _usable_jti(claims.get("jti"))
+    if not jti:
+        return None
+    with _conn() as con:
+        revoked = con.execute(
+            "SELECT 1 FROM revoked_sessions WHERE jti=? LIMIT 1",
+            (jti,),
+        ).fetchone()
+    if revoked:
+        return None
+    u = get_user_by_id(str(claims["sub"]))
     if not u or not u["is_active"]:
         return None
     return str(u["email"])
