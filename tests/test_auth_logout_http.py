@@ -1,7 +1,11 @@
-"""Sign-out must retire the copied cookie, and only drop the browser cookie after that write."""
+"""Sign-out must retire the copied cookie, and a new login must retire the previous one."""
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import time
 from pathlib import Path
 
 import pytest
@@ -61,6 +65,77 @@ def test_failed_revoke_keeps_the_session_cookie(
     assert logged_out.status_code == 503
     assert "set-cookie" not in {name.lower() for name in logged_out.headers}
     assert https_client.get("/api/watchlist", cookies=cookies).status_code == 200
+
+
+def _sign_without_iat(user_id: str) -> str:
+    claims = {
+        "sub": user_id,
+        "exp": int(time.time()) + 900,
+        "typ": "session",
+        "ver": 2,
+        "jti": "stale-session-jti",
+    }
+    payload = auth_users._b64u(json.dumps(claims, separators=(",", ":")).encode())
+    signature = auth_users._b64u(
+        hmac.new(auth_users._secret(), payload.encode(), hashlib.sha256).digest()
+    )
+    return f"{payload}.{signature}"
+
+
+def _login(client: TestClient, email: str = "a@b.com", password: str = "pw") -> str:
+    response = client.post("/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200
+    token = response.cookies.get(auth_users.COOKIE_NAME)
+    assert token
+    return str(token)
+
+
+def test_login_again_retires_the_previous_session(
+    isolated_auth: None, https_client: TestClient
+) -> None:
+    auth_users.create_user("a@b.com", "pw")
+    older = _login(https_client)
+    newer = _login(https_client)
+    assert older != newer
+    user_id = auth_users.resolve_user_id("a@b.com")
+    with auth_users._conn() as con:
+        row = con.execute(
+            "SELECT user_id FROM revoked_sessions WHERE jti!=?",
+            ("unused",),
+        ).fetchone()
+    assert row is not None
+    assert row["user_id"] == user_id
+    assert https_client.get("/api/watchlist", cookies={auth_users.COOKIE_NAME: older}).status_code == 401
+    assert https_client.get("/api/watchlist", cookies={auth_users.COOKIE_NAME: newer}).status_code == 200
+
+
+def test_login_retires_a_session_minted_before_rotation_existed(
+    isolated_auth: None, https_client: TestClient
+) -> None:
+    auth_users.create_user("a@b.com", "pw")
+    user_id = auth_users.resolve_user_id("a@b.com")
+    assert user_id is not None
+    stale = _sign_without_iat(user_id)
+    assert https_client.get("/api/watchlist", cookies={auth_users.COOKIE_NAME: stale}).status_code == 200
+    current = _login(https_client)
+    assert https_client.get("/api/watchlist", cookies={auth_users.COOKIE_NAME: stale}).status_code == 401
+    assert https_client.get("/api/watchlist", cookies={auth_users.COOKIE_NAME: current}).status_code == 200
+
+
+def test_magic_link_login_retires_the_previous_session(
+    isolated_auth: None, https_client: TestClient
+) -> None:
+    auth_users.create_user("a@b.com", "pw")
+    older = _login(https_client)
+    magic = auth_users.issue_magic_token("a@b.com")
+    assert magic
+    landed = https_client.get(f"/auth/magic?token={magic}", follow_redirects=False)
+    assert landed.status_code == 303
+    newer = landed.cookies.get(auth_users.COOKIE_NAME)
+    assert newer
+    assert newer != older
+    assert https_client.get("/api/watchlist", cookies={auth_users.COOKIE_NAME: older}).status_code == 401
+    assert https_client.get("/api/watchlist", cookies={auth_users.COOKIE_NAME: newer}).status_code == 200
 
 
 def test_dashboard_sign_out_waits_for_a_successful_logout() -> None:
