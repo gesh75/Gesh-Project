@@ -163,9 +163,11 @@ def test_existing_v2_db_gains_revoked_sessions_without_a_full_migration():
     assert version == 2
 
 
-def test_auth_logout_revokes_before_clearing_the_cookie():
+def test_auth_logout_clears_the_cookie_only_after_a_recorded_revoke():
     src = (REPO / "server.py").read_text()
     body = src.split("def auth_logout", 1)[1].split("\n@app.", 1)[0]
-    assert body.index("auth_users.revoke_session") < body.index("delete_cookie")
+    assert body.index("auth_users.revoke_session") < body.index("_clear_session_cookie")
+    failed = body.split('if outcome == "failed"', 1)[1]
+    assert failed.index("return JSONResponse") < failed.index("_clear_session_cookie")
     assert "Sign-out could not revoke the session. Try again." in body
     assert "503" in body

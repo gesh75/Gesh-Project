@@ -593,6 +593,20 @@ body:not(.customer) .customer-only { display: none !important; }
   <!--GESH_SLOT:owner_block_07-->
   <!--GESH_SLOT:owner_block_08-->
   <button class="btn-ref" onclick="refreshDesk()" title="Reload your book and last saved read.">↻ Refresh</button>
+  <button type="button" class="btn-ref" id="sign-out" title="End this session on the server, not only in this browser.">Sign out</button>
+  <script>
+  document.getElementById("sign-out").addEventListener("click", async function () {
+    var button = document.getElementById("sign-out");
+    button.disabled = true;
+    var response = await fetch("/auth/logout", {method: "POST", credentials: "same-origin"});
+    if (response.ok) {
+      location.href = "/login";
+      return;
+    }
+    button.disabled = false;
+    button.textContent = "Sign-out failed — try again";
+  });
+  </script>
 </header>
 
 <!-- Persistent stats bar -->

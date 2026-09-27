@@ -1615,6 +1615,21 @@ def _cookie_secure(request: Request | None = None) -> bool:
     return True
 
 
+def _clear_session_cookie(response: JSONResponse, request: Request) -> None:
+    """Expire the session cookie with the same attributes used when it was set.
+
+    A Secure cookie is ignored by the browser when the clearing Set-Cookie omits
+    Secure. Call this only after the blacklist write has succeeded.
+    """
+    response.delete_cookie(
+        auth_users.COOKIE_NAME,
+        path="/",
+        secure=_cookie_secure(request),
+        httponly=True,
+        samesite="lax",
+    )
+
+
 def _secure_cookie_config_ready() -> bool:
     """Fail closed when an HTTPS customer URL explicitly disables Secure cookies."""
     base_url = os.getenv("APP_BASE_URL", "").strip().lower()
@@ -1680,8 +1695,8 @@ def auth_logout(request: Request):
     """Drop the cookie and blacklist the signed session until it expires.
 
     Deleting the cookie alone leaves the 7-day token reusable by anyone who
-    copied it. A revoke that cannot be recorded is a 503: the cookie is still
-    cleared, and the client can retry so the token does not stay live.
+    copied it. A revoke that cannot be recorded is a 503 and the cookie stays,
+    so the same browser can retry with the token still attached.
     """
     token = request.cookies.get(auth_users.COOKIE_NAME)
     try:
@@ -1690,16 +1705,15 @@ def auth_logout(request: Request):
         logging.getLogger(__name__).warning("auth logout could not revoke the session")
         outcome = "failed"
     if outcome == "failed":
-        resp = JSONResponse(
+        return JSONResponse(
             status_code=503,
             content={
                 "ok": False,
                 "detail": "Sign-out could not revoke the session. Try again.",
             },
         )
-    else:
-        resp = JSONResponse(content={"ok": True})
-    resp.delete_cookie(auth_users.COOKIE_NAME)
+    resp = JSONResponse(content={"ok": True})
+    _clear_session_cookie(resp, request)
     return resp
 
 
@@ -2082,7 +2096,7 @@ async def account_delete(request: Request):
                 "the billing-portal link in your receipt email to stop future charges."
             )
         resp = JSONResponse({"status": "ok", **report, "notice": notice})
-        resp.delete_cookie(auth_users.COOKIE_NAME, path="/")
+        _clear_session_cookie(resp, request)
         return resp
     except HTTPException:
         raise
