@@ -157,11 +157,13 @@ def issue_token(email: str, ttl: int | None = None, typ: str = "session") -> str
     user_id = resolve_user_id(email)
     if user_id is None:
         raise ValueError("token subject must be a current active user")
-    exp = int(time.time()) + (TOKEN_TTL_SECONDS if ttl is None else ttl)
+    issued = int(time.time())
+    exp = issued + (TOKEN_TTL_SECONDS if ttl is None else ttl)
     payload = _b64u(json.dumps(
         {
             "sub": user_id,
             "exp": exp,
+            "iat": issued,
             "typ": typ,
             "ver": _TOKEN_SCHEMA_VERSION,
             "jti": secrets.token_urlsafe(8),
@@ -254,8 +256,16 @@ _CORE_DDL = (
     """
     CREATE TABLE IF NOT EXISTS revoked_sessions (
         jti        TEXT PRIMARY KEY,
+        user_id    TEXT,
         expires_at INTEGER NOT NULL,
         revoked_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS user_sessions (
+        jti        TEXT PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
     )
     """,
 )
@@ -424,29 +434,56 @@ def _prune_used_magic_tokens(con: sqlite3.Connection) -> None:
     con.execute("DELETE FROM used_magic_tokens WHERE used_at < ?", (cutoff,))
 
 
+def _column_names(con: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row["name"]) for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def _ensure_revoked_sessions(con: sqlite3.Connection) -> None:
     """Create the session blacklist without forcing a schema-v2 rebuild.
 
     ``_schema_v2_ready`` returns before ``_ensure_core_schema`` on every existing
-    v2 database. This table is not part of that ready-check, so it has to be
-    created on the fast path or logout cannot revoke anything. Once the table
-    exists the check is a read, so ``authenticate_session`` does not take a
-    write lock on every request.
+    v2 database. These tables are not part of that ready-check, so they have to
+    be created on the fast path or logout cannot revoke anything. ``user_id`` is
+    added in place on a blacklist created before rotation existed.
+    Once the columns exist, this stays a read.
     """
     exists = con.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='revoked_sessions'"
     ).fetchone()
-    if exists:
+    sessions = con.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='user_sessions'"
+    ).fetchone()
+    if (
+        exists
+        and sessions
+        and "user_id" in _column_names(con, "revoked_sessions")
+        and "session_not_before" in _column_names(con, "users")
+    ):
         return
+    if not exists:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS revoked_sessions (
+                jti        TEXT PRIMARY KEY,
+                user_id    TEXT,
+                expires_at INTEGER NOT NULL,
+                revoked_at TEXT NOT NULL
+            )
+            """
+        )
+    elif "user_id" not in _column_names(con, "revoked_sessions"):
+        con.execute("ALTER TABLE revoked_sessions ADD COLUMN user_id TEXT")
     con.execute(
         """
-        CREATE TABLE IF NOT EXISTS revoked_sessions (
+        CREATE TABLE IF NOT EXISTS user_sessions (
             jti        TEXT PRIMARY KEY,
-            expires_at INTEGER NOT NULL,
-            revoked_at TEXT NOT NULL
+            user_id    TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
         )
         """
     )
+    if "session_not_before" not in _column_names(con, "users"):
+        con.execute("ALTER TABLE users ADD COLUMN session_not_before INTEGER")
 
 
 def _prune_revoked_sessions(con: sqlite3.Connection) -> None:
@@ -1197,6 +1234,7 @@ def _migrate_to_user_ids(con: sqlite3.Connection) -> None:
             "ON customer_equity_snapshots(user_id, symbol, snapshot_at DESC)"
         )
         con.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+        _ensure_revoked_sessions(con)
 
         violations = con.execute("PRAGMA foreign_key_check").fetchall()
         if violations:
@@ -1679,11 +1717,51 @@ def revoke_session(token: str | None) -> str:
     with _conn() as con:
         _prune_revoked_sessions(con)
         con.execute(
-            "INSERT OR IGNORE INTO revoked_sessions (jti, expires_at, revoked_at) "
-            "VALUES (?,?,?)",
-            (jti, int(claims.get("exp", 0)), now),
+            "INSERT OR IGNORE INTO revoked_sessions "
+            "(jti, user_id, expires_at, revoked_at) VALUES (?,?,?,?)",
+            (jti, str(claims["sub"]), int(claims.get("exp", 0)), now),
         )
     return "revoked"
+
+
+def rotate_session(email: str) -> str:
+    """Mint a session and retire every other session for this user.
+
+    Sessions this process recorded are blacklisted by ``jti``. A token from
+    before rotation has no ``iat`` and fails once ``session_not_before`` is set.
+    The new token's ``iat`` is that watermark, so it stays valid.
+    """
+    token = issue_token(email, typ="session")
+    claims = _verified_claims(token, expected_typ="session")
+    if not claims:
+        raise ValueError("issued session could not be verified")
+    jti = _usable_jti(claims.get("jti"))
+    issued = claims.get("iat")
+    if not jti or isinstance(issued, bool) or not isinstance(issued, int):
+        raise ValueError("issued session is missing jti or iat")
+    user_id = str(claims["sub"])
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO user_sessions (jti, user_id, expires_at) VALUES (?,?,?)",
+            (jti, user_id, int(claims["exp"])),
+        )
+        others = con.execute(
+            "SELECT jti, expires_at FROM user_sessions WHERE user_id=? AND jti!=?",
+            (user_id, jti),
+        ).fetchall()
+        for row in others:
+            con.execute(
+                "INSERT OR IGNORE INTO revoked_sessions "
+                "(jti, user_id, expires_at, revoked_at) VALUES (?,?,?,?)",
+                (str(row["jti"]), user_id, int(row["expires_at"]), now),
+            )
+        con.execute("DELETE FROM user_sessions WHERE user_id=? AND jti!=?", (user_id, jti))
+        con.execute(
+            "UPDATE users SET session_not_before=? WHERE user_id=?",
+            (issued, user_id),
+        )
+    return token
 
 
 def authenticate_session(token: str | None) -> str | None:
@@ -1708,11 +1786,26 @@ def authenticate_session(token: str | None) -> str | None:
     jti = _usable_jti(claims.get("jti"))
     if not jti:
         return None
+    issued = claims.get("iat")
     with _conn() as con:
+        marker = con.execute(
+            "SELECT session_not_before FROM users WHERE user_id=?",
+            (str(claims["sub"]),),
+        ).fetchone()
         revoked = con.execute(
             "SELECT 1 FROM revoked_sessions WHERE jti=? LIMIT 1",
             (jti,),
         ).fetchone()
+    if marker is not None and marker["session_not_before"] is not None:
+        not_before = marker["session_not_before"]
+        if (
+            isinstance(issued, bool)
+            or not isinstance(issued, int)
+            or isinstance(not_before, bool)
+            or not isinstance(not_before, int)
+            or issued < not_before
+        ):
+            return None
     if revoked:
         return None
     u = get_user_by_id(str(claims["sub"]))

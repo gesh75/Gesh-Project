@@ -1681,7 +1681,7 @@ async def auth_login(request: Request):
     resp = JSONResponse(content={"ok": True})
     resp.set_cookie(
         auth_users.COOKIE_NAME,
-        auth_users.issue_token(email),
+        auth_users.rotate_session(email),
         httponly=True,
         samesite="lax",
         max_age=auth_users.TOKEN_TTL_SECONDS,
@@ -1754,7 +1754,7 @@ def auth_magic(request: Request, token: str = ""):
     resp.headers["Referrer-Policy"] = "no-referrer"
     resp.set_cookie(
         auth_users.COOKIE_NAME,
-        auth_users.issue_token(email, typ="session"),  # fresh SESSION token (not the magic one)
+        auth_users.rotate_session(email),  # fresh session; retires every other one
         httponly=True,
         samesite="lax",
         max_age=auth_users.TOKEN_TTL_SECONDS,
