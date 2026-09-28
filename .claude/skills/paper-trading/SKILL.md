@@ -47,7 +47,14 @@ Gates checked (in order):
 Config is editable via `POST /api/config`. Never hardcode limits.
 
 ### paper_trading.py — Simulation Engine
-Use `run_paper_session()` to simulate a full action plan:
+Operator contract (remaining cash, DATA_FRESH, DUPLICATE, shared DB):
+`docs/PAPER_SESSION.md`.
+
+Use `run_paper_session()` to simulate a full action plan. Pass `current_cash`
+whenever the caller has a deployable figure — each accepted BUY/ADD subtracts
+notional so a later name still sees the $500 floor. TRIM/SELL proceeds are
+not added back. Paper skips `auto_trade` but still enforces size / open-paper-lot
+/ cash-floor caps; a full TRIM frees the in-session slot.
 ```python
 from paper_trading import run_paper_session, check_and_close_paper_positions, get_paper_summary
 
@@ -57,6 +64,7 @@ results = run_paper_session(
     holdings=payload["holdings"],
     total_portfolio=total_equity,
     scanner_source="daily-analysis",
+    current_cash=equity_summary.get("deployable"),
 )
 
 # Auto-close positions that hit stop or target
@@ -116,7 +124,9 @@ Gates (priority order):
 5. ORDER_RATE — exceeded MAX_ORDERS_PER_DAY (default 3)
 6. CASH_FLOOR — post-trade cash below MIN_CASH_BUFFER_USD ($500)
 7. DAILY_LOSS — portfolio P&L today ≤ −MAX_DAILY_LOSS_PCT (1%)
-8. DATA_FRESH — last quote older than MAX_PRICE_AGE_SECONDS (300s)
+8. DATA_FRESH — age the **selected symbol's** quote (`quote_provenance` /
+   holding / watchlist), not the snapshot `as_of`. Missing stamp fails closed.
+   PAPER uses `max_price_age_seconds_paper`.
 
 Via API: `POST /api/trading/dry-run`
 
@@ -125,11 +135,13 @@ Via API: `POST /api/trading/dry-run`
 from trading.execution import place
 
 result = place(intent, verdict, snapshot)
-# result.status: SIMULATED | REJECTED | ERROR
+# result.status: SIMULATED | REJECTED | ERROR | DUPLICATE
 # result.fill_price, result.fill_qty — for paper fills
 ```
 **PAPER_MODE=true by default.** Live execution raises NotImplementedError until explicitly implemented.
-Idempotency: SHA1(symbol|action|time|target_pct|uuid) — replays never double-submit.
+Idempotency: SHA-256 of `symbol|action|minute-bucket|target_pct` (`intent_uuid`
+excluded). A UNIQUE replay returns `status="DUPLICATE"` and reuses the existing
+row — it is not a second fill.
 
 Via API: `POST /api/trading/paper-order`, `POST /api/trading/consensus-order`
 
@@ -200,3 +212,7 @@ Verdict: Performing similarly to live — continue paper testing
 - Paper TRIM/close is **not** a Robinhood fill. Do not sell on RH because the
   paper book closed a name. Two books by design (daily-chain `paper_trades` vs
   autopilot tracker). **REQUIRED BACKGROUND:** gesh-daily-report.
+- `trade_log` shares `gesh_core.db_path` with `trading.state`. Unusable paths
+  fail closed — never fall back to `/tmp/gesh_trades.db`.
+- `/api/trades` and `/api/paper/*` are owner / `X-API-Key` only. A customer
+  session is 403.

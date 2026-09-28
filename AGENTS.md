@@ -51,7 +51,7 @@ Also do **not** run AI calls, brokerage actions, billing actions, or production 
 - `llm_gateway.py` / `llm_failover.py` — Anthropic admission + loud Grok/Gemini failover (`docs/LLM_OPERATIONS.md`)
 - `regime.py`, `kelly.py`, `monte_carlo.py`, `consensus.py`, `ecg.py` — core portfolio engines
 - `news_agent.py`, `sec_agent.py`, `fundamental_agent.py`, `gemini_agent.py`, `ollama_agent.py` — supporting intelligence agents
-- `trade_log.py`, `paper_trading.py`, `trading/` — paper/live execution pipeline and gates
+- `trade_log.py`, `paper_trading.py`, `trading/` — paper/live execution pipeline and gates. Operator contract: `docs/PAPER_SESSION.md`
 - `templates/dashboard.html` — main UI
 - `tests/` — pytest suite
 
