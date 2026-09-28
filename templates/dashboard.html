@@ -140,6 +140,8 @@ tr:hover td{background:var(--hover)}
 .empty{color:var(--muted);text-align:center;padding:28px}
 .btn-analyze{background:var(--accent);color:#000;border:none;border-radius:5px;padding:8px 20px;font-family:var(--font);font-size:17px;font-weight:700;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;transition:opacity .2s,transform .1s}
 .btn-analyze:hover{opacity:.82}.btn-analyze:active{transform:scale(.97)}.btn-analyze:disabled{opacity:.35;cursor:not-allowed}
+.btn-danger{background:transparent;color:#ff8b96;border:1px solid #7a2530;border-radius:5px;padding:8px 20px;font-family:var(--font);font-size:17px;font-weight:700;cursor:pointer;letter-spacing:.06em;text-transform:uppercase}
+.btn-quiet{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:6px 12px;font-size:12px;cursor:pointer}
 .btn-ref{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:6px 14px;font-family:var(--font);font-size:17px;cursor:pointer;transition:all .2s}
 .btn-ref:hover{color:var(--accent);border-color:var(--accent)}
 .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:rot .7s linear infinite;vertical-align:middle;margin-right:5px}
@@ -665,7 +667,7 @@ body:not(.customer) .customer-only { display: none !important; }
         <button class="btn-analyze" id="mybook-add-btn" onclick="mybookAdd()">＋ Add</button>
         <button class="btn-analyze" onclick="mybookToggleBulk()" title="Paste your whole list at once — one ticker per line. Sizes optional & private.">📋 Bulk import</button>
         <button class="btn-analyze" onclick="mybookImportWatchlist()" title="Add every saved watchlist ticker (1 share each — edit after)">⬇ Import watchlist</button>
-        <button class="btn-analyze" onclick="mybookClear()" title="Remove EVERY position from your book.">🗑 Clear</button>
+        <button class="btn-danger" onclick="mybookClear()" title="Remove EVERY position from your book.">🗑 Clear</button>
         <a class="btn-analyze" href="/mybook/report" target="_blank" rel="noopener" style="text-decoration:none;display:inline-flex;align-items:center" title="Print-friendly report of your book + last analysis">🖨 Report</a>
       </div>
       <div id="mybook-form-error" role="alert" style="display:none;margin:0 0 10px;color:var(--red);font-size:13px"></div>
@@ -689,6 +691,10 @@ body:not(.customer) .customer-only { display: none !important; }
       </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Your positions stay private to your account. Valued from public quotes; nothing here connects to a broker.</div>
       <div id="mybook-list" style="margin-bottom:12px"></div>
+      <div id="mybook-analyze-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:4px 0 16px">
+        <button class="btn-analyze" id="mybook-analyze-btn" type="button" onclick="mybookAnalyze()" title="Kelly sizing, Monte Carlo, and a research read of every name in this book. Starts only when you click.">Analyze my portfolio</button>
+        <span style="font-size:12px;color:var(--muted);line-height:1.45">Reads the shares in the table. A large book takes a few minutes. Nothing is sent to a broker.</span>
+      </div>
       <div id="mybook-results"></div>
       <div class="card" style="margin-top:16px">
         <div style="font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-size:13px;margin-bottom:10px">Past reads</div>
@@ -2154,7 +2160,7 @@ function buildHomeHero(d){
     <div class="desk-hero-sub">${nPos} positions · ${nWatch} watched</div>
     <div class="desk-edu">${daEsc(String(d.educational||'Research desk. Educational information only — not investment advice.'))}</div>
     ${buildHomeCatchup(d)}
-    <div class="desk-hero-sub" style="margin-top:12px">${d.analyzed_at?('Last AI read of this book: '+daEsc(String(d.analyzed_at).slice(0,10))):(nPos?'No AI read of this book yet — click a name for a live card.':'Add holdings to start.')}</div>
+    <div class="desk-hero-sub" style="margin-top:12px">${d.analyzed_at?('Last AI read of this book: '+daEsc(String(d.analyzed_at).slice(0,10))):(nPos?'No read of this whole book yet. Use Analyze my portfolio under your shares.':'Add holdings to start.')}</div>
     ${d.last_verdict?`<div class="desk-verdict">${daEsc(String(d.last_verdict))}</div>`:''}
     ${d.analysis_stale?'<div style="color:var(--yellow);font-size:13px;margin-top:8px">That opinion is older than the book you hold now. It is not today\'s catch-up.</div>':''}
     ${showCta?('<button class="btn-analyze" style="margin-top:14px" onclick="homeAction(\''+daEsc(String(act.target||'research'))+'\')">'+daEsc(String(act.label||'Pick a name to research'))+'</button>'):''}
@@ -2164,7 +2170,7 @@ function buildAdvisoryTickets(d){
   const acts=d.actions||[];
   if(!acts.length){
     if(!d.positions_count) return '';
-    return `<div class="blotter"><div class="ticket kind-hold"><div class="ticket-kicker">Next</div><p>Click a name in the table for a live research card. That is the only deep read — one share at a time.</p></div></div>`;
+    return `<div class="blotter"><div class="ticket kind-hold"><div class="ticket-kicker">Next</div><p>Use Analyze my portfolio under the table for the whole book. Click a name for one share.</p></div></div>`;
   }
   const kick={conflict:'Conflict',trim:'Trim',add:'Add',hold:'Hold',flip:'Changed'};
   return `<div class="blotter">${acts.map(a=>{
@@ -2231,6 +2237,12 @@ function homeAction(target){
   if(target==='report'){ window.location='/mybook/report'; return; }
   if(target==='desk'){ switchTab('home'); return; }
   if(target==='book'){ switchTab('home'); const f=document.getElementById('mybook-sym'); if(f) f.focus(); return; }
+  if(target==='portfolio'){
+    switchTab('home');
+    const bookBtn=document.getElementById('mybook-analyze-btn');
+    if(bookBtn) bookBtn.scrollIntoView({behavior:'smooth', block:'center'});
+    return;
+  }
   if(target==='research'||target==='analyze'){
     switchTab('analyze');
     const f=document.getElementById('analyze-input');
@@ -2292,7 +2304,7 @@ async function loadWatchlist(){
     el.innerHTML = wl.length
       ? `<span style="color:var(--muted);font-size:12px;margin-right:4px">Watchlist:</span>`
         + wl.map(s=>`<span onclick="analyzeTicker('${daEsc(s)}')" style="cursor:pointer;background:var(--hover);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;font-weight:700">${daEsc(s)} <span onclick="event.stopPropagation();removeFromWatch('${daEsc(s)}')" style="color:var(--muted);margin-left:4px">✕</span></span>`).join('')
-      : `<span style="color:var(--muted);font-size:12px">No saved tickers yet — analyze one and click ★ Save.</span>`;
+      : `<span style="color:var(--muted);font-size:12px">No saved tickers yet. Analyze a name, then press ★ Save on its card.</span>`;
   }catch(e){ el.innerHTML=''; }
 }
 async function addToWatch(sym){
@@ -2431,8 +2443,13 @@ async function analyzeTicker(raw){
             ${px!=null?`<span style="font-size:16px;font-weight:600;color:var(--muted2)">$${daEsc(isFinite(px)?Number(px).toFixed(2):px)}</span>`:''}
             ${buildNewsChip(nsent)}
           </span>
-          <span class="cons-verdict ${chipClass}">${daEsc(d.verdict)}</span>
+          <span style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase">11-node consensus</span>
+            <span class="cons-verdict ${chipClass}">${daEsc(d.verdict)}</span>
+            <button class="per-btn" onclick="addToWatch('${daEsc(sym)}')" title="Save to watchlist">★ Save</button>
+          </span>
         </div>
+        <div style="font-size:12px;color:var(--muted);margin:-4px 0 10px">Consensus is the vote of every node. A card below is one node and can disagree.</div>
         <div style="display:flex;gap:16px;font-size:15px;color:var(--muted2);margin-bottom:10px;flex-wrap:wrap">
           <span style="color:var(--green);font-weight:700">🟢 ${daEsc(d.bullish)} bull</span>
           <span style="color:var(--red);font-weight:700">🔴 ${daEsc(d.bearish)} bear</span>
@@ -2760,7 +2777,13 @@ async function loadMyBook(){
     const d=(j&&j.data)||{}; const pos=d.positions||[]; const eqw=!!d.equal_weight;
     const signals=d.signals||{}; const kellyDeltas=d.kelly_deltas||{};
     const riskySet=new Set(d.risky_symbols||[]);
-    if(!pos.length&&!(d.unpriced||[]).length){ el.innerHTML='<span style="color:var(--muted);font-size:12px">No positions yet — add a ticker above, or use 📋 Bulk import to paste your whole list.</span>'; return; }
+    const analyzeBtn=document.getElementById('mybook-analyze-btn');
+    if(!pos.length&&!(d.unpriced||[]).length){
+      el.innerHTML='<span style="color:var(--muted);font-size:12px">No positions yet — add a ticker above, or use 📋 Bulk import to paste your whole list.</span>';
+      if(analyzeBtn) analyzeBtn.disabled=true;
+      return;
+    }
+    if(analyzeBtn && !(typeof _mybookAnalyzeInFlight!=='undefined' && _mybookAnalyzeInFlight)) analyzeBtn.disabled=false;
 
     // Customer book stats (parity with owner overview)
     let bookStats = '';
@@ -3449,6 +3472,8 @@ async function mybookAnalyze(){
   const box=document.getElementById('mybook-results'); if(!box) return;
   if(_mybookAnalyzeInFlight) return;
   _mybookAnalyzeInFlight=true;
+  const analyzeBtn=document.getElementById('mybook-analyze-btn');
+  if(analyzeBtn){ analyzeBtn.disabled=true; analyzeBtn.textContent='Analyzing…'; }
   const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
   // Live elapsed counter, not static text: a large book runs ~3 min, and with a
   // frozen "2–4 minutes" message "working" is indistinguishable from "hung". A QA
@@ -3495,7 +3520,12 @@ async function mybookAnalyze(){
     await mybookRenderResult(d, box, null);
     mybookHistory(true);   // the run just saved is now a past run — keep the list true
   }catch(e){ box.innerHTML='<div class="card"><div class="deep-ph-text" style="padding:16px 0;text-align:center">Analysis unavailable right now.</div></div>'; }
-  finally{ clearInterval(tick); _mybookAnalyzeInFlight=false; }
+  finally{
+    clearInterval(tick);
+    _mybookAnalyzeInFlight=false;
+    const doneBtn=document.getElementById('mybook-analyze-btn');
+    if(doneBtn){ doneBtn.disabled=false; doneBtn.textContent='Analyze my portfolio'; }
+  }
 }
 
 // The whole analysis render, extracted so a REPLAY of a stored run
@@ -3537,7 +3567,13 @@ async function mybookRenderResult(d, box, meta){
     ? `<div class="card" style="margin-bottom:16px;border-left:3px solid var(--yellow)"><div style="font-size:13px;color:var(--yellow);font-weight:600">AI narrative unavailable — showing local Kelly sizing and Monte Carlo (no API spend).</div><div style="margin-top:5px;font-size:12px;color:var(--muted)">Snowflake / fair-value cards need a language model. Engines below are computed on this server.</div></div>`
     : '';
   box.innerHTML=`${histBanner}${aiBanner}
-      <div class="card" style="margin-bottom:16px"><div style="${T}">🧠 Portfolio Verdict</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <button type="button" class="btn-quiet" onclick="document.getElementById('book-verdict').scrollIntoView({block:'start'})">Verdict</button>
+        <button type="button" class="btn-quiet" onclick="document.getElementById('book-risk').scrollIntoView({block:'start'})">Risk</button>
+        <button type="button" class="btn-quiet" onclick="document.getElementById('book-sizing').scrollIntoView({block:'start'})">Sizing</button>
+        <button type="button" class="btn-quiet" onclick="document.getElementById('book-radar').scrollIntoView({block:'start'})">Radar</button>
+      </div>
+      <div class="card" id="book-verdict" style="margin-bottom:16px"><div style="${T}">🧠 Portfolio Verdict</div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <span class="da-holding vrd" style="${daVerdictStyle(a.portfolio_verdict)}">${daEsc(a.portfolio_verdict||'—')}</span>
           <span style="font-size:13px;color:var(--muted)">${daEsc(a.portfolio_type||'')}</span></div>
@@ -3546,10 +3582,10 @@ async function mybookRenderResult(d, box, meta){
         ${a.market_context?buildLeadFold(a.market_context):''}
         ${risks?`<div style="margin-top:10px">${risks}</div>`:''}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:16px">
-        <div class="card"><div style="${T}">Risk Check</div>
+        <div class="card" id="book-risk"><div style="${T}">Risk Check</div>
           <div style="font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.55;font-weight:600">${daEsc(mcLead)}</div>
           ${mc.error?'':`<details><summary style="cursor:pointer;font-size:12px;color:var(--muted)">How this was computed — Monte Carlo (${daEsc(mc.horizon_days||21)} trading days, ${daEsc(mc.n_sims||1000)} sims)</summary><div style="margin-top:8px">${buildRow('Median outcome','$'+daFmt(mc.median,0))+buildRow('P5 – P95','$'+daFmt(mc.p5,0)+' – $'+daFmt(mc.p95,0))+buildRow('VaR 95%','$'+daFmt(mc.var_95,0)+' ('+daFmt(mc.var_95_pct,1)+'%)')+buildRow('Prob. of profit',daFmt(mc.prob_profit_pct,0)+'%')+buildRow('Regime',mc.regime||'—')}</div></details>`}</div>
-        <div class="card"><div style="${T}">Position Sizing</div>
+        <div class="card" id="book-sizing"><div style="${T}">Position Sizing</div>
           <div style="font-size:13px;color:var(--text);margin-bottom:8px;line-height:1.55;font-weight:600">${daEsc(kellyLead)}</div>
           ${ky.error||!kh.length?'':`<details><summary style="cursor:pointer;font-size:12px;color:var(--muted)">How this was computed — Kelly sizing</summary><div style="margin-top:8px">${buildRow('Allocated (optimal)',daFmt(ky.total_optimal_allocated_pct,1)+'%')+buildRow('Cash recommended',daFmt(ky.cash_recommended_pct,1)+'%')+kh.slice(0,10).map(k=>buildRow(k.symbol+' · '+(k.action||''),daFmt(k.current_pct,1)+'% → '+daFmt(k.optimal_pct,1)+'%'+(k.delta_usd?' ('+(k.delta_usd>0?'+$':'-$')+daFmt(Math.abs(k.delta_usd),0)+')':''))).join('')}</div></details>`}</div>
       </div>
@@ -3773,8 +3809,9 @@ function buildDiversificationCard(rad){
       <span style="color:var(--muted2)"><b style="color:var(--text)">${daEsc(s.trim_symbol||'')} → ${daEsc(s.fund_new_symbol||'')}</b> · ${daEsc(s.rationale||'')}</span>
     </div>`).join('');
   const excl=(rad.excluded_holdings||[]).length;
-  return `<div class="card" style="margin-bottom:16px"><div style="${T2}">🧭 Diversification Radar</div>
-    <div style="font-size:13px;color:var(--text);margin-bottom:10px;line-height:1.55;font-weight:600">${weights.length?`Your book is <b style="color:${topW>=0.4?'var(--red)':'var(--text)'}">${daFmt(topW*100,0)}% ${daEsc(topS)}</b>.`:'Sector mix unavailable for this book.'}</div>
+  return `<div class="card" id="book-radar" style="margin-bottom:16px"><div style="${T2}">🧭 Diversification Radar</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Radar groups are a separate classification from the model sector mix.</div>
+    <div style="font-size:13px;color:var(--text);margin-bottom:10px;line-height:1.55;font-weight:600">${weights.length?`Radar group: <b style="color:${topW>=0.4?'var(--red)':'var(--text)'}">${daFmt(topW*100,0)}% ${daEsc(topS)}</b>.`:'Sector mix unavailable for this book.'}</div>
     ${bars?`<div style="margin-bottom:12px">${bars}</div>`:''}
     ${table}
     ${swaps?`<div style="margin-top:12px">${swaps}</div>`:''}

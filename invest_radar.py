@@ -789,6 +789,24 @@ def _select(survivors, sector_value, total, n, deployable, vols, cfg) -> list[di
     return picks
 
 
+def _swap_rationale(over_sector, sector_value, total, trim, best) -> str:
+    """Say when a swap stays inside the concentrated radar group."""
+    pct = round(sector_value[over_sector] / total * 100)
+    dest = str(best.get("sector") or "")
+    same = dest == str(over_sector)
+    if same:
+        move = (
+            f"still inside {dest}, so this does not shrink that group's weight. "
+            "It only replaces one name with a less-correlated name in the same group"
+        )
+    else:
+        move = f"in {dest}, outside {over_sector}"
+    return (
+        f"{over_sector} is the most concentrated radar group ({pct}% of book). "
+        f"Trimming {trim.get('symbol')} would fund {best['symbol']}, {move}."
+    )
+
+
 def _build_swaps(holdings, sector_value, survivors, total, sector_of) -> list[dict]:
     """When no BUY is possible, surface a funding-source swap: trim the most
     OVER-WEIGHT sector's largest holding to fund the best diversifying new name."""
@@ -810,11 +828,7 @@ def _build_swaps(holdings, sector_value, survivors, total, sector_of) -> list[di
         # is both meaningless jargon and actively wrong — the customer surface
         # derives that limit from their own book size, so any number quoted here
         # would be advice about a setting they cannot see or change.
-        "rationale": (f"{over_sector} is the most concentrated sector "
-                      f"({round(sector_value[over_sector] / total * 100)}% of book). Trimming "
-                      f"{trim.get('symbol')} would fund {best['symbol']} ({best['sector']}), a "
-                      f"lower-correlation diversifier — or hold more names so no single "
-                      f"sector dominates."),
+        "rationale": _swap_rationale(over_sector, sector_value, total, trim, best),
     }]
 
 

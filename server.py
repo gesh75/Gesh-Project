@@ -6303,7 +6303,7 @@ def mybook_summary(request: Request):
     if not positions:
         action = {"label": "Add your holdings", "target": "book"}
     elif not saved or stale:
-        action = {"label": "Pick a name to research", "target": "research"}
+        action = {"label": "Analyze my portfolio", "target": "portfolio"}
     else:
         action = {"label": "You're on your desk", "target": "desk"}
     return {
@@ -6954,7 +6954,10 @@ def _render_radar_block(radar: object) -> str:
         top_sector, top_weight = weights[0]
         colour = "#c00" if top_weight >= 0.4 else "#111"
         headline = (
-            f"<p style='color:#111;line-height:1.6'>Your book is "
+            "<p style='color:#555;line-height:1.6;font-size:13px'>Radar groups are a "
+            "separate classification from the model sector mix above. A swap can stay "
+            "inside the same radar group; that does not shrink the group's weight.</p>"
+            f"<p style='color:#111;line-height:1.6'>Radar group: "
             f"<b style='color:{colour}'>{num(top_weight * 100)}% {e(top_sector)}</b>.</p>"
         )
     else:
@@ -7049,16 +7052,27 @@ def _render_book_report(email: str) -> str:
         f"<td style='padding:6px 12px;text-align:right'>{h['portfolio_percentage']:.1f}%</td></tr>"
         for h in book["holdings"]
     )
+    unpriced_names = {str(sym) for sym in book["unpriced"]}
+    pos_rows += "".join(
+        f"<tr><td style='padding:6px 12px;font-weight:600'>{e(str(p.get('symbol') or ''))}</td>"
+        f"<td style='padding:6px 12px;text-align:right'>{e(format(p.get('shares') or 0, 'g'))}</td>"
+        f"<td style='padding:6px 12px;text-align:right' colspan='3'>Quote not loaded</td></tr>"
+        for p in positions
+        if str(p.get("symbol") or "") in unpriced_names
+    )
     total = book["equity_summary"]["portfolio_equity"]
-    total_html = (
-        (
+    if not book["holdings"] and book["unpriced"]:
+        total_html = (
+            "<b>Total: not available</b> — quotes have not loaded, so this is not a $0 book."
+        )
+    elif ew:
+        total_html = (
             f"<b>Equal-weight basis</b> — position sizes are private, so each of the "
             f"{len(book['holdings'])} priced names is weighted equally (1/N). "
             f"Dollar values are illustrative, not real holdings."
         )
-        if ew
-        else f"<b>Total: ${total:,.2f}</b>"
-    )
+    else:
+        total_html = f"<b>Total: ${total:,.2f}</b>"
 
     stale_banner = ""
     if stale and _ready_analysis_pending(email):
@@ -7141,7 +7155,7 @@ def _render_book_report(email: str) -> str:
             _ts, _tw = _sec_w[0]
             _flag = " — more than 40% in one sector." if _tw >= 40 else "."
             top_sector_html = (
-                "<p style='color:#111;line-height:1.6;font-size:16px'><b>What this book is:</b> "
+                "<p style='color:#111;line-height:1.6;font-size:16px'><b>Model sector mix:</b> "
                 f"{e(f'{_tw:.1f}% {_ts}')}{_flag} "
                 "That is a measurement of the positions you entered, not a trade instruction.</p>"
             )
@@ -7222,7 +7236,7 @@ def _render_book_report(email: str) -> str:
         body = "<p><em>No analysis yet — run <b>Analyze My Portfolio</b> on the dashboard, then reload this report.</em></p>"
 
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>GESH — Portfolio Report</title>
-<style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:860px;margin:32px auto;padding:0 20px;color:#111}}
+<style>body{{font-family:-apple-system,Segoe UI,sans-serif;max-width:860px;margin:32px auto;padding:0 20px;background:#fff;color:#111;color-scheme:light}}
 h1{{margin:0}}h2{{margin-top:28px}}table{{border-collapse:collapse}}
 tr:nth-child(even){{background:#f6f6f6}}
 details{{margin:8px 0;page-break-inside:avoid}}details summary{{cursor:pointer;color:#555;font-size:13px}}
