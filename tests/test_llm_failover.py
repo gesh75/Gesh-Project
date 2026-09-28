@@ -340,6 +340,14 @@ def test_call_gemini_forwards_deep_analysis_token_budget(monkeypatch):
     assert seen["max_tokens"] == 4096
     assert seen["mime"] == "application/json"
     assert seen["timeout_s"] == 180.0
+    # Missing / non-positive budgets keep the deep-analysis default (8192),
+    # never the news-scoring 1024 that truncates a holdings card.
+    llm_failover.call_gemini("analyze")
+    assert seen["max_tokens"] == 8192
+    llm_failover.call_gemini("analyze", max_tokens=0)
+    assert seen["max_tokens"] == 8192
+    llm_failover.call_gemini("analyze", max_tokens=-5)
+    assert seen["max_tokens"] == 8192
 
 
 def test_grok_executable_finds_home_local_bin_when_not_on_path(monkeypatch, tmp_path):

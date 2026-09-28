@@ -41,10 +41,35 @@ def test_normal_price_in_band_is_ok():
         (50, 0, 0),
         (50, "x", "y"),
         (float("nan"), 100, 200),
+        (float("inf"), 100, 200),
+        (float("-inf"), 100, 200),
+        (True, 500, 1200),
+        (False, 500, 1200),
+        (50, True, True),
+        (50, False, False),
     ],
 )
 def test_missing_or_bad_inputs_fail_open(price, lo, hi):
     assert ps.is_price_suspect(price, lo, hi)[0] is False
+
+
+def test_bool_price_is_not_one_dollar_suspect():
+    """JSON true must not become $1 via float(True) and then fail the 52-wk band."""
+    suspect, reason = ps.is_price_suspect(True, low_52=500.0, high_52=1200.0)
+    assert suspect is False
+    assert reason == ""
+
+
+def test_bool_52w_high_does_not_flag_a_real_quote():
+    """True as high_52 used to be $1, so a $50 print looked 50× the band."""
+    suspect, reason = ps.is_price_suspect(50.0, low_52=40.0, high_52=True)
+    assert suspect is False
+    assert reason == ""
+
+
+def test_overflow_price_fails_open():
+    assert ps._positive(10**10000) is None
+    assert ps.is_price_suspect(10**10000, 100, 200)[0] is False
 
 
 # ── endpoint wiring ───────────────────────────────────────────────────────────

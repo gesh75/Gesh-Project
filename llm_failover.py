@@ -33,6 +33,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -66,6 +67,8 @@ _FAST_OPS: Final[frozenset[str]] = frozenset({"news_sentiment", "sec_filing", "f
 # the same way a retired Grok pin degrades to the CLI default.
 _GEMINI_FAILOVER_DEFAULT: Final[str] = "gemini-2.5-flash"
 _GEMINI_FAILOVER_FALLBACK_DEFAULT: Final[str] = "gemini-2.0-flash-lite"
+_GEMINI_DEFAULT_OUT_TOKENS: Final[int] = 8192
+_GEMINI_MIN_OUT_TOKENS: Final[int] = 4096
 
 # The Grok CLI loads the user's global agent rules, which on this host instruct it
 # to open a memory MCP session before answering ("I'll load OMEGA context first…").
@@ -610,6 +613,25 @@ def _gemini_generate(agent: Any, prompt: str, model: str, max_tokens: int) -> st
     return fn(prompt, **kwargs)
 
 
+def _gemini_out_tokens(max_tokens: object) -> int:
+    """Positive Gemini output budget, floored at 4096.
+
+    Bool / NaN / inf / overflow / non-positive stay at the 8192 deep-analysis
+    default so a poisoned budget cannot crash failover (``int(inf)``) or
+    shrink to the news-scoring 1024. A legacy ticker budget of 2000 floors
+    to 4096; a 24000 deep-analysis budget is not clamped down.
+    """
+    if isinstance(max_tokens, bool) or max_tokens is None:
+        return _GEMINI_DEFAULT_OUT_TOKENS
+    try:
+        n = float(max_tokens)
+    except (TypeError, ValueError, OverflowError):
+        return _GEMINI_DEFAULT_OUT_TOKENS
+    if not math.isfinite(n) or n <= 0 or n > 100_000:
+        return _GEMINI_DEFAULT_OUT_TOKENS
+    return max(int(n), _GEMINI_MIN_OUT_TOKENS)
+
+
 def call_gemini(
     prompt: str,
     *,
@@ -631,8 +653,7 @@ def call_gemini(
     # gemini_agent._generate defaults to 1024 output tokens — enough for news
     # scoring, nowhere near deep_analyze_portfolio (max_tokens=24000). A Gemini
     # failover with the default truncates the JSON and the report fills blanks.
-    out_tokens = int(max_tokens) if max_tokens and int(max_tokens) > 0 else 8192
-    out_tokens = max(out_tokens, 4096)
+    out_tokens = _gemini_out_tokens(max_tokens)
 
     last_exc: BaseException | None = None
     for model in models:
