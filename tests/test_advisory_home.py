@@ -151,10 +151,11 @@ def _home_pane() -> str:
     return html[html.index('id="tab-home"') : html.index('id="tab-analyze"')]
 
 
-def test_home_pane_has_no_whole_book_analyze_button():
-    """Whole-book POST /api/mybook/analyze must not be a Home CTA."""
+def test_home_pane_has_an_explicit_book_analyze_button():
+    """The whole-book job starts only from this click, never from opening Home."""
     home = _home_pane()
-    assert 'onclick="mybookAnalyze()"' not in home
+    assert 'id="mybook-analyze-btn"' in home
+    assert 'onclick="mybookAnalyze()"' in home
     assert "SEE WHAT'S IN THIS BOOK" not in home.upper()
 
 

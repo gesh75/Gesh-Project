@@ -523,6 +523,22 @@ def test_report_page_without_analysis_prompts_run(client, monkeypatch):
     assert "No analysis yet" in r.text
 
 
+def test_report_without_quotes_does_not_print_a_zero_total(client, monkeypatch, au):
+    """A book with no quotes yet is not an empty $0 portfolio."""
+    server, c = client
+    _as(server, monkeypatch, "cust@x.com")
+    au.set_position("cust@x.com", "NVDA", 10)
+    monkeypatch.setattr(server, "_cached_close", lambda _symbol: None)
+    r = c.get("/mybook/report")
+    assert r.status_code == 200
+    assert "Total: $0.00" not in r.text
+    assert "Total: not available" in r.text
+    assert "NVDA" in r.text
+    assert "Quote not loaded" in r.text
+    assert "color-scheme:light" in r.text
+    assert "background:#fff" in r.text
+
+
 def test_report_page_requires_session_and_is_isolated(client, monkeypatch, au):
     server, c = client
     monkeypatch.setattr(server.auth_users, "gate_decision", lambda p, c: "allow", raising=False)
@@ -1043,13 +1059,13 @@ def test_mybook_summary_next_action_ladder(client, monkeypatch, au):
     assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "book"
     # book, no analysis → research a name (never the whole-book job)
     au.set_position("cust@x.com", "NVDA", 10)
-    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "research"
+    assert c.get("/api/mybook/summary").json()["data"]["next_action"]["target"] == "portfolio"
     # stale analysis → still research, not a 3-minute book job
     au.save_book_analysis("cust@x.com", {"_fp": "other-book", "analysis": {},
                                          "kelly": {}, "monte_carlo": {},
                                          "book": {"positions": [], "unpriced": []}})
     d = c.get("/api/mybook/summary").json()["data"]
-    assert d["analysis_stale"] is True and d["next_action"]["target"] == "research"
+    assert d["analysis_stale"] is True and d["next_action"]["target"] == "portfolio"
 
 
 def test_mybook_summary_flags_stale_for_legacy_analysis_with_changed_symbols(client, monkeypatch, au):
@@ -1069,7 +1085,7 @@ def test_mybook_summary_flags_stale_for_legacy_analysis_with_changed_symbols(cli
                  "unpriced": []}})   # legacy row: no _fp, recorded only NVDA
     d = c.get("/api/mybook/summary").json()["data"]
     assert d["analysis_stale"] is True
-    assert d["next_action"]["target"] == "research"
+    assert d["next_action"]["target"] == "portfolio"
 
 
 def test_mybook_summary_flags_any_legacy_analysis_without_fingerprint(client, monkeypatch, au):
@@ -1088,7 +1104,7 @@ def test_mybook_summary_flags_any_legacy_analysis_without_fingerprint(client, mo
                  "unpriced": []}})
     d = c.get("/api/mybook/summary").json()["data"]
     assert d["analysis_stale"] is True
-    assert d["next_action"]["target"] == "research"
+    assert d["next_action"]["target"] == "portfolio"
 
 
 def test_mybook_summary_catch_up_is_mechanical_never_analyze(client, monkeypatch, au):
@@ -1100,7 +1116,7 @@ def test_mybook_summary_catch_up_is_mechanical_never_analyze(client, monkeypatch
     c.cookies.set(server.auth_users.COOKIE_NAME, "tok")
     au.set_position("cust@x.com", "NVDA", 10)
     d = c.get("/api/mybook/summary").json()["data"]
-    assert d["next_action"]["target"] == "research"
+    assert d["next_action"]["target"] == "portfolio"
     assert d["educational"] == EDUCATIONAL
     assert "not investment advice" in d["educational"].lower()
     assert isinstance(d["day_change_available"], bool)
