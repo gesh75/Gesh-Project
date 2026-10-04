@@ -208,6 +208,17 @@ def sitemap() -> Response:
     return Response(content=sitemap_xml(), media_type="application/xml")
 
 
+# Google Search Console ownership file (HTML-file method). Public, exact path, static text.
+GSC_VERIFICATION_NAME = "googlec741436d0e4c79df.html"
+
+
+@router.api_route(f"/{GSC_VERIFICATION_NAME}", methods=["GET", "HEAD"], include_in_schema=False)
+def gsc_verification() -> Response:
+    return Response(
+        content=f"google-site-verification: {GSC_VERIFICATION_NAME}", media_type="text/html"
+    )
+
+
 # ── Open Graph images (static, committed; regenerate with scripts/gen_og_images.py) ──
 
 # Served from /og/<name>.png — deliberately NOT under /api (robots.txt disallows /api and

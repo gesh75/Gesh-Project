@@ -79,6 +79,15 @@ def test_robots_txt_is_plain_text_not_the_login_page(seo_anon: TestClient) -> No
     assert not any(re.match(r"^Disallow:\s*/\s*$", ln) for ln in lines)
 
 
+def test_search_console_verification_file_is_public_exact_and_plain(seo_anon: TestClient) -> None:
+    name = seo_pages.GSC_VERIFICATION_NAME
+    r = seo_anon.get(f"/{name}", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.text == f"google-site-verification: {name}"
+    # exact match only: neighbours stay behind the login wall
+    assert seo_anon.get(f"/{name}.bak", follow_redirects=False).status_code != 200
+
+
 def test_robots_txt_allows_head(seo_anon: TestClient) -> None:
     assert seo_anon.head("/robots.txt", follow_redirects=False).status_code == 200
 
