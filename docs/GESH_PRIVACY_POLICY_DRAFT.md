@@ -14,6 +14,7 @@ This policy explains what personal information we collect when you use the GESH 
 - **Usage data:** feature usage/metering events (e.g., which analyses you ran), timestamps, and basic technical logs.
 - **Payment data:** processed by **Lemon Squeezy** (our merchant of record). We do **not** store your full card details; we receive subscription status and limited billing metadata from Lemon Squeezy.
 - **Communications:** emails you send us and email-preference choices.
+- **Weekly learning note signup:** if you enter your email on a free tool page and tick the consent box, we store that address, the tool you signed up from, the consent wording you saw, the time, and a keyed hash of your IP address (used only for abuse limits). We email you once to confirm; until you confirm, we send nothing else. Every email includes an unsubscribe link, and you can also ask us to delete the address (see Your rights). This list is separate from GESH accounts, and unconfirmed signups are deleted after 30 days.
 
 ## 3. How we use your information
 - To provide the research/analytics features you request.
