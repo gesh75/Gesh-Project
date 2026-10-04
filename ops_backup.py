@@ -35,6 +35,7 @@ _TRADING = Path(
 TARGETS = [
     _BASE / "gesh_financial.db",
     _BASE / "gesh_auth.db",
+    _BASE / "gesh_marketing.db",  # double-opt-in marketing list (separate from users)
     _BASE / "gesh.db",
     _TRADING / "gesh_financial.db",
     _TRADING / "gesh.db",
