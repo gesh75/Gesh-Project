@@ -68,6 +68,18 @@ PUBLIC_PREFIXES = (
     "/track-record",
 )
 
+# SEO surface (crawlers + logged-out visitors). EXACT match only — unlike the prefixes
+# above these never expose a sub-path, so '/robots.txt.bak' or '/sitemap.xml/x' stay gated.
+PUBLIC_EXACT_PATHS = frozenset({
+    "/",  # logged-out marketing landing; the handler serves the dashboard ONLY to a valid session
+    "/robots.txt", "/sitemap.xml",
+    # Free tools (SSR shell + client-side calculators; no owner data, no server state).
+    "/tools", "/tools/portfolio-xray", "/tools/monte-carlo-simulator", "/tools/kelly-calculator",
+    # Static Open Graph images for link previews (fixed whitelist; served from static/og/).
+    "/og/gesh-financial.png", "/og/portfolio-xray.png", "/og/monte-carlo-simulator.png",
+    "/og/kelly-calculator.png",
+})
+
 
 # ── config flags ────────────────────────────────────────────────────────────────
 
@@ -1602,6 +1614,8 @@ def is_public_path(path: str) -> bool:
     '/api/congress/NVDA' but NOT '/api/congress-admin'. Prefixes ending in '/'
     (e.g. '/static/') keep raw-prefix semantics. A future adjacent route must never
     silently inherit a public/auth bypass."""
+    if path in PUBLIC_EXACT_PATHS:
+        return True
     for p in PUBLIC_PREFIXES:
         if p.endswith("/"):
             if path.startswith(p):

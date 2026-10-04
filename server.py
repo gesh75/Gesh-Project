@@ -508,6 +508,9 @@ import model_portfolio  # the ONLY portfolio shape a customer receives
 import portfolio_valuation  # CANONICAL money arithmetic — see module docstring
 import price_cache  # shared close-price cache (also used by cron digest)
 import price_sanity  # cross-source price quality + strict mode (Codex #3)
+import seo_landing  # public marketing landing for logged-out `/` (static copy only)
+import seo_tools  # free public tools: SSR shell + client-side calculators
+import seo_pages  # public SEO surface: robots/sitemap/head tags (no owner data)
 import verdict_reconciliation  # ONE stance from the mechanical + valuation layers
 from ai_analyzer import (
     MODEL,
@@ -666,6 +669,9 @@ async def _auth_gate_middleware(request: Request, call_next):
 from routers.health import router as health_router
 
 app.include_router(health_router)
+app.include_router(seo_pages.router)  # robots.txt, sitemap.xml (public, exact paths)
+app.include_router(seo_tools.router)  # free tools (public, exact paths, no private state)
+app.middleware("http")(seo_pages.noindex_middleware)
 
 
 # ─── Customer view: model-book masking (launch gap #1) ─────────────────────────
@@ -1472,7 +1478,8 @@ HTML = Path(__file__).parent / "templates" / "dashboard.html"
 
 # ─── Login wall routes (active only when GESH_AUTH_ENABLED) ────────────────────
 _LOGIN_PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>GESH — Sign in</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<!--SEO_HEAD-->
 <style>body{background:#080d14;color:#e8eef6;font-family:-apple-system,Segoe UI,Roboto,sans-serif;
 display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
 .card{background:#0d1520;border:1px solid #1a2840;border-radius:12px;padding:32px;width:320px}
@@ -1484,7 +1491,7 @@ button{width:100%;margin-top:20px;background:#00d4ff;color:#03121a;border:0;bord
 padding:11px;font-weight:700;font-size:14px;cursor:pointer}
 .err{color:#ff3c5a;font-size:12px;margin-top:12px;min-height:14px}</style></head>
 <body><form class=card id=f>
-<h1>GESH Financial</h1><div class=sub>Signal-accuracy research · sign in</div>
+<h1>Sign in to GESH Financial</h1><div class=sub>Signal-accuracy research · sign in</div>
 <label>Email</label><input name=email type=email autocomplete=username required autofocus>
 <label>Password</label><input name=password type=password autocomplete=current-password required>
 <button type=submit>Sign in</button><div class=err id=e></div>
@@ -1646,7 +1653,16 @@ def _require_secure_cookie_config() -> None:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
-    return _LOGIN_PAGE
+    head = seo_pages.head_tags(
+        title="Sign in | GESH Financial",
+        description="Sign in to your GESH Financial dashboard.",
+        path="/login",
+        robots="noindex",
+    )
+    return HTMLResponse(
+        _LOGIN_PAGE.replace("<!--SEO_HEAD-->", head, 1),
+        headers={"X-Robots-Tag": "noindex, nofollow"},
+    )
 
 
 @app.post("/auth/login")
@@ -1838,9 +1854,38 @@ def pricing_page():
             "color:#001018;padding:12px;border-radius:8px;text-decoration:none;"
             'font-weight:600;margin-top:12px">Subscribe</a></div>'
         )
+    # Offer JSON-LD mirrors the VISIBLE card only: no card (signups paused) or a
+    # non-numeric env price means no structured offer — never a made-up one.
+    offers: list[dict] = []
+    if not _signups_paused() and re.fullmatch(r"\d+(\.\d{1,2})?", _os.getenv("LS_PLAN_PRICE", "49")):
+        offers.append(
+            {
+                "@type": "Offer",
+                "name": _os.getenv("LS_PLAN_NAME", "GESH Access"),
+                "price": _os.getenv("LS_PLAN_PRICE", "49"),
+                "priceCurrency": "USD",
+                "url": seo_pages.site_base_url() + "/pricing",
+                "priceSpecification": {
+                    "@type": "UnitPriceSpecification",
+                    "price": _os.getenv("LS_PLAN_PRICE", "49"),
+                    "priceCurrency": "USD",
+                    "unitText": "MONTH",
+                },
+            }
+        )
+    head = seo_pages.head_tags(
+        title="Pricing | GESH Financial – Plans for Portfolio Analytics",
+        description=(
+            "Simple plans for daily portfolio observability. "
+            "Compare features and start measuring your book today."
+        ),
+        path="/pricing",
+        jsonld=[seo_pages.software_application_ld(offers)],
+    )
     return (
-        "<!doctype html><html><head><meta charset=utf-8><title>GESH — Pricing</title>"
-        '<meta name=viewport content="width=device-width,initial-scale=1"></head>'
+        "<!doctype html><html lang=en><head><meta charset=utf-8>"
+        '<meta name=viewport content="width=device-width,initial-scale=1">'
+        f"{head}</head>"
         '<body style="font-family:system-ui,sans-serif;background:#080d14;color:#e6edf3;'
         'max-width:900px;margin:auto;padding:32px">'
         '<h1 style="color:#00d4ff">GESH Financial — Access</h1>'
@@ -2793,7 +2838,12 @@ def _render_dashboard(role: str) -> str:
 def dashboard(request: Request):
     if auth_users.auth_enabled():
         email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
-        role = "owner" if (email and auth_users.is_owner(email)) else "customer"
+        if not email:
+            # "/" is an exact public path (auth_users.PUBLIC_EXACT_PATHS) so crawlers and
+            # logged-out visitors get the marketing landing. The dashboard below is only
+            # ever rendered for a VALID session — never for an anonymous request.
+            return HTMLResponse(seo_landing.render_landing())
+        role = "owner" if auth_users.is_owner(email) else "customer"
     else:
         role = "owner"
     html = _render_dashboard(role)
@@ -2801,7 +2851,9 @@ def dashboard(request: Request):
     # before first paint. This eliminates the 1-2s flash of full owner menu on refresh.
     html = html.replace("<body", f'<body data-initial-role="{role}"', 1)
     html = html.replace("{{ model }}", MODEL)
-    return HTMLResponse(html)
+    # The logged-in app is private: keep it out of search indexes (header only, so
+    # the document body is unchanged).
+    return HTMLResponse(html, headers={"X-Robots-Tag": "noindex, nofollow"})
 
 
 # ─── Portfolio data ───────────────────────────────────────────────────────────

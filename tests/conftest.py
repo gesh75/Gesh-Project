@@ -258,3 +258,38 @@ def _browser_like_origin(monkeypatch: pytest.MonkeyPatch) -> None:
         return original(self, method, url, *args, **kwargs)
 
     monkeypatch.setattr(TestClient, "request", _with_origin)
+
+
+# ── SEO test fixtures (tests/test_seo_*.py) ────────────────────────────────────
+
+@pytest.fixture
+def seo_walled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auth wall ON with an isolated auth DB (anonymous client = logged-out visitor)."""
+    import auth_users  # lazy: conftest must not import app modules before env isolation
+
+    monkeypatch.setenv("GESH_AUTH_DB", str(tmp_path / "auth.db"))
+    monkeypatch.setenv("GESH_AUTH_SECRET", "test-secret-deterministic")
+    monkeypatch.setenv("GESH_AUTH_ENABLED", "1")
+    monkeypatch.setattr(auth_users, "AUTH_DB_PATH", tmp_path / "auth.db")
+    auth_users.init_auth_db()
+
+
+@pytest.fixture
+def seo_anon(seo_walled: None):
+    from starlette.testclient import TestClient
+
+    import server
+
+    return TestClient(server.app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def seo_empty_track_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import proof_page
+
+    real = proof_page.load_track_record
+    monkeypatch.setattr(
+        proof_page,
+        "load_track_record",
+        lambda: real(str(tmp_path / "absent.db"), daily_analysis_db_path=None),
+    )

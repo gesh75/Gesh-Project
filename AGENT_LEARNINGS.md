@@ -4,6 +4,11 @@ Repo-only memory for `gesh-project`. Cross-repo lessons stay in `~/.cursor/AGENT
 
 ## Entries
 
+### [2026-10-03] [seo] A baseline run is only a baseline if nothing moves under it
+- **Mistake:** Started the origin/main pytest baseline inside the worktree, then kept editing; a later `git archive` copy had no `.git`, so a `git ls-files` test failed there while the real tree passed. On macOS `sed -i 's/a/b/' file` also aborted a `&&` chain (BSD sed needs `-i ''`).
+- **Avoid:** Editing the tree a background pytest is importing from. Reading a failure count from a scratch copy without checking it is a git repo. A path under `/Users/` trips `test_ops_backup_targets_are_repo_relative_not_hardcoded_users` in any worktree.
+- **Instead:** Baseline from a frozen copy that is a git repo (or `git worktree add` outside the work area), and compare failing test names, not counts. Use a python one-liner for edits instead of `sed -i`.
+
 ### [2026-09-27] [auth] Logout and the next sign-in
 - **Mistake:** Logout only deleted the cookie, so the 7-day token still worked. Creating `revoked_sessions` before the schema-v2 ready check made an empty database look pre-v2 and the backup check failed. Clearing the cookie when the blacklist write failed left the copied token alive.
 - **Avoid:** A new auth table before `_schema_v2_ready`. `delete_cookie` without the same Secure, HttpOnly, SameSite, and path used at login. A browser test that signs in as the owner, because `rotate_session` retires that user's other sessions.
