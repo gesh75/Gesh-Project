@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
+import marketing_capture
 import seo_layout as L
 import seo_pages
 import seo_tools_js
@@ -346,15 +347,41 @@ def _related(tool: Tool) -> str:
     )
 
 
-def _cta() -> str:
-    # TODO(email-capture, B8): an "email me my report" form is intentionally NOT built.
-    # The only subscriber-like store in this repo is auth_users' `users` table (paying
-    # customers, magic-link login, alert/digest opt-outs); writing anonymous addresses
-    # there would create accounts and email-able contacts without consent. Add it once a
-    # separate consented, double-opt-in marketing list exists. Until then the CTA stays
-    # a plain link to /pricing and /login.
+def _capture_form(tool: Tool) -> str:
+    """Double opt-in signup (see marketing_capture). Works without JavaScript: the form
+    POSTs to /marketing/subscribe and gets a simple page back; seo_tools_js.capture_script
+    upgrades it to a fetch with an aria-live status line. Only the email is ever sent."""
     return (
-        '<section id="cta" class="card"><h2>Save to GESH / unlock the full dashboard</h2>'
+        '<section id="learning-note" class="card" aria-labelledby="ln-h">'
+        '<h2 id="ln-h">Email me the weekly learning note</h2>'
+        '<p class="muted">Short educational explainers on portfolio risk and position sizing. '
+        "Optional. The calculator above never sends what you type; only the email below is "
+        "sent, and only if you submit it.</p>"
+        '<form id="capture-form" method="post" action="/marketing/subscribe" novalidate>'
+        f'<input type="hidden" name="source" value="{L.esc(tool.slug)}">'
+        '<div class="hp" aria-hidden="true"><label for="cap-website">Leave this field empty'
+        '</label><input id="cap-website" name="website" type="text" tabindex="-1" '
+        'autocomplete="off"></div>'
+        '<label for="cap-email">Email address</label>'
+        '<input id="cap-email" name="email" type="email" inputmode="email" '
+        'autocomplete="email" maxlength="254" required aria-describedby="cap-consent">'
+        '<div class="chk"><input id="cap-ok" name="consent" type="checkbox" value="1" required>'
+        '<label for="cap-ok">Yes, email me the weekly learning note.</label></div>'
+        f'<p id="cap-consent" class="muted">{L.esc(marketing_capture.CONSENT_TEXT)} '
+        '<a href="/privacy">Privacy policy</a>.</p>'
+        '<p><button class="btn" id="cap-btn" type="submit">Send me a confirmation email</button></p>'
+        '<p id="cap-status" class="muted" role="status" aria-live="polite"></p>'
+        "</form></section>"
+    )
+
+
+def _cta(tool: Tool | None = None) -> str:
+    # B8 email capture lives in marketing_capture (own SQLite file, double opt-in, never the
+    # auth `users` table). Only the three tool pages carry the form; the /tools index keeps
+    # the plain CTA because it promises "no data sent".
+    capture = _capture_form(tool) if tool is not None else ""
+    return (
+        capture + '<section id="cta" class="card"><h2>Save to GESH / unlock the full dashboard</h2>'
         "<p>Track your real positions, risk and sizing in one daily report.</p>"
         '<p><a class="btn" href="/pricing">See plans</a> '
         '<a class="btn alt" href="/login">Sign in</a></p></section>'
@@ -376,7 +403,7 @@ def render_tool(tool: Tool) -> str:
         + _explainer(tool)
         + L.faq_html(list(tool.faq))
         + _related(tool)
-        + _cta()
+        + _cta(tool)
     )
     head = seo_pages.head_tags(
         title=tool.title,
@@ -390,7 +417,12 @@ def render_tool(tool: Tool) -> str:
         ],
     )
     return L.page(head, body, extra_head="").replace(
-        "</body>", f"<script>{tool.script}</script></body>", 1
+        "</body>",
+        # The calculator script stays attribute-less and network-free (tests pin that). The
+        # signup enhancement is a separate, identified script: it only POSTs the email form.
+        f"<script>{tool.script}</script>"
+        f'<script id="capture-js">{seo_tools_js.capture_script()}</script></body>',
+        1,
     )
 
 

@@ -351,3 +351,45 @@ def monte_carlo_script() -> str:
 def xray_script() -> str:
     data = f"var GeshTool = GeshTool || {{}};\nGeshTool.SECTORS={_json(SECTORS)};\nGeshTool.OVERLAP={_json(OVERLAP)};\n"
     return data + COMMON_JS + XRAY_JS
+
+
+CAPTURE_JS = r"""
+(function () {
+  'use strict';
+  var form = document.getElementById('capture-form');
+  if (!form || typeof fetch !== 'function') return;  // no JS / old browser: plain form POST
+  var status = document.getElementById('cap-status');
+  var btn = document.getElementById('cap-btn');
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var f = form.elements;
+    if (!f.email.value || !f.consent.checked) {
+      status.textContent = !f.email.value ? 'Please enter your email address.'
+        : 'Please tick the box to confirm you want the weekly learning note.';
+      return;
+    }
+    btn.disabled = true;
+    status.textContent = 'Sending\u2026';
+    fetch('/api/marketing/subscribe', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: f.email.value, consent: f.consent.checked,
+        source: f.source.value, website: f.website.value
+      })
+    }).then(function (r) {
+      return r.json().then(function (j) { return j; }, function () { return {}; });
+    }).then(function (j) {
+      status.textContent = j.message || 'Something went wrong. Please try again later.';
+      if (j.ok) { form.reset(); }
+    }).catch(function () {
+      status.textContent = 'Network problem. Please try again later.';
+    }).then(function () { btn.disabled = false; });
+  });
+})();
+"""
+
+
+def capture_script() -> str:
+    return CAPTURE_JS

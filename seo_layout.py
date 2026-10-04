@@ -63,6 +63,10 @@ ol.steps li{margin:8px 0;color:#aeb9c7}
 .bar{height:10px;background:#00d4ff;border-radius:5px}
 .muted{color:#8fa3bd;font-size:13px}
 .err{color:#ff6b81;font-size:13px;min-height:16px}
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.chk{display:flex;gap:8px;align-items:flex-start;margin:12px 0}
+.chk input{width:auto;margin-top:5px}
+.chk label{margin:0;font-size:13px}
 """
 
 

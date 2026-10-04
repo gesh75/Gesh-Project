@@ -35,16 +35,25 @@ def is_configured() -> bool:
     return bool(os.getenv("RESEND_API_KEY", "").strip())
 
 
-def send_email(to: str, subject: str, html: str, headers: dict | None = None) -> bool:
+def send_email(
+    to: str,
+    subject: str,
+    html: str,
+    headers: dict | None = None,
+    log_recipient: bool = True,
+) -> bool:
     """Send one HTML email. Returns True on a 2xx from Resend, False otherwise
     (including the no-key dev path). Never raises — email failure must not 500 a webhook.
 
     `headers` are per-message SMTP headers passed through to Resend — used by the
-    retention jobs for RFC 8058 one-click unsubscribe (List-Unsubscribe[-Post])."""
+    retention jobs for RFC 8058 one-click unsubscribe (List-Unsubscribe[-Post]).
+
+    `log_recipient=False` keeps the address out of log lines (anonymous marketing signups)."""
+    who = to if log_recipient else "<redacted>"
     api_key = os.getenv("RESEND_API_KEY", "").strip()
     if not api_key:
         logger.warning("email_sender: RESEND_API_KEY unset — NOT sending to %s (subject=%r)",
-                       to, subject)
+                       who, subject)
         return False
     try:
         import requests  # local import: keeps module import-light + testable
@@ -60,10 +69,11 @@ def send_email(to: str, subject: str, html: str, headers: dict | None = None) ->
         ok = 200 <= resp.status_code < 300
         if not ok:
             logger.error("email_sender: Resend %s sending to %s — %s",
-                         resp.status_code, to, resp.text[:200])
+                         resp.status_code, who, resp.text[:200] if log_recipient else "")
         return ok
     except Exception as e:  # noqa: BLE001 — never let email break the caller
-        logger.error("email_sender: send failed to %s — %s", to, e)
+        logger.error("email_sender: send failed to %s — %s", who,
+                     e if log_recipient else type(e).__name__)
         return False
 
 

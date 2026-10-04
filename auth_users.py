@@ -80,6 +80,11 @@ PUBLIC_EXACT_PATHS = frozenset({
     # Static Open Graph images for link previews (fixed whitelist; served from static/og/).
     "/og/gesh-financial.png", "/og/portfolio-xray.png", "/og/monte-carlo-simulator.png",
     "/og/kelly-calculator.png",
+    # Marketing email capture for the free tools (double opt-in). EXACT paths only, so a
+    # neighbour such as '/marketing/confirm/x' or '/marketing' stays gated. Each handler is
+    # self-protecting: HMAC-token-gated, body-capped, rate-limited, never touches `users`.
+    "/api/marketing/subscribe", "/marketing/subscribe",
+    "/marketing/confirm", "/marketing/unsubscribe",
 })
 
 

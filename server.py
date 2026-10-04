@@ -667,10 +667,12 @@ async def _auth_gate_middleware(request: Request, call_next):
 
 
 from routers.health import router as health_router
+from routers.marketing import router as marketing_router
 
 app.include_router(health_router)
 app.include_router(seo_pages.router)  # robots.txt, sitemap.xml (public, exact paths)
 app.include_router(seo_tools.router)  # free tools (public, exact paths, no private state)
+app.include_router(marketing_router)  # double opt-in email capture (public, exact paths)
 app.middleware("http")(seo_pages.noindex_middleware)
 
 
