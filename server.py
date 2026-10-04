@@ -508,6 +508,7 @@ import model_portfolio  # the ONLY portfolio shape a customer receives
 import portfolio_valuation  # CANONICAL money arithmetic — see module docstring
 import price_cache  # shared close-price cache (also used by cron digest)
 import price_sanity  # cross-source price quality + strict mode (Codex #3)
+import seo_landing  # public marketing landing for logged-out `/` (static copy only)
 import seo_pages  # public SEO surface: robots/sitemap/head tags (no owner data)
 import verdict_reconciliation  # ONE stance from the mechanical + valuation layers
 from ai_analyzer import (
@@ -2835,7 +2836,12 @@ def _render_dashboard(role: str) -> str:
 def dashboard(request: Request):
     if auth_users.auth_enabled():
         email = auth_users.authenticate_session(request.cookies.get(auth_users.COOKIE_NAME))
-        role = "owner" if (email and auth_users.is_owner(email)) else "customer"
+        if not email:
+            # "/" is an exact public path (auth_users.PUBLIC_EXACT_PATHS) so crawlers and
+            # logged-out visitors get the marketing landing. The dashboard below is only
+            # ever rendered for a VALID session — never for an anonymous request.
+            return HTMLResponse(seo_landing.render_landing())
+        role = "owner" if auth_users.is_owner(email) else "customer"
     else:
         role = "owner"
     html = _render_dashboard(role)

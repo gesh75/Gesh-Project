@@ -71,6 +71,7 @@ PUBLIC_PREFIXES = (
 # SEO surface (crawlers + logged-out visitors). EXACT match only — unlike the prefixes
 # above these never expose a sub-path, so '/robots.txt.bak' or '/sitemap.xml/x' stay gated.
 PUBLIC_EXACT_PATHS = frozenset({
+    "/",  # logged-out marketing landing; the handler serves the dashboard ONLY to a valid session
     "/robots.txt", "/sitemap.xml",
 })
 

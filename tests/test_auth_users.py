@@ -204,7 +204,10 @@ class TestGate:
             assert au.is_public_path(p) is True
 
     def test_protected_paths_not_public(self):
-        assert au.is_public_path("/") is False
+        # "/" is an EXACT public path (marketing landing for logged-out visitors); the
+        # handler renders the dashboard only for a valid session (test_seo_landing.py).
+        assert au.is_public_path("/") is True
+        assert au.is_public_path("/report") is False
         assert au.is_public_path("/api/portfolio") is False
         assert au.is_public_path("/track-record") is True
 
@@ -230,7 +233,7 @@ class TestGate:
         assert au.gate_decision("/api/portfolio", None) == "unauthorized"
 
     def test_gate_redirect_html_without_cookie(self):
-        assert au.gate_decision("/", None) == "redirect"
+        assert au.gate_decision("/report", None) == "redirect"
 
     def test_gate_rejects_expired_cookie(self):
         au.create_user("a@b.com", "pw")
@@ -249,7 +252,7 @@ class TestGate:
 
     def test_gate_rejects_unknown_subject(self):
         tok = _signed_v2_token(str(uuid.uuid4()))  # crypto-valid token, no such user
-        assert au.gate_decision("/", tok) == "redirect"
+        assert au.gate_decision("/report", tok) == "redirect"
 
     def test_authenticate_session_active_user(self):
         au.create_user("s@x.com", "pw")

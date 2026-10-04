@@ -143,6 +143,7 @@ def software_application_ld(offers: list[dict[str, Any]] | None = None) -> dict[
 # (path, source files whose mtime is the page's lastmod). Only PUBLIC, indexable
 # marketing URLs belong here — a test fetches every entry logged-out and asserts 200.
 SITEMAP_PAGES: list[tuple[str, tuple[str, ...]]] = [
+    ("/", ("seo_landing.py", "seo_layout.py", "seo_pages.py")),
     ("/track-record", ("proof_page.py", "seo_pages.py")),
     ("/pricing", ("server.py", "seo_pages.py")),
 ]
