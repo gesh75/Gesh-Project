@@ -219,6 +219,15 @@ def gsc_verification() -> Response:
     )
 
 
+# IndexNow ownership key (Bing, Yandex, Naver, Seznam). Public by design, static text.
+INDEXNOW_KEY = "9d2c61f07b8a4e35a1c0d4f7e6b3285a"  # gitleaks:allow (public ownership token)
+
+
+@router.api_route(f"/{INDEXNOW_KEY}.txt", methods=["GET", "HEAD"], include_in_schema=False)
+def indexnow_key() -> Response:
+    return Response(content=INDEXNOW_KEY, media_type="text/plain")
+
+
 # ── Open Graph images (static, committed; regenerate with scripts/gen_og_images.py) ──
 
 # Served from /og/<name>.png — deliberately NOT under /api (robots.txt disallows /api and
