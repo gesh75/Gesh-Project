@@ -31,6 +31,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import seo_pages
+
 
 # Public page rendered OUTSIDE the dashboard XSS guard, under a CSP that carries
 # 'unsafe-inline' — so every DB-sourced string (symbol/source/outcome/timestamps)
@@ -1004,10 +1006,19 @@ def render_html(data: dict[str, Any]) -> str:
         "You are solely responsible for your own decisions."
     )
 
+    seo_head = seo_pages.head_tags(
+        title="Signal Track Record (Hypothetical) | GESH Financial",
+        description=(
+            "The public GESH signal track record: logged closes, expectancy, profit factor. "
+            "Hypothetical/simulated results — methodology and limitations disclosed."
+        ),
+        path="/track-record",
+    )
+
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GESH Financial — Signal Accuracy Track Record</title>
+{seo_head}
 <style>
  body{{margin:0;background:{_BG};color:#e8eef6;font-family:-apple-system,Segoe UI,Roboto,sans-serif}}
  .wrap{{max-width:880px;margin:0 auto;padding:32px 20px 64px}}
