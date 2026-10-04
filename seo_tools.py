@@ -347,6 +347,12 @@ def _related(tool: Tool) -> str:
 
 
 def _cta() -> str:
+    # TODO(email-capture, B8): an "email me my report" form is intentionally NOT built.
+    # The only subscriber-like store in this repo is auth_users' `users` table (paying
+    # customers, magic-link login, alert/digest opt-outs); writing anonymous addresses
+    # there would create accounts and email-able contacts without consent. Add it once a
+    # separate consented, double-opt-in marketing list exists. Until then the CTA stays
+    # a plain link to /pricing and /login.
     return (
         '<section id="cta" class="card"><h2>Save to GESH / unlock the full dashboard</h2>'
         "<p>Track your real positions, risk and sizing in one daily report.</p>"
