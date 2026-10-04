@@ -118,8 +118,8 @@ def test_methodology_and_limitations_section_is_explicit_and_honest(page: str) -
     assert "Commissions, fees and taxes are not stated" in block
 
 
-def test_pending_counsel_review_note_is_present_but_nothing_claims_review(page: str) -> None:
-    assert "<!-- PENDING COUNSEL REVIEW before promoting -->" in page
+def test_page_never_claims_legal_review(page: str) -> None:
+    assert "PENDING COUNSEL REVIEW" not in page
     low = page.lower()
     assert "reviewed by counsel" not in low and "attorney-approved" not in low
 
