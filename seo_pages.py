@@ -146,6 +146,10 @@ SITEMAP_PAGES: list[tuple[str, tuple[str, ...]]] = [
     ("/", ("seo_landing.py", "seo_layout.py", "seo_pages.py")),
     ("/track-record", ("proof_page.py", "seo_pages.py")),
     ("/pricing", ("server.py", "seo_pages.py")),
+    ("/tools", ("seo_tools.py", "seo_layout.py")),
+    ("/tools/portfolio-xray", ("seo_tools.py", "seo_tools_js.py", "seo_tools_data.py")),
+    ("/tools/monte-carlo-simulator", ("seo_tools.py", "seo_tools_js.py")),
+    ("/tools/kelly-calculator", ("seo_tools.py", "seo_tools_js.py")),
 ]
 
 
@@ -211,9 +215,6 @@ def sitemap() -> Response:
 # because the handler decides: landing = indexable, logged-in dashboard = noindex.
 INDEXABLE_EXACT: frozenset[str] = frozenset(
     {
-        "/",
-        "/pricing",
-        "/track-record",
         "/robots.txt",
         "/sitemap.xml",
         "/favicon.ico",
@@ -222,6 +223,7 @@ INDEXABLE_EXACT: frozenset[str] = frozenset(
         "/disclaimer",
         "/congress-watch",
     }
+    | {path for path, _ in SITEMAP_PAGES}  # every sitemap URL is indexable by definition
 )
 INDEXABLE_PREFIXES: tuple[str, ...] = ("/static/",)
 

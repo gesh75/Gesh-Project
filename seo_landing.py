@@ -132,6 +132,18 @@ def _measures() -> str:
     )
 
 
+def _tools() -> str:
+    links = "".join(
+        f'<li><a href="{L.esc(path)}">{L.esc(name)}</a></li>' for path, name in L.TOOL_LINKS
+    )
+    return (
+        '<section aria-labelledby="tools"><h2 id="tools">Free tools — no signup</h2>'
+        "<p>Try the same measurements on your own numbers, right in your browser.</p>"
+        f"<ul>{links}</ul>"
+        '<p><a class="btn alt" href="/tools">All free tools</a></p></section>'
+    )
+
+
 def _proof_and_pricing() -> str:
     return (
         '<section aria-labelledby="proof"><h2 id="proof">Show the losers too</h2>'
@@ -157,6 +169,7 @@ def render_landing() -> str:
         + _how_it_works()
         + _live_look()
         + _measures()
+        + _tools()
         + _proof_and_pricing()
         + L.faq_html(FAQ)
     )

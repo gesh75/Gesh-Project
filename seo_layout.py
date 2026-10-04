@@ -16,9 +16,12 @@ DISCLAIMER = (
     "future results."
 )
 
-# Public tool pages are registered by seo_tools (kept here as plain data so the nav and
-# footer can link them without importing the tool renderers).
-TOOL_LINKS: list[tuple[str, str]] = []
+# Public tool pages (rendered by seo_tools; a test keeps this list in sync with it).
+TOOL_LINKS: list[tuple[str, str]] = [
+    ("/tools/portfolio-xray", "Portfolio X-Ray"),
+    ("/tools/monte-carlo-simulator", "Monte Carlo simulator"),
+    ("/tools/kelly-calculator", "Kelly calculator"),
+]
 
 _CSS = """
 :root{color-scheme:dark}

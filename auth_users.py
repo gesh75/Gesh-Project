@@ -73,6 +73,8 @@ PUBLIC_PREFIXES = (
 PUBLIC_EXACT_PATHS = frozenset({
     "/",  # logged-out marketing landing; the handler serves the dashboard ONLY to a valid session
     "/robots.txt", "/sitemap.xml",
+    # Free tools (SSR shell + client-side calculators; no owner data, no server state).
+    "/tools", "/tools/portfolio-xray", "/tools/monte-carlo-simulator", "/tools/kelly-calculator",
 })
 
 

@@ -509,6 +509,7 @@ import portfolio_valuation  # CANONICAL money arithmetic — see module docstrin
 import price_cache  # shared close-price cache (also used by cron digest)
 import price_sanity  # cross-source price quality + strict mode (Codex #3)
 import seo_landing  # public marketing landing for logged-out `/` (static copy only)
+import seo_tools  # free public tools: SSR shell + client-side calculators
 import seo_pages  # public SEO surface: robots/sitemap/head tags (no owner data)
 import verdict_reconciliation  # ONE stance from the mechanical + valuation layers
 from ai_analyzer import (
@@ -669,6 +670,7 @@ from routers.health import router as health_router
 
 app.include_router(health_router)
 app.include_router(seo_pages.router)  # robots.txt, sitemap.xml (public, exact paths)
+app.include_router(seo_tools.router)  # free tools (public, exact paths, no private state)
 app.middleware("http")(seo_pages.noindex_middleware)
 
 

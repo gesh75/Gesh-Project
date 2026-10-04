@@ -179,7 +179,14 @@ def test_sitemap_now_lists_the_homepage_first(seo_anon: TestClient) -> None:
 
 def test_seo_modules_have_no_private_imports() -> None:
     root = Path(server.__file__).parent
-    for name in ("seo_pages.py", "seo_layout.py", "seo_landing.py"):
+    for name in (
+        "seo_pages.py",
+        "seo_layout.py",
+        "seo_landing.py",
+        "seo_tools.py",
+        "seo_tools_js.py",
+        "seo_tools_data.py",
+    ):
         src = (root / name).read_text(encoding="utf-8")
         for banned in (
             "data_fetcher",
