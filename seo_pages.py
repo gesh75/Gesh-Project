@@ -208,6 +208,42 @@ def sitemap() -> Response:
     return Response(content=sitemap_xml(), media_type="application/xml")
 
 
+# ── Open Graph images (static, committed; regenerate with scripts/gen_og_images.py) ──
+
+# Served from /og/<name>.png — deliberately NOT under /api (robots.txt disallows /api and
+# social crawlers must be able to fetch these). Whitelisted names only; no path params.
+OG_IMAGES: tuple[str, ...] = (
+    DEFAULT_OG_IMAGE,
+    "portfolio-xray",
+    "monte-carlo-simulator",
+    "kelly-calculator",
+)
+OG_DIR = _HERE / "static" / "og"
+
+
+def og_paths() -> tuple[str, ...]:
+    return tuple(f"/og/{name}.png" for name in OG_IMAGES)
+
+
+def _register_og(name: str) -> None:
+    def view() -> Response:
+        try:
+            data = (OG_DIR / f"{name}.png").read_bytes()
+        except OSError:
+            return Response(status_code=404)
+        return Response(
+            content=data,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    router.add_api_route(f"/og/{name}.png", view, methods=["GET", "HEAD"], include_in_schema=False)
+
+
+for _name in OG_IMAGES:
+    _register_og(_name)
+
+
 # ── noindex for everything that is not an indexable marketing page ──────────────
 
 # Pages that SHOULD be indexed. Everything else (dashboard, /api/*, /login, owner
@@ -224,6 +260,7 @@ INDEXABLE_EXACT: frozenset[str] = frozenset(
         "/congress-watch",
     }
     | {path for path, _ in SITEMAP_PAGES}  # every sitemap URL is indexable by definition
+    | set(og_paths())
 )
 INDEXABLE_PREFIXES: tuple[str, ...] = ("/static/",)
 

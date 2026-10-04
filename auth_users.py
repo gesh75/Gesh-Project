@@ -75,6 +75,9 @@ PUBLIC_EXACT_PATHS = frozenset({
     "/robots.txt", "/sitemap.xml",
     # Free tools (SSR shell + client-side calculators; no owner data, no server state).
     "/tools", "/tools/portfolio-xray", "/tools/monte-carlo-simulator", "/tools/kelly-calculator",
+    # Static Open Graph images for link previews (fixed whitelist; served from static/og/).
+    "/og/gesh-financial.png", "/og/portfolio-xray.png", "/og/monte-carlo-simulator.png",
+    "/og/kelly-calculator.png",
 })
 
 

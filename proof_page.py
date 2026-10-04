@@ -1006,6 +1006,33 @@ def render_html(data: dict[str, Any]) -> str:
         "You are solely responsible for your own decisions."
     )
 
+    # B6 compliance additions (insert-only: no figure above or below is changed).
+    # PENDING COUNSEL REVIEW — nothing here has been reviewed by counsel.
+    compliance_html = (
+        f'<div role="note" data-k="hypothetical-banner" style="background:#1a1405;'
+        f"border:1px solid #6b5410;border-left:4px solid #f0b429;border-radius:8px;"
+        f'padding:12px 16px;margin-bottom:16px;color:#e8d9b0;font-size:14px">'
+        f"<b>HYPOTHETICAL / SIMULATED — NOT LIVE TRADING.</b> Every figure on this page comes "
+        f"from paper trades recorded in a tracker ledger, not from real money. "
+        f"<b>Past performance is not indicative of future results.</b></div>"
+    )
+    methodology_extra_html = (
+        f'<ul id="methodology-limits" style="color:{_DIM};font-size:12px;line-height:1.6;'
+        f'margin:0 0 24px;padding-left:20px">'
+        f"<li><b>Universe:</b> every paper trade the tracker logged, labelled by source "
+        f"(consensus engine or manual). No fixed index or screening universe is stated.</li>"
+        f"<li><b>Date range:</b> execution clock starts {_esc(LAUNCH_DATE)}; ledger generated "
+        f"{_esc(str(data['generated_at']))}.</li>"
+        f"<li><b>Costs and slippage:</b> tracker fills model 10 bp entry slippage and, since "
+        f"2026-07-02, 10 bp exit slippage. Commissions, fees and taxes are not stated on this "
+        f"page.</li>"
+        f"<li><b>Gross vs. net:</b> profit factor and P&amp;L above are gross-dollar figures. "
+        f"No net-of-cost figure is published; the 20–50 bp stress range in the headline shows "
+        f"sensitivity only.</li>"
+        f"<li><b>Not audited:</b> the ledger is a mutable database and has not been "
+        f"independently verified.</li></ul>"
+    )
+
     seo_head = seo_pages.head_tags(
         title="Signal Track Record (Hypothetical) | GESH Financial",
         description=(
@@ -1029,11 +1056,14 @@ def render_html(data: dict[str, Any]) -> str:
  th.r{{text-align:right}}
  a{{color:{_CYAN}}}
 </style></head>
-<body><div class="wrap">
+<body><!-- PENDING COUNSEL REVIEW before promoting -->
+<div class="wrap">
  <h1 style="color:{_CYAN}">GESH Financial — Signal Accuracy Track Record</h1>
  <div class="sub">Paper-trade tracker ledger (sources labeled per trade: consensus = 11-node
    engine, manual = rated entries) · generated {_esc(data["generated_at"])}. Tracker timestamps
    are shown as stored; this mutable SQLite ledger is not independently audited.</div>
+
+ {compliance_html}
 
  <div style="background:{_SURFACE};border:1px solid {banner_color};border-left:4px solid {banner_color};
    border-radius:8px;padding:14px 16px;margin-bottom:20px;color:#dfe8f2;font-size:14px">{banner_txt}</div>
@@ -1072,8 +1102,9 @@ def render_html(data: dict[str, Any]) -> str:
    <span>Signal ratings: <b class="num" style="color:#e8eef6">{data["signal_ratings"]}</b></span>
  </div>
 
+ <h2 id="methodology" style="font-size:15px;margin:0 0 8px">Methodology and limitations</h2>
  <div style="background:{_SURFACE};border:1px solid {_BORDER};border-radius:8px;padding:12px 16px;
-   margin-bottom:24px;color:{_DIM};font-size:12px;line-height:1.6">
+   margin-bottom:12px;color:{_DIM};font-size:12px;line-height:1.6">
    <b style="color:#dfe8f2">Tracker methodology and limits.</b> The current workflow creates a
    paper position at entry and an outcome row when that position closes. The complete
    gate-eligible tracker outcome ledger is shown, including every gate-eligible losing trade.
@@ -1089,6 +1120,7 @@ def render_html(data: dict[str, Any]) -> str:
    10 bp entry slippage and, since 2026-07-02, 10 bp exit slippage; the headline applies an
    additional uniform execution-cost stress because the historical sample is not fully uniform.
  </div>
+ {methodology_extra_html}
 
  <h2 style="font-size:15px;margin:0 0 8px">Complete gate-eligible closed-trade ledger</h2>
  <table><thead><tr>
