@@ -74,6 +74,7 @@ PUBLIC_EXACT_PATHS = frozenset({
     "/",  # logged-out marketing landing; the handler serves the dashboard ONLY to a valid session
     "/robots.txt", "/sitemap.xml",
     "/googlec741436d0e4c79df.html",  # Google Search Console ownership file (static text)
+    "/9d2c61f07b8a4e35a1c0d4f7e6b3285a.txt",  # IndexNow ownership key (static text) gitleaks:allow
     # Free tools (SSR shell + client-side calculators; no owner data, no server state).
     "/tools", "/tools/portfolio-xray", "/tools/monte-carlo-simulator", "/tools/kelly-calculator",
     # Static Open Graph images for link previews (fixed whitelist; served from static/og/).

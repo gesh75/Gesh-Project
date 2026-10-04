@@ -88,6 +88,14 @@ def test_search_console_verification_file_is_public_exact_and_plain(seo_anon: Te
     assert seo_anon.get(f"/{name}.bak", follow_redirects=False).status_code != 200
 
 
+def test_indexnow_key_file_is_public_exact_and_plain(seo_anon: TestClient) -> None:
+    key = seo_pages.INDEXNOW_KEY
+    r = seo_anon.get(f"/{key}.txt", follow_redirects=False)
+    assert r.status_code == 200
+    assert r.text == key
+    assert seo_anon.get(f"/{key}.txt.bak", follow_redirects=False).status_code != 200
+
+
 def test_robots_txt_allows_head(seo_anon: TestClient) -> None:
     assert seo_anon.head("/robots.txt", follow_redirects=False).status_code == 200
 

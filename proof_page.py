@@ -1007,7 +1007,8 @@ def render_html(data: dict[str, Any]) -> str:
     )
 
     # B6 compliance additions (insert-only: no figure above or below is changed).
-    # PENDING COUNSEL REVIEW — nothing here has been reviewed by counsel.
+    # Owner decision 2026-10-04: educational content, no counsel gate. The page must still
+    # never claim legal review (tests/test_seo_og_and_track_record.py).
     compliance_html = (
         f'<div role="note" data-k="hypothetical-banner" style="background:#1a1405;'
         f"border:1px solid #6b5410;border-left:4px solid #f0b429;border-radius:8px;"
@@ -1056,7 +1057,7 @@ def render_html(data: dict[str, Any]) -> str:
  th.r{{text-align:right}}
  a{{color:{_CYAN}}}
 </style></head>
-<body><!-- PENDING COUNSEL REVIEW before promoting -->
+<body>
 <div class="wrap">
  <h1 style="color:{_CYAN}">GESH Financial — Signal Accuracy Track Record</h1>
  <div class="sub">Paper-trade tracker ledger (sources labeled per trade: consensus = 11-node
