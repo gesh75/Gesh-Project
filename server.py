@@ -2434,6 +2434,24 @@ def _is_fresh(ran_at: str | None, max_age_h: float = 24.0) -> bool:
         return False
 
 
+def _kelly_delta_pp(row: dict) -> float | None:
+    """Kelly optimal minus current weight in percentage points, or None.
+
+    None unless BOTH sides are real numbers: ``(optimal or 0) - (current or 0)``
+    read a missing optimum as "trim to 0%" and a missing current as "add the whole
+    target" (audit M-12). An explicit ``0`` optimum is a real target.
+    """
+    def _num(v: object) -> float | None:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return float(v) if math.isfinite(v) else None
+
+    opt, cur = _num(row.get("optimal_pct")), _num(row.get("current_pct"))
+    if opt is None or cur is None:
+        return None
+    return round(opt - cur, 1)
+
+
 def _holding_consensus_args(symbol: str, payload: dict) -> dict[str, float]:
     """Derive run_consensus_holding() kwargs from a portfolio snapshot."""
     symbol = symbol.upper()
@@ -5084,9 +5102,7 @@ def mybook_get(request: Request):
                 if k.get("symbol") in syms and k.get("action"):
                     kelly_deltas[k["symbol"]] = {
                         "action": k["action"],
-                        "delta_pp": round(
-                            (k.get("optimal_pct") or 0) - (k.get("current_pct") or 0), 1
-                        ),
+                        "delta_pp": _kelly_delta_pp(k),
                     }
             risk_syms: set[str] = set()
             for r in (saved.get("analysis") or {}).get("portfolio_risks") or []:
@@ -6340,7 +6356,7 @@ def mybook_summary(request: Request):
             if k.get("symbol") and k.get("action"):
                 kelly_by[str(k["symbol"]).upper()] = {
                     "action": k["action"],
-                    "delta_pp": round((k.get("optimal_pct") or 0) - (k.get("current_pct") or 0), 1),
+                    "delta_pp": _kelly_delta_pp(k),
                 }
     rows = []
     for p in positions:

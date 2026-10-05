@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -382,6 +383,42 @@ def open_window() -> None:
     _CANDIDATES.clear()
 
 
+def _positive_finite(value: Any) -> float | None:
+    """Strictly positive finite number, else None (bool/NaN/inf/garbage = unknown)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _current_weight(holding: dict[str, Any], portfolio_equity: Any) -> float | None:
+    """A holding's current portfolio weight as a fraction, or None if unknowable.
+
+    Prefers the snapshot's ``portfolio_percentage``; if that is absent or unusable
+    (0.0 is the producer's "unavailable" sentinel) derive it from
+    ``equity / portfolio_equity``. Never defaults to 0%: a missing weight read as
+    0% makes the drift equal the whole target and trades against a phantom
+    empty position (audit M-06).
+    """
+    pct = _positive_finite(holding.get("portfolio_percentage"))
+    if pct is not None:
+        return pct / 100.0
+    total = _positive_finite(portfolio_equity)
+    eq = holding.get("equity")
+    if total is None or isinstance(eq, bool) or not isinstance(eq, (int, float, str)):
+        return None
+    try:
+        eq_f = float(eq)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(eq_f) or eq_f < 0:
+        return None
+    return eq_f / total
+
+
 def midday_rebalance() -> None:
     """
     12:30 ET — Re-run consensus on currently held positions.
@@ -412,14 +449,20 @@ def midday_rebalance() -> None:
         logger.info("midday_rebalance: no holdings — skipping")
         return
 
-    equity = float(snapshot.get("equity_summary", {}).get("portfolio_equity", 0) or 0)
+    equity = snapshot.get("equity_summary", {}).get("portfolio_equity")
 
     for h in holdings:
         sym = h.get("symbol")
         if not sym:
             continue
         try:
-            current_pct = float(h.get("portfolio_percentage", 0) or 0) / 100.0
+            current_pct = _current_weight(h, equity)
+            if current_pct is None:
+                logger.warning(
+                    "  %s midday skip: current weight unknown (no portfolio_percentage, "
+                    "no usable equity/portfolio_equity)", sym,
+                )
+                continue
             row = run_consensus_holding(sym, **_consensus_args(sym, snapshot))
             intent = from_consensus(row, max_position_pct=cfg.max_position_pct)
 
@@ -485,11 +528,12 @@ def close_risk_check() -> None:
     equity_summary = snapshot.get("equity_summary", {})
     equity = float(equity_summary.get("portfolio_equity", 0) or 0)
     prev_close = float(equity_summary.get("adjusted_equity_previous_close", 0) or 0)
-    daily_pnl = (equity - prev_close) / prev_close if prev_close > 0 else 0.0
+    # Unknown previous close => unknown P&L (None), never a flat +0.00% day.
+    daily_pnl = (equity - prev_close) / prev_close if prev_close > 0 else None
 
     logger.info(
-        "close_risk_check: EOD equity=$%.2f daily_pnl=%+.2f%%",
-        equity, daily_pnl * 100,
+        "close_risk_check: EOD equity=$%.2f daily_pnl=%s",
+        equity, "N/A" if daily_pnl is None else f"{daily_pnl * 100:+.2f}%",
     )
     from .config import load_risk_config as _cfg
     alert_daily_pnl(equity, prev_close, daily_pnl, _cfg().max_daily_loss_pct)
@@ -547,7 +591,7 @@ def close_risk_check() -> None:
                 _sweep_sell(sym, price, stop, "live")
 
     # Warn if daily loss cap was approached
-    if daily_pnl < -0.008:
+    if daily_pnl is not None and daily_pnl < -0.008:
         logger.warning(
             "close_risk_check: daily P&L %+.2f%% approaching max loss cap of %.2f%%",
             daily_pnl * 100, cfg.max_daily_loss_pct * 100,

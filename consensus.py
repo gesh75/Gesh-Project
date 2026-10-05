@@ -446,11 +446,19 @@ def node_ecg(symbol: str) -> tuple[int | None, str]:
         history = get_equity_history(symbol, days=30)
         if not history or len(history) < 3:
             return ABSTAIN, "Insufficient ECG history"
-        prices = [h["equity"] for h in reversed(history)]  # oldest → newest
-        chgs = [
-            (prices[i] / prices[i - 1] - 1.0) * 100 if prices[i - 1] else 0.0
-            for i in range(1, len(prices))
-        ]
+        # oldest → newest. Keep only REAL observations (finite, > 0). A missing /
+        # zero point is dropped, never turned into a 0.0% session: a fabricated flat
+        # session resets the loss streak and hides a genuine run of losses (M-12).
+        prices = []
+        for h in reversed(history):
+            eq = h.get("equity")
+            if isinstance(eq, bool) or not isinstance(eq, (int, float)):
+                continue
+            if math.isfinite(eq) and eq > 0:
+                prices.append(float(eq))
+        if len(prices) < 3:
+            return ABSTAIN, "Insufficient valid ECG history"
+        chgs = [(prices[i] / prices[i - 1] - 1.0) * 100 for i in range(1, len(prices))]
         dd = _compute_drawdown_from_peak(prices)
         streak = _loss_streak(chgs)
         status = _classify(dd, streak)
