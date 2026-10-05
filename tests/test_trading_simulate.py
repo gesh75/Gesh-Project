@@ -123,3 +123,21 @@ def test_holding_consensus_args_unknown_total_keeps_watchlist_symbols_usable():
     args = server._holding_consensus_args("NVDA", payload)
     assert args["equity"] == 0.0
     assert args["current_price"] == 123.4
+
+
+# ── M-12: Kelly delta with a missing side is unknown, not "trim to zero" ─────
+@_pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"optimal_pct": 12.0, "current_pct": 9.1}, 2.9),
+        ({"optimal_pct": 0, "current_pct": 5.0}, -5.0),          # a real 0% target
+        ({"optimal_pct": None, "current_pct": 9.1}, None),       # was -9.1 (phantom TRIM)
+        ({"current_pct": 9.1}, None),
+        ({"optimal_pct": 12.0}, None),                           # was +12.0 (phantom ADD)
+        ({"optimal_pct": "n/a", "current_pct": 1.0}, None),
+        ({"optimal_pct": float("nan"), "current_pct": 1.0}, None),
+        ({"optimal_pct": True, "current_pct": 1.0}, None),
+    ],
+)
+def test_kelly_delta_pp_is_none_unless_both_sides_are_known(row, expected):
+    assert server._kelly_delta_pp(row) == expected
