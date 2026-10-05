@@ -46,9 +46,10 @@ RSI_PERIOD    = 14
 
 # ─── Indicator functions ─────────────────────────────────────────────────────
 
-def _rsi(close: np.ndarray, period: int = RSI_PERIOD) -> float:
+def _rsi(close: np.ndarray, period: int = RSI_PERIOD) -> float | None:
+    """Wilder RSI, or None when the series is too short (unknown, not neutral 50)."""
     if len(close) < period + 1:
-        return 50.0
+        return None
     delta   = np.diff(close)
     gain    = np.where(delta > 0, delta, 0.0)
     loss    = np.where(delta < 0, -delta, 0.0)
@@ -125,7 +126,7 @@ def _bollinger_width(close: np.ndarray, period: int = BB_PERIOD) -> tuple[float,
 
 # ─── Classification ───────────────────────────────────────────────────────────
 
-def _classify_regime(adx: float, bb_width: float, rsi: float, bb_width_history: list[float]) -> str:
+def _classify_regime(adx: float, bb_width: float, rsi: float | None, bb_width_history: list[float]) -> str:
     """Convert indicator values into a regime label."""
     # Detect compression: current width is lower than recent average.
     # Use whatever history is available rather than defaulting to the current
@@ -135,9 +136,9 @@ def _classify_regime(adx: float, bb_width: float, rsi: float, bb_width_history: 
     compressed = bb_width < avg_width * 0.75 and bb_width < 4.0
 
     if adx >= 30:
-        if rsi >= 70:
+        if rsi is not None and rsi >= 70:
             return "MOMENTUM-HIGH"
-        if rsi <= 30:
+        if rsi is not None and rsi <= 30:
             return "MOMENTUM-LOW"
         return "TRENDING"
     if compressed and adx > 18:
@@ -400,7 +401,7 @@ def detect_regimes(symbols: list[str]) -> dict[str, Any]:
 
         ctx = (
             f"{sym}: {regime} (ADX={adx_val:.0f}, "
-            f"BB-Width={bb_width:.1f}%, RSI={rsi_val:.0f}, "
+            f"BB-Width={bb_width:.1f}%, RSI={'N/A' if rsi_val is None else format(rsi_val, '.0f')}, "
             f"%B={pct_b:.0f}%) — {desc}"
         )
         lines.append(ctx)

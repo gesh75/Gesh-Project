@@ -35,6 +35,14 @@ def format_optional_percent(value: float | None, *, digits: int = 1) -> str:
     return f"{parsed:.{digits}f}%"
 
 
+def format_optional_number(value, *, digits: int = 0) -> str:
+    """Format a unitless indicator (RSI, ADX, ...). A missing value is N/A, never 0."""
+    parsed = optional_float(value)
+    if parsed is None:
+        return "N/A"
+    return f"{parsed:.{digits}f}"
+
+
 def format_optional_usd(value: float | None) -> str:
     """Format a dollar figure that may be missing. Never render unknown as $0."""
     parsed = optional_float(value)

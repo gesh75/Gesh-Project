@@ -156,7 +156,7 @@ def _compose(email: str) -> str | None:
             f"<h3>Signal changes on your names</h3><table>{flip_rows}</table>"
             f"<p>Last portfolio verdict: <b>{verdict}</b> &middot; "
             f"<a href='{base}/mybook/report'>your full report</a> &middot; "
-            f"<a href='{base}/track-record'>verified track record</a></p>"
+            f"<a href='{base}/track-record'>simulated paper track record</a></p>"
             f"<p style='color:#888;font-size:12px'>Informational only — not financial advice. "
             f"<a href='{base}/digest/unsubscribe?token={tok}'>Unsubscribe from the digest</a></p>")
 

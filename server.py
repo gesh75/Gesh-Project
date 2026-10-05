@@ -1823,7 +1823,7 @@ def pricing_page():
         quote=True,
     )
     feats = [
-        "Signal-accuracy proof (live track record)",
+        "Signal-accuracy proof (simulated paper track record)",
         "Daily AI portfolio report",
         "Watch dashboard",
         "Diversification radar",
@@ -2437,14 +2437,18 @@ def _is_fresh(ran_at: str | None, max_age_h: float = 24.0) -> bool:
 def _holding_consensus_args(symbol: str, payload: dict) -> dict[str, float]:
     """Derive run_consensus_holding() kwargs from a portfolio snapshot."""
     symbol = symbol.upper()
-    total_portfolio = (
-        float((payload.get("equity_summary") or {}).get("portfolio_equity", 0) or 0) or 1.0
+    total_portfolio = _positive_finite(
+        (payload.get("equity_summary") or {}).get("portfolio_equity")
     )
     holding = next(
         (h for h in payload.get("holdings", []) if (h.get("symbol") or "").upper() == symbol),
         None,
     )
     if holding is not None:
+        # Unknown total → 0.0, NOT a made-up 1.0: a 1.0-dollar portfolio makes a
+        # $2.5k position look 250000% allocated. consensus.node_kelly abstains on
+        # a non-positive total, so the Kelly vote is withheld instead of garbage.
+        total_portfolio = total_portfolio or 0.0
         return {
             "equity": float(holding.get("equity", 0) or 0),
             "total_portfolio": total_portfolio,
@@ -2458,7 +2462,8 @@ def _holding_consensus_args(symbol: str, payload: dict) -> dict[str, float]:
     current_price = float((quote or {}).get("last_trade_price", 0) or 0)
     return {
         "equity": 0.0,
-        "total_portfolio": total_portfolio,
+        # Flat symbol: equity is 0, so the denominator is inert; keep it positive.
+        "total_portfolio": total_portfolio or 1.0,
         "avg_cost": 0.0,
         "current_price": current_price,
     }

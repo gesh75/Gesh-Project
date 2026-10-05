@@ -337,7 +337,7 @@ a{{color:#00e87a;text-decoration:none}}.cta{{display:inline-block;margin-top:8px
 <table><thead><tr><th>#</th><th>Ticker</th><th>Buy disclosures</th></tr></thead><tbody>{lb_rows}</tbody></table>
 <h3>Latest disclosed transactions</h3>
 <table><thead><tr><th>Ticker</th><th>Filed by</th><th>Action</th><th>Amount</th><th>Disclosed</th></tr></thead><tbody>{recent_rows}</tbody></table>
-<p>Want AI analysis on any of these — regime, fundamentals, consensus, risk? <a href='/pricing'>See GESH</a> · <a href='/track-record'>verified track record</a>.</p>
+<p>Want AI analysis on any of these — regime, fundamentals, consensus, risk? <a href='/pricing'>See GESH</a> · <a href='/track-record'>simulated paper track record</a>.</p>
 <a class='cta' href='/pricing'>Analyze these tickers with GESH →</a>
 <p style='color:#5a6570;font-size:12px;margin-top:24px'>{src_line}<br>Informational and educational only. Not financial advice. Congressional disclosure data is public and lagged.</p>
 </div></body></html>"""

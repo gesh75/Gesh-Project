@@ -229,7 +229,9 @@ def run_monte_carlo(
 
     # Symbols with no usable history fall back to FALLBACK_DAILY_VOL / zero
     # drift — flag them so the substitution is never silent.
-    degraded_symbols = [s for s in symbols if s not in ewma_vols]
+    # A symbol missing its DRIFT is degraded too: hist_drifts.get(sym, 0.0) would
+    # otherwise silently treat "no history" as "zero expected return".
+    degraded_symbols = [s for s in symbols if s not in ewma_vols or s not in hist_drifts]
     calibration = "degraded" if degraded_symbols else "ok"
 
     # ── Regime detection ─────────────────────────────────────────────────────

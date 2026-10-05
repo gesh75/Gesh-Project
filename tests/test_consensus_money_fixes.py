@@ -94,3 +94,29 @@ def test_ohlcv_cache_stays_row_aligned(monkeypatch):
     assert len(captured["close"]) == len(captured["high"]) == len(captured["low"])
     # The NaN row must be gone from ALL arrays: every remaining high == close+1.
     assert np.allclose(captured["high"], captured["close"] + 1)
+
+
+# ── M-05: Kelly must abstain when the portfolio total is unusable ────────────
+def test_node_kelly_abstains_when_total_portfolio_missing_for_a_held_position(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    fake = types.SimpleNamespace(
+        kelly_size_holding=lambda *a, **k: calls.append(a) or {"action": "TRIM", "optimal_pct": 1}
+    )
+    monkeypatch.setitem(sys.modules, "kelly", fake)
+    for equity, total in ((2500.0, 0.0), (2500.0, 1.0), (2500.0, float("nan")), (1.0, -3.0)):
+        vote, detail = consensus.node_kelly("MU", equity, total, 90.0, 95.0)
+        assert vote is consensus.ABSTAIN, (equity, total, detail)
+    assert calls == []  # never reached the sizing maths with a nonsense denominator
+
+
+def test_node_kelly_still_runs_for_flat_watchlist_symbol_with_default_total(monkeypatch):
+    import sys
+    import types
+
+    fake = types.SimpleNamespace(kelly_size_holding=lambda *a, **k: {"action": "ADD", "optimal_pct": 5})
+    monkeypatch.setitem(sys.modules, "kelly", fake)
+    vote, _ = consensus.node_kelly("NVDA", 0.0, 1.0, 0.0, 100.0)
+    assert vote == consensus.VOTE_BULLISH

@@ -97,3 +97,29 @@ def test_gate_status_endpoint(monkeypatch):
     assert body["orders_today"] == 6
     assert body["max_orders_per_day"] == 3
     assert body["cap_reached"] is True
+
+# ── M-05: an unknown portfolio total must not become a 1.0-dollar portfolio ──
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.mark.parametrize(
+    "summary",
+    [{}, {"portfolio_equity": 0}, {"portfolio_equity": None}, {"portfolio_equity": float("nan")},
+     {"portfolio_equity": -5}],
+)
+def test_holding_consensus_args_unknown_total_is_zero_for_a_held_position(summary):
+    payload = {
+        "equity_summary": summary,
+        "holdings": [{"symbol": "MU", "equity": 2500, "average_buy_price": 90, "current_price": 95}],
+    }
+    args = server._holding_consensus_args("MU", payload)
+    assert args["total_portfolio"] == 0.0  # never the old 1.0 substitute
+    assert args["equity"] == 2500
+
+
+def test_holding_consensus_args_unknown_total_keeps_watchlist_symbols_usable():
+    payload = {"equity_summary": {}, "holdings": [],
+               "watchlist": [{"symbol": "NVDA", "last_trade_price": "123.4"}]}
+    args = server._holding_consensus_args("NVDA", payload)
+    assert args["equity"] == 0.0
+    assert args["current_price"] == 123.4

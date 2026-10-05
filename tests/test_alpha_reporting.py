@@ -121,3 +121,20 @@ def test_cvar_95_pct_falls_through_from_invalid_percent_to_dollar_ratio():
     assert cvar_95_pct(
         {"cvar_95_pct": "n/a", "cvar_95": 200, "current_equity": 1000}
     ) == pytest.approx(20.0)
+
+
+# ── M-08: indicators (RSI/ADX/...) that are missing must not render as 0 ─────
+from alpha_reporting import format_optional_number  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, "N/A"), ("", "N/A"), ("n/a", "N/A"), (float("nan"), "N/A"), (True, "N/A"),
+     (0.0, "0"), (54.4, "54"), ("71.6", "72")],
+)
+def test_format_optional_number_never_invents_zero(value, expected):
+    assert format_optional_number(value, digits=0) == expected
+
+
+def test_format_optional_number_digits():
+    assert format_optional_number(12.345, digits=1) == "12.3"

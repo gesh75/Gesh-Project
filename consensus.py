@@ -21,6 +21,7 @@ Final: score = sum(votes) / len(voting nodes)
 """
 
 from __future__ import annotations
+import math
 import os
 import sqlite3, json, numpy as np
 from datetime import datetime, timedelta, timezone
@@ -203,6 +204,8 @@ def node_trend(symbol: str, close: np.ndarray | None = None, high: np.ndarray | 
         adx = _adx(h, l, c)
         _, pct_b = _bollinger(c)
         rsi = _rsi(c)
+        if rsi is None:
+            return ABSTAIN, "RSI unavailable (series too short)"
         detail = f"ADX={adx:.0f} %B={pct_b:.0f} RSI={rsi:.0f}"
         # Strong trend + price above midline = bullish
         if adx > 25 and pct_b > 55 and rsi > 50: return VOTE_BULLISH, detail
@@ -399,8 +402,21 @@ def node_news(symbol: str) -> tuple[int | None, str]:
 
 def node_kelly(symbol: str, equity: float, total_portfolio: float,
                avg_cost: float, current_price: float, returns: np.ndarray | None = None) -> tuple[int | None, str]:
-    """Kelly position sizing signal."""
+    """Kelly position sizing signal.
+
+    Abstains when the portfolio total cannot be right: non-finite, non-positive,
+    or smaller than the position itself (a holding cannot exceed its portfolio).
+    That is what an unknown total substituted with 1.0 looked like — it made the
+    current weight absurd and the Kelly vote meaningless.
+    """
     try:
+        total_ok = (
+            math.isfinite(total_portfolio)
+            and total_portfolio > 0
+            and not (math.isfinite(equity) and equity > total_portfolio)
+        )
+        if not total_ok:
+            return ABSTAIN, "Portfolio total unavailable — Kelly weight not computed"
         from kelly import kelly_size_holding
         k = kelly_size_holding(symbol, equity, total_portfolio, avg_cost, current_price, returns=returns)
         if k.get("error"):

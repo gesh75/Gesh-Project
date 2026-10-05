@@ -163,3 +163,25 @@ def test_api_monte_carlo_carries_horizon_and_degraded(
     assert data["calibration"] == "degraded"
     assert set(data["calibration_degraded_symbols"]) == {"NVDA", "MSTR"}
     assert "1yr" not in json.dumps(data).lower()
+
+
+# ─── M-11: a missing DRIFT is also a degraded calibration ────────────────────
+
+def test_missing_drift_with_known_vol_marks_calibration_degraded(monkeypatch, _stub_regime_and_garch):
+    """Vol present, drift absent: the drift silently became 0.0 and the run said 'ok'."""
+    monkeypatch.setattr(
+        monte_carlo, "_fetch_data",
+        _fetch_stub({"NVDA": 0.02, "MSTR": 0.03}, {"NVDA": 0.001}))  # MSTR drift missing
+    res = monte_carlo.run_monte_carlo(_HOLDINGS, _EQ, n_sims=200)
+    assert res["calibration"] == "degraded"
+    assert "MSTR" in res["calibration_degraded_symbols"]
+    assert "NVDA" not in res["calibration_degraded_symbols"]
+
+
+def test_full_vol_and_drift_stays_ok(monkeypatch, _stub_regime_and_garch):
+    monkeypatch.setattr(
+        monte_carlo, "_fetch_data",
+        _fetch_stub({"NVDA": 0.02, "MSTR": 0.03}, {"NVDA": 0.001, "MSTR": 0.001}))
+    res = monte_carlo.run_monte_carlo(_HOLDINGS, _EQ, n_sims=200)
+    assert res["calibration"] == "ok"
+    assert res["calibration_degraded_symbols"] == []
