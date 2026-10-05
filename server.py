@@ -8077,6 +8077,35 @@ async def trading_deep_debate(symbol: str, request: Request):
 # ─── Phase 1-3 Enhancement Endpoints ─────────────────────────────────────────
 
 
+_PURCHASE_WASH_NOT_CHECKED_NOTE = (
+    "Purchase-side wash-sale risk (buys within 30 days either side of a loss sale) "
+    "was not checked here. Absence of a warning does not mean the window is clear."
+)
+
+
+async def _enrich_harvest_for_caller(result: dict, payload: dict, request: Request | None) -> dict:
+    """Add lot-level purchase-side wash warnings, OWNER ONLY.
+
+    The base scan sees prior harvest SALES but is blind to PURCHASES, so a position
+    inside a purchase-side window can read "eligible" (audit M-03). The lot loader
+    reads the owner's Robinhood account, and a customer's context is the published
+    model book — enriching it would leak owner lot dates/cost. Customers (and any
+    owner lookup failure) therefore get an explicit ``not_checked`` marker rather
+    than a response that can be read as "no warnings found".
+    """
+    out = dict(result)
+    if _is_owner_request(request):
+        try:
+            from tax_lots_enrich import enrich
+
+            return await asyncio.to_thread(enrich, out, payload.get("holdings", []))
+        except Exception as e:  # noqa: BLE001 - never lose the base report
+            logger.warning("tax harvest: lot enrichment failed (%s)", type(e).__name__)
+    out["purchase_wash_check"] = "not_checked"
+    out["purchase_wash_note"] = _PURCHASE_WASH_NOT_CHECKED_NOTE
+    return out
+
+
 @app.get("/api/tax/harvest")
 async def api_tax_harvest(request: Request = None):  # noqa: B008
     """Tax-loss harvesting candidates + wash-sale window status."""
@@ -8087,6 +8116,7 @@ async def api_tax_harvest(request: Request = None):  # noqa: B008
         positions = {h["symbol"]: h for h in payload.get("holdings", [])}
         cost_basis = {h["symbol"]: h.get("average_buy_price") for h in payload.get("holdings", [])}
         result = get_harvest_summary(positions, cost_basis)
+        result = await _enrich_harvest_for_caller(result, payload, request)
         return _sanitize({"status": "ok", **result})
     except Exception as e:
         raise _server_error(e)

@@ -655,9 +655,24 @@ def _numeric_props(js: str) -> set[str]:
     return pairs
 
 
-def _scan() -> list[str]:
-    text = TEMPLATE.read_text()
-    js_all = "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", text, re.S))
+OWNER_PARTIAL = Path(__file__).resolve().parents[1] / "templates" / "owner_console.html"
+
+
+def _scan(template: Path = TEMPLATE, context: tuple[Path, ...] = ()) -> list[str]:
+    """Walk `template`'s innerHTML templates for unsafe ${...} interpolations.
+
+    `context` files contribute only the *declarations* (safe literal locals, numeric
+    property names, literal maps, helpers) — they are NOT walked. The owner console is
+    a partial spliced into dashboard.html at serve time, so its `daEsc` / colour maps
+    live in the dashboard.
+    """
+    own = template.read_text()
+    text = "\n".join([c.read_text() for c in context] + [own])
+
+    def _scripts(src: str) -> str:
+        return "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", src, re.S))
+
+    js_all = _scripts(text)
     _NUM_PROPS.clear()
     _NUM_PROPS.update(_numeric_props(js_all))
     _MAP_LOCALS.clear()
@@ -673,7 +688,9 @@ def _scan() -> list[str]:
     # innerHTML sinks — a tagless top-level template (a textContent/alert/label
     # string) can't inject markup on its own, and scanning it would force
     # display-breaking daEsc() on plain text.
-    js = "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", text, re.S))
+    # A partial may be a bare <div>/<script> fragment; fall back to the raw file when
+    # it carries no <script> wrapper of its own.
+    js = _scripts(own) or own
     for tpl in _top_templates(js):
         if "<" in tpl:
             _walk(tpl, safe_locals, offenders, text)
@@ -693,6 +710,37 @@ def test_no_unescaped_ai_sinks_in_template():
         "or an allowlist classifier (deny-by-default XSS guard):\n"
         + "\n".join(f"  {o}" for o in offenders)
     )
+
+
+def test_no_unescaped_sinks_in_owner_console_partial():
+    """T-02: the operator console has 50+ innerHTML sites the dashboard guard never saw.
+
+    The partial is spliced into dashboard.html at serve time, so the dashboard supplies
+    its helpers (daEsc, colour maps). Same deny-by-default rule as the customer page.
+    """
+    offenders = _scan(OWNER_PARTIAL, context=(TEMPLATE,))
+    assert not offenders, (
+        "Un-escaped value(s) interpolated into innerHTML in owner_console.html — wrap in "
+        "daEsc()/_esc() or an allowlist classifier:\n" + "\n".join(f"  {o}" for o in offenders)
+    )
+
+
+def test_owner_console_scan_is_not_vacuous():
+    """The scanner must actually reach the partial's templates (a silent zero-walk passes)."""
+    own = OWNER_PARTIAL.read_text()
+    assert own.count("innerHTML") >= 20
+    js = "\n".join(re.findall(r"<script\b[^>]*>(.*?)</script>", own, re.S)) or own
+    assert sum("<" in t for t in _top_templates(js)) >= 10
+
+
+def test_partial_scan_has_teeth(tmp_path):
+    """A raw property access in a partial MUST be flagged; the escaped form must pass."""
+    bad = tmp_path / "bad.html"
+    bad.write_text("<script>el.innerHTML=`<b>${row.name}</b>`;</script>")
+    good = tmp_path / "good.html"
+    good.write_text("<script>el.innerHTML=`<b>${daEsc(row.name)}</b>`;</script>")
+    assert _scan(bad, context=(TEMPLATE,))
+    assert not _scan(good, context=(TEMPLATE,))
 
 
 def test_guard_flags_property_access_and_aliases():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -39,9 +40,15 @@ def test_healthz_optional_build_sha(client, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_ops_backup_targets_are_repo_relative_not_hardcoded_users():
+    # "Repo-relative" means every target resolves INSIDE the configured base. A string
+    # check for "/Users/" is wrong: a checkout under a home directory (this Mac, any
+    # worktree) legitimately contains it, which made the suite red by default (T-01).
+    base = Path(os.getenv("GESH_HOME", Path(ops_backup.__file__).resolve().parent))
+    trading = Path(os.getenv("GESH_TRADING_HOME", base.parent / "gesh-project-trading"))
     for t in ops_backup.TARGETS:
-        assert "/Users/" not in str(t), f"hardcoded host path: {t}"
-    base = Path(ops_backup.__file__).resolve().parent
+        assert Path(t).is_relative_to(base) or Path(t).is_relative_to(trading), (
+            f"target is not under the configured roots ({base} / {trading}): {t}"
+        )
     assert base / "gesh_financial.db" in ops_backup.TARGETS
     assert base / "gesh_auth.db" in ops_backup.TARGETS
 

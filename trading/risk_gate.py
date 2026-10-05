@@ -24,6 +24,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import RiskConfig, load_risk_config
+from . import extra_gates
 from .contract import TradeIntent
 from .state import (
     count_orders_today,
@@ -402,6 +403,20 @@ def evaluate(
     else:
         gates["CONFIDENCE_FLOOR"] = False
 
+    # 3b. Entry-risk gates ported from the engine (audit M-02): earnings proximity, sector
+    #     cap, consecutive-loss suspension, correlation heat. BUY only — an exit is never
+    #     trapped. Inputs are snapshot data; a gate with no input passes and is recorded
+    #     in the decision log as ``gates_unchecked`` (see trading/extra_gates.py).
+    if intent.action == "BUY":
+        extra_results, extra_reason = extra_gates.check_entry_gates(
+            intent, portfolio_snapshot, cfg, blocked=rejection_reason is not None
+        )
+        gates.update(extra_results)
+        if rejection_reason is None:
+            rejection_reason = extra_reason
+    else:
+        gates.update({name: True for name in extra_gates.GATE_NAMES})
+
     # 4. Position cap
     if rejection_reason is None:
         target = intent.target_position_pct or 0.0
@@ -483,7 +498,9 @@ def evaluate(
         gates["DATA_FRESH"] = False
 
     verdict_label = "REJECTED" if rejection_reason else "APPROVED"
-    decision_id = log_decision(intent_id, verdict_label, rejection_reason, gates, asdict(cfg))
+    config_snapshot = asdict(cfg)
+    config_snapshot["gates_unchecked"] = extra_gates.unchecked_gates(intent, portfolio_snapshot)
+    decision_id = log_decision(intent_id, verdict_label, rejection_reason, gates, config_snapshot)
     return GateVerdict(
         approved=(rejection_reason is None),
         reason=rejection_reason,
