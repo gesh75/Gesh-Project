@@ -40,7 +40,6 @@ SECTOR_BENCHMARKS: dict[str, str] = {
     "MSFT": "XLK",
     "GOOGL": "XLK",
     "META": "XLK",
-    "AMZN": "XLK",
     "PLTR": "IGV",
     "CRM": "IGV",
     "DDOG": "IGV",

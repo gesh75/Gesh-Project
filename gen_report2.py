@@ -15,6 +15,7 @@ from alpha_reporting import (
     alpha_value_color,
     cvar_95_pct,
     format_alpha_percent,
+    format_optional_number,
     format_optional_percent,
     format_optional_usd,
     optional_float,
@@ -154,19 +155,19 @@ cash_blocked = cash < 500.0
 rsi_overrides = {}
 for rd in regimes_list:
     sym = rd.get("symbol", "")
-    rsi = rd.get("rsi") or 0  # regime may emit rsi=None on a short/missing series
+    rsi = optional_float(rd.get("rsi"))  # None on a short/missing series — unknown, not 0
     k_act = kelly_res.get(sym, {}).get("action", "HOLD")
-    if rsi >= 70 and k_act == "ADD":
+    if rsi is not None and rsi >= 70 and k_act == "ADD":
         rsi_overrides[sym] = rsi
 
 
 # Action plan (after overrides)
 def final_action(sym):
     k_act = kelly_res.get(sym, {}).get("action", "HOLD")
-    rsi = regime_by_sym.get(sym, {}).get("rsi") or 0
+    rsi = optional_float(regime_by_sym.get(sym, {}).get("rsi"))
     if cash_blocked and k_act == "ADD":
         return "HOLD", f"Cash ${cash:.0f}<$500 (Rule 8)"
-    if rsi >= 70 and k_act == "ADD":
+    if rsi is not None and rsi >= 70 and k_act == "ADD":
         return "HOLD", f"RSI={rsi:.0f}≥70 (Rule 5)"
     return k_act, ""
 
@@ -324,8 +325,8 @@ def holding_card(h):
 
     reg = regime_by_sym.get(sym, {})
     reg_name = reg.get("regime", "?")
-    rsi_val = reg.get("rsi") or 0
-    adx_val = reg.get("adx") or 0
+    rsi_val = format_optional_number(reg.get("rsi"))
+    adx_val = format_optional_number(reg.get("adx"))
 
     act, reason = final_action(sym)
 
@@ -398,7 +399,7 @@ def holding_card(h):
   </div>
   <div class="hc-meta">
     {qty:.3f} sh &nbsp;·&nbsp; avg ${avg:.2f} &nbsp;·&nbsp; gain {((px / avg - 1) * 100):+.1f}%
-    &nbsp;·&nbsp; RSI {rsi_val:.0f} &nbsp;·&nbsp; ADX {adx_val:.0f}
+    &nbsp;·&nbsp; RSI {rsi_val} &nbsp;·&nbsp; ADX {adx_val}
     {f'<span style="color:#ff7c3a;font-size:10px;margin-left:8px">⚠️ {reason}</span>' if reason else ""}
   </div>
   <div class="hc-body">
@@ -965,10 +966,10 @@ regime_cards_html = ""
 for rd in regimes_list:
     sym = rd.get("symbol", "")
     reg = rd.get("regime", "")
-    adx = rd.get("adx") or 0
-    rsi = rd.get("rsi") or 0
-    bb = rd.get("bb_width") or 0
-    pctb = rd.get("pct_b") or 0
+    adx = format_optional_number(rd.get("adx"))
+    rsi = format_optional_number(rd.get("rsi"))
+    bb = format_optional_number(rd.get("bb_width"))
+    pctb = format_optional_number(rd.get("pct_b"))
     desc = rd.get("description", "")
     col = {
         "TRENDING": "#00d4ff",
@@ -979,7 +980,7 @@ for rd in regimes_list:
     regime_cards_html += f"""<div class="regime-card" style="border-left:3px solid {col}">
   <div class="rc-sym">{_html(sym)}</div>
   <div class="rc-regime" style="color:{col}">{_html(reg)}</div>
-  <div class="rc-stats">ADX {adx:.0f} &nbsp;|&nbsp; RSI {rsi:.0f} &nbsp;|&nbsp; BB-W {bb:.0f}% &nbsp;|&nbsp; %B {pctb:.0f}%</div>
+  <div class="rc-stats">ADX {adx} &nbsp;|&nbsp; RSI {rsi} &nbsp;|&nbsp; BB-W {bb}{'' if bb == 'N/A' else '%'} &nbsp;|&nbsp; %B {pctb}{'' if pctb == 'N/A' else '%'}</div>
   <div class="rc-desc">{_html(desc)}</div>
 </div>"""
 

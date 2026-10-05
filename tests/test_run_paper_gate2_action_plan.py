@@ -348,3 +348,37 @@ def test_action_plan_trim_proceeds_are_not_spent_on_later_buy(gate_mod):
     bbb = next(r for r in plan if r["symbol"] == "BBB")
     assert bbb["action"] == "BUY"
     assert bbb["shares"] == 10
+
+
+# ── M-04: a MISSING optimum is unknown, not a 0% target ──────────────────────
+@pytest.mark.parametrize("bad", [None, "", "n/a", float("nan"), float("inf"), -3.0, True])
+@pytest.mark.parametrize("action", ["TRIM", "ADD", "BUY"])
+def test_action_plan_missing_or_invalid_optimal_pct_holds(gate_mod, action, bad):
+    kelly = {"NVDA": {"action": action, "optimal_pct": bad}}
+    plan = _plan(gate_mod, [_holding(equity=1_000.0, quantity=10.0)], kelly)
+    row = _row(plan, "NVDA")
+    assert row["action"] == "HOLD"
+    assert row["shares"] == 0
+    assert "optimal_pct" in row["signal_reason"]
+
+
+def test_action_plan_absent_optimal_pct_key_holds_instead_of_full_trim(gate_mod):
+    """Before the fix this liquidated the whole position (opt coerced to 0)."""
+    plan = _plan(gate_mod, [_holding(equity=1_000.0, quantity=10.0)],
+                 {"NVDA": {"action": "TRIM"}})
+    assert _row(plan, "NVDA")["action"] == "HOLD"
+
+
+def test_action_plan_explicit_zero_optimal_pct_is_still_a_full_trim(gate_mod):
+    """0 is a legitimate target (exit); only a MISSING value is unknown."""
+    plan = _plan(gate_mod, [_holding(equity=1_000.0, quantity=10.0)],
+                 {"NVDA": {"action": "TRIM", "optimal_pct": 0}})
+    row = _row(plan, "NVDA")
+    assert row["action"] == "TRIM"
+    assert row["shares"] == 10
+
+
+def test_action_plan_hold_signal_without_optimal_pct_stays_silent(gate_mod):
+    """HOLD rows never needed an optimum; they must not gain a spurious row."""
+    plan = _plan(gate_mod, [_holding()], {"NVDA": {"action": "HOLD"}})
+    assert plan == []

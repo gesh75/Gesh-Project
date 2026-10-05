@@ -94,7 +94,7 @@ def _build_email(email: str, flips: list[dict]) -> str:
     return (f"<h2>GESH signal change{'s' if len(flips) > 1 else ''} on your holdings</h2>"
             f"<table>{rows}</table>"
             f"<p><a href='{base}/'>Open your dashboard</a> &middot; "
-            f"<a href='{base}/track-record'>our verified track record</a></p>"
+            f"<a href='{base}/track-record'>our simulated paper track record</a></p>"
             f"<p style='color:#888;font-size:12px'>Informational only — not financial advice. "
             f"<a href='{base}/alerts/unsubscribe?token={tok}'>Unsubscribe from alerts</a></p>")
 

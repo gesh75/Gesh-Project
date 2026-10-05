@@ -16,6 +16,7 @@ Pure: no broker I/O, no network calls. The portfolio snapshot must be passed in.
 """
 
 from __future__ import annotations
+import math
 from dataclasses import asdict, dataclass
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
@@ -280,8 +281,28 @@ def _quote_age_seconds(portfolio: dict[str, Any], symbol: str | None = None) -> 
     return (datetime.now(timezone.utc) - ts).total_seconds()
 
 
-def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
+def _positive_finite(value: Any) -> float | None:
+    """A strictly positive, finite number, or None. bool/NaN/inf/str are 'unknown'.
+
+    Producers use ``0.0`` as an "unavailable" sentinel for the previous-close
+    equity, so a non-positive reading is treated as missing here rather than as
+    a measured zero.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float | None:
     """Daily P&L as a fraction of account base, for the daily-loss circuit breaker.
+
+    Returns ``None`` when the day's P&L cannot be PROVEN (paper ledger unreadable,
+    or LIVE previous-close / current equity missing or non-positive). The caller
+    fails closed on ``None``; it must never read as a flat 0% day.
 
     In PAPER mode this is the paper book's OWN realized P&L today over the
     simulated base (cfg.paper_cash_usd) — NOT the real Robinhood account.
@@ -303,11 +324,11 @@ def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float:
             return paper_realized_pnl_usd_today() / base
         except LedgerUnavailable:
             return None
-    eq_summary = portfolio.get("equity_summary", {})
-    prev = float(eq_summary.get("adjusted_equity_previous_close", 0) or 0)
-    curr = float(eq_summary.get("portfolio_equity", 0) or 0)
-    if prev <= 0:
-        return 0.0
+    eq_summary = portfolio.get("equity_summary") or {}
+    prev = _positive_finite(eq_summary.get("adjusted_equity_previous_close"))
+    curr = _positive_finite(eq_summary.get("portfolio_equity"))
+    if prev is None or curr is None:
+        return None
     return (curr - prev) / prev
 
 
@@ -415,9 +436,17 @@ def evaluate(
     # 7. Daily loss
     if rejection_reason is None:
         pnl = _daily_pnl_pct(portfolio_snapshot, cfg)
-        if pnl is None:
+        if pnl is None and intent.action == "SELL" and not cfg.paper_mode:
+            # LIVE exit with no provable baseline: a sell adds no risk, so the
+            # breaker must not trap the position. BUYs still fail closed below.
+            gates["DAILY_LOSS"] = True
+        elif pnl is None:
             gates["DAILY_LOSS"] = False
-            rejection_reason = "Paper ledger unavailable — cannot prove daily loss"
+            rejection_reason = (
+                "Paper ledger unavailable — cannot prove daily loss"
+                if cfg.paper_mode
+                else "Previous-close equity unavailable — cannot prove daily loss"
+            )
         else:
             gates["DAILY_LOSS"] = pnl >= -cfg.max_daily_loss_pct
             if not gates["DAILY_LOSS"]:

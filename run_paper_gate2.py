@@ -178,6 +178,21 @@ def _order_notional_usd(order: Mapping[str, object] | None) -> float:
     return shares * price
 
 
+def _optimal_pct(value: object) -> float | None:
+    """Kelly optimal weight in percent, or None if missing/non-numeric/negative.
+
+    An explicit ``0`` is valid (a real exit target); only an absent or unusable
+    value is "unknown".
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        pct = float(value)
+    except (TypeError, ValueError):
+        return None
+    return pct if math.isfinite(pct) and pct >= 0 else None
+
+
 def build_action_plan(
     holdings: list[dict],
     kelly: Mapping[str, object] | None,
@@ -213,9 +228,17 @@ def build_action_plan(
         equity = float(h.get('equity') or 0)
         k      = kelly.get(sym, {}) if isinstance(kelly, dict) else {}
         k_act  = (k.get('action') or 'HOLD').upper()
-        opt    = float(k.get('optimal_pct') or 0)
         if price <= 0 or not sym:
             continue
+        opt = _optimal_pct(k.get('optimal_pct'))
+        if k_act in ('ADD', 'BUY', 'TRIM') and opt is None:
+            # Unknown target ≠ 0% target. Coercing a missing optimum to 0 turned
+            # a data gap into a full TRIM of the position (audit M-04).
+            action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
+                                'current_price': price,
+                                'signal_reason': f'Kelly {k_act}: optimal_pct missing/invalid — held, not sized'})
+            continue
+        opt = opt if opt is not None else 0.0
 
         if k_act in ('ADD', 'BUY'):
             if sym.upper() in open_paper_symbols:

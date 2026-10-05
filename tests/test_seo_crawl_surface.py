@@ -253,7 +253,7 @@ def test_pricing_keeps_every_existing_behaviour(
     assert 'href="https://checkout.example/buy?a=1&amp;b=2"' in html
     assert ">Subscribe</a>" in html
     for frag in (
-        "Signal-accuracy proof (live track record)",
+        "Signal-accuracy proof (simulated paper track record)",
         "Daily AI portfolio report",
         "Watch dashboard",
         "Diversification radar",
