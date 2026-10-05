@@ -31,6 +31,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import book_registry
 import proof_stats
 import seo_pages
 
@@ -764,12 +765,51 @@ def _automated_scope_html(data: dict[str, Any]) -> str:
         else "No invalid in-scope rows were excluded from these totals."
     )
     as_of = _esc(daily.get("as_of") or "unknown")
-    return (
+    retired = book_registry.retired_book(book_registry.DAILY_ANALYSIS)
+    retired_badge = ""
+    retired_note = ""
+    if retired is not None:
+        retired_badge = (
+            f' <span data-k="daily-analysis-retired" style="color:{_YELLOW};font-size:11px;'
+            f"border:1px solid {_YELLOW};border-radius:4px;padding:1px 6px;"
+            f'vertical-align:middle">RETIRED {_esc(retired.retired_on)}</span>'
+        )
+        relaunch = "; ".join(_esc(r) for r in retired.relaunch_requirements)
+        retired_note = (
+            f'<div data-k="daily-analysis-retired-note" style="color:{_DIM};font-size:12px;'
+            f'margin-top:7px;line-height:1.55">{_esc(retired.reason)} It opens no new '
+            f"simulated positions; any it still holds close on their stops. It would only "
+            f"return as a new, pre-registered experiment once: {relaunch}.</div>"
+        )
+    combined_html = (
+        f'<section data-book="combined-automated" style="background:{_SURFACE};'
+        f"border:1px solid {_BORDER};border-left:4px solid {_YELLOW};border-radius:10px;"
+        f'padding:12px 16px;margin-bottom:12px;font-size:13px">'
+        f'<h2 style="font-size:14px;margin:0 0 6px">Combined automated record — every '
+        f"simulated automated trade, shown before the engine subset. This is arithmetic "
+        f"context only</h2>"
+        f'<div style="color:{_DIM}">closed <b class="num" style="color:#e8eef6" '
+        f'data-k="combined-automated-closed">{int(combined["closed"])}</b> · wins '
+        f'<b class="num" style="color:{_GREEN}">{int(combined["wins"])}</b> · losses '
+        f'<b class="num" style="color:{_RED}">{int(combined["losses"])}</b> · breakeven '
+        f'<b class="num">{int(combined["breakeven"])}</b> · win rate '
+        f'<b class="num" style="color:#e8eef6">{float(combined["win_rate"]) * 100:.1f}%</b> · '
+        f'realized P&amp;L <b class="num" style="color:#e8eef6" '
+        f'data-k="combined-automated-realized-pnl">'
+        f"{_fmt_signed_usd(float(combined['realized_pnl_usd']))}</b> · gross entry notional "
+        f'<b class="num" style="color:#e8eef6">'
+        f"{_fmt_usd(float(combined['gross_entry_notional_usd']))}</b>.</div>"
+        f'<div style="color:{_DIM};font-size:12px;margin-top:7px">The engine headline below '
+        f"is a subset of this record (the gated strategy only). This adds counts and "
+        f"realized dollars across two separate simulated books. It is not a portfolio return, "
+        f"TWR, MWR, exposure-matched comparison, or autonomy-gate population.</div></section>"
+    )
+    daily_html = (
         f'<section data-book="daily-analysis" style="background:{_SURFACE};'
         f"border:1px solid {_BORDER};border-radius:10px;padding:12px 16px;"
-        f'margin-bottom:12px;font-size:13px">'
+        f'margin-bottom:20px;font-size:13px">'
         f'<h2 style="font-size:14px;margin:0 0 6px">Second automated strategy — '
-        f"daily-analysis (separate SQLite book)</h2>"
+        f"daily-analysis (separate SQLite book){retired_badge}</h2>"
         f'<div style="color:{_DIM}">closed <b class="num" style="color:#e8eef6" '
         f'data-k="daily-analysis-closed">{int(daily["closed"])}</b> · wins '
         f'<b class="num" style="color:{_GREEN}">{int(daily["wins"])}</b> · losses '
@@ -784,28 +824,10 @@ def _automated_scope_html(data: dict[str, Any]) -> str:
         f'<b class="num" style="color:#e8eef6">{int(daily["open_positions"])}</b>.</div>'
         f'<div style="color:{_DIM};font-size:12px;margin-top:7px">This is a different '
         f"automated strategy and accounting ledger. It is not included in the headline or "
-        f"autonomy gate above. As-of stored event: {as_of}. {_esc(integrity_note)}</div>"
-        f"</section>"
-        f'<section data-book="combined-automated" style="background:{_SURFACE};'
-        f"border:1px solid {_BORDER};border-radius:10px;padding:12px 16px;"
-        f'margin-bottom:20px;font-size:13px">'
-        f'<h2 style="font-size:14px;margin:0 0 6px">Combined automated record — '
-        f"arithmetic context only</h2>"
-        f'<div style="color:{_DIM}">closed <b class="num" style="color:#e8eef6" '
-        f'data-k="combined-automated-closed">{int(combined["closed"])}</b> · wins '
-        f'<b class="num" style="color:{_GREEN}">{int(combined["wins"])}</b> · losses '
-        f'<b class="num" style="color:{_RED}">{int(combined["losses"])}</b> · breakeven '
-        f'<b class="num">{int(combined["breakeven"])}</b> · win rate '
-        f'<b class="num" style="color:#e8eef6">{float(combined["win_rate"]) * 100:.1f}%</b> · '
-        f'realized P&amp;L <b class="num" style="color:#e8eef6" '
-        f'data-k="combined-automated-realized-pnl">'
-        f"{_fmt_signed_usd(float(combined['realized_pnl_usd']))}</b> · gross entry notional "
-        f'<b class="num" style="color:#e8eef6">'
-        f"{_fmt_usd(float(combined['gross_entry_notional_usd']))}</b>.</div>"
-        f'<div style="color:{_DIM};font-size:12px;margin-top:7px">This adds counts and '
-        f"realized dollars across two separate simulated books. It is not a portfolio return, "
-        f"TWR, MWR, exposure-matched comparison, or autonomy-gate population.</div></section>"
+        f"autonomy gate. As-of stored event: {as_of}. {_esc(integrity_note)}</div>"
+        f"{retired_note}</section>"
     )
+    return combined_html + daily_html
 
 
 def _signed_pct(v: Any, digits: int = 2) -> str:
@@ -1227,13 +1249,13 @@ def render_html(data: dict[str, Any]) -> str:
    Simulated paper results only. This is an internal readiness gate - a process threshold,
    <span>not evidence of future profit</span> and not a guarantee.</div>
 
+ {automated_scope_html}
+
  {cohorts_html}
 
  {min_sample_html}
 
  {trial_html}
-
- {automated_scope_html}
 
  <div style="background:{_SURFACE};border:1px solid {_BORDER};border-radius:10px;padding:16px;margin-bottom:8px">
    <div style="color:{_DIM};font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">

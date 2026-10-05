@@ -32,8 +32,13 @@ def _sized_values(kelly: object) -> list[float]:
     inner = kelly.get("data")
     if isinstance(inner, Mapping):  # the server's {"status", "data": {...}} envelope
         kelly = inner
+    holdings = kelly.get("holdings")
+    if isinstance(holdings, list):  # run_kelly_analysis / POST shape: {"holdings": [rows]}
+        rows: list[object] = list(holdings)
+    else:  # daily-chain shape: {symbol: row}
+        rows = list(kelly.values())
     out: list[float] = []
-    for row in kelly.values():
+    for row in rows:
         if not isinstance(row, Mapping):
             continue
         v = row.get("optimal_pct")
@@ -43,6 +48,12 @@ def _sized_values(kelly: object) -> list[float]:
         if math.isfinite(f) and f > 0:
             out.append(f)
     return out
+
+
+def quality_block(kelly: object) -> dict:
+    """Degeneracy result plus the customer-facing note (``None`` when healthy)."""
+    q = kelly_degeneracy(kelly)
+    return {**q, "note": KELLY_UNINFORMATIVE_NOTE if q["degenerate"] else None}
 
 
 def kelly_degeneracy(kelly: object) -> dict:
