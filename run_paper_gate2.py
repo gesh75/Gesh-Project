@@ -38,7 +38,9 @@ from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 
+import kelly_quality
 from gesh_core.trading.autopilot_core import entry_floor_blocks
+from kelly_quality import KELLY_UNINFORMATIVE_NOTE
 from run_manifest import available_rsi_by_symbol
 
 try:
@@ -193,6 +195,16 @@ def _optimal_pct(value: object) -> float | None:
     return pct if math.isfinite(pct) and pct >= 0 else None
 
 
+def _cap_as_pct(max_position_pct: object) -> float | None:
+    """Execution cap (fraction, 0<x<=1) as percent points, or None if unusable."""
+    if isinstance(max_position_pct, bool) or not isinstance(max_position_pct, (int, float)):
+        return None
+    x = float(max_position_pct)
+    if not math.isfinite(x) or x <= 0 or x > 1:
+        return None
+    return x * 100.0
+
+
 def build_action_plan(
     holdings: list[dict],
     kelly: Mapping[str, object] | None,
@@ -201,8 +213,21 @@ def build_action_plan(
     cash: float,
     rsi_by_sym: Mapping[str, float] | None = None,
     open_paper_symbols: set[str] | None = None,
+    max_position_pct: float | None = None,
+    kelly_degenerate: bool = False,
 ) -> list[dict]:
     """Kelly + override rules → daily paper action plan.
+
+    ``max_position_pct`` (a FRACTION, e.g. 0.02) is the execution layer's
+    per-position cap. ADD/BUY sizing is clipped to it so the plan proposes what
+    the risk gate can actually approve, instead of a raw Kelly weight that
+    POSITION_CAP then rejects whole. TRIM is never clipped (the cap must not
+    force new selling). An unusable value means "no clip" — the gate still
+    enforces its own cap.
+
+    ``kelly_degenerate`` (audit M-14): Kelly published equal weight as an
+    optimum, so an ADD/BUY is only "distance from equal weight". New entries are
+    held; TRIM (risk-reducing) is unaffected.
 
     Rule 8: cash < $500 blocks ALL ADD/BUY.
     Rule 5: RSI >= 70 turns ADD/BUY into HOLD.
@@ -221,6 +246,7 @@ def build_action_plan(
     if remaining < 0:
         remaining = Decimal("0")
     action_plan: list[dict] = []
+    cap_pct = _cap_as_pct(max_position_pct)
 
     for h in holdings:
         sym    = h.get('symbol')
@@ -239,6 +265,11 @@ def build_action_plan(
                                 'signal_reason': f'Kelly {k_act}: optimal_pct missing/invalid — held, not sized'})
             continue
         opt = opt if opt is not None else 0.0
+        if kelly_degenerate and k_act in ('ADD', 'BUY'):
+            action_plan.append({'symbol': sym, 'action': 'HOLD', 'shares': 0,
+                                'current_price': price,
+                                'signal_reason': f'Kelly {k_act}: {KELLY_UNINFORMATIVE_NOTE}'})
+            continue
 
         if k_act in ('ADD', 'BUY'):
             if sym.upper() in open_paper_symbols:
@@ -257,8 +288,13 @@ def build_action_plan(
                                     'current_price': price,
                                     'signal_reason': f'Rule 5: RSI={rsi_by_sym[sym]:.0f}>=70 — ADD overridden'})
                 continue
+            opt_eff = opt
+            capped_note = ""
+            if cap_pct is not None and opt > cap_pct:
+                opt_eff = cap_pct
+                capped_note = f" (capped from {opt:.1f}% to the {cap_pct:.1f}% position cap)"
             usd = (
-                Decimal(str(opt)) / Decimal(100) * Decimal(str(total_eq))
+                Decimal(str(opt_eff)) / Decimal(100) * Decimal(str(total_eq))
                 - Decimal(str(equity))
             )
             if usd < 0:
@@ -273,7 +309,7 @@ def build_action_plan(
                 remaining -= Decimal(shares) * price_d
                 action_plan.append({'symbol': sym, 'action': 'BUY', 'shares': shares,
                                     'current_price': price,
-                                    'signal_reason': f'Kelly {k_act}: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%'})
+                                    'signal_reason': f'Kelly {k_act}: now {equity/total_eq*100:.1f}% vs optimal {opt:.1f}%{capped_note}'})
         elif k_act == 'TRIM':
             usd    = max(0.0, equity - opt / 100 * total_eq)
             shares = math.ceil(usd / price)
@@ -523,11 +559,19 @@ def main(results_path: str | Path | None = None) -> int:
     except Exception as e:
         print(f"{_t()} [gate] auto-close / open-set failed (non-fatal): {e}")
 
+    try:
+        from trading.config import load_risk_config
+        plan_cap: float | None = float(load_risk_config().max_position_pct)
+    except Exception as e:  # noqa: BLE001 — unreadable config => no clip; the gate still caps
+        print(f"{_t()} [gate] position cap unavailable for sizing (non-fatal): {e}")
+        plan_cap = None
     action_plan = build_action_plan(
         holdings, kelly if isinstance(kelly, dict) else {},
         total_eq=total_eq, cash=cash,
         rsi_by_sym=rsi_by_sym,
         open_paper_symbols=open_paper_symbols,
+        max_position_pct=plan_cap,
+        kelly_degenerate=kelly_quality.kelly_degeneracy(kelly)['degenerate'],
     )
 
     executable = [a for a in action_plan if a['action'] in ('BUY', 'TRIM') and a['shares'] > 0]

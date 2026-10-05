@@ -382,3 +382,87 @@ def test_action_plan_hold_signal_without_optimal_pct_stays_silent(gate_mod):
     """HOLD rows never needed an optimum; they must not gain a spurious row."""
     plan = _plan(gate_mod, [_holding()], {"NVDA": {"action": "HOLD"}})
     assert plan == []
+
+
+# ── M-07: size ADD/BUY to the EXECUTION cap, not to a Kelly weight the gate rejects ──
+def _plan_capped(gate_mod, kelly, cap, *, equity=0.0, total_eq=100_000.0, cash=50_000.0):
+    return gate_mod.build_action_plan(
+        [_holding(price=100.0, equity=equity, quantity=equity / 100.0)],
+        kelly,
+        total_eq=total_eq,
+        cash=cash,
+        max_position_pct=cap,
+    )
+
+
+def test_add_is_clipped_to_the_position_cap(gate_mod):
+    """Kelly says 12%; the cap is 2% => buy up to 2% ($2,000 = 20 sh), not 12%."""
+    plan = _plan_capped(gate_mod, {"NVDA": {"action": "ADD", "optimal_pct": 12}}, cap=0.02)
+    row = _row(plan, "NVDA")
+    assert row["action"] == "BUY"
+    assert row["shares"] == 20
+    assert "capped" in row["signal_reason"].lower()
+
+
+def test_add_below_the_cap_is_untouched(gate_mod):
+    plan = _plan_capped(gate_mod, {"NVDA": {"action": "ADD", "optimal_pct": 1.5}}, cap=0.02)
+    row = _row(plan, "NVDA")
+    assert row["shares"] == 15
+    assert "capped" not in row["signal_reason"].lower()
+
+
+def test_add_already_at_the_cap_buys_nothing(gate_mod):
+    plan = _plan_capped(gate_mod, {"NVDA": {"action": "ADD", "optimal_pct": 12}}, cap=0.02,
+                        equity=2_500.0)  # 2.5% held > 2% cap
+    assert [r for r in plan if r["action"] == "BUY"] == []
+
+
+def test_no_cap_argument_preserves_the_old_uncapped_sizing(gate_mod):
+    plan = _plan_capped(gate_mod, {"NVDA": {"action": "ADD", "optimal_pct": 12}}, cap=None)
+    assert _row(plan, "NVDA")["shares"] == 120
+
+
+@pytest.mark.parametrize("bad_cap", [0.0, -0.1, float("nan"), True, "x"])
+def test_unusable_cap_is_ignored_not_zeroed(gate_mod, bad_cap):
+    """An unreadable cap must never silently become 'buy nothing' OR 'buy anything'
+    differently from today: it behaves as no clip (the gate still enforces its own cap)."""
+    plan = _plan_capped(gate_mod, {"NVDA": {"action": "ADD", "optimal_pct": 12}}, cap=bad_cap)
+    assert _row(plan, "NVDA")["shares"] == 120
+
+
+def test_trim_is_not_changed_by_the_cap(gate_mod):
+    plan = _plan_capped(gate_mod, {"NVDA": {"action": "TRIM", "optimal_pct": 5}}, cap=0.02,
+                        equity=10_000.0)
+    row = _row(plan, "NVDA")
+    assert row["action"] == "TRIM"
+    assert row["shares"] == 50  # 10% -> 5% = $5,000 = 50 sh; never forced down to the 2% cap
+
+
+# ── M-14: degenerate (equal-weight) Kelly must not open new risk ─────────────
+def test_degenerate_kelly_holds_instead_of_adding(gate_mod):
+    plan = gate_mod.build_action_plan(
+        [_holding(price=100.0, equity=0.0, quantity=0.0)],
+        {"NVDA": {"action": "ADD", "optimal_pct": 4.9}},
+        total_eq=100_000.0, cash=50_000.0, kelly_degenerate=True,
+    )
+    row = _row(plan, "NVDA")
+    assert row["action"] == "HOLD" and row["shares"] == 0
+    assert "uninformative" in row["signal_reason"].lower()
+
+
+def test_degenerate_kelly_still_allows_trim(gate_mod):
+    plan = gate_mod.build_action_plan(
+        [_holding(price=100.0, equity=10_000.0, quantity=100.0)],
+        {"NVDA": {"action": "TRIM", "optimal_pct": 5}},
+        total_eq=100_000.0, cash=50_000.0, kelly_degenerate=True,
+    )
+    assert _row(plan, "NVDA")["action"] == "TRIM"
+
+
+def test_non_degenerate_default_is_unchanged(gate_mod):
+    plan = gate_mod.build_action_plan(
+        [_holding(price=100.0, equity=0.0, quantity=0.0)],
+        {"NVDA": {"action": "ADD", "optimal_pct": 4.9}},
+        total_eq=100_000.0, cash=50_000.0,
+    )
+    assert _row(plan, "NVDA")["action"] == "BUY"
