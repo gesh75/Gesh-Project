@@ -609,6 +609,19 @@ def main(results_path: str | Path | None = None) -> int:
             'holdings':       holdings,
             'equity_summary': gate_eqs,
         }
+        # M-02: the four entry gates pass when their input is missing. Stamp the
+        # paper book's own closes, and pass through earnings/correlation only
+        # when the engine file already carries them. No network, no invented marks.
+        try:
+            from trade_log import get_trade_history
+            from trading.entry_inputs import stamp_entry_inputs
+            stamp_entry_inputs(
+                gate_payload,
+                closes=get_trade_history(limit=500, is_paper=True),
+                engine=eng if isinstance(eng, dict) else None,
+            )
+        except Exception as e:  # noqa: BLE001 — a missing ledger must not skip the chain
+            print(f"{_t()} [gate] entry-gate inputs unavailable (non-fatal): {e}")
         consensus = eng.get('consensus') if isinstance(eng.get('consensus'), dict) else {}
         confidence_by_sym = build_confidence_map(
             consensus,
