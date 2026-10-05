@@ -1655,7 +1655,11 @@ function renderKelly(d, totalEq){
   // Summary bar
   const trimCount=d.trim_list.length, addCount=d.add_list.length, avoidCount=d.avoid_list.length;
   const cashColor=d.cash_recommended_pct>20?'var(--yellow)':'var(--green)';
-  let html=`<div class="kelly-summary">
+  const kq=d.kelly_quality;
+  const kqBanner=(kq&&kq.degenerate)
+    ?`<div data-k="kelly-uninformative" role="note" style="background:rgba(255,193,7,.08);border:1px solid var(--yellow);border-left:4px solid var(--yellow);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--text)"><strong style="color:var(--yellow)">Sizing is not informative today.</strong> ${daEsc(kq.note||'Most names share one identical target weight, so ADD/TRIM here reflect distance from equal weight, not a per-name edge.')} Treat the actions below as a rebalance-to-equal-weight reference, not a recommendation.</div>`
+    :'';
+  let html=kqBanner+`<div class="kelly-summary">
     <div class="ks-item"><span class="ks-lbl">Kelly Score</span><span class="ks-val" style="color:var(--accent)">${daEsc(d.portfolio_kelly_score)}%</span></div>
     <div class="ks-item"><span class="ks-lbl">Optimal Invested</span><span class="ks-val">${d.total_optimal_allocated_pct}%</span></div>
     <div class="ks-item"><span class="ks-lbl">Recommended Cash</span><span class="ks-val" style="color:${cashColor}">${d.cash_recommended_pct}%</span></div>

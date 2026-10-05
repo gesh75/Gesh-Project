@@ -3612,9 +3612,17 @@ def kelly_endpoint():
         # that FastAPI's encoder rejects ("'numpy.bool' object is not iterable" —
         # the QA-observed 500 of 2026-07-17). The customer path already coerces;
         # the owner endpoint must too.
-        resp = {"status": "ok", "data": _jsonable(result), "total_equity": total_equity}
-        quality = kelly_quality.kelly_degeneracy(result)
-        resp["kelly_quality"] = {**quality, "note": kelly_quality.KELLY_UNINFORMATIVE_NOTE if quality["degenerate"] else None}
+        quality = kelly_quality.quality_block(result)
+        # `quality` is stamped inside `data` as well: renderKelly receives `data`.
+        data = _jsonable(result)
+        if isinstance(data, dict):
+            data = {**data, "kelly_quality": quality}
+        resp = {
+            "status": "ok",
+            "data": data,
+            "total_equity": total_equity,
+            "kelly_quality": quality,
+        }
         if payload.get("offline"):
             resp["offline"] = True
         if degraded:
@@ -3814,6 +3822,13 @@ def _cached_response(key: str) -> dict:
     out["cached"] = True
     out["ran_at"] = ran
     out["fresh"] = _is_fresh(ran)
+    if key == "kelly":
+        # Customers read this cache. Stamp the degeneracy verdict inside `data` too:
+        # renderKelly receives `data`, not the envelope (audit M-14 / item 14).
+        quality = kelly_quality.quality_block(val)
+        out["kelly_quality"] = quality
+        if isinstance(out.get("data"), dict):
+            out["data"] = {**out["data"], "kelly_quality": quality}
     return _sanitize(out)
 
 

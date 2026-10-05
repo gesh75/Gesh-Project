@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 
+import book_registry
 import kelly_quality
 from gesh_core.trading.autopilot_core import entry_floor_blocks
 from kelly_quality import KELLY_UNINFORMATIVE_NOTE
@@ -573,6 +574,10 @@ def main(results_path: str | Path | None = None) -> int:
         max_position_pct=plan_cap,
         kelly_degenerate=kelly_quality.kelly_degeneracy(kelly)['degenerate'],
     )
+    # Item 14: a retired book opens nothing new. The auto-close above already ran, so
+    # its open positions still exit on their stops/targets.
+    book_retired = book_registry.is_retired(book_registry.DAILY_ANALYSIS)
+    action_plan = book_registry.hold_if_retired(action_plan, book_registry.DAILY_ANALYSIS)
 
     executable = [a for a in action_plan if a['action'] in ('BUY', 'TRIM') and a['shares'] > 0]
     print(f"{_t()} [gate] action plan: {len(action_plan)} entries, {len(executable)} executable")
@@ -665,7 +670,7 @@ def main(results_path: str | Path | None = None) -> int:
         # Send when there's anything worth a phone ping: a position closed (stop/
         # target hit) OR there's an action plan. A pure stop-out day with no new
         # signals must still alert — that's the day the user most wants to know.
-        if _closed or action_plan:
+        if _closed or (action_plan and not book_retired):
             try:
                 from dotenv import load_dotenv as _ld
                 # TELEGRAM_* live in the trading repo's .env; override=False keeps
@@ -687,7 +692,7 @@ def main(results_path: str | Path | None = None) -> int:
                 )
             if _closed:
                 _lines.append("— signals —")
-            for a in action_plan:
+            for a in ([] if book_retired else action_plan):
                 g = next((x for x in gate_results
                           if x['symbol'] == a['symbol'] and x['action'] == a['action']), None)
                 if g is not None:
