@@ -110,7 +110,8 @@ def test_methodology_and_limitations_section_is_explicit_and_honest(page: str) -
         "Costs and slippage:",
         "10 bp entry slippage",
         "Gross vs. net:",
-        "No net-of-cost figure is published",
+        "net of a 20 bp",
+        "stress scenarios, not measured costs",
         "Not audited:",
     ):
         assert needle in block, needle

@@ -31,6 +31,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import proof_stats
 import seo_pages
 
 
@@ -208,6 +209,10 @@ def _load_gate_dto(db_path: str) -> dict[str, Any]:
         return _fallback_gate_dto()
 
 
+def _round_or_none(value: float | None) -> float | None:
+    return None if value is None else round(value, 2)
+
+
 def _cohort_stats(rows: list[dict]) -> dict[str, Any]:
     """Per-cohort ledger stats (engine vs manual are computed on DISJOINT row sets —
     manual wins can never leak into engine numbers)."""
@@ -250,6 +255,11 @@ def _cohort_stats(rows: list[dict]) -> dict[str, Any]:
         "win_rate_ci_95": _wilson_ci_95(wins, closed),
         "cost_sensitivity_20bp_usd": round(gross_entry_notional_usd * 0.002, 2),
         "cost_sensitivity_50bp_usd": round(gross_entry_notional_usd * 0.005, 2),
+        # Audit C-02: realized P&L net of the same 20/50 bp execution-cost stress.
+        "net_of_20bp_usd": _round_or_none(
+            proof_stats.net_of_cost(realized_pnl_usd, gross_entry_notional_usd, 20)),
+        "net_of_50bp_usd": _round_or_none(
+            proof_stats.net_of_cost(realized_pnl_usd, gross_entry_notional_usd, 50)),
         "profit_factor_usd": (
             round(profit_factor_usd, 4) if math.isfinite(profit_factor_usd) else profit_factor_usd
         ),
@@ -563,6 +573,23 @@ def load_track_record(
         by_source[src] = by_source.get(src, 0) + 1
 
     engine = _cohort_stats(engine_rows)
+    days_running = _days_between(launch_date, today)
+    # Item 12: minimum-sample projection on RETURN-normalised engine closes (dollar
+    # P&L mixes $22-$400 notionals), at the engine's observed close rate.
+    engine_returns = [
+        x for x in (_finite_float(r.get("pnl_pct")) for r in engine_rows) if x is not None
+    ]
+    min_sample = proof_stats.min_sample_panel(
+        engine_returns,
+        closes_per_day=len(engine_rows) / max(days_running, 1),
+        today=date.fromisoformat(today),
+    )
+    # Item 13: the number of trials behind the Deflated Sharpe, disclosed.
+    trial_disclosure = {
+        "raw_declared": proof_stats.declared_raw_trials(
+            _trading_home() / "strategy_variant_registry.json"
+        ),
+    }
     daily_analysis = _load_daily_analysis_book(daily_analysis_db_path)
     all_sources = _cohort_stats(rows)
     return {
@@ -584,9 +611,11 @@ def load_track_record(
         "open_positions": open_positions,
         "signal_ratings": signal_ratings,
         "excluded_ledger_rows": excluded_ledger_rows,
-        "days_running": _days_between(launch_date, today),
+        "days_running": days_running,
         "days_target": DAYS_TARGET,
         "engine": engine,
+        "min_sample": min_sample,
+        "trial_disclosure": trial_disclosure,
         "manual": _cohort_stats(manual_rows),
         "daily_analysis": daily_analysis,
         "combined_automated": _combined_automated_context(engine, daily_analysis),
@@ -779,6 +808,110 @@ def _automated_scope_html(data: dict[str, Any]) -> str:
     )
 
 
+def _signed_pct(v: Any, digits: int = 2) -> str:
+    return f"{float(v) * 100:+.{digits}f}%"
+
+
+def _panel_open(data_k: str, title: str) -> str:
+    return (
+        f'<section data-k="{data_k}" style="background:{_SURFACE};border:1px solid {_BORDER};'
+        f'border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px;'
+        f'line-height:1.6;color:#dfe8f2"><div style="color:{_DIM};font-size:11px;'
+        f'text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">{title}</div>'
+    )
+
+
+def _min_sample_html(ms: Any) -> str:
+    """Item 12: how much data the OBSERVED edge would need - with its caveats."""
+    if not isinstance(ms, dict):
+        return ""
+    head = _panel_open("min-sample-panel", "Minimum sample - how much evidence would be enough")
+    status, n = ms.get("status"), int(ms.get("n") or 0)
+    if status == "insufficient_sample":
+        body = (
+            f"Not enough closes yet to estimate an edge ({n} engine close"
+            f"{'' if n == 1 else 's'} with usable returns; at least 2 with differing returns "
+            "are needed). Nothing is projected until then."
+        )
+    else:
+        lo, hi = ms["mean_ci95"]
+        body = (
+            f"Observed engine edge: <b class=\"num\">{_signed_pct(ms['mean'])}</b> per closed "
+            f"trade (approx. 95% interval {_signed_pct(lo)} to {_signed_pct(hi)}) over {n} "
+            f"closes; t = <b class=\"num\">{float(ms['t_stat']):.2f}</b> (|t| &ge; 1.96 is the "
+            "conventional bar for distinguishable-from-zero). "
+        )
+        if status == "no_positive_edge":
+            body += (
+                "The observed mean return is not positive, so there is no sample size at which "
+                "this edge would become significant; more closes can only change the estimate."
+            )
+        else:
+            n_sig, n_pow = int(ms["n_for_significance"]), int(ms["n_for_80pct_power"])
+            more = int(ms["additional_closes"])
+            body += (
+                f"If the observed edge were the true edge, about <b class=\"num\">{n_sig} "
+                f"closes</b> would be needed to separate it from zero "
+                f"({'already reached' if more == 0 else f'{more} more'}) and about {n_pow} closes "
+                "for 80% power. "
+            )
+            if more == 0:
+                pass
+            elif ms.get("eta_beyond_horizon"):
+                body += "At the current close rate that is more than 10 years away. "
+            elif ms.get("eta_date"):
+                rate = float(ms["closes_per_day"]) * 30
+                body += (
+                    f"At the current pace (~{rate:.1f} closes per 30 days) that is around "
+                    f"<b class=\"num\">{_esc(ms['eta_date'])}</b>. "
+                )
+            else:
+                body += "The close rate is not known, so no date is projected. "
+        body += (
+            f'<div style="color:{_DIM};font-size:12px;margin-top:6px">This is a projection '
+            "from a noisy estimate, not a forecast. Closes overlap in time and share market "
+            "exposure, so they are not independent and the real requirement is likely larger. "
+            "Per-trade returns are used (not dollars) because notionals differ.</div>"
+        )
+    return head + body + "</section>"
+
+
+def _trial_disclosure_html(data: dict[str, Any]) -> str:
+    """Item 13: PSR/DSR next to the number of trials that DSR deflates for."""
+    td = data.get("trial_disclosure")
+    if not isinstance(td, dict):
+        return ""
+    crit = (data.get("gate") or {}).get("criteria") or {}
+    psr, dsr = crit.get("prob_sharpe"), crit.get("deflated_sharpe")
+
+    def val(g: Any) -> str:
+        v = g.get("value") if isinstance(g, dict) else None
+        return f"{float(v):.2f}" if isinstance(v, (int, float)) and math.isfinite(v) else "n/a"
+
+    raw = td.get("raw_declared")
+    raw_txt = (
+        f"<b class=\"num\">{int(raw)}</b> strategy configurations declared in the engine's "
+        "variant registry"
+        if isinstance(raw, int) and raw > 0
+        else "the declared raw trial count is not available in this view"
+    )
+    note = dsr.get("note") if isinstance(dsr, dict) else None
+    note_txt = f" Engine note: {_esc(note)}." if note else ""
+    body = (
+        f"Probabilistic Sharpe (PSR) <b class=\"num\">{val(psr)}</b> is the probability the "
+        f"true Sharpe ratio is above zero. Deflated Sharpe (DSR) <b class=\"num\">{val(dsr)}</b> "
+        "is the same figure after a haircut for how many configurations were tried before this "
+        f"engine was selected. Trials disclosed: {raw_txt}; every threshold, lookback, hold-day "
+        f"and stop setting counts as a trial.{note_txt} "
+        f'<div style="color:{_DIM};font-size:12px;margin-top:6px">The haircut uses the '
+        "effective (correlation-adjusted) number of trials, which is smaller than the raw "
+        "count; using the raw count would deflate the Sharpe further. The trial count is "
+        "maintained by hand plus a trial ledger, so it may undercount. Both statistics also treat "
+        "overlapping, unequal-size trades as independent observations, which they are not.</div>"
+    )
+    return _panel_open("trial-disclosure", "PSR / DSR and the number of trials") + body + "</section>"
+
+
 def render_html(data: dict[str, Any]) -> str:
     """Render the self-contained proof-page HTML from a load_track_record() dict."""
     gate = data["gate"]
@@ -810,23 +943,24 @@ def render_html(data: dict[str, Any]) -> str:
 
     if closes == 0:
         banner_txt = (
-            f"Building track record — Day {data['days_running']} of {data['days_target']}. "
-            f"0 of {required} engine closed trades recorded. Manual trades are tracked "
+            f"Building track record - calendar day {data['days_running']} of {data['days_target']} "
+            f"since launch. 0 of {required} engine closed trades recorded. Manual trades are tracked "
             "separately below and never count toward the autonomy gate."
         )
         banner_color = _YELLOW
     elif not ready:
         banner_txt = (
-            f"Building track record — Day {data['days_running']} of {data['days_target']}. "
-            f"{closes} of {required} engine closed trades. Manual trades are shown "
+            f"Building track record - calendar day {data['days_running']} of {data['days_target']} "
+            f"since launch. {closes} of {required} engine closed trades. Manual trades are shown "
             "separately and never count toward the gate; metrics are provisional until "
             f"the {required}-close engine autonomy gate is met."
         )
         banner_color = _YELLOW
     else:
         banner_txt = (
-            f"Autonomy gate met — {closes} engine closed trades, all readiness "
-            f"criteria passed over {data['days_running']} days."
+            f"<b>Simulated paper only - an internal readiness gate, not a guarantee or "
+            f"validated edge.</b> Autonomy gate met - {closes} engine closed trades, all "
+            f"readiness criteria passed over {data['days_running']} calendar days since launch."
         )
         banner_color = _GREEN
 
@@ -843,6 +977,20 @@ def render_html(data: dict[str, Any]) -> str:
     eng_ci = _wilson_ci_95(int(eng["wins"]), int(eng["closed"]), precision=8)
     eng_cost_20 = float(eng.get("cost_sensitivity_20bp_usd") or 0.0)
     eng_cost_50 = float(eng.get("cost_sensitivity_50bp_usd") or 0.0)
+    eng_net_20 = eng.get("net_of_20bp_usd")
+    eng_net_50 = eng.get("net_of_50bp_usd")
+
+    def _net_cell(value: Any, bp: int) -> str:
+        if not isinstance(value, (int, float)) or not math.isfinite(value):
+            return ""
+        colour = _GREEN if value >= 0 else _RED
+        return (
+            f'<div><span style="font-size:20px;font-weight:700;color:{colour}" class="num" '
+            f'data-k="headline-net-{bp}bp-usd">{_fmt_signed_usd(float(value))}</span> '
+            f'<span style="color:{_DIM};font-size:12px">net of {bp} bp cost stress</span></div>'
+        )
+
+    net_cells = _net_cell(eng_net_20, 20) + _net_cell(eng_net_50, 50)
     all_sources = data.get("all_sources")
     if not isinstance(all_sources, dict):
         # Recompute dollar accounting when a legacy caller supplies actual rows. If
@@ -918,7 +1066,8 @@ def render_html(data: dict[str, Any]) -> str:
         f'data-k="headline-pnl-to-gross-entry-notional">'
         f"{eng_pnl_to_gross_notional * 100:+.1f}%</span> "
         f'<span style="color:{_DIM};font-size:12px">P&amp;L / gross entry notional</span></div>'
-        f"</div>"
+        + net_cells
+        + f"</div>"
         f'<div style="color:{_DIM};font-size:12px;margin-top:8px">'
         f"{int(eng['closed'])} closed paper trades · win rate "
         f"{float(eng['win_rate']) * 100:.0f}% · Approx. Wilson 95% interval "
@@ -962,6 +1111,8 @@ def render_html(data: dict[str, Any]) -> str:
         + "</div>"
     )
     automated_scope_html = _automated_scope_html(data)
+    min_sample_html = _min_sample_html(data.get("min_sample"))
+    trial_html = _trial_disclosure_html(data)
 
     def ts(v: Any) -> str:
         return _esc((str(v or "")[:16].replace("T", " ")) or "—")
@@ -1027,9 +1178,11 @@ def render_html(data: dict[str, Any]) -> str:
         f"<li><b>Costs and slippage:</b> tracker fills model 10 bp entry slippage and, since "
         f"2026-07-02, 10 bp exit slippage. Commissions, fees and taxes are not stated on this "
         f"page.</li>"
-        f"<li><b>Gross vs. net:</b> profit factor and P&amp;L above are gross-dollar figures. "
-        f"No net-of-cost figure is published; the 20–50 bp stress range in the headline shows "
-        f"sensitivity only.</li>"
+        f"<li><b>Gross vs. net:</b> profit factor and the realized P&amp;L headline are "
+        f"gross-dollar figures. Beside them the headline shows realized P&amp;L net of a 20 bp "
+        f"and a 50 bp additional execution-cost stress on gross entry notional. These are "
+        f"stress scenarios, not measured costs; actual commissions, fees and taxes are not "
+        f"stated.</li>"
         f"<li><b>Not audited:</b> the ledger is a mutable database and has not been "
         f"independently verified.</li></ul>"
     )
@@ -1069,9 +1222,16 @@ def render_html(data: dict[str, Any]) -> str:
  <div style="background:{_SURFACE};border:1px solid {banner_color};border-left:4px solid {banner_color};
    border-radius:8px;padding:14px 16px;margin-bottom:20px;color:#dfe8f2;font-size:14px">{banner_txt}</div>
 
- <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">{chips}</div>
+ <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">{chips}</div>
+ <div data-k="gate-disclaimer" style="color:{_DIM};font-size:12px;margin-bottom:20px">
+   Simulated paper results only. This is an internal readiness gate - a process threshold,
+   <span>not evidence of future profit</span> and not a guarantee.</div>
 
  {cohorts_html}
+
+ {min_sample_html}
+
+ {trial_html}
 
  {automated_scope_html}
 
