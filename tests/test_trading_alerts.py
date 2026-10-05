@@ -191,3 +191,17 @@ def test_daily_pnl_severity_bands(
     alerts.alert_daily_pnl(100_000.0, 99_000.0, pnl, cap)
     assert f"Status    : {severity}" in captured["text"]
     assert captured["silent"] is silent
+
+
+def test_daily_pnl_alert_with_unknown_baseline_never_reports_a_flat_day(monkeypatch):
+    """M-06: no previous close => 'unknown', not '+0.00% NORMAL'."""
+    captured: dict = {}
+    monkeypatch.setattr(
+        alerts, "_send",
+        lambda text, silent=False: captured.update(text=text, silent=silent) or True,
+    )
+    alerts.alert_daily_pnl(100_000.0, 0.0, None, 0.02)
+    assert "N/A" in captured["text"]
+    assert "+0.00%" not in captured["text"]
+    assert "Status    : UNKNOWN" in captured["text"]
+    assert captured["silent"] is False  # an unknown baseline must be audible

@@ -147,11 +147,18 @@ def alert_rejection(
 def alert_daily_pnl(
     equity: float,
     prev_close: float,
-    pnl_pct: float,
+    pnl_pct: float | None,
     max_loss_pct: float,
 ) -> None:
-    """Fired at EOD or when P&L approaches the daily loss cap."""
-    if pnl_pct >= 0:
+    """Fired at EOD or when P&L approaches the daily loss cap.
+
+    ``pnl_pct=None`` means the previous close was unavailable: the report says so
+    (UNKNOWN, audible) instead of presenting a fabricated flat day.
+    """
+    if pnl_pct is None:
+        icon = "❔"
+        severity = "unknown"
+    elif pnl_pct >= 0:
         icon = "📈"
         severity = "normal"
     elif pnl_pct > -max_loss_pct * 0.75:
@@ -161,11 +168,19 @@ def alert_daily_pnl(
         icon = "🚨"
         severity = "critical"
 
+    pnl_line = (
+        "Daily P&L : N/A (previous close unavailable)"
+        if pnl_pct is None
+        else f"Daily P&L : {pnl_pct:+.2%}"
+    )
+    prev_line = (
+        "Prev Close: N/A" if pnl_pct is None else f"Prev Close: ${prev_close:,.2f}"
+    )
     lines = [
         f"{icon} <b>EOD P&L Report</b>",
         f"Equity    : ${equity:,.2f}",
-        f"Prev Close: ${prev_close:,.2f}",
-        f"Daily P&L : {pnl_pct:+.2%}",
+        prev_line,
+        pnl_line,
         f"Loss Cap  : {-max_loss_pct:.2%}",
         f"Status    : {severity.upper()}",
         f"Time      : {_now_et()}",

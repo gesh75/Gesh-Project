@@ -158,3 +158,17 @@ def test_stale_candidates_are_not_restored(sandbox_db):
     autopilot._CANDIDATES.clear()
     autopilot._restore_candidates()
     assert autopilot._CANDIDATES == {}
+
+
+def test_eod_pnl_is_unknown_when_previous_close_is_missing(sandbox_db, monkeypatch):
+    """M-06: close_risk_check must hand the alert pnl=None, not a fabricated 0.0."""
+    seen: dict = {}
+    snap = _snapshot(100.0)
+    snap["equity_summary"] = {"portfolio_equity": 50_000.0, "adjusted_equity_previous_close": 0.0}
+    _wire(monkeypatch, snap, [])
+    monkeypatch.setattr(
+        autopilot, "alert_daily_pnl",
+        lambda equity, prev, pnl, cap: seen.update(prev=prev, pnl=pnl),
+    )
+    autopilot.close_risk_check()
+    assert seen.get("pnl", "missing") is None

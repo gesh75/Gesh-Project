@@ -2,8 +2,8 @@
 
 The 12:30 ET job emits intents when |current − Kelly target| > 5 percentage
 points. The comparison is strict ``> 0.05`` on fractions (10% vs 15% is
-exactly 5pp and must stay quiet). Missing ``portfolio_percentage`` is treated
-as 0%, so an unlabelled holding looks fully drifted. HOLD / missing-target
+exactly 5pp and must stay quiet). A missing ``portfolio_percentage`` is derived
+from equity / portfolio_equity; if that is unknowable the symbol is skipped. HOLD / missing-target
 intents must not be coerced to flatten-to-zero; SELL's genuine ``0.0`` still
 fires.
 
@@ -88,9 +88,25 @@ def test_drift_exactly_five_percent_is_within_tolerance(monkeypatch):
     assert placed == []
 
 
-def test_missing_portfolio_percentage_is_zero_and_can_place(monkeypatch):
-    placed = _drive(monkeypatch, _snapshot(pct=None), target_pct=0.20)
-    assert len(placed) == 1
+def test_missing_portfolio_percentage_is_derived_from_equity(monkeypatch):
+    """M-06: absent weight is UNKNOWN, not 0%. Derive it: 10k / 100k = 10%."""
+    # target 14% vs derived 10% -> 4pp drift -> quiet (the old "0%" read as 14pp)
+    assert _drive(monkeypatch, _snapshot(pct=None), target_pct=0.14) == []
+    # target 20% vs derived 10% -> 10pp drift -> places
+    assert len(_drive(monkeypatch, _snapshot(pct=None), target_pct=0.20)) == 1
+
+
+@pytest.mark.parametrize("bad_total", [None, 0.0, -1.0, float("nan")])
+def test_unknowable_weight_skips_instead_of_trading_against_zero(monkeypatch, bad_total):
+    snap = _snapshot(pct=None)
+    snap["equity_summary"]["portfolio_equity"] = bad_total
+    assert _drive(monkeypatch, snap, target_pct=0.20) == []
+
+
+@pytest.mark.parametrize("bad_pct", ["n/a", float("nan"), True])
+def test_garbage_portfolio_percentage_falls_back_to_derived_weight(monkeypatch, bad_pct):
+    placed = _drive(monkeypatch, _snapshot(pct=bad_pct), target_pct=0.14)
+    assert placed == []  # derived 10% vs 14% = 4pp, not 14pp
 
 
 def test_blank_symbol_is_skipped(monkeypatch):

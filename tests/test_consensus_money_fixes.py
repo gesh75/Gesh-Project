@@ -120,3 +120,26 @@ def test_node_kelly_still_runs_for_flat_watchlist_symbol_with_default_total(monk
     monkeypatch.setitem(sys.modules, "kelly", fake)
     vote, _ = consensus.node_kelly("NVDA", 0.0, 1.0, 0.0, 100.0)
     assert vote == consensus.VOTE_BULLISH
+
+
+# ── M-12: ECG must not turn a missing equity point into a flat 0% session ────
+def _ecg_with_history(monkeypatch, equities_newest_first):
+    import sys
+    import types
+
+    rows = [{"equity": e} for e in equities_newest_first]
+    monkeypatch.setitem(sys.modules, "db", types.SimpleNamespace(get_equity_history=lambda s, days=30: rows))
+    return consensus.node_ecg("MU")
+
+
+def test_ecg_loss_streak_survives_a_missing_equity_point(monkeypatch):
+    # oldest->newest: 100, 99, 0(missing), 97, 96, 95. Dropping the gap leaves 4
+    # straight losses (99, 97, 96, 95). The old code turned the gap into a 0.0%
+    # session and reported a streak of only 2.
+    vote, detail = _ecg_with_history(monkeypatch, [95.0, 96.0, 97.0, 0.0, 99.0, 100.0])
+    assert "Streak=4" in detail, detail
+
+
+def test_ecg_abstains_when_too_few_real_points_remain(monkeypatch):
+    vote, detail = _ecg_with_history(monkeypatch, [0.0, None, 100.0, 101.0])
+    assert vote is consensus.ABSTAIN
