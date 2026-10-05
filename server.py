@@ -557,6 +557,7 @@ from gemini_agent import (
     gemini_second_opinion,
     get_gemini_status,
 )
+import kelly_quality
 from kelly import run_kelly_analysis
 from market_data import get_all_market_data, get_analyst_targets, screen_market
 from monte_carlo import run_monte_carlo
@@ -3612,6 +3613,8 @@ def kelly_endpoint():
         # the QA-observed 500 of 2026-07-17). The customer path already coerces;
         # the owner endpoint must too.
         resp = {"status": "ok", "data": _jsonable(result), "total_equity": total_equity}
+        quality = kelly_quality.kelly_degeneracy(result)
+        resp["kelly_quality"] = {**quality, "note": kelly_quality.KELLY_UNINFORMATIVE_NOTE if quality["degenerate"] else None}
         if payload.get("offline"):
             resp["offline"] = True
         if degraded:
