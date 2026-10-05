@@ -50,10 +50,28 @@ def test_no_owner_function_definition_in_customer_bundle(customer_doc, fn):
         f"operator function {fn}() still defined in the customer bundle")
 
 
+# GET /api/kelly/cached is customer-or-owner. The operator surface is the
+# unsuffixed POST. The cache path contains the operator prefix as a substring,
+# so drop it before the prefix check.
+_CUSTOMER_CACHE_PATHS = ("/api/kelly/cached",)
+
+
+def _without_customer_caches(doc: str) -> str:
+    for path in _CUSTOMER_CACHE_PATHS:
+        doc = doc.replace(path, "")
+    return doc
+
+
 @pytest.mark.parametrize("endpoint", OWNER_ENDPOINTS)
 def test_no_owner_endpoint_string_in_customer_bundle(customer_doc, endpoint):
-    assert endpoint not in customer_doc, (
+    assert endpoint not in _without_customer_caches(customer_doc), (
         f"operator endpoint {endpoint} referenced in the customer bundle")
+
+
+def test_customer_signals_pane_reads_the_published_kelly_cache(customer_doc):
+    assert "/api/kelly/cached" in customer_doc
+    assert "function kellyUninformativeBanner" in customer_doc
+    assert "function loadBookKellyNote" in customer_doc
 
 
 def test_command_palette_has_no_operator_actions_for_a_customer(customer_doc):

@@ -118,7 +118,9 @@ def test_dashboard_renders_the_uninformative_banner():
         encoding="utf-8"
     )
     assert 'data-k="kelly-uninformative"' in html
-    assert "kq.degenerate" in html
+    assert "kellyUninformativeBanner" in html
+    assert "/api/kelly/cached" in html
+    assert "loadBookKellyNote" in html
 
 
 # ── proof page ──────────────────────────────────────────────────────────────

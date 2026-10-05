@@ -1627,6 +1627,10 @@ function volBadge(tier){
   return `<span style="font-size:11px;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,.07);color:${map[tier]||'var(--muted)'}">${daEsc(tier)}</span>`;
 }
 
+function kellyUninformativeBanner(kq){
+  if(!(kq&&kq.degenerate)) return '';
+  return `<div data-k="kelly-uninformative" role="note" style="background:rgba(255,193,7,.08);border:1px solid var(--yellow);border-left:4px solid var(--yellow);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--text)"><strong style="color:var(--yellow)">Sizing is not informative today.</strong> ${daEsc(kq.note||'Most names share one identical target weight, so ADD/TRIM here reflect distance from equal weight, not a per-name edge.')} Treat the actions below as a rebalance-to-equal-weight reference, not a recommendation.</div>`;
+}
 function renderKelly(d, totalEq){
   const cont=$('kelly-container');
   if(!d||!d.holdings){cont.innerHTML='<div style="color:var(--muted);padding:16px">No data</div>';return;}
@@ -1655,10 +1659,7 @@ function renderKelly(d, totalEq){
   // Summary bar
   const trimCount=d.trim_list.length, addCount=d.add_list.length, avoidCount=d.avoid_list.length;
   const cashColor=d.cash_recommended_pct>20?'var(--yellow)':'var(--green)';
-  const kq=d.kelly_quality;
-  const kqBanner=(kq&&kq.degenerate)
-    ?`<div data-k="kelly-uninformative" role="note" style="background:rgba(255,193,7,.08);border:1px solid var(--yellow);border-left:4px solid var(--yellow);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;color:var(--text)"><strong style="color:var(--yellow)">Sizing is not informative today.</strong> ${daEsc(kq.note||'Most names share one identical target weight, so ADD/TRIM here reflect distance from equal weight, not a per-name edge.')} Treat the actions below as a rebalance-to-equal-weight reference, not a recommendation.</div>`
-    :'';
+  const kqBanner=kellyUninformativeBanner(d.kelly_quality);
   let html=kqBanner+`<div class="kelly-summary">
     <div class="ks-item"><span class="ks-lbl">Kelly Score</span><span class="ks-val" style="color:var(--accent)">${daEsc(d.portfolio_kelly_score)}%</span></div>
     <div class="ks-item"><span class="ks-lbl">Optimal Invested</span><span class="ks-val">${d.total_optimal_allocated_pct}%</span></div>
@@ -2952,20 +2953,36 @@ async function hydrateLastBookAnalysis(){
   }catch(e){ return null; }
 }
 
-function _bookPane(paneId, bodyId, render){
+function _bookPane(paneId, bodyId, render, after){
   switchTab(paneId);
   const box = document.getElementById(bodyId);
   if (!box) return;
   const paint=d=>{
     box.innerHTML=d?render(d):'<div class="deep-ph-text" style="padding:18px 0;text-align:center">No saved book read. Home is the desk; click a ticker for a live card.</div>';
+    if(typeof after==='function') after();
   };
   if(_mybookLastResult){ paint(_mybookLastResult); return; }
   box.innerHTML='<div class="deep-ph-text" style="padding:18px 0;text-align:center">Loading your last saved read…</div>';
   hydrateLastBookAnalysis().then(paint);
 }
 
+async function loadBookKellyNote(){
+  const box=document.getElementById('book-signals-body');
+  if(!box) return;
+  try{
+    const r=await fetch('/api/kelly/cached');
+    if(!r.ok) return;
+    const j=await r.json().catch(()=>null);
+    const data=(j&&j.data)||{};
+    const banner=kellyUninformativeBanner(data.kelly_quality||j.kelly_quality);
+    if(!banner||box.querySelector('[data-k="kelly-uninformative"]')) return;
+    const holder=document.createElement('div');
+    holder.innerHTML=banner;
+    if(holder.firstElementChild) box.prepend(holder.firstElementChild);
+  }catch(e){}
+}
 function showBookSignals(){
-  _bookPane('book-signals', 'book-signals-body', buildBookSignalsPane);
+  _bookPane('book-signals', 'book-signals-body', buildBookSignalsPane, loadBookKellyNote);
   loadBookConsensus();
 }
 
