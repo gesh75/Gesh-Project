@@ -138,7 +138,9 @@ def test_ai_penalty_branches(ai_eval, expected_penalty):
 
 
 def test_ai_penalty_shrinks_position():
-    """Applying an AVOID penalty must not increase the recommended size."""
+    """An AVOID verdict must strictly shrink the recommended size (gesh-core
+    4f48962: penalty applies after the MAX_POSITION_PCT clamp and AVOID sizes
+    to zero, so `<=` would have passed on the old pre-clamp bug)."""
     base = kelly_size_holding(
         "X", 1_000, 100_000, 10, 12, returns=POSITIVE_DRIFT,
     )
@@ -146,7 +148,10 @@ def test_ai_penalty_shrinks_position():
         "X", 1_000, 100_000, 10, 12, returns=POSITIVE_DRIFT,
         ai_eval={"verdict": "AVOID"},
     )
-    assert penalised["optimal_pct"] <= base["optimal_pct"]
+    assert base["optimal_pct"] > 0
+    assert penalised["optimal_pct"] < base["optimal_pct"]
+    assert penalised["optimal_pct"] == 0.0
+    assert penalised["action"] != "ADD"
 
 
 # ─── action outputs: AVOID / TRIM / ADD / HOLD ────────────────────────────────
