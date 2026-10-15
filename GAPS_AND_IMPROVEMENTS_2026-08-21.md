@@ -137,7 +137,7 @@ That file is now stale on five points:
 | P0-2 targets: "≥30 closed, WR≥55%, Sharpe≥0.5, DD<10%" | **Retired spec.** The 2026-06-24 re-spec requires ≥100 *engine* closes, PF ≥1.5, expectancy >0, PSR/DSR ≥0.95, and win_rate is descriptive-only and never gates. Engine closes today: **23**. |
 | P2: "Owner JS out of shared bundle" · "Cookie consent copy" — open | Both **done** (`tests/test_owner_js_extraction.py` exists; `server.py:1442` renders the consent copy). |
 | P1: "Split `server.py` (~6.5k lines)" | Now **7,635** lines — regressed ~1.1k. |
-| Doc map: "`docs/GESH_FINANCE_DEFECT_REGISTER.md` — status column added" | True for the `docs/` copy; the **root shadow** has no Status column and reads as 38 open defects. **Eight** root docs shadow `docs/` copies, not four. |
+| Doc map: "`docs/GESH_FINANCE_DEFECT_REGISTER.md` — status column added" | True for the `docs/` copy; the **root shadow** has no Status column and reads as 38 open defects. **Eight** root docs shadow `docs/` copies, not four. **Resolved 2026-10-15:** GFD register merged into `docs/`, the other seven moved to `docs/audits/second-pass-2026-07-18/`. |
 
 ---
 

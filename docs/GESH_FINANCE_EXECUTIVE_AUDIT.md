@@ -1,5 +1,7 @@
 # GESH Financial — Comprehensive Executive Audit
 
+> **Canonical.** A second, independently written audit of the same 2026-07-18 baseline (`dc969264`) formerly shadowed this file at the repo root; it now lives at [`docs/audits/second-pass-2026-07-18/GESH_FINANCE_EXECUTIVE_AUDIT.md`](audits/second-pass-2026-07-18/GESH_FINANCE_EXECUTIVE_AUDIT.md) (moved 2026-10-15). It was never reconciled after 2026-07-19; its IDs do not map to the ones here.
+
 **Date:** 2026-07-18
 **Auditor:** Independent AI-assisted audit (Claude Opus 4.6 Thinking)
 **Scope:** Full gesh-project (port :9000) + gesh-project-trading (port :9003) + gesh-core
