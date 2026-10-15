@@ -229,3 +229,89 @@ def test_malformed_intent_rejected_before_gates():
     assert verdict.approved is False
     assert "Malformed intent" in verdict.reason
     assert verdict.gates["INTENT_VALID"] is False
+
+
+def test_malformed_hold_is_rejected_not_shortcut():
+    """A HOLD with an out-of-range confidence is malformed. It must not ride the
+    HOLD shortcut into the audit ledger as APPROVED (Argon audit, WP1-1)."""
+    bad_hold = TradeIntent(symbol="MSTR", action="HOLD", confidence=1.7, source="consensus")
+    verdict = rg.evaluate(bad_hold, _fresh_snapshot(), _base_config())
+    assert verdict.approved is False
+    assert "Malformed intent" in verdict.reason
+    assert verdict.gates == {"INTENT_VALID": False}
+
+
+# ─── extra: skipped gates are named, not silently recorded as failures ────────
+
+def test_skipped_gates_listed_when_an_early_gate_rejects(tmp_path, monkeypatch):
+    """After KILL_SWITCH rejects, gates 2-8 are not evaluated. The decision row
+    keeps the boolean map shape (False for unevaluated gates) but names them in
+    config_snapshot['gates_skipped'] so gate analytics can exclude them."""
+    captured: dict = {}
+
+    def _capture(intent_id, verdict, reason, gates, config_snapshot):
+        captured.update(gates=dict(gates), cfg=dict(config_snapshot))
+        return 202
+
+    monkeypatch.setattr(rg, "log_decision", _capture)
+    kill = tmp_path / "KILL"
+    kill.write_text("stop")
+    verdict = rg.evaluate(_buy_intent(), _fresh_snapshot(),
+                          _base_config(kill_switch_path=str(kill)))
+    assert verdict.approved is False
+    skipped = captured["cfg"]["gates_skipped"]
+    for gate in ("MARKET_HOURS", "MARKET_REGIME", "CONFIDENCE_FLOOR", "POSITION_CAP",
+                 "ORDER_RATE", "CASH_FLOOR", "DAILY_LOSS", "DATA_FRESH"):
+        assert gate in skipped
+        assert captured["gates"][gate] is False
+    assert "KILL_SWITCH" not in skipped
+
+
+def test_no_gates_skipped_on_full_pass(monkeypatch):
+    captured: dict = {}
+
+    def _capture(intent_id, verdict, reason, gates, config_snapshot):
+        captured.update(cfg=dict(config_snapshot))
+        return 202
+
+    monkeypatch.setattr(rg, "log_decision", _capture)
+    verdict = rg.evaluate(_buy_intent(), _fresh_snapshot(), _base_config())
+    assert verdict.approved is True
+    assert captured["cfg"]["gates_skipped"] == []
+
+
+# ─── extra: MARKET_HOURS honours the NYSE calendar ────────────────────────────
+
+def _frozen_at(monkeypatch, instant: _dt.datetime) -> None:
+    class _At(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+
+    monkeypatch.setattr(rg, "datetime", _At)
+
+
+def test_market_hours_closed_on_nyse_holiday(monkeypatch):
+    # Friday 2026-04-03 is Good Friday: a weekday, mid-session clock, exchange closed.
+    _frozen_at(monkeypatch, _dt.datetime(2026, 4, 3, 16, 0, tzinfo=_dt.timezone.utc))
+    assert rg._within_market_hours(_base_config()) is False
+    verdict = rg.evaluate(_buy_intent(), {"as_of": "2026-04-03T16:00:00+00:00",
+                                          "equity_summary": _fresh_snapshot()["equity_summary"]},
+                          _base_config())
+    assert verdict.approved is False
+    assert verdict.gates["MARKET_HOURS"] is False
+    assert "market hours" in (verdict.reason or "").lower()
+
+
+def test_market_hours_early_close_day_after_thanksgiving(monkeypatch):
+    # 2026-11-27 14:00 ET (19:00 UTC, EST): inside the regular window, after the 13:00 close.
+    _frozen_at(monkeypatch, _dt.datetime(2026, 11, 27, 19, 0, tzinfo=_dt.timezone.utc))
+    assert rg._within_market_hours(_base_config()) is False
+    # 2026-11-27 12:30 ET (17:30 UTC): before the early close → open.
+    _frozen_at(monkeypatch, _dt.datetime(2026, 11, 27, 17, 30, tzinfo=_dt.timezone.utc))
+    assert rg._within_market_hours(_base_config()) is True
+
+
+def test_market_hours_ordinary_weekday_unchanged(monkeypatch):
+    _frozen_at(monkeypatch, _dt.datetime(2026, 6, 3, 19, 0, tzinfo=_dt.timezone.utc))  # 15:00 EDT
+    assert rg._within_market_hours(_base_config()) is True

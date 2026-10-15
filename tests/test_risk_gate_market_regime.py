@@ -168,3 +168,51 @@ def test_successful_spy_result_is_cached(monkeypatch):
     monkeypatch.setitem(sys.modules, "price_source", fake_ps)
     assert rg._spy_above_ma() is True
     assert calls["n"] == 0
+
+
+# ─── snapshot-first: a caller-supplied regime makes the gate pure ─────────────
+
+def _never_fetch(*_a, **_k):
+    raise AssertionError("gate must not fetch SPY when the snapshot carries the regime")
+
+
+def test_snapshot_regime_below_ma_blocks_without_fetch(monkeypatch):
+    monkeypatch.setattr(rg, "_spy_above_ma", _never_fetch)
+    snap = _snap()
+    snap["market_regime"] = {"spy_above_ma": False}
+    verdict = rg.evaluate(_buy(), snap, _cfg())
+    assert verdict.approved is False
+    assert verdict.gates["MARKET_REGIME"] is False
+
+
+def test_snapshot_regime_above_ma_allows_without_fetch(monkeypatch):
+    monkeypatch.setattr(rg, "_spy_above_ma", _never_fetch)
+    snap = _snap()
+    snap["market_regime"] = {"spy_above_ma": True}
+    verdict = rg.evaluate(_buy(), snap, _cfg())
+    assert verdict.approved is True
+    assert verdict.gates["MARKET_REGIME"] is True
+
+
+def test_snapshot_regime_unknown_falls_back_to_fetch(monkeypatch):
+    calls = {"n": 0}
+
+    def _fetch(*_a, **_k):
+        calls["n"] += 1
+        return False
+
+    monkeypatch.setattr(rg, "_spy_above_ma", _fetch)
+    for snap in (_snap(), {**_snap(), "market_regime": {}},
+                 {**_snap(), "market_regime": {"spy_above_ma": None}},
+                 {**_snap(), "market_regime": {"spy_above_ma": "yes"}}):
+        verdict = rg.evaluate(_buy(), snap, _cfg())
+        assert verdict.approved is False
+    assert calls["n"] == 4
+
+
+def test_snapshot_regime_helper_reads_only_real_booleans():
+    assert rg._snapshot_spy_above_ma({"market_regime": {"spy_above_ma": True}}) is True
+    assert rg._snapshot_spy_above_ma({"market_regime": {"spy_above_ma": False}}) is False
+    assert rg._snapshot_spy_above_ma({"market_regime": {"spy_above_ma": 1}}) is None
+    assert rg._snapshot_spy_above_ma({"market_regime": "below"}) is None
+    assert rg._snapshot_spy_above_ma({}) is None
