@@ -42,6 +42,7 @@ except ImportError:
 from .config import load_risk_config
 from .contract import from_consensus, TradeIntent
 from .risk_gate import evaluate
+from .market_regime import stamp_market_regime
 from .execution import place
 from .state import (
     active_stops,
@@ -223,6 +224,7 @@ def pre_market_scan() -> None:
 
     try:
         snapshot = build_data_payload([])      # holdings + watchlist
+        stamp_market_regime(snapshot, cfg)   # one SPY read per job; gate stays network-free
     except Exception as e:
         logger.error("pre_market_scan: could not build data payload — %s", e)
         alert_error("pre_market_scan", str(e))
@@ -313,6 +315,7 @@ def open_window() -> None:
     # Refresh snapshot at open, not pre-market
     try:
         snapshot = build_data_payload([])
+        stamp_market_regime(snapshot, cfg)   # one SPY read per job; gate stays network-free
     except Exception as e:
         logger.error("open_window: could not build snapshot — %s", e)
         return
@@ -440,6 +443,7 @@ def midday_rebalance() -> None:
 
     try:
         snapshot = build_data_payload([])
+        stamp_market_regime(snapshot, cfg)   # one SPY read per job; gate stays network-free
     except Exception as e:
         logger.error("midday_rebalance: could not build snapshot — %s", e)
         return
@@ -520,6 +524,7 @@ def close_risk_check() -> None:
 
     try:
         snapshot = build_data_payload([])
+        stamp_market_regime(snapshot, cfg)   # one SPY read per job; gate stays network-free
     except Exception as e:
         logger.error("close_risk_check: could not build snapshot — %s", e)
         return
