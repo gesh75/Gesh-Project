@@ -24,7 +24,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import RiskConfig, load_risk_config
-from . import extra_gates
+from . import extra_gates, market_calendar
 from .contract import TradeIntent
 from .state import (
     count_orders_today,
@@ -89,30 +89,58 @@ def _spy_above_ma(ma_days: int = 200) -> bool | None:
     return val
 
 
-def _market_regime_blocks_buy(intent: TradeIntent, cfg: RiskConfig) -> tuple[bool, str]:
+def _snapshot_spy_above_ma(portfolio: dict[str, Any]) -> bool | None:
+    """Caller-supplied regime: ``portfolio["market_regime"]["spy_above_ma"]``.
+
+    Only a real bool counts; anything else is "unknown" and the gate falls back
+    to its own (cached) fetch. A chain that stamps this once per run keeps
+    evaluate() network-free, which is what the module docstring promises.
+    """
+    regime = portfolio.get("market_regime") if isinstance(portfolio, dict) else None
+    if not isinstance(regime, dict):
+        return None
+    value = regime.get("spy_above_ma")
+    return value if isinstance(value, bool) else None
+
+
+def _market_regime_blocks_buy(
+    intent: TradeIntent, cfg: RiskConfig, portfolio: dict[str, Any] | None = None
+) -> tuple[bool, str]:
     """AVOID gate — blocks BUY/ADD only, when enabled and SPY is in a downtrend.
-    Fail-OPEN: unknown SPY data does NOT block (the other gates still apply)."""
+    Fail-OPEN: unknown SPY data does NOT block (the other gates still apply).
+    Reads the snapshot's stamped regime first; fetches only when it is absent."""
     if not getattr(cfg, "market_regime_gate", False) or intent.action != "BUY":
         return False, ""
-    if _spy_above_ma(getattr(cfg, "market_regime_ma_days", 200)) is False:
+    above = _snapshot_spy_above_ma(portfolio or {})
+    if above is None:
+        above = _spy_above_ma(getattr(cfg, "market_regime_ma_days", 200))
+    if above is False:
         return True, "Market regime AVOID: SPY below its 200d MA (downtrend) — no new longs"
     return False, ""
 
 
 def _within_market_hours(cfg: RiskConfig) -> bool:
+    """Inside the regular session on an NYSE trading day.
+
+    Weekends and the exchange's published full closures (trading/market_calendar.py)
+    are outside hours. On a scheduled early-close day the session ends at 13:00 ET
+    instead of ``cfg.market_close_hhmm``.
+    """
     try:
         tz = ZoneInfo(cfg.market_timezone)
     except Exception:
         tz = ZoneInfo("America/New_York")
     now = datetime.now(tz)
-    if now.weekday() >= 5:  # Sat/Sun
+    today = now.date()
+    if not market_calendar.is_trading_day(today):  # Sat/Sun or NYSE holiday
         return False
     try:
         open_h, open_m = (int(p) for p in cfg.market_open_hhmm.split(":"))
         close_h, close_m = (int(p) for p in cfg.market_close_hhmm.split(":"))
     except (ValueError, AttributeError):
         return False  # malformed time config → fail closed (treat as outside hours)
-    return dtime(open_h, open_m) <= now.time() <= dtime(close_h, close_m)
+    close = market_calendar.session_close(today, dtime(close_h, close_m))
+    return dtime(open_h, open_m) <= now.time() <= close
 
 
 # Permitted future-quote clock skew. Code constant, not an env/deployment
@@ -320,7 +348,7 @@ def _daily_pnl_pct(portfolio: dict[str, Any], cfg: RiskConfig) -> float | None:
     if cfg.paper_mode:
         base = cfg.paper_cash_usd or 0.0
         if base <= 0:
-            return 0.0
+            return None  # no simulated base → the day's loss cannot be proven (fail closed)
         try:
             return paper_realized_pnl_usd_today() / base
         except LedgerUnavailable:
@@ -353,6 +381,15 @@ def evaluate(
     gates: dict[str, bool] = {}
     rejection_reason: str | None = None
 
+    # Validation first — a malformed intent never reaches a gate, and never
+    # rides the HOLD shortcut into the ledger as APPROVED.
+    problems = intent.validate()
+    if problems:
+        gates["INTENT_VALID"] = False
+        rejection_reason = "Malformed intent: " + "; ".join(problems)
+        decision_id = log_decision(intent_id, "REJECTED", rejection_reason, gates, asdict(cfg))
+        return GateVerdict(False, rejection_reason, gates, intent_id, decision_id)
+
     # HOLD shortcuts: log, no checks, approve trivially.
     if intent.action == "HOLD":
         gates["HOLD_SHORTCUT"] = True
@@ -361,14 +398,11 @@ def evaluate(
         )
         return GateVerdict(True, None, gates, intent_id, decision_id)
 
-    # Validation first — malformed intent should never even hit a gate.
-    problems = intent.validate()
-    if problems:
-        gates["INTENT_VALID"] = False
-        rejection_reason = "Malformed intent: " + "; ".join(problems)
-        decision_id = log_decision(intent_id, "REJECTED", rejection_reason, gates, asdict(cfg))
-        return GateVerdict(False, rejection_reason, gates, intent_id, decision_id)
     gates["INTENT_VALID"] = True
+    # Gates after the first rejection are not evaluated. They are still written
+    # as False (the ledger's boolean-map shape is load-bearing) and named here so
+    # gate analytics do not count them as failures.
+    gates_skipped: list[str] = []
 
     # 1. Kill switch
     gates["KILL_SWITCH"] = not _kill_switch_present(cfg.kill_switch_path)
@@ -382,16 +416,18 @@ def evaluate(
             rejection_reason = "Outside market hours"
     else:
         gates["MARKET_HOURS"] = False
+        gates_skipped.append("MARKET_HOURS")
 
     # 2b. Market-regime AVOID gate (SPY<200dMA → no new longs). BUY-only,
     # fail-open. Backtest-validated (docs/SIGNAL_PROFITABILITY_2026-06.md).
     if rejection_reason is None:
-        _blk, _why = _market_regime_blocks_buy(intent, cfg)
+        _blk, _why = _market_regime_blocks_buy(intent, cfg, portfolio_snapshot)
         gates["MARKET_REGIME"] = not _blk
         if _blk:
             rejection_reason = _why
     else:
         gates["MARKET_REGIME"] = False
+        gates_skipped.append("MARKET_REGIME")
 
     # 3. Confidence floor
     if rejection_reason is None:
@@ -402,6 +438,7 @@ def evaluate(
             )
     else:
         gates["CONFIDENCE_FLOOR"] = False
+        gates_skipped.append("CONFIDENCE_FLOOR")
 
     # 3b. Entry-risk gates ported from the engine (audit M-02): earnings proximity, sector
     #     cap, consecutive-loss suspension, correlation heat. BUY only — an exit is never
@@ -427,6 +464,7 @@ def evaluate(
             )
     else:
         gates["POSITION_CAP"] = False
+        gates_skipped.append("POSITION_CAP")
 
     # 5. Order rate
     if rejection_reason is None:
@@ -436,6 +474,7 @@ def evaluate(
             rejection_reason = f"Daily order cap reached ({used}/{cfg.max_orders_per_day})"
     else:
         gates["ORDER_RATE"] = False
+        gates_skipped.append("ORDER_RATE")
 
     # 6. Cash floor (only meaningful for BUY)
     if rejection_reason is None:
@@ -447,6 +486,7 @@ def evaluate(
             )
     else:
         gates["CASH_FLOOR"] = False
+        gates_skipped.append("CASH_FLOOR")
 
     # 7. Daily loss
     if rejection_reason is None:
@@ -470,6 +510,7 @@ def evaluate(
                 )
     else:
         gates["DAILY_LOSS"] = False
+        gates_skipped.append("DAILY_LOSS")
 
     # 8. Data freshness — age the selected symbol's quote, not the snapshot.
     if rejection_reason is None:
@@ -496,10 +537,12 @@ def evaluate(
                 rejection_reason = f"Quote age {effective_age:.0f}s exceeds max {max_age}s"
     else:
         gates["DATA_FRESH"] = False
+        gates_skipped.append("DATA_FRESH")
 
     verdict_label = "REJECTED" if rejection_reason else "APPROVED"
     config_snapshot = asdict(cfg)
     config_snapshot["gates_unchecked"] = extra_gates.unchecked_gates(intent, portfolio_snapshot)
+    config_snapshot["gates_skipped"] = gates_skipped
     decision_id = log_decision(intent_id, verdict_label, rejection_reason, gates, config_snapshot)
     return GateVerdict(
         approved=(rejection_reason is None),

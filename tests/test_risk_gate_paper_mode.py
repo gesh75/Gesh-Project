@@ -109,7 +109,7 @@ def _wire_gate_to_daily_loss(monkeypatch, pnl):
     monkeypatch.setattr(risk_gate, "log_decision", lambda *a, **k: 1)
     monkeypatch.setattr(risk_gate, "_kill_switch_present", lambda _p: False)
     monkeypatch.setattr(risk_gate, "_within_market_hours", lambda _c: True)
-    monkeypatch.setattr(risk_gate, "_market_regime_blocks_buy", lambda _i, _c: (False, ""))
+    monkeypatch.setattr(risk_gate, "_market_regime_blocks_buy", lambda *_a, **_k: (False, ""))
     monkeypatch.setattr(risk_gate, "count_orders_today", lambda: 0)
     monkeypatch.setattr(risk_gate, "_post_trade_cash_estimate", lambda *_a: 1_000_000.0)
     monkeypatch.setattr(risk_gate, "_daily_pnl_pct", lambda _p, _c: pnl)
@@ -155,11 +155,14 @@ def test_live_known_loss_still_trips_the_breaker(monkeypatch):
     assert "Daily P&L" in (verdict.reason or "")
 
 
-def test_paper_daily_loss_zero_base_fails_safe(monkeypatch):
+def test_paper_daily_loss_zero_base_fails_closed(monkeypatch):
+    """A non-positive paper base cannot prove the day's loss. The docstring
+    contract is None (fail closed); it used to return 0.0, a flat healthy day."""
     monkeypatch.setattr(risk_gate, "paper_realized_pnl_usd_today",
                         lambda: pytest.fail("must not query the book with zero base"))
-    cfg = RiskConfig(paper_mode=True, paper_cash_usd=0.0)
-    assert risk_gate._daily_pnl_pct(PORTFOLIO, cfg) == 0.0
+    for base in (0.0, -1.0):
+        cfg = RiskConfig(paper_mode=True, paper_cash_usd=base)
+        assert risk_gate._daily_pnl_pct(PORTFOLIO, cfg) is None
 
 
 def test_paper_daily_loss_unavailable_ledger_is_not_flat(monkeypatch):
