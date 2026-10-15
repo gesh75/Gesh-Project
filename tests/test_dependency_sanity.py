@@ -20,10 +20,10 @@ REQ = ROOT / "requirements.txt"
 REQ_OPENBB = ROOT / "requirements-openbb.txt"
 LOCK = ROOT / "requirements.lock"
 
-# The pinned gesh-core commit: a6d287b (Precision Overlay). Declared as a LITERAL
+# The pinned gesh-core commit: 4f48962 (Kelly: AVOID/SELL never ADD, PR #96). Declared as a LITERAL
 # on purpose — bumping the dependency then requires editing this line, so the
 # change is reviewable.
-GESH_CORE_SHA = "a6d287bbb146add4d21523c9c9bffdfb6b3cfc8a"
+GESH_CORE_SHA = "4f48962632223da08c87ae6bc5e6bfca6f6b9121"
 _GESH_CORE_RE = re.compile(r"gesh-core @ git\+https://[^@\s]+@([0-9a-zA-Z._-]+)")
 SECURE_RUNTIME_PINS = {
     "cryptography": "50.0.1",

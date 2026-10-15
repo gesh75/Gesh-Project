@@ -33,7 +33,7 @@ docstring_parser==0.18.0
 fastapi==0.135.3
 fredapi==0.5.2
 frozendict==2.4.7
-gesh-core @ git+https://github.com/gesh75/gesh-core.git@a6d287bbb146add4d21523c9c9bffdfb6b3cfc8a
+gesh-core @ git+https://github.com/gesh75/gesh-core.git@4f48962632223da08c87ae6bc5e6bfca6f6b9121
 google-auth==2.56.2
 google-genai==1.73.1
 h11==0.16.0
