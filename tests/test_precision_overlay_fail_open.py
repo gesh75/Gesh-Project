@@ -118,6 +118,7 @@ def _load_autopilot_missing_overlay():
     )
     stub.TradeIntent = SimpleNamespace
     stub.evaluate = lambda *a, **k: SimpleNamespace(approved=False, reason="stub")
+    stub.stamp_market_regime = lambda snapshot, cfg, **k: snapshot
     stub.place = lambda *a, **k: SimpleNamespace(qty=0, target_price=0, status="SKIPPED")
     stub.active_stops = lambda: {}
     stub.get_marker = lambda *a, **k: None
@@ -138,6 +139,7 @@ def _load_autopilot_missing_overlay():
         .replace("from .config import", f"from {stub_name} import")
         .replace("from .contract import", f"from {stub_name} import")
         .replace("from .risk_gate import", f"from {stub_name} import")
+        .replace("from .market_regime import", f"from {stub_name} import")
         .replace("from .execution import", f"from {stub_name} import")
         .replace("from .state import", f"from {stub_name} import")
         .replace("from .alerts import", f"from {stub_name} import")

@@ -32,6 +32,14 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator:
     # env) so name-based tests run in bootstrap mode as they assume; allowlist-mode tests set
     # these explicitly via monkeypatch. Without this, a real LS_VARIANT_OBSERVER leaks in and
     # flips _tier_for to strict-allowlist, refusing every name-only payload.
+    # billing._alert_dead_letter lazily imports trading.alerts, whose import-time
+    # load_dotenv() re-injects the live checkout's .env AFTER the delenv above —
+    # the retry in the dead-letter test then saw LS_VARIANT_OBSERVER, flipped to
+    # strict-allowlist mode and refused the name-only payload (passes in a clean
+    # worktree with no .env). Import it first so dotenv has already run, and stub
+    # the Telegram send so no test can page the operator.
+    import trading.alerts as _alerts
+    monkeypatch.setattr(_alerts, "_send", lambda *a, **k: False)
     for _v in ("LS_VARIANT_OBSERVER", "LS_VARIANT_TRADER", "LS_VARIANT_DESK"):
         monkeypatch.delenv(_v, raising=False)
     import auth_users as au

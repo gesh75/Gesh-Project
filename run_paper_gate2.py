@@ -622,6 +622,14 @@ def main(results_path: str | Path | None = None) -> int:
             )
         except Exception as e:  # noqa: BLE001 — a missing ledger must not skip the chain
             print(f"{_t()} [gate] entry-gate inputs unavailable (non-fatal): {e}")
+        # Stamp the SPY-vs-200d regime once for the whole session so MARKET_REGIME
+        # reads the snapshot instead of fetching inside evaluate() per intent.
+        try:
+            from trading.config import load_risk_config as _load_cfg
+            from trading.market_regime import stamp_market_regime
+            stamp_market_regime(gate_payload, _load_cfg())
+        except Exception as e:  # noqa: BLE001 — best-effort; the gate's fallback still applies
+            print(f"{_t()} [gate] market-regime stamp unavailable (non-fatal): {e}")
         consensus = eng.get('consensus') if isinstance(eng.get('consensus'), dict) else {}
         confidence_by_sym = build_confidence_map(
             consensus,
