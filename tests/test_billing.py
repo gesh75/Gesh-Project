@@ -1202,3 +1202,73 @@ def test_non_owner_is_still_revoked(monkeypatch):
     res = _post("subscription_expired", status="expired", sub_id="sub_1")
     assert res["action"] == "revoke"
     assert au.get_user("buyer@example.com")["is_active"] == 0
+
+
+# ─── _conn(): SQLite concurrency + one-time schema init (Phase-3 hardening) ───────
+
+def test_conn_sets_busy_timeout_and_foreign_keys():
+    """A webhook burst must wait on a locked DB instead of raising `database is locked`
+    immediately; match auth_users._conn() (5 s busy_timeout, FK enforcement on)."""
+    with billing._conn() as con:
+        assert con.execute("PRAGMA busy_timeout").fetchone()[0] >= 5000
+        assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_conn_passes_timeout_to_sqlite_connect(monkeypatch):
+    import sqlite3
+    seen: dict = {}
+    real_connect = sqlite3.connect
+
+    def spy(path, *a, **k):
+        seen["timeout"] = k.get("timeout")
+        return real_connect(path, *a, **k)
+
+    monkeypatch.setattr(billing.sqlite3, "connect", spy)
+    with billing._conn():
+        pass
+    assert seen["timeout"] is not None and seen["timeout"] >= 5.0
+
+
+def test_conn_initialises_dedup_schema_once_per_db_path(monkeypatch):
+    """_claim/_complete/_unclaim open three connections per webhook; the DDL +
+    PRAGMA table_info migration must not run on each of them."""
+    calls = []
+    real_apply = billing._apply_dedup_schema
+    monkeypatch.setattr(billing, "_apply_dedup_schema",
+                        lambda con: calls.append(1) or real_apply(con))
+    billing._reset_dedup_schema_cache()
+    for _ in range(3):
+        with billing._conn() as con:
+            con.execute("SELECT 1 FROM processed_webhook_events LIMIT 1").fetchall()
+    assert len(calls) == 1
+
+
+def test_conn_schema_cache_is_per_path(monkeypatch, tmp_path):
+    """Pointing AUTH_DB_PATH at a fresh file (new tenant DB, test isolation, restore)
+    must still create the table there — the cache is keyed by path, not global."""
+    billing._reset_dedup_schema_cache()
+    with billing._conn():
+        pass
+    other = tmp_path / "other_auth.db"
+    monkeypatch.setattr(au, "AUTH_DB_PATH", other)
+    with billing._conn() as con:
+        names = {r["name"] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert "processed_webhook_events" in names
+
+
+def test_conn_rolls_back_on_error():
+    """auth_users._conn() rolls back on exception; billing must not leave a half-written
+    claim committed when the body raises."""
+    key = "rollback-key"
+    with pytest.raises(RuntimeError):
+        with billing._conn() as con:
+            con.execute(
+                "INSERT INTO processed_webhook_events (dedup_key, seen_at) VALUES (?, ?)",
+                (key, "2026-01-01T00:00:00+00:00"),
+            )
+            raise RuntimeError("boom")
+    with billing._conn() as con:
+        assert con.execute(
+            "SELECT 1 FROM processed_webhook_events WHERE dedup_key=?", (key,)
+        ).fetchone() is None

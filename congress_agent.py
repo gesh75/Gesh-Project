@@ -53,7 +53,10 @@ HEADERS = {"User-Agent": "GeshFinancial/1.0 georgy75@gmail.com"}
 
 # FMP congressional endpoints (activate with FMP_API_KEY). Senate and House are
 # SEPARATE feeds — both are required or every House trade is silently omitted.
-_FMP_KEY = os.getenv("FMP_API_KEY", "").strip()
+# Resolved at CALL time by _fmp_key() so a rotated key takes effect without a restart
+# and tests can monkeypatch.setenv. The module attribute is an OVERRIDE slot: None means
+# "read the environment"; a str (tests pin "" or "k") beats the environment.
+_FMP_KEY: str | None = None
 _FMP_ENDPOINTS: tuple[str, ...] = (
     "https://financialmodelingprep.com/stable/senate-latest?apikey={k}",
     "https://financialmodelingprep.com/stable/house-latest?apikey={k}",
@@ -62,7 +65,23 @@ _FMP_ENDPOINTS: tuple[str, ...] = (
 # Operator-configured JSON-array source (e.g. a self-hosted dump or a working mirror).
 # No baked-in default: the old public S3 buckets 403 now (see module docstring), so a
 # silent default would only burn a request per refresh and imply a source that is dead.
-_SOURCES: tuple[str, ...] = tuple(u for u in (os.getenv("CONGRESS_DATA_URL", "").strip(),) if u)
+# Same override-slot convention as _FMP_KEY; see _sources().
+_SOURCES: tuple[str, ...] | None = None
+
+
+def _fmp_key() -> str:
+    """FMP API key: module override if a test pinned one, else the live environment."""
+    if _FMP_KEY is not None:
+        return _FMP_KEY
+    return os.getenv("FMP_API_KEY", "").strip()
+
+
+def _sources() -> tuple[str, ...]:
+    """Operator JSON-array URLs: module override if pinned, else CONGRESS_DATA_URL now."""
+    if _SOURCES is not None:
+        return _SOURCES
+    url = os.getenv("CONGRESS_DATA_URL", "").strip()
+    return (url,) if url else ()
 
 DISCLOSURE_LAG_NOTE = (
     "Congress discloses trades up to 45 days after they happen (STOCK Act). This is "
@@ -94,17 +113,18 @@ def _fetch_from_sources() -> list[dict]:
     """One upstream sweep: FMP senate + house (keyed), then the operator URL."""
     rows: list[dict] = []
     # 1) FMP (keyed) — merge the senate + house latest feeds.
-    if _FMP_KEY:
+    key = _fmp_key()
+    if key:
         for tmpl in _FMP_ENDPOINTS:
             try:
-                r = requests.get(tmpl.format(k=_FMP_KEY), headers=HEADERS, timeout=12)
+                r = requests.get(tmpl.format(k=key), headers=HEADERS, timeout=12)
                 if r.ok and isinstance(data := r.json(), list):
                     rows.extend(data)
             except Exception:  # noqa: BLE001 — best-effort; degrade to empty
                 continue
     # 2) Operator-configured JSON-array URL (fallback / self-host).
     if not rows:
-        for url in _SOURCES:
+        for url in _sources():
             try:
                 r = requests.get(url, headers=HEADERS, timeout=12)
                 if r.ok and isinstance(data := r.json(), list) and data:
@@ -142,7 +162,7 @@ def _fetch_raw() -> list[dict]:
             _STATE["last_error"] = None
             return rows
         # Failure: stale-if-error — keep serving the previous good data, flag it.
-        _STATE["degraded"] = bool(_FMP_KEY or _SOURCES)
+        _STATE["degraded"] = bool(_fmp_key() or _sources())
         _STATE["last_error"] = "all configured sources failed or returned no data"
         if hit:
             return hit[2]
@@ -154,11 +174,12 @@ def source_status() -> dict:
     """Provenance for the public surfaces: source, chambers covered, fetched-at,
     and degraded flag — so an outage is never presented as successful empty data."""
     hit = _CACHE.get("_raw")
-    configured = bool(_FMP_KEY or _SOURCES)
+    key = _fmp_key()
+    configured = bool(key or _sources())
     return {
         "configured": configured,
-        "source": ("fmp" if _FMP_KEY else "custom-url") if configured else None,
-        "chambers": (["senate", "house"] if _FMP_KEY else []) if configured else [],
+        "source": ("fmp" if key else "custom-url") if configured else None,
+        "chambers": (["senate", "house"] if key else []) if configured else [],
         "fetched_at": (time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(hit[1]))
                        if hit else None),
         "degraded": _STATE["degraded"],

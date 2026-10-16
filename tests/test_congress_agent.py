@@ -247,3 +247,48 @@ def test_public_page_escapes_untrusted_strings():
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
     assert "Congress Trade Watch" in html
+
+
+# ─── env resolution is dynamic (Phase-3 hardening) ───────────────────────────────
+
+def test_env_key_is_read_at_call_time_without_reload(monkeypatch):
+    """Rotating FMP_API_KEY / CONGRESS_DATA_URL in the environment must take effect
+    on the next call — no module reload, no restart."""
+    monkeypatch.setattr(ca, "_FMP_KEY", None)        # no module-level override
+    monkeypatch.setattr(ca, "_SOURCES", None)
+    monkeypatch.setenv("FMP_API_KEY", "  rotated-key  ")
+    monkeypatch.setenv("CONGRESS_DATA_URL", "https://mirror.example/feed.json")
+    assert ca._fmp_key() == "rotated-key"
+    assert ca._sources() == ("https://mirror.example/feed.json",)
+    st = ca.source_status()
+    assert st["configured"] is True and st["source"] == "fmp"
+    monkeypatch.delenv("FMP_API_KEY")
+    monkeypatch.delenv("CONGRESS_DATA_URL")
+    assert ca._fmp_key() == "" and ca._sources() == ()
+    assert ca.source_status()["configured"] is False
+
+
+def test_fetch_uses_the_current_env_key(monkeypatch):
+    monkeypatch.setattr(ca, "_FMP_KEY", None)
+    monkeypatch.setattr(ca, "_SOURCES", None)
+    monkeypatch.setenv("FMP_API_KEY", "live-k2")
+    urls = []
+
+    class _R:
+        ok = True
+        def json(self): return []
+
+    monkeypatch.setattr(ca.requests, "get", lambda url, **k: urls.append(url) or _R())
+    ca._fetch_from_sources()
+    assert urls and all(u.endswith("apikey=live-k2") for u in urls)
+
+
+def test_module_attribute_override_still_wins(monkeypatch):
+    """Existing tests pin ca._FMP_KEY / ca._SOURCES directly; a monkeypatched module
+    attribute must beat whatever the ambient environment (or a loaded .env) says."""
+    monkeypatch.setenv("FMP_API_KEY", "ambient")
+    monkeypatch.setenv("CONGRESS_DATA_URL", "https://ambient.example/x")
+    monkeypatch.setattr(ca, "_FMP_KEY", "")
+    monkeypatch.setattr(ca, "_SOURCES", ())
+    assert ca._fmp_key() == "" and ca._sources() == ()
+    assert ca.source_status()["configured"] is False
