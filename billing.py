@@ -23,6 +23,8 @@ import hmac
 import logging
 import os
 import secrets
+import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -198,20 +200,59 @@ _DEDUP_COLUMNS = {"status": "TEXT NOT NULL DEFAULT 'completed'", "owner": "TEXT"
                   "claimed_at": "TEXT", "completed_at": "TEXT"}
 
 
+# Match auth_users._conn(): a webhook burst (LS retries fan out) or the autopilot's
+# concurrent writes must wait on a locked DB, not fail immediately with "database is
+# locked". Both the connect() timeout and the PRAGMA are set — the first covers the
+# initial lock acquisition, the second every statement after it.
+_BUSY_TIMEOUT_MS = auth_users._BUSY_TIMEOUT_MS
+
+# DDL + column migration ran on EVERY connection (3× per webhook: _claim, _complete,
+# _unclaim). It is idempotent, so run it once per DB path per process; keyed by path
+# (not a bare flag) because tests and tenant restores repoint AUTH_DB_PATH at fresh files.
+_DEDUP_SCHEMA_READY: set[str] = set()
+_DEDUP_SCHEMA_LOCK = threading.Lock()
+
+
+def _apply_dedup_schema(con: sqlite3.Connection) -> None:
+    con.executescript(_DEDUP_DDL)
+    have = {r["name"] for r in con.execute(
+        "PRAGMA table_info(processed_webhook_events)").fetchall()}
+    for col, decl in _DEDUP_COLUMNS.items():
+        if col not in have:
+            con.execute(f"ALTER TABLE processed_webhook_events ADD COLUMN {col} {decl}")
+    con.commit()
+
+
+def _ensure_dedup_schema(con: sqlite3.Connection, db_key: str) -> None:
+    if db_key in _DEDUP_SCHEMA_READY:
+        return
+    with _DEDUP_SCHEMA_LOCK:
+        if db_key in _DEDUP_SCHEMA_READY:
+            return
+        _apply_dedup_schema(con)
+        _DEDUP_SCHEMA_READY.add(db_key)
+
+
+def _reset_dedup_schema_cache() -> None:
+    """Test seam: forget which DB paths have been initialised."""
+    with _DEDUP_SCHEMA_LOCK:
+        _DEDUP_SCHEMA_READY.clear()
+
+
 @contextmanager
 def _conn():
-    import sqlite3
-    con = sqlite3.connect(auth_users.AUTH_DB_PATH)
+    db_path = auth_users.AUTH_DB_PATH
+    con = sqlite3.connect(db_path, timeout=_BUSY_TIMEOUT_MS / 1_000)
     con.row_factory = sqlite3.Row
     try:
-        con.executescript(_DEDUP_DDL)
-        have = {r["name"] for r in con.execute(
-            "PRAGMA table_info(processed_webhook_events)").fetchall()}
-        for col, decl in _DEDUP_COLUMNS.items():
-            if col not in have:
-                con.execute(f"ALTER TABLE processed_webhook_events ADD COLUMN {col} {decl}")
+        con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+        con.execute("PRAGMA foreign_keys = ON")
+        _ensure_dedup_schema(con, str(db_path))
         yield con
         con.commit()
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
 
