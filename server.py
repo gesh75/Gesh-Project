@@ -655,8 +655,19 @@ async def _auth_gate_middleware(request: Request, call_next):
       protected HTML page → 302 /login   ·   protected /api/* → 401 JSON.
     Leaves the existing per-endpoint X-API-Key gate on mutating endpoints intact."""
     if auth_users.auth_enabled():
+        path = request.url.path
+        # Exact public pages (/tools, the calculators, robots, sitemap) are not
+        # prefixes. A trailing slash would miss the allowlist and 302 to /login
+        # before routing can canonicalize, so Google indexes the noindex login
+        # page instead of the sitemap URL. Send the slash form to the canonical
+        # path. A neighbour such as /tools/not-a-tool/ is not in the allowlist
+        # and stays on the login wall.
+        if len(path) > 1 and path.endswith("/"):
+            canonical = path.rstrip("/")
+            if canonical in auth_users.PUBLIC_EXACT_PATHS:
+                return RedirectResponse(url=str(request.url.replace(path=canonical)), status_code=308)
         decision = auth_users.gate_decision(
-            request.url.path, request.cookies.get(auth_users.COOKIE_NAME)
+            path, request.cookies.get(auth_users.COOKIE_NAME)
         )
         if decision == "redirect":
             return RedirectResponse(url="/login", status_code=302)
