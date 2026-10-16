@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import urlparse
 
 import pytest
 from seo_helpers import (
@@ -177,6 +178,33 @@ def test_private_api_routes_stay_gated(seo_anon: TestClient, path: str) -> None:
 @pytest.mark.parametrize("path", PRIVATE_HTML)
 def test_private_html_routes_stay_gated(seo_anon: TestClient, path: str) -> None:
     r = seo_anon.get(path, follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/login"
+
+
+# Google fetches the slash form of a sitemap URL. Exact-match public tools are not
+# prefixes, so /tools/ used to miss the allowlist and the login wall answered 302
+# before routing could canonicalize. That sends the crawler at a noindex login page.
+@pytest.mark.parametrize(
+    "slashed, canonical",
+    [
+        ("/tools/", "/tools"),
+        ("/tools/portfolio-xray/", "/tools/portfolio-xray"),
+        ("/tools/monte-carlo-simulator/", "/tools/monte-carlo-simulator"),
+        ("/tools/kelly-calculator/", "/tools/kelly-calculator"),
+    ],
+)
+def test_trailing_slash_on_exact_public_page_redirects_to_canonical(
+    seo_anon: TestClient, slashed: str, canonical: str
+) -> None:
+    r = seo_anon.get(slashed + "?utm=gsc", follow_redirects=False)
+    assert r.status_code == 308, (slashed, r.status_code, r.headers.get("location"))
+    parsed = urlparse(r.headers["location"])
+    assert parsed.path == canonical
+    assert parsed.query == "utm=gsc"
+
+
+def test_trailing_slash_on_an_unknown_tool_stays_behind_the_login_wall(seo_anon: TestClient) -> None:
+    r = seo_anon.get("/tools/not-a-tool/", follow_redirects=False)
     assert r.status_code == 302 and r.headers["location"] == "/login"
 
 
