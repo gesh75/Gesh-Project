@@ -15,8 +15,9 @@ these bands is ring-fenced to the agentic experiment account in
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping
+from typing import Any
 
 from risk_bands import TRAIL_MULT, TRAIL_MAX, TRAIL_MIN, exit_bands
 
@@ -56,6 +57,27 @@ def exit_advice(
             "tracked_by_kelly": sym in kelly_by_symbol,
         })
     return out
+
+
+def exit_advice_with_lessons(
+    holdings: list[str],
+    kelly: Mapping[str, Mapping[str, object]],
+    positions: Sequence[Mapping[str, Any]] | None = None,
+    **lesson_kwargs: Any,
+) -> dict[str, object]:
+    """Exit bands plus lesson notes. ``exit_advice`` itself is unchanged.
+
+    Imported inside the function: ``trading``'s package init loads gesh-core
+    state, and the band table must stay importable without that.
+    """
+    from trading.portfolio_lessons import lesson_notes
+
+    bands = exit_advice(holdings, kelly)
+    notes = [] if not positions else lesson_notes(positions=positions, **lesson_kwargs)
+    return {
+        "bands": bands,
+        "lesson_notes": [note.as_dict() for note in notes],
+    }
 
 
 def _holdings_from_engine(engine: Mapping[str, object]) -> list[str]:
