@@ -218,7 +218,7 @@
     <div class="card" style="margin-bottom:18px">
       <div class="ch">
         <div style="display:flex;align-items:center;gap:10px">
-          <span class="ct">Lesson notes</span>
+          <span class="ct">Portfolio Lesson Notes (Watch / Info)</span>
           <span class="badge b-green" style="font-size:10px">ADVISORY · NOT AN ORDER</span>
         </div>
       </div>
@@ -1517,7 +1517,7 @@ async function runPaperSession(){
     if(!response.ok) throw new Error('unavailable');
     return response.json();
   }).then(function(data){
-    const notes = (data && data.lesson_notes) || [];
+    const notes = (data && (data.notes || data.lesson_notes)) || [];
     const bands = (data && data.bands) || [];
     const measured = new Set((data && data.measured_tiers) || []);
     const shown = notes.filter(function(note){

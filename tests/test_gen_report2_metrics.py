@@ -427,8 +427,10 @@ def _book_engine(holding: dict, kelly: dict) -> dict:
 
 def test_report_shows_two_x_note_and_measured_band_only(tmp_path):
     doubled = _render(tmp_path, _book_engine(_book_holding(), {"NVDA": {"volatility_tier": "HIGH"}}))
+    assert "Portfolio Lesson Notes (Watch / Info)" in doubled
     assert "2.50x cost" in doubled
     assert "does not size a sale" in doubled
+    assert "Advisory only. Nothing here is an order." in doubled
     assert "Advisory band" in doubled
     assert "not an order" in doubled
     assert "12.00%" in doubled

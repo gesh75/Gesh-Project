@@ -4,6 +4,11 @@ Repo-only memory for `gesh-project`. Cross-repo lessons stay in `~/.cursor/AGENT
 
 ## Entries
 
+### [2026-10-19] [report] Chart pages already contain `<script>`
+- **Mistake:** An XSS assertion required `"<script>"` to be absent from `gen_report2.py` output. The report's Chart.js blocks are real script tags, so the check failed even though the lesson note was escaped.
+- **Avoid:** Treating every `<script>` in that report as an injection. The existing gate compares the raw payload with its escaped form.
+- **Instead:** Assert the payload string is absent and the escaped note (`&lt;SCRIPT&gt;…`) is present.
+
 ### [2026-10-19] [server] A new import above `llm_gateway` fails the dotenv probe
 - **Mistake:** `import gesh_exit_advice` was placed at the top of `server.py`, ahead of `import llm_gateway`. CI then failed `test_server_env_bootstrap`: that test copies only `server.py` and a stub `llm_gateway.py`, so the new import raised `ModuleNotFoundError` before the probe could run. The same route was also absent from the customer leak-sweep lists, so `/api/exit-advice` failed `test_all_customer_gets_categorized`. The local pre-push gate reported green because its pytest warning path was the live checkout, which did not contain the new route.
 - **Avoid:** Adding any local import above `llm_gateway` in `server.py`. Adding a `/api/` GET without a `COVERED` or `EXCLUDED` row in `tests/test_customer_leak_sweep.py`. Trusting the pre-push isolation count when it was collected from a different checkout.

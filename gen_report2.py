@@ -314,11 +314,11 @@ def _lesson_asides(rows, kelly):
     try:
         from gesh_exit_advice import exit_advice_with_lessons, positions_from_holdings
     except Exception:
-        return {}
+        return {}, []
     positions = positions_from_holdings(rows)
     symbols = [row["ticker"] for row in positions]
     if not symbols:
-        return {}
+        return {}, []
     kelly_map = kelly if isinstance(kelly, dict) else {}
     usable = {}
     measured = set()
@@ -329,14 +329,21 @@ def _lesson_asides(rows, kelly):
         usable[symbol] = value
         if "volatility_tier" in value:
             measured.add(symbol)
+    lesson_kwargs = {}
+    if isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0:
+        lesson_kwargs["total_nav"] = total
     try:
-        wrapped = exit_advice_with_lessons(symbols, usable, positions=positions)
+        wrapped = exit_advice_with_lessons(
+            symbols, usable, positions=positions, **lesson_kwargs
+        )
     except Exception:
-        return {}
+        return {}, []
     by_symbol: dict[str, dict] = {}
+    visible: list[dict] = []
     for note in wrapped.get("lesson_notes") or []:
         if not isinstance(note, dict) or note.get("severity") not in ("watch", "info"):
             continue
+        visible.append(note)
         symbol = str(note.get("symbol") or "").upper()
         if not symbol:
             continue
@@ -350,7 +357,27 @@ def _lesson_asides(rows, kelly):
             continue
         slot = by_symbol.setdefault(symbol, {"notes": [], "band": None})
         slot["band"] = band
-    return by_symbol
+    return by_symbol, visible
+
+
+def _lesson_notes_section(notes) -> str:
+    """Book-level watch/info notes. Empty when the book produced none."""
+    items: list[str] = []
+    for note in notes or []:
+        if not isinstance(note, dict) or note.get("severity") not in ("watch", "info"):
+            continue
+        symbol = str(note.get("symbol") or "").strip()
+        prefix = f"{symbol}: " if symbol else ""
+        items.append(f"<li>{_html(prefix + str(note.get('text') or ''))}</li>")
+    if not items:
+        return ""
+    body = "".join(items)
+    return (
+        '<div class="section-title">Portfolio Lesson Notes (Watch / Info)</div>'
+        f'<ul class="risk-list">{body}</ul>'
+        '<div style="font-size:11px;color:#888;margin:-8px 0 16px">'
+        "Advisory only. Nothing here is an order.</div>"
+    )
 
 
 def holding_card(h):
@@ -518,7 +545,8 @@ def holding_card(h):
 </div>"""
 
 
-LESSON_ASIDE = _lesson_asides(holdings, kelly_res)
+LESSON_ASIDE, LESSON_NOTES = _lesson_asides(holdings, kelly_res)
+lesson_notes_section_html = _lesson_notes_section(LESSON_NOTES)
 holdings_html = "\n".join(holding_card(h) for h in holdings)
 
 # ─── Action table ─────────────────────────────────────────────────────────────
@@ -1405,6 +1433,7 @@ html = f"""<!DOCTYPE html>
   </div>
 
   <!-- Holdings -->
+  {lesson_notes_section_html}
   <div class="section-title">📈 Holdings Analysis ({len(holdings)} positions)</div>
   {holdings_html}
 

@@ -129,9 +129,16 @@ def advice_for_engine(engine: Mapping[str, Any]) -> dict[str, object]:
             if "volatility_tier" in value:
                 measured.append(symbol)
     wrapped = exit_advice_with_lessons(symbols, kelly, positions=positions)
+    lesson_notes = wrapped["lesson_notes"]
+    notes = [
+        note
+        for note in lesson_notes
+        if isinstance(note, dict) and note.get("severity") in ("watch", "info")
+    ]
     return {
         "bands": wrapped["bands"],
-        "lesson_notes": wrapped["lesson_notes"],
+        "lesson_notes": lesson_notes,
+        "notes": notes,
         "measured_tiers": measured,
     }
 
