@@ -1,6 +1,6 @@
 """Tests for gesh_exit_advice.py — advisory exit-band table from the engine."""
 
-from gesh_exit_advice import _holdings_from_engine, exit_advice
+from gesh_exit_advice import _holdings_from_engine, advice_for_engine, exit_advice
 
 KELLY = {
     "NVDA": {"volatility_tier": "MEDIUM"},
@@ -64,3 +64,40 @@ def test_holdings_from_engine_skips_blank_and_non_rows():
     assert _holdings_from_engine(engine) == ["NVDA", "MU"]
     # A dict-shaped holdings blob is not a book — iterating it must not invent tickers.
     assert _holdings_from_engine({"holdings": {"NVDA": {"equity": 1}}}) == []
+
+
+def test_advice_for_engine_keeps_explicit_zero_and_marks_only_real_tiers():
+    payload = advice_for_engine(
+        {
+            "holdings": [
+                {
+                    "symbol": "nvda",
+                    "quantity": 10,
+                    "average_buy_price": 40,
+                    "price": 100,
+                    "shares_held_for_sells": 0,
+                }
+            ],
+            "kelly": {
+                "NVDA": {"optimal_pct": 5},
+                "MU": {"volatility_tier": "HIGH"},
+                "bad": ["not-a-row"],
+            },
+        }
+    )
+    notes = {note["lesson_id"]: note for note in payload["lesson_notes"]}
+    assert "round_trip" in notes
+    assert notes["round_trip"]["severity"] == "watch"
+    assert "does not size a sale" in notes["round_trip"]["text"]
+    assert payload["measured_tiers"] == ["MU"]
+    band = {row["symbol"]: row for row in payload["bands"]}["NVDA"]
+    assert band["tracked_by_kelly"] is True
+    assert band["volatility_tier"] == "MEDIUM"
+    assert set(band) == {
+        "symbol",
+        "volatility_tier",
+        "take_profit_pct",
+        "stop_loss_pct",
+        "trailing_pct",
+        "tracked_by_kelly",
+    }

@@ -334,3 +334,44 @@ def test_build_reads_raw_path(tmp_path):
     snap = B.build(raw_path=raw_path, output=out, now=NOW)
     assert snap["holdings"][0]["symbol"] == "NVDA"
     assert out.is_file()
+
+
+def test_snapshot_without_history_pages_has_no_history_key(tmp_path):
+    snap = _build(tmp_path)
+    assert "history" not in snap
+    assert snap["equity_summary"]["deployable"] == pytest.approx(1500.0)
+
+
+def test_single_day_over_ceiling_is_a_gap_and_orders_stay_out(tmp_path, monkeypatch):
+    raw = _raw()
+    raw["history_pages"] = [
+        {
+            "start": "2026-10-01",
+            "end": "2026-10-01",
+            "raw_bytes": 20_000,
+            "results": [{"id": "order-secret-1", "symbol": "NVDA", "executed_at": "2026-10-01T14:00:00Z"}],
+        }
+    ]
+    override = tmp_path / "overrides.json"
+    override.write_text(
+        json.dumps([{"date": "2026-10-02", "type": "deposit", "amount": 10, "source": "local"}])
+    )
+    monkeypatch.setenv("GESH_STATEMENT_OVERRIDES", str(override))
+    snap = _build(tmp_path, raw)
+    history = snap["history"]
+    assert history["order_count"] == 0
+    assert history["gaps"] == [
+        {"start": "2026-10-01", "end": "2026-10-01", "symbol": None, "reason": "truncated"}
+    ]
+    assert history["statement_override_count"] == 1
+    assert history["statement_override_dates"] == ["2026-10-02"]
+    assert "order-secret-1" not in json.dumps(snap)
+    assert snap["equity_summary"]["deployable"] == pytest.approx(1500.0)
+
+
+def test_missing_statement_override_file_does_not_drop_the_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("GESH_STATEMENT_OVERRIDES", str(tmp_path / "missing.json"))
+    snap = _build(tmp_path)
+    assert snap["history"]["statement_overrides_error"] == "missing"
+    assert snap["holdings"][0]["symbol"] == "NVDA"
+    assert snap["equity_summary"]["deployable"] == pytest.approx(1500.0)

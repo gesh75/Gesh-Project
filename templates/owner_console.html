@@ -215,6 +215,17 @@
         </div>
       </div>
     </div>
+    <div class="card" style="margin-bottom:18px">
+      <div class="ch">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="ct">Lesson notes</span>
+          <span class="badge b-green" style="font-size:10px">ADVISORY · NOT AN ORDER</span>
+        </div>
+      </div>
+      <div id="lesson-notes" class="deep-placeholder">
+        <div class="deep-ph-text">Loading advisory notes for this book.</div>
+      </div>
+    </div>
   </div>
 <!--/GESH_BLOCK:owner_block_12-->
 <!--GESH_BLOCK:owner_block_13-->
@@ -1498,6 +1509,43 @@ async function runPaperSession(){
   btn.disabled=false; btn.textContent='▶ Simulate Today';
 }
 
+
+(function loadLessonNotes(){
+  const box = document.getElementById('lesson-notes');
+  if(!box) return;
+  fetch('/api/exit-advice').then(function(response){
+    if(!response.ok) throw new Error('unavailable');
+    return response.json();
+  }).then(function(data){
+    const notes = (data && data.lesson_notes) || [];
+    const bands = (data && data.bands) || [];
+    const measured = new Set((data && data.measured_tiers) || []);
+    const shown = notes.filter(function(note){
+      return note && (note.severity === 'watch' || note.severity === 'info');
+    });
+    box.replaceChildren();
+    if(!shown.length){
+      box.textContent = 'No lesson notes for the current book.';
+      return;
+    }
+    shown.forEach(function(note){
+      const p = document.createElement('p');
+      const symbol = note.symbol || '';
+      let line = (symbol ? symbol + ': ' : '') + (note.text || '');
+      const band = bands.find(function(row){
+        return row && row.symbol === symbol && row.tracked_by_kelly && measured.has(symbol);
+      });
+      if(band){
+        line += ' Advisory band TP ' + band.take_profit_pct + '% SL ' + band.stop_loss_pct
+          + '% trail ' + band.trailing_pct + '%. Not an order.';
+      }
+      p.textContent = line;
+      box.appendChild(p);
+    });
+  }).catch(function(){
+    box.textContent = 'Lesson notes unavailable.';
+  });
+})();
 
 /* Operator entries for the command palette, appended to the shared (empty) list. */
 CMDK_ACTIONS.push(

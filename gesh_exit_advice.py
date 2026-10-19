@@ -80,6 +80,62 @@ def exit_advice_with_lessons(
     }
 
 
+def positions_from_holdings(holdings: object) -> list[dict[str, Any]]:
+    """Copy price and cost fields the lesson notes know how to read.
+
+    A missing high-water or protective-order field is left off the row.
+    An explicit zero is kept.
+    """
+    if isinstance(holdings, (str, bytes)) or not isinstance(holdings, Sequence):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in holdings:
+        if not isinstance(item, Mapping):
+            continue
+        ticker = str(item.get("symbol") or item.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        row: dict[str, Any] = {
+            "ticker": ticker,
+            "qty": item.get("quantity", item.get("qty")),
+            "avg_cost": item.get("average_buy_price", item.get("avg_cost")),
+            "current_price": item.get("price", item.get("current_price")),
+        }
+        for key in ("high_water_price", "shares_held_for_sells", "entry_date"):
+            if key in item and item[key] is not None:
+                row[key] = item[key]
+        rows.append(row)
+    return rows
+
+
+def advice_for_engine(engine: Mapping[str, Any]) -> dict[str, object]:
+    """Bands plus lesson notes for one engine document.
+
+    ``measured_tiers`` lists symbols whose Kelly row actually carried a
+    volatility tier. A missing tier still produces the MEDIUM fallback band,
+    and that fallback is not marked measured.
+    """
+    positions = positions_from_holdings(engine.get("holdings"))
+    symbols = [row["ticker"] for row in positions]
+    raw_kelly = engine.get("kelly") or {}
+    kelly: dict[str, Mapping[str, object]] = {}
+    measured: list[str] = []
+    if isinstance(raw_kelly, Mapping):
+        for key, value in raw_kelly.items():
+            if not isinstance(value, Mapping):
+                continue
+            symbol = str(key).upper()
+            kelly[symbol] = value
+            if "volatility_tier" in value:
+                measured.append(symbol)
+    wrapped = exit_advice_with_lessons(symbols, kelly, positions=positions)
+    return {
+        "bands": wrapped["bands"],
+        "lesson_notes": wrapped["lesson_notes"],
+        "measured_tiers": measured,
+    }
+
+
 def _holdings_from_engine(engine: Mapping[str, object]) -> list[str]:
     rows = engine.get("holdings", []) or []
     syms: list[str] = []

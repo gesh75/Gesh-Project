@@ -24,10 +24,13 @@ holding as surfaces are added:
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
 from starlette.testclient import TestClient
+
+import gesh_exit_advice
 
 # The owner's real book, from live_portfolio_snapshot.json. None of these may
 # ever appear in a customer response unless the CUSTOMER typed them.
@@ -256,3 +259,38 @@ def test_one_customer_cannot_read_another_customers_book(client, monkeypatch):
     _as(server, monkeypatch, OTHER_CUSTOMER)
     positions = c.get("/api/mybook").json()["data"]["positions"]
     assert positions == [], "another customer's positions were visible"
+
+
+def test_exit_advice_stays_on_the_owner_side(client, monkeypatch, tmp_path):
+    server, c = client
+    engine = tmp_path / "engine.json"
+    engine.write_text(
+        json.dumps(
+            {
+                "holdings": [
+                    {
+                        "symbol": "NVDA",
+                        "quantity": 10,
+                        "average_buy_price": 40,
+                        "price": 100,
+                        "equity": 1000,
+                    }
+                ],
+                "kelly": {"NVDA": {"volatility_tier": "HIGH"}},
+            }
+        )
+    )
+    monkeypatch.setattr(gesh_exit_advice, "ENGINE", engine)
+    _as(server, monkeypatch, CUSTOMER_EMAIL)
+    denied = c.get("/api/exit-advice")
+    assert denied.status_code == 403
+    assert "NVDA" not in denied.text
+    assert "does not size a sale" not in denied.text
+
+    _as(server, monkeypatch, OWNER_EMAIL)
+    allowed = c.get("/api/exit-advice")
+    assert allowed.status_code == 200
+    body = allowed.json()
+    assert body["available"] is True
+    assert any(note["symbol"] == "NVDA" for note in body["lesson_notes"])
+    assert "NVDA" in body["measured_tiers"]
