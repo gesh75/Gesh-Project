@@ -249,6 +249,10 @@ EXCLUDED: dict[str, str] = {
                         "customer's data; per-user isolation locked by tests/test_preferences.py",
     "/api/symbol-search": "public reference data (ticker + company name) from the Alpaca "
                           "asset universe — no owner positions/dollars, no LLM",
+    "/api/exit-advice": "OWNER-ONLY lesson notes and Kelly bands for the operator book "
+                        "(403s customer sessions). The 200-with-masking contract cannot "
+                        "apply to a route customers cannot read. Gate locked by "
+                        "tests/test_customer_owner_isolation.py",
     "/api/usage/summary": "OWNER-ONLY metering view (403s customer sessions — locked by "
                           "tests/test_mybook.py); the sweep's 200-with-masking contract "
                           "cannot apply to a route customers cannot read",

@@ -25,7 +25,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 # import time. Existing process/launchd variables remain authoritative.
 load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
 
-import gesh_exit_advice
 import llm_gateway
 import price_source  # locked yf.download adapter (thread-safety)
 from run_manifest import atomic_write_json
@@ -2354,7 +2353,14 @@ def daily_report_page(request: Request):
 
 @app.get("/api/exit-advice")
 def api_exit_advice(request: Request):
-    """Owner book notes and Kelly bands. Customers are refused before this runs."""
+    """Owner book notes and Kelly bands. Customers are refused before this runs.
+
+    Imported here, not at module top: the dotenv bootstrap test copies only
+    ``server.py`` plus a stub ``llm_gateway``, and that import must stay the
+    first local import after ``load_dotenv``.
+    """
+    import gesh_exit_advice
+
     _require_owner_view(request)
     path = gesh_exit_advice.ENGINE
     empty = {"bands": [], "lesson_notes": [], "measured_tiers": [], "available": False}
