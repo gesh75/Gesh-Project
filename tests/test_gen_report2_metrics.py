@@ -397,3 +397,52 @@ def test_prior_et_day_snapshot_is_labeled_not_today(tmp_path):
     )
     assert 'id="asof-write"' in report
     assert "Not a new session" in report
+
+
+def _book_holding(**overrides) -> dict:
+    row = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "quantity": 10.0,
+        "equity": 1000.0,
+        "average_buy_price": 40.0,
+        "percent_change": 150.0,
+    }
+    row.update(overrides)
+    return row
+
+
+def _book_engine(holding: dict, kelly: dict) -> dict:
+    return {
+        "holdings": [holding],
+        "equity_summary": {"total": 1000.0, "cash": 0.0, "portfolio_equity": 1000.0},
+        "monte_carlo": {},
+        "vol_models": {},
+        "kelly": kelly,
+        "consensus": {},
+        "regime": {},
+        "ai_result": {},
+    }
+
+
+def test_report_shows_two_x_note_and_measured_band_only(tmp_path):
+    doubled = _render(tmp_path, _book_engine(_book_holding(), {"NVDA": {"volatility_tier": "HIGH"}}))
+    assert "Portfolio Lesson Notes (Watch / Info)" in doubled
+    assert "2.50x cost" in doubled
+    assert "does not size a sale" in doubled
+    assert "Advisory only. Nothing here is an order." in doubled
+    assert "Advisory band" in doubled
+    assert "not an order" in doubled
+    assert "12.00%" in doubled
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    unchanged = _render(
+        plain,
+        _book_engine(
+            _book_holding(price=100.0, average_buy_price=90.0, equity=1000.0, percent_change=11.1),
+            {"NVDA": {"optimal_pct": 5}},
+        ),
+    )
+    assert "does not size a sale" not in unchanged
+    assert "Advisory band" not in unchanged

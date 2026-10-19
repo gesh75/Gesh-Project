@@ -304,6 +304,82 @@ tape_html = " &nbsp;|&nbsp; ".join(tape_items * 3)
 
 
 # ─── Holdings cards ───────────────────────────────────────────────────────────
+def _lesson_asides(rows, kelly):
+    """Watch/info notes, plus a band only when the engine stored a real tier.
+
+    Imported inside the function: the lesson module loads through ``trading``,
+    whose package init pulls gesh-core. A missing import must leave the report
+    intact.
+    """
+    try:
+        from gesh_exit_advice import exit_advice_with_lessons, positions_from_holdings
+    except Exception:
+        return {}, []
+    positions = positions_from_holdings(rows)
+    symbols = [row["ticker"] for row in positions]
+    if not symbols:
+        return {}, []
+    kelly_map = kelly if isinstance(kelly, dict) else {}
+    usable = {}
+    measured = set()
+    for key, value in kelly_map.items():
+        if not isinstance(value, dict):
+            continue
+        symbol = str(key).upper()
+        usable[symbol] = value
+        if "volatility_tier" in value:
+            measured.add(symbol)
+    lesson_kwargs = {}
+    if isinstance(total, (int, float)) and not isinstance(total, bool) and total > 0:
+        lesson_kwargs["total_nav"] = total
+    try:
+        wrapped = exit_advice_with_lessons(
+            symbols, usable, positions=positions, **lesson_kwargs
+        )
+    except Exception:
+        return {}, []
+    by_symbol: dict[str, dict] = {}
+    visible: list[dict] = []
+    for note in wrapped.get("lesson_notes") or []:
+        if not isinstance(note, dict) or note.get("severity") not in ("watch", "info"):
+            continue
+        visible.append(note)
+        symbol = str(note.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        by_symbol.setdefault(symbol, {"notes": [], "band": None})
+        by_symbol[symbol]["notes"].append(str(note.get("text") or ""))
+    for band in wrapped.get("bands") or []:
+        if not isinstance(band, dict) or not band.get("tracked_by_kelly"):
+            continue
+        symbol = str(band.get("symbol") or "").upper()
+        if symbol not in measured:
+            continue
+        slot = by_symbol.setdefault(symbol, {"notes": [], "band": None})
+        slot["band"] = band
+    return by_symbol, visible
+
+
+def _lesson_notes_section(notes) -> str:
+    """Book-level watch/info notes. Empty when the book produced none."""
+    items: list[str] = []
+    for note in notes or []:
+        if not isinstance(note, dict) or note.get("severity") not in ("watch", "info"):
+            continue
+        symbol = str(note.get("symbol") or "").strip()
+        prefix = f"{symbol}: " if symbol else ""
+        items.append(f"<li>{_html(prefix + str(note.get('text') or ''))}</li>")
+    if not items:
+        return ""
+    body = "".join(items)
+    return (
+        '<div class="section-title">Portfolio Lesson Notes (Watch / Info)</div>'
+        f'<ul class="risk-list">{body}</ul>'
+        '<div style="font-size:11px;color:#888;margin:-8px 0 16px">'
+        "Advisory only. Nothing here is an order.</div>"
+    )
+
+
 def holding_card(h):
     sym = h["symbol"]
     px = h["price"]
@@ -384,6 +460,21 @@ def holding_card(h):
     exp_sym = explanations.get(sym, {})
     headline = exp_sym.get("headline", "") if isinstance(exp_sym, dict) else ""
 
+    aside = LESSON_ASIDE.get(str(sym).upper(), {})
+    band = aside.get("band") if isinstance(aside, dict) else None
+    notes = aside.get("notes") if isinstance(aside, dict) else None
+    lesson_html = ""
+    if isinstance(band, dict):
+        lesson_html += (
+            '<div style="font-size:11px;color:#9ad;margin-top:4px">'
+            f"Advisory band · TP {float(band['take_profit_pct']):.2f}% · "
+            f"SL {float(band['stop_loss_pct']):.2f}% · "
+            f"trail {float(band['trailing_pct']):.2f}% · not an order</div>"
+        )
+    if notes:
+        items = "".join(f"<li>{_html(text)}</li>" for text in notes)
+        lesson_html += f'<ul class="risk-list" style="margin-top:4px">{items}</ul>'
+
     return f"""
 <div class="holding-card">
   <div class="hc-header">
@@ -418,6 +509,7 @@ def holding_card(h):
       </div>
       <div style="font-size:11px;color:#ccc;margin:2px 0 4px">{_html(report_share_plan.holding_share_caption(h, kly, total))}</div>
       {pct_bar(curr_pct, 30)}
+      {lesson_html}
       <div class="hc-section-title" style="margin-top:10px">Volatility</div>
       <div style="font-size:11px;color:#aaa">GARCH {garch_label} &nbsp;|&nbsp; EWMA {ewma_label} annualised</div>
     </div>
@@ -453,6 +545,8 @@ def holding_card(h):
 </div>"""
 
 
+LESSON_ASIDE, LESSON_NOTES = _lesson_asides(holdings, kelly_res)
+lesson_notes_section_html = _lesson_notes_section(LESSON_NOTES)
 holdings_html = "\n".join(holding_card(h) for h in holdings)
 
 # ─── Action table ─────────────────────────────────────────────────────────────
@@ -1339,6 +1433,7 @@ html = f"""<!DOCTYPE html>
   </div>
 
   <!-- Holdings -->
+  {lesson_notes_section_html}
   <div class="section-title">📈 Holdings Analysis ({len(holdings)} positions)</div>
   {holdings_html}
 

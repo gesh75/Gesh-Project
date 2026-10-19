@@ -699,7 +699,14 @@ app.middleware("http")(seo_pages.noindex_middleware)
 
 _MODEL_BOOK_USD = float(os.getenv("CUSTOMER_MODEL_BOOK_USD", "100000"))
 # Raw proof and cockpit pages expose paper sizing and P&L — owner only.
-_OWNER_ONLY_PATHS = ("/report", "/invest", "/progress", "/watch", "/usage")
+_OWNER_ONLY_PATHS = (
+    "/report",
+    "/invest",
+    "/progress",
+    "/watch",
+    "/usage",
+    "/api/exit-advice",
+)
 # Customer research endpoints whose bodies carry NO owner dollars — single-ticker AI
 # research cards (public per-share fair value / price forecasts, not the owner's book).
 # Money-masking would wrongly REDACT their public price prose ("$180" -> "$•••") and
@@ -2342,6 +2349,33 @@ def daily_report_page(request: Request):
         return resp
     except Exception as exc:
         raise _server_error(exc)
+
+
+@app.get("/api/exit-advice")
+def api_exit_advice(request: Request):
+    """Owner book notes and Kelly bands. Customers are refused before this runs.
+
+    Imported here, not at module top: the dotenv bootstrap test copies only
+    ``server.py`` plus a stub ``llm_gateway``, and that import must stay the
+    first local import after ``load_dotenv``.
+    """
+    import gesh_exit_advice
+
+    _require_owner_view(request)
+    path = gesh_exit_advice.ENGINE
+    empty = {"bands": [], "lesson_notes": [], "measured_tiers": [], "available": False}
+    if not path.is_file():
+        return JSONResponse(empty)
+    try:
+        engine = _json.loads(path.read_text())
+        if not isinstance(engine, dict):
+            return JSONResponse(empty)
+        payload = dict(gesh_exit_advice.advice_for_engine(engine))
+    except Exception:
+        logger.exception("exit advice notes unavailable")
+        return JSONResponse(empty)
+    payload["available"] = True
+    return JSONResponse(payload)
 
 
 @app.get("/watch/data")

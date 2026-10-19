@@ -22,10 +22,13 @@ buying_power_leveraged is kept == deployable (sizing can never inflate on margin
 
 import json
 import math
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from rh_history_pages import MCP_SAFE_BYTE_CEILING, collect_pages, load_statement_overrides
 
 BASE_DIR = Path(__file__).parent
 OUTPUT = BASE_DIR / "live_portfolio_snapshot.json"
@@ -106,6 +109,158 @@ def quote_provenance(item: dict[str, Any], session: str) -> dict[str, Any]:
         "provider": "robinhood_mcp",
         "session": session,
         "timestamp_basis": "unavailable",
+    }
+
+
+def _history_metadata(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Gaps and statement-override counts. Equity fields stay untouched.
+
+    Recorded pages are replayed through the pager. A truncated single day
+    becomes a gap. Order rows are counted and not copied into the snapshot.
+    """
+    pages = raw.get("history_pages")
+    meta: dict[str, Any] = {}
+    if isinstance(pages, list) and pages:
+        gaps, count = _recorded_history(pages)
+        meta["gaps"] = gaps
+        meta["order_count"] = count
+    meta.update(_statement_meta())
+    return meta or None
+
+
+def _recorded_history(pages: list[object]) -> tuple[list[dict[str, Any]], int]:
+    clean = [page for page in pages if isinstance(page, dict)]
+    gaps: list[dict[str, Any]] = []
+    count = 0
+    plain = [page for page in clean if not page.get("symbol")]
+    scoped = [page for page in clean if page.get("symbol")]
+    if plain:
+        group_gaps, group_count = _collect_group(plain, None)
+        gaps.extend(group_gaps)
+        count += group_count
+    if scoped:
+        symbols = sorted(
+            {str(page.get("symbol") or "").strip().upper() for page in scoped if page.get("symbol")}
+        )
+        group_gaps, group_count = _collect_group(scoped, symbols or None)
+        gaps.extend(group_gaps)
+        count += group_count
+    return gaps, count
+
+
+def _collect_group(
+    pages: list[dict[str, Any]],
+    symbols: list[str] | None,
+) -> tuple[list[dict[str, Any]], int]:
+    window = _history_window(pages)
+    if window is None:
+        return [], 0
+    start, end = window
+
+    def fetch(
+        start_iso: str,
+        end_iso: str,
+        symbol: str | None,
+        cursor: str | None,
+    ) -> dict[str, Any]:
+        for page in pages:
+            if _page_matches(page, start_iso, end_iso, symbol, cursor):
+                return page
+        for page in pages:
+            if _covers_truncated(page, start_iso, end_iso, symbol):
+                raw_bytes = page.get("raw_bytes")
+                size = raw_bytes if isinstance(raw_bytes, int) and not isinstance(raw_bytes, bool) else 20_000
+                return {"results": [], "truncated": True, "raw_bytes": size}
+        return {"results": [], "raw_bytes": 0, "truncated": False}
+
+    collected = collect_pages(fetch, start, end, symbols)
+    gaps = [
+        {
+            "start": gap.start.isoformat(),
+            "end": gap.end.isoformat(),
+            "symbol": gap.symbol,
+            "reason": gap.reason,
+        }
+        for gap in collected.gaps
+    ]
+    return gaps, len(collected.orders)
+
+
+def _history_window(pages: list[dict[str, Any]]) -> tuple[str, str] | None:
+    starts: list[str] = []
+    ends: list[str] = []
+    for page in pages:
+        start = str(page.get("start") or "")[:10]
+        end = str(page.get("end") or "")[:10]
+        if len(start) == 10 and len(end) == 10 and end >= start:
+            starts.append(start)
+            ends.append(end)
+    if not starts:
+        return None
+    return min(starts), max(ends)
+
+
+def _page_cursor(page: dict[str, Any]) -> str | None:
+    cursor = page.get("cursor")
+    if isinstance(cursor, str) and cursor:
+        return cursor
+    return None
+
+
+def _page_symbol(page: dict[str, Any]) -> str | None:
+    symbol = page.get("symbol")
+    if symbol in (None, ""):
+        return None
+    return str(symbol).strip().upper() or None
+
+
+def _page_matches(
+    page: dict[str, Any],
+    start: str,
+    end: str,
+    symbol: str | None,
+    cursor: str | None,
+) -> bool:
+    return (
+        str(page.get("start") or "")[:10] == start
+        and str(page.get("end") or "")[:10] == end
+        and _page_symbol(page) == symbol
+        and _page_cursor(page) == cursor
+    )
+
+
+def _covers_truncated(page: dict[str, Any], start: str, end: str, symbol: str | None) -> bool:
+    raw_bytes = page.get("raw_bytes")
+    over_ceiling = (
+        isinstance(raw_bytes, int)
+        and not isinstance(raw_bytes, bool)
+        and raw_bytes >= MCP_SAFE_BYTE_CEILING
+    )
+    if page.get("truncated") is not True and not over_ceiling:
+        return False
+    page_start = str(page.get("start") or "")[:10]
+    page_end = str(page.get("end") or "")[:10]
+    if not page_start or not page_end or page_start > start or page_end < end:
+        return False
+    return _page_symbol(page) == symbol
+
+
+def _statement_meta() -> dict[str, Any]:
+    if not os.environ.get("GESH_STATEMENT_OVERRIDES", "").strip():
+        return {}
+    try:
+        rows = load_statement_overrides()
+    except FileNotFoundError:
+        return {"statement_overrides_error": "missing"}
+    except Exception as exc:
+        print(
+            f"[build_snapshot] statement overrides not loaded: {type(exc).__name__}",
+            flush=True,
+        )
+        return {"statement_overrides_error": "invalid"}
+    return {
+        "statement_override_count": len(rows),
+        "statement_override_dates": [str(row.get("date") or "") for row in rows],
     }
 
 
@@ -210,6 +365,9 @@ def build(
             "adjusted_equity_previous_close": round(prev_eq_positions + deployable, 2),
         },
     }
+    history = _history_metadata(raw)
+    if history is not None:
+        snapshot["history"] = history
 
     if not holdings:
         print("[build_snapshot] ERROR: 0 holdings parsed from MCP dump", flush=True)
