@@ -6,9 +6,17 @@ Pure string rendering. No owner data, broker, LLM or billing access.
 from __future__ import annotations
 
 import html as _html
+import json
+import os
+import re
 from typing import Any
 
 import seo_pages
+
+# Cloudflare Web Analytics — token is never hardcoded. Unset / invalid → no beacon.
+CF_WEB_ANALYTICS_TOKEN_ENV = "CF_WEB_ANALYTICS_TOKEN"
+CF_WEB_ANALYTICS_SCRIPT_SRC = "https://static.cloudflareinsights.com/beacon.min.js"
+_CF_WEB_ANALYTICS_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 DISCLAIMER = (
     "Educational illustration — not investment advice. GESH Financial is not a registered "
@@ -141,10 +149,28 @@ def free_offer() -> dict[str, Any]:
     }
 
 
+def cf_web_analytics_token() -> str:
+    """Return the configured beacon token, or '' if unset / not a safe token shape."""
+    raw = os.getenv(CF_WEB_ANALYTICS_TOKEN_ENV, "").strip()
+    if not raw or _CF_WEB_ANALYTICS_TOKEN_RE.fullmatch(raw) is None:
+        return ""
+    return raw
+
+
+def cf_web_analytics_beacon() -> str:
+    """One shared Cloudflare Web Analytics snippet, or '' when the token is unset."""
+    token = cf_web_analytics_token()
+    if not token:
+        return ""
+    payload = json.dumps({"token": token})
+    return f"<script defer src='{CF_WEB_ANALYTICS_SCRIPT_SRC}' data-cf-beacon='{payload}'></script>"
+
+
 def page(head: str, body: str, *, extra_head: str = "") -> str:
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"{head}<style>{_CSS}</style>{extra_head}</head><body>"
-        f'{nav_html()}<main class="wrap">{body}</main>{footer_html()}</body></html>'
+        f'{nav_html()}<main class="wrap">{body}</main>{footer_html()}'
+        f"{cf_web_analytics_beacon()}</body></html>"
     )

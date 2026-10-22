@@ -647,7 +647,9 @@ def test_tools_index_has_no_signup_form(client) -> None:
 def test_csp_allows_the_inline_enhancement_and_same_origin_post(client) -> None:
     csp = client.get("/tools/kelly-calculator").headers["content-security-policy"]
     assert "script-src 'self' 'unsafe-inline'" in csp
-    assert "connect-src 'self'" in csp and "form-action 'self'" in csp
+    assert "https://static.cloudflareinsights.com" in csp
+    assert "connect-src 'self' https://cloudflareinsights.com" in csp
+    assert "form-action 'self'" in csp
 
 
 def test_json_endpoint_rejects_non_json_content_type(client, mkt_db) -> None:

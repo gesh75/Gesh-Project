@@ -1456,16 +1456,20 @@ async def _customer_view_after_auth(request: Request, call_next, path: str):
 # connect-src/img-src/script-src so an injected handler CANNOT beacon data to an
 # attacker host or pull external script — the classic XSS exfiltration channels.
 # Chart.js is the one external script, allow-listed by exact host + SRI (below).
+# Cloudflare Web Analytics (optional, token-gated in seo_layout) needs its
+# beacon host in script-src and its collector in connect-src.
 _CHARTJS_HOST = "https://cdn.jsdelivr.net"
 _FONTS_CSS = "https://fonts.googleapis.com"
 _FONTS_FILES = "https://fonts.gstatic.com"
+_CF_INSIGHTS_SCRIPT = "https://static.cloudflareinsights.com"
+_CF_INSIGHTS_CONNECT = "https://cloudflareinsights.com"
 _CSP = (
     "default-src 'self'; "
-    f"script-src 'self' 'unsafe-inline' {_CHARTJS_HOST}; "
+    f"script-src 'self' 'unsafe-inline' {_CHARTJS_HOST} {_CF_INSIGHTS_SCRIPT}; "
     f"style-src 'self' 'unsafe-inline' {_FONTS_CSS}; "
     "img-src 'self' data:; "
     f"font-src 'self' data: {_FONTS_FILES}; "
-    "connect-src 'self'; "
+    f"connect-src 'self' {_CF_INSIGHTS_CONNECT}; "
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; "
     "object-src 'none'"
 )

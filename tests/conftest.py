@@ -124,6 +124,12 @@ def _isolate_llm_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_cf_web_analytics_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not inherit a deploy-env analytics token into HTML assertions."""
+    monkeypatch.delenv("CF_WEB_ANALYTICS_TOKEN", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_auth_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point auth_users at a per-test throwaway DB. Product endpoints now write
     usage_events on every hit (metering), so a test that doesn't stub the auth DB
