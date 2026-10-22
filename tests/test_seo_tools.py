@@ -12,6 +12,8 @@ import pytest
 from seo_helpers import BASE, _jsonld, _meta, _sitemap, assert_seo_head
 
 import auth_users
+import seo_layout
+import seo_tools
 import seo_tools_data
 
 TOOLS = [
@@ -279,8 +281,58 @@ def test_sector_map_is_small_static_and_unambiguous() -> None:
 
 
 def test_layout_tool_links_match_registered_tools() -> None:
-    import seo_layout
-    import seo_tools
-
     assert [p for p, _ in seo_layout.TOOL_LINKS] == [t.path for t in seo_tools.TOOLS]
     assert set(seo_tools.PUBLIC_PATHS) <= set(auth_users.PUBLIC_EXACT_PATHS)
+
+
+# ── Cloudflare Web Analytics beacon (token-gated, shared seo_layout include) ──
+
+_TOOL_PATHS = ["/tools", *(f"/tools/{s}" for s in IDS)]
+_FAKE_CF_TOKEN = "testcfwebanalytics01"
+
+
+def _beacon_scripts(html: str) -> list[str]:
+    return re.findall(
+        r"<script defer src='https://static\.cloudflareinsights\.com/beacon\.min\.js' "
+        r"data-cf-beacon='(\{.*?\})'></script>",
+        html,
+    )
+
+
+@pytest.mark.parametrize("path", _TOOL_PATHS)
+def test_cf_beacon_absent_on_tools_when_token_unset(seo_anon, path) -> None:
+    html = seo_anon.get(path).text
+    assert "cloudflareinsights.com" not in html
+    assert "data-cf-beacon" not in html
+    assert seo_layout.cf_web_analytics_beacon() == ""
+
+
+@pytest.mark.parametrize("path", _TOOL_PATHS)
+def test_cf_beacon_renders_on_tools_when_token_set(seo_anon, monkeypatch, path) -> None:
+    monkeypatch.setenv(seo_layout.CF_WEB_ANALYTICS_TOKEN_ENV, _FAKE_CF_TOKEN)
+    html = seo_anon.get(path).text
+    beacons = _beacon_scripts(html)
+    assert beacons == [json.dumps({"token": _FAKE_CF_TOKEN})]
+    assert html.count(seo_layout.CF_WEB_ANALYTICS_SCRIPT_SRC) == 1
+
+
+def test_shared_layout_render_includes_beacon_on_every_tools_page(monkeypatch) -> None:
+    monkeypatch.setenv(seo_layout.CF_WEB_ANALYTICS_TOKEN_ENV, _FAKE_CF_TOKEN)
+    pages = [seo_tools.render_index(), *(seo_tools.render_tool(t) for t in seo_tools.TOOLS)]
+    assert len(pages) == 1 + len(IDS)
+    expected = json.dumps({"token": _FAKE_CF_TOKEN})
+    for html in pages:
+        assert _beacon_scripts(html) == [expected]
+
+
+def test_cf_beacon_absent_when_token_is_not_a_safe_shape(monkeypatch) -> None:
+    for bad in ("", "short", "not a token", "');alert(1)//", "x" * 200):
+        monkeypatch.setenv(seo_layout.CF_WEB_ANALYTICS_TOKEN_ENV, bad)
+        assert seo_layout.cf_web_analytics_beacon() == ""
+
+
+def test_tools_csp_allows_cloudflare_web_analytics(seo_anon) -> None:
+    csp = seo_anon.get("/tools/kelly-calculator").headers["content-security-policy"]
+    assert "script-src 'self' 'unsafe-inline'" in csp
+    assert "https://static.cloudflareinsights.com" in csp
+    assert "connect-src 'self' https://cloudflareinsights.com" in csp
